@@ -187,7 +187,7 @@ func (nc *NTCP2Config) WithRetryBackoff(backoff time.Duration) *NTCP2Config {
 // When enabled with a custom IV, the IV must be exactly 16 bytes.
 func (nc *NTCP2Config) WithAESObfuscation(enabled bool, customIV []byte) *NTCP2Config {
 	nc.EnableAESObfuscation = enabled
-	if customIV != nil && len(customIV) == 16 {
+	if len(customIV) == 16 {
 		nc.ObfuscationIV = make([]byte, 16)
 		copy(nc.ObfuscationIV, customIV)
 	}
