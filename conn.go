@@ -6,12 +6,27 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-i2p/noise"
 	"github.com/go-i2p/go-noise/internal"
 	"github.com/go-i2p/logger"
+	"github.com/go-i2p/noise"
 	"github.com/samber/oops"
 	"github.com/sirupsen/logrus"
 )
+
+// Connection state constants for public API
+const (
+	// StateInit represents a newly created connection
+	StateInit = internal.StateInit
+	// StateHandshaking represents a connection performing handshake
+	StateHandshaking = internal.StateHandshaking
+	// StateEstablished represents a connection with completed handshake
+	StateEstablished = internal.StateEstablished
+	// StateClosed represents a closed connection
+	StateClosed = internal.StateClosed
+)
+
+// ConnState represents the state of a NoiseConn
+type ConnState = internal.ConnState
 
 // NoiseConn implements net.Conn with Noise Protocol encryption.
 // It wraps an underlying net.Conn and provides encrypted communication
@@ -230,7 +245,7 @@ func (nc *NoiseConn) Close() error {
 		nc.stateMutex.Unlock()
 		return nil // Already closed
 	}
-	
+
 	oldState := nc.state
 	nc.state = internal.StateClosed
 	nc.stateMutex.Unlock()
@@ -265,7 +280,7 @@ func (nc *NoiseConn) GetConnectionMetrics() (bytesRead, bytesWritten int64, hand
 }
 
 // GetConnectionState returns the current connection state
-func (nc *NoiseConn) GetConnectionState() internal.ConnState {
+func (nc *NoiseConn) GetConnectionState() ConnState {
 	return nc.getState()
 }
 

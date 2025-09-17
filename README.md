@@ -103,13 +103,13 @@ The library provides connection state tracking and metrics:
 // Check connection state
 state := noiseConn.GetConnectionState()
 switch state {
-case internal.StateInit:
+case noise.StateInit:
     fmt.Println("Connection created, handshake not started")
-case internal.StateHandshaking:
+case noise.StateHandshaking:
     fmt.Println("Handshake in progress")
-case internal.StateEstablished:
+case noise.StateEstablished:
     fmt.Println("Handshake complete, ready for secure communication")
-case internal.StateClosed:
+case noise.StateClosed:
     fmt.Println("Connection closed")
 }
 
