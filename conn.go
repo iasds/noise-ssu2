@@ -661,9 +661,10 @@ func (nc *NoiseConn) isClosed() bool {
 }
 
 // isHandshakeDone returns true if the handshake is complete
+// Only established connections have completed handshakes - closed connections should not pass this check
 func (nc *NoiseConn) isHandshakeDone() bool {
 	state := nc.getState()
-	return state == internal.StateEstablished || state == internal.StateClosed
+	return state == internal.StateEstablished
 }
 
 // getState returns the current connection state in a thread-safe manner
