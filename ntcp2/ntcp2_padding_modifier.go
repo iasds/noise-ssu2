@@ -141,54 +141,79 @@ func (npm *NTCP2PaddingModifier) ModifyInbound(phase handshake.HandshakePhase, d
 // calculatePaddingSize determines padding size using production-grade strategies.
 // Uses cryptographically secure random padding distribution aligned with I2P NTCP2 spec.
 func (npm *NTCP2PaddingModifier) calculatePaddingSize(dataLen int) int {
-	if npm.minPadding == 0 && npm.maxPadding == 0 && npm.paddingRatio == 0.0 {
+	if npm.shouldSkipPadding() {
 		return 0
 	}
 
-	var paddingSize int
+	paddingSize := npm.calculateRatioPadding(dataLen)
+	paddingSize = npm.enforceMinimumPadding(paddingSize)
+	paddingSize = npm.applyRandomVariation(paddingSize, dataLen)
+	return npm.enforceMaximumPadding(paddingSize)
+}
 
-	// Calculate ratio-based padding if specified
+// shouldSkipPadding checks if padding should be skipped based on configuration.
+func (npm *NTCP2PaddingModifier) shouldSkipPadding() bool {
+	return npm.minPadding == 0 && npm.maxPadding == 0 && npm.paddingRatio == 0.0
+}
+
+// calculateRatioPadding computes padding size based on the configured ratio.
+func (npm *NTCP2PaddingModifier) calculateRatioPadding(dataLen int) int {
 	if npm.paddingRatio > 0.0 {
-		ratioPadding := int(float64(dataLen) * npm.paddingRatio)
-		paddingSize = ratioPadding
+		return int(float64(dataLen) * npm.paddingRatio)
 	}
+	return 0
+}
 
-	// Ensure minimum padding is met
+// enforceMinimumPadding ensures the padding size meets the minimum requirement.
+func (npm *NTCP2PaddingModifier) enforceMinimumPadding(paddingSize int) int {
 	if paddingSize < npm.minPadding {
-		paddingSize = npm.minPadding
+		return npm.minPadding
 	}
+	return paddingSize
+}
 
-	// Apply random variation within constraints
+// applyRandomVariation adds cryptographically secure random variation to padding size.
+func (npm *NTCP2PaddingModifier) applyRandomVariation(paddingSize, dataLen int) int {
 	paddingRange := npm.maxPadding - npm.minPadding
-	if paddingRange > 0 {
-		if npm.testMode {
-			// Deterministic for testing (INSECURE - for testing only)
-			paddingSize = npm.minPadding + (dataLen%paddingRange+paddingRange)%paddingRange
-		} else {
-			// Cryptographically secure random variation
-			randomBytes := make([]byte, 4)
-			if _, err := rand.Read(randomBytes); err == nil {
-				randomValue := binary.BigEndian.Uint32(randomBytes)
-				randomPadding := int(randomValue) % (paddingRange + 1)
+	if paddingRange <= 0 {
+		return paddingSize
+	}
 
-				// Choose between base padding size and random size
-				if npm.paddingRatio > 0.0 {
-					// Use larger of ratio-based or random padding
-					if randomPadding > paddingSize-npm.minPadding {
-						paddingSize = npm.minPadding + randomPadding
-					}
-				} else {
-					paddingSize = npm.minPadding + randomPadding
-				}
-			}
+	if npm.testMode {
+		return npm.calculateDeterministicPadding(dataLen, paddingRange)
+	}
+	return npm.calculateSecureRandomPadding(paddingSize, paddingRange)
+}
+
+// calculateDeterministicPadding generates deterministic padding for testing only.
+func (npm *NTCP2PaddingModifier) calculateDeterministicPadding(dataLen, paddingRange int) int {
+	return npm.minPadding + (dataLen%paddingRange+paddingRange)%paddingRange
+}
+
+// calculateSecureRandomPadding generates cryptographically secure random padding.
+func (npm *NTCP2PaddingModifier) calculateSecureRandomPadding(paddingSize, paddingRange int) int {
+	randomBytes := make([]byte, 4)
+	if _, err := rand.Read(randomBytes); err != nil {
+		return paddingSize
+	}
+
+	randomValue := binary.BigEndian.Uint32(randomBytes)
+	randomPadding := int(randomValue) % (paddingRange + 1)
+
+	if npm.paddingRatio > 0.0 {
+		if randomPadding > paddingSize-npm.minPadding {
+			return npm.minPadding + randomPadding
 		}
+		return paddingSize
 	}
+	return npm.minPadding + randomPadding
+}
 
-	// Ensure we don't exceed maximum
+// enforceMaximumPadding ensures the padding size does not exceed the maximum limit.
+func (npm *NTCP2PaddingModifier) enforceMaximumPadding(paddingSize int) int {
 	if paddingSize > npm.maxPadding {
-		paddingSize = npm.maxPadding
+		return npm.maxPadding
 	}
-
 	return paddingSize
 }
 
