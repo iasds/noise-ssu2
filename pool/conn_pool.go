@@ -77,7 +77,10 @@ func (p *ConnPool) Get(remoteAddr string) net.Conn {
 // Put adds a connection to the pool for reuse
 func (p *ConnPool) Put(conn net.Conn) error {
 	if conn == nil {
-		return oops.Errorf("cannot put nil connection in pool")
+		return oops.
+			Code("INVALID_CONNECTION").
+			In("pool").
+			Errorf("cannot put nil connection in pool")
 	}
 
 	remoteAddr := conn.RemoteAddr().String()

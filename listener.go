@@ -139,11 +139,17 @@ func (lc *ListenerConfig) Validate() error {
 // configured as responders (non-initiators) using the provided configuration.
 func NewNoiseListener(underlying net.Listener, config *ListenerConfig) (*NoiseListener, error) {
 	if underlying == nil {
-		return nil, oops.Errorf("underlying listener cannot be nil")
+		return nil, oops.
+			Code("INVALID_LISTENER").
+			In("noise").
+			Errorf("underlying listener cannot be nil")
 	}
 
 	if config == nil {
-		return nil, oops.Errorf("listener config cannot be nil")
+		return nil, oops.
+			Code("INVALID_CONFIG").
+			In("noise").
+			Errorf("listener config cannot be nil")
 	}
 
 	if err := config.Validate(); err != nil {
