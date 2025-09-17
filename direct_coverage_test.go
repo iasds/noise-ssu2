@@ -2,6 +2,8 @@ package noise
 
 import (
 	"context"
+	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -10,23 +12,53 @@ import (
 
 // TestDirectTimeoutFunctionCalls tests timeout configuration functions directly
 func TestDirectTimeoutFunctionCalls(t *testing.T) {
-	// Create a mock connection
-	localAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8001"}
-	remoteAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8002"}
-	mockConn := newMockNetConn(localAddr, remoteAddr)
+	// Create paired connections for proper handshake
+	initiatorConn, responderConn := net.Pipe()
+	defer initiatorConn.Close()
+	defer responderConn.Close()
 
-	// Create config with timeouts
-	config := NewConnConfig("NN", true).
+	// Create configs for both sides
+	initiatorConfig := NewConnConfig("NN", true).
 		WithHandshakeTimeout(5 * time.Second).
 		WithReadTimeout(1 * time.Second).
 		WithWriteTimeout(1 * time.Second)
 
-	nc, err := NewNoiseConn(mockConn, config)
+	responderConfig := NewConnConfig("NN", false).
+		WithHandshakeTimeout(5 * time.Second).
+		WithReadTimeout(1 * time.Second).
+		WithWriteTimeout(1 * time.Second)
+
+	initiatorNC, err := NewNoiseConn(initiatorConn, initiatorConfig)
 	require.NoError(t, err)
 
-	// Complete handshake to make cipher operations valid
-	err = nc.Handshake(context.Background())
+	responderNC, err := NewNoiseConn(responderConn, responderConfig)
 	require.NoError(t, err)
+
+	// Perform handshakes
+	var wg sync.WaitGroup
+	var handshakeErrors []error
+	handshakeErrors = make([]error, 2)
+
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		handshakeErrors[0] = initiatorNC.Handshake(context.Background())
+	}()
+
+	go func() {
+		defer wg.Done()
+		handshakeErrors[1] = responderNC.Handshake(context.Background())
+	}()
+
+	wg.Wait()
+
+	// Complete handshake to make cipher operations valid
+	require.NoError(t, handshakeErrors[0], "Initiator handshake should succeed")
+	require.NoError(t, handshakeErrors[1], "Responder handshake should succeed")
+
+	// Use initiator for timeout testing
+	nc := initiatorNC
 
 	// Call Read to trigger configureReadTimeout
 	// Even though this will fail due to cipher state, it should hit the timeout config

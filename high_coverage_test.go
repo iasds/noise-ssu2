@@ -93,23 +93,53 @@ func TestHighCoverageEncryption(t *testing.T) {
 
 // TestTimeoutConfigurationCoverage tests timeout configuration paths
 func TestTimeoutConfigurationCoverage(t *testing.T) {
-	// Create a mock connection that can simulate slow operations
-	localAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8001"}
-	remoteAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8002"}
-	baseMock := newMockNetConn(localAddr, remoteAddr)
+	// Create paired connections for handshake
+	initiatorConn, responderConn := net.Pipe()
+	defer initiatorConn.Close()
+	defer responderConn.Close()
 
-	// Create config with read/write timeouts
-	config := NewConnConfig("NN", true).
+	// Create configs with read/write timeouts
+	initiatorConfig := NewConnConfig("NN", true).
 		WithHandshakeTimeout(5 * time.Second).
 		WithReadTimeout(50 * time.Millisecond).
 		WithWriteTimeout(50 * time.Millisecond)
 
-	nc, err := NewNoiseConn(baseMock, config)
+	responderConfig := NewConnConfig("NN", false).
+		WithHandshakeTimeout(5 * time.Second).
+		WithReadTimeout(50 * time.Millisecond).
+		WithWriteTimeout(50 * time.Millisecond)
+
+	initiatorNC, err := NewNoiseConn(initiatorConn, initiatorConfig)
 	require.NoError(t, err)
 
-	// Perform handshake first
-	err = nc.Handshake(context.Background())
-	require.NoError(t, err, "Handshake should succeed")
+	responderNC, err := NewNoiseConn(responderConn, responderConfig)
+	require.NoError(t, err)
+
+	// Perform handshakes
+	var wg sync.WaitGroup
+	var handshakeErrors []error
+	handshakeErrors = make([]error, 2)
+
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		handshakeErrors[0] = initiatorNC.Handshake(context.Background())
+	}()
+
+	go func() {
+		defer wg.Done()
+		handshakeErrors[1] = responderNC.Handshake(context.Background())
+	}()
+
+	wg.Wait()
+
+	// Check if handshakes succeeded
+	require.NoError(t, handshakeErrors[0], "Handshake should succeed")
+	require.NoError(t, handshakeErrors[1], "Handshake should succeed")
+
+	// Use the initiator connection for timeout testing
+	nc := initiatorNC
 
 	// Test read with timeout configuration (this should hit configureReadTimeout)
 	readBuffer := make([]byte, 10)

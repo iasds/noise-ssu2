@@ -85,22 +85,53 @@ func TestSuccessfulEncryptedCommunication(t *testing.T) {
 
 // TestCoverageOfTimeoutPaths tests timeout configuration paths that weren't covered
 func TestCoverageOfTimeoutPaths(t *testing.T) {
-	// Create a connection with specific timeouts configured
-	localAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8001"}
-	remoteAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8002"}
-	mockConn := newMockNetConn(localAddr, remoteAddr)
+	// Create paired connections for proper handshake
+	initiatorConn, responderConn := net.Pipe()
+	defer initiatorConn.Close()
+	defer responderConn.Close()
 
-	config := NewConnConfig("NN", true).
+	// Create configs for both sides
+	initiatorConfig := NewConnConfig("NN", true).
 		WithHandshakeTimeout(5 * time.Second).
 		WithReadTimeout(100 * time.Millisecond). // Set non-zero timeout
 		WithWriteTimeout(100 * time.Millisecond) // Set non-zero timeout
 
-	nc, err := NewNoiseConn(mockConn, config)
+	responderConfig := NewConnConfig("NN", false).
+		WithHandshakeTimeout(5 * time.Second).
+		WithReadTimeout(100 * time.Millisecond).
+		WithWriteTimeout(100 * time.Millisecond)
+
+	initiatorNC, err := NewNoiseConn(initiatorConn, initiatorConfig)
 	require.NoError(t, err)
 
-	// Complete handshake
-	err = nc.Handshake(context.Background())
+	responderNC, err := NewNoiseConn(responderConn, responderConfig)
 	require.NoError(t, err)
+
+	// Perform handshakes
+	var wg sync.WaitGroup
+	var handshakeErrors []error
+	handshakeErrors = make([]error, 2)
+
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		handshakeErrors[0] = initiatorNC.Handshake(context.Background())
+	}()
+
+	go func() {
+		defer wg.Done()
+		handshakeErrors[1] = responderNC.Handshake(context.Background())
+	}()
+
+	wg.Wait()
+
+	// Complete handshake
+	require.NoError(t, handshakeErrors[0], "Initiator handshake should succeed")
+	require.NoError(t, handshakeErrors[1], "Responder handshake should succeed")
+
+	// Use initiator for timeout testing
+	nc := initiatorNC
 
 	// Try to read - this should hit configureReadTimeout even if it fails later
 	readBuffer := make([]byte, 10)
