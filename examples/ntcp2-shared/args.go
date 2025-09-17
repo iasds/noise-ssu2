@@ -98,19 +98,19 @@ func PrintNTCP2Usage(appName, description string) {
 // ValidateArgs performs validation on parsed NTCP2 arguments
 func (args *NTCP2Args) ValidateArgs() error {
 	modeCount := args.countOperationModes()
-	
+
 	if err := args.validateModeSelection(modeCount); err != nil {
 		return err
 	}
-	
+
 	if err := args.validateRouterHashRequirements(); err != nil {
 		return err
 	}
-	
+
 	if err := args.validateClientRequirements(); err != nil {
 		return err
 	}
-	
+
 	return nil
 }
 
@@ -147,7 +147,7 @@ func (args *NTCP2Args) validateModeSelection(modeCount int) error {
 			In("ntcp2-examples").
 			Errorf("cannot specify multiple modes simultaneously")
 	}
-	
+
 	return nil
 }
 
