@@ -92,7 +92,7 @@ func PrintNTCP2Usage(appName, description string) {
 	fmt.Printf("  %s -server localhost:7654 -router-hash <64-char-hex>\n\n", appName)
 	fmt.Printf("  # Run NTCP2 client:\n")
 	fmt.Printf("  %s -client localhost:7654 -router-hash <64-char-hex> -remote-router-hash <64-char-hex>\n\n", appName)
-	fmt.Println("Note: NTCP2 uses Noise_IK_25519_AESGCM_SHA256 pattern exclusively")
+	fmt.Println("Note: NTCP2 uses Noise_XK_25519_AESGCM_SHA256 pattern exclusively")
 }
 
 // ValidateNTCP2Args performs validation on parsed NTCP2 arguments
@@ -307,8 +307,8 @@ func RunNTCP2Generate() {
 func demonstrateNTCP2Pattern() {
 	fmt.Println("🔐 NTCP2 Noise Protocol Pattern:")
 	fmt.Println("=================================")
-	fmt.Println("NTCP2 exclusively uses: Noise_IK_25519_AESGCM_SHA256")
-	fmt.Println("  • IK Pattern: Initiator knows responder's static key")
+	fmt.Println("NTCP2 exclusively uses: Noise_XK_25519_AESGCM_SHA256")
+	fmt.Println("  • XK Pattern: Initiator sends static key, knows responder's static key")
 	fmt.Println("  • Curve25519: Elliptic curve for key exchange")
 	fmt.Println("  • AESGCM: Authenticated encryption")
 	fmt.Println("  • SHA256: Hash function")

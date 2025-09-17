@@ -84,7 +84,7 @@ go run main.go -server localhost:8080 -pattern IK -static-key <server-key>
 
 ### NTCP2 Examples
 
-NTCP2 examples exclusively use the `Noise_IK_25519_AESGCM_SHA256` pattern as per I2P specification.
+NTCP2 examples exclusively use the `Noise_XK_25519_AESGCM_SHA256` pattern as per I2P specification.
 
 #### NTCP2-Specific Arguments
 
