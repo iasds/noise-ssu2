@@ -462,32 +462,50 @@ func (npm *NTCP2PaddingModifier) ValidateAEADFrame(data []byte) bool {
 	hasPadding := false
 
 	for offset < len(data) {
-		if offset+3 > len(data) {
-			return false // Invalid block header
+		if !npm.validateFrameBlockHeader(data, offset) {
+			return false
 		}
 
-		blockType := data[offset]
-		blockSize := int(binary.BigEndian.Uint16(data[offset+1 : offset+3]))
+		blockType, blockSize := npm.parseFrameBlockHeader(data, offset)
 
-		if offset+3+blockSize > len(data) {
-			return false // Block size exceeds data
+		if !npm.validateBlockSize(data, offset, blockSize) {
+			return false
 		}
 
-		// Check I2P NTCP2 block ordering rules
-		if blockType == 254 { // Padding block
-			if hasPadding {
-				return false // Multiple padding blocks not allowed
-			}
-			hasPadding = true
-			// Padding must be last block
-			if offset+3+blockSize != len(data) {
-				return false
-			}
+		if !npm.validateFramePaddingRules(blockType, blockSize, offset, len(data), &hasPadding) {
+			return false
 		}
 
 		offset += 3 + blockSize
 	}
 
+	return true
+}
+
+// validateFrameBlockHeader checks if there's enough data for a complete block header
+func (npm *NTCP2PaddingModifier) validateFrameBlockHeader(data []byte, offset int) bool {
+	return offset+3 <= len(data)
+}
+
+// parseFrameBlockHeader extracts block type and size from the header
+func (npm *NTCP2PaddingModifier) parseFrameBlockHeader(data []byte, offset int) (byte, int) {
+	blockType := data[offset]
+	blockSize := int(binary.BigEndian.Uint16(data[offset+1 : offset+3]))
+	return blockType, blockSize
+}
+
+// validateFramePaddingRules enforces I2P NTCP2 padding block ordering rules
+func (npm *NTCP2PaddingModifier) validateFramePaddingRules(blockType byte, blockSize, offset, dataLen int, hasPadding *bool) bool {
+	if blockType == 254 { // Padding block
+		if *hasPadding {
+			return false // Multiple padding blocks not allowed
+		}
+		*hasPadding = true
+		// Padding must be last block
+		if offset+3+blockSize != dataLen {
+			return false
+		}
+	}
 	return true
 }
 

@@ -95,23 +95,45 @@ func PrintNTCP2Usage(appName, description string) {
 	fmt.Println("Note: NTCP2 uses Noise_XK_25519_AESGCM_SHA256 pattern exclusively")
 }
 
-// ValidateNTCP2Args performs validation on parsed NTCP2 arguments
+// ValidateArgs performs validation on parsed NTCP2 arguments
 func (args *NTCP2Args) ValidateArgs() error {
-	// Check that we have either server, client, demo, or generate mode
-	modeCount := 0
+	modeCount := args.countOperationModes()
+	
+	if err := args.validateModeSelection(modeCount); err != nil {
+		return err
+	}
+	
+	if err := args.validateRouterHashRequirements(); err != nil {
+		return err
+	}
+	
+	if err := args.validateClientRequirements(); err != nil {
+		return err
+	}
+	
+	return nil
+}
+
+// countOperationModes counts the number of operation modes specified
+func (args *NTCP2Args) countOperationModes() int {
+	count := 0
 	if args.ServerAddr != "" {
-		modeCount++
+		count++
 	}
 	if args.ClientAddr != "" {
-		modeCount++
+		count++
 	}
 	if args.Demo {
-		modeCount++
+		count++
 	}
 	if args.Generate {
-		modeCount++
+		count++
 	}
+	return count
+}
 
+// validateModeSelection ensures exactly one operation mode is selected
+func (args *NTCP2Args) validateModeSelection(modeCount int) error {
 	if modeCount == 0 {
 		return oops.
 			Code("INVALID_ARGS").
@@ -125,23 +147,29 @@ func (args *NTCP2Args) ValidateArgs() error {
 			In("ntcp2-examples").
 			Errorf("cannot specify multiple modes simultaneously")
 	}
+	
+	return nil
+}
 
-	// For non-demo/generate modes, require router hash
+// validateRouterHashRequirements checks router hash requirements for network modes
+func (args *NTCP2Args) validateRouterHashRequirements() error {
 	if (args.ServerAddr != "" || args.ClientAddr != "") && args.RouterHash == "" {
 		return oops.
 			Code("MISSING_ROUTER_HASH").
 			In("ntcp2-examples").
 			Errorf("NTCP2 requires a router hash (-router-hash)")
 	}
+	return nil
+}
 
-	// For client mode, require remote router hash
+// validateClientRequirements checks client-specific requirements
+func (args *NTCP2Args) validateClientRequirements() error {
 	if args.ClientAddr != "" && args.RemoteRouterHash == "" {
 		return oops.
 			Code("MISSING_REMOTE_ROUTER_HASH").
 			In("ntcp2-examples").
 			Errorf("NTCP2 client requires remote router hash (-remote-router-hash)")
 	}
-
 	return nil
 }
 
