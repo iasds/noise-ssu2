@@ -259,8 +259,18 @@ func (npm *NTCP2PaddingModifier) removeAEADPadding(data []byte) ([]byte, error) 
 		return data, nil // No room for block header
 	}
 
-	// Strategy 1: Look for padding block (type 254) from the end
-	// This works for simple cases where we have data + single padding block
+	// Try simple reverse scan strategy first
+	if result := npm.removePaddingFromEnd(data); result != nil {
+		return result, nil
+	}
+
+	// Fallback to structured block parsing
+	return npm.removePaddingFromBlocks(data)
+}
+
+// removePaddingFromEnd scans from the end looking for a trailing padding block (type 254).
+// This works for simple cases where we have data + single padding block.
+func (npm *NTCP2PaddingModifier) removePaddingFromEnd(data []byte) []byte {
 	for i := len(data) - 1; i >= 2; i-- {
 		if data[i-2] == 254 { // Found potential padding block type
 			if i-1 < len(data) {
@@ -268,49 +278,72 @@ func (npm *NTCP2PaddingModifier) removeAEADPadding(data []byte) ([]byte, error) 
 				expectedEnd := i + 1 + int(paddingSize)
 				// Check if this looks like a valid trailing padding block
 				if expectedEnd == len(data) && i-2 >= 0 {
-					return data[:i-2], nil
+					return data[:i-2]
 				}
 			}
 		}
 	}
+	return nil
+}
 
-	// Strategy 2: Parse as proper I2P block structure if Strategy 1 fails
+// removePaddingFromBlocks parses data as proper I2P block structure to locate padding blocks.
+// Returns original data if no valid block structure or padding found.
+func (npm *NTCP2PaddingModifier) removePaddingFromBlocks(data []byte) ([]byte, error) {
+	result := npm.parseBlockStructure(data)
+	if result.foundValidBlocks && result.lastDataEnd > 0 && result.lastDataEnd <= len(data) {
+		return data[:result.lastDataEnd], nil
+	}
+	return data, nil
+}
+
+// parseBlockStructure analyzes data as I2P block format and tracks parsing state.
+func (npm *NTCP2PaddingModifier) parseBlockStructure(data []byte) blockParseResult {
+	result := blockParseResult{}
 	offset := 0
-	lastDataEnd := 0
-	foundValidBlocks := false
 
 	for offset < len(data) {
-		if offset+3 > len(data) {
+		if !npm.validateBlockBounds(data, offset) {
 			break
 		}
 
-		blockType := data[offset]
-		blockSize := int(binary.BigEndian.Uint16(data[offset+1 : offset+3]))
-
-		// Validate block size - if invalid, might not be block format
-		if offset+3+blockSize > len(data) {
+		blockType, blockSize := npm.extractBlockHeader(data, offset)
+		if !npm.validateBlockSize(data, offset, blockSize) {
 			break
 		}
 
-		foundValidBlocks = true
-
+		result.foundValidBlocks = true
 		if blockType == 254 {
-			// Found padding block - return data up to this point
-			return data[:lastDataEnd], nil
+			return result // Found padding block
 		}
 
-		// Move to next block
-		lastDataEnd = offset + 3 + blockSize
-		offset = lastDataEnd
+		result.lastDataEnd = offset + 3 + blockSize
+		offset = result.lastDataEnd
 	}
 
-	// If we found valid blocks but no padding, return up to last valid block
-	if foundValidBlocks && lastDataEnd > 0 && lastDataEnd <= len(data) {
-		return data[:lastDataEnd], nil
-	}
+	return result
+}
 
-	// No padding block found or not block format - return original data
-	return data, nil
+// blockParseResult holds the state from parsing I2P block structure.
+type blockParseResult struct {
+	foundValidBlocks bool
+	lastDataEnd      int
+}
+
+// validateBlockBounds checks if there's enough data for a block header at the given offset.
+func (npm *NTCP2PaddingModifier) validateBlockBounds(data []byte, offset int) bool {
+	return offset+3 <= len(data)
+}
+
+// extractBlockHeader reads the block type and size from the data at the given offset.
+func (npm *NTCP2PaddingModifier) extractBlockHeader(data []byte, offset int) (byte, int) {
+	blockType := data[offset]
+	blockSize := int(binary.BigEndian.Uint16(data[offset+1 : offset+3]))
+	return blockType, blockSize
+}
+
+// validateBlockSize ensures the block size doesn't exceed the available data.
+func (npm *NTCP2PaddingModifier) validateBlockSize(data []byte, offset, blockSize int) bool {
+	return offset+3+blockSize <= len(data)
 }
 
 // SetPaddingRatio updates the padding ratio for dynamic adjustment during connection.
