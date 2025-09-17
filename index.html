@@ -13,7 +13,7 @@
         <a href="index.html">go-i2p/go-noise</a>
       </h2>
       <div class="repo-meta">
-        📝 13 commits
+        📝 20 commits
          • 📜 License
       </div>
     </div>
@@ -46,17 +46,17 @@
         
           <li><a href="docs/DOC.html">noise</a></li>
         
-          <li><a href="docs/ntcp2/DOC.html">ntcp2</a></li>
-        
           <li><a href="docs/examples/ntcp2/DOC.html">ntcp2</a></li>
+        
+          <li><a href="docs/ntcp2/DOC.html">ntcp2</a></li>
         
           <li><a href="docs/examples/ntcp2-config/DOC.html">ntcp2-config</a></li>
         
           <li><a href="docs/examples/ntcp2-listener/DOC.html">ntcp2-listener</a></li>
         
-          <li><a href="docs/pool/DOC.html">pool</a></li>
-        
           <li><a href="docs/examples/pool/DOC.html">pool</a></li>
+        
+          <li><a href="docs/pool/DOC.html">pool</a></li>
         
           <li><a href="docs/examples/retry/DOC.html">retry</a></li>
         
@@ -86,12 +86,12 @@
       <div class="repo-stats">
         
         <div class="repo-stat">
-          <span>📝</span> <span>13 commits</span>
+          <span>📝</span> <span>20 commits</span>
         </div>
         
         
         <div class="repo-stat">
-          <span>📅</span> <span>Last updated: August 5, 2025</span>
+          <span>📅</span> <span>Last updated: September 17, 2025</span>
         </div>
         
         
@@ -120,7 +120,7 @@
 </li>
 <li><strong>Error Handling</strong>: Contextual error information using samber/oops<br>
 </li>
-<li><strong>Thread-Safe</strong>: Concurrent connection handling with synchronization<br>
+<li><strong>Thread-Safe</strong>: Concurrent connection handling with synchronization - Read/Write operations can be called concurrently, Close() is idempotent, and state access is atomic<br>
 </li>
 <li><strong>Memory Management</strong>: Structured buffer management<br>
 </li>
@@ -220,13 +220,13 @@ func main() {
 <pre><code class="language-go">// Check connection state
 state := noiseConn.GetConnectionState()
 switch state {
-case internal.StateInit:
+case noise.StateInit:
     fmt.Println(&quot;Connection created, handshake not started&quot;)
-case internal.StateHandshaking:
+case noise.StateHandshaking:
     fmt.Println(&quot;Handshake in progress&quot;)
-case internal.StateEstablished:
+case noise.StateEstablished:
     fmt.Println(&quot;Handshake complete, ready for secure communication&quot;)
-case internal.StateClosed:
+case noise.StateClosed:
     fmt.Println(&quot;Connection closed&quot;)
 }
 
@@ -336,7 +336,7 @@ fmt.Printf(&quot;Handshake completed in %v\n&quot;, handshakeDuration)
                 eyedeekay
               </div>
               <div class="contributor-commits">
-                13 commits
+                20 commits
               </div>
             </div>
           </div>
@@ -348,7 +348,7 @@ fmt.Printf(&quot;Handshake completed in %v\n&quot;, handshakeDuration)
     </main>
     
     <footer class="page-footer">
-      <p>Generated on 2025-09-17 21:18:24 • <a href="https://github.com/go-i2p/go-noise" target="_blank">View on GitHub</a></p>
+      <p>Generated on 2025-09-17 21:43:19 • <a href="https://github.com/go-i2p/go-noise" target="_blank">View on GitHub</a></p>
     </footer>
   </div>
 </body>
