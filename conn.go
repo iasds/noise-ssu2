@@ -31,6 +31,20 @@ type ConnState = internal.ConnState
 // NoiseConn implements net.Conn with Noise Protocol encryption.
 // It wraps an underlying net.Conn and provides encrypted communication
 // following the Noise Protocol Framework specification.
+//
+// Thread Safety:
+// NoiseConn is safe for concurrent use by multiple goroutines with the following guarantees:
+//   - Read() and Write() can be called concurrently from different goroutines
+//   - Close() can be called concurrently with other operations and will be idempotent  
+//   - GetConnectionState() and GetConnectionMetrics() are safe for concurrent access
+//   - Handshake() operations are serialized - only one handshake can occur at a time
+//   - All operations that check connection state are atomic and consistent
+//
+// Synchronization is achieved through multiple mutexes:
+//   - stateMutex: Protects connection state transitions (RWMutex for read-heavy access)
+//   - handshakeMutex: Serializes handshake operations
+//   - closeMutex: Protects close operations from concurrent execution
+//   - Internal metrics mutex: Protects connection metrics updates
 type NoiseConn struct {
 	// underlying is the wrapped network connection
 	underlying net.Conn
@@ -103,6 +117,10 @@ func NewNoiseConn(underlying net.Conn, config *ConnConfig) (*NoiseConn, error) {
 
 // Read reads data from the connection.
 // If the handshake is not complete, it will return an error.
+// 
+// Thread Safety: This method is safe for concurrent use. Multiple goroutines
+// can call Read simultaneously. State validation is atomic and encryption
+// operations are protected by the underlying cipher state synchronization.
 func (nc *NoiseConn) Read(b []byte) (int, error) {
 	if err := nc.validateReadState(); err != nil {
 		return 0, err
@@ -127,6 +145,10 @@ func (nc *NoiseConn) Read(b []byte) (int, error) {
 
 // Write writes data to the connection.
 // If the handshake is not complete, it will return an error.
+//
+// Thread Safety: This method is safe for concurrent use. Multiple goroutines
+// can call Write simultaneously. State validation is atomic and encryption
+// operations are protected by the underlying cipher state synchronization.
 func (nc *NoiseConn) Write(b []byte) (int, error) {
 	if err := nc.validateWriteState(); err != nil {
 		return 0, err
@@ -235,6 +257,11 @@ func (nc *NoiseConn) writeEncryptedData(originalData, encryptedData []byte) (int
 }
 
 // Close closes the connection.
+//
+// Thread Safety: This method is safe for concurrent use and is idempotent.
+// Multiple goroutines can call Close simultaneously - only the first call
+// will perform the actual close operation, subsequent calls will return nil.
+// The close mutex ensures atomic close operations.
 func (nc *NoiseConn) Close() error {
 	nc.closeMutex.Lock()
 	defer nc.closeMutex.Unlock()
@@ -280,6 +307,10 @@ func (nc *NoiseConn) GetConnectionMetrics() (bytesRead, bytesWritten int64, hand
 }
 
 // GetConnectionState returns the current connection state
+//
+// Thread Safety: This method is safe for concurrent use. It uses a read lock
+// on the state mutex, allowing multiple goroutines to read the state simultaneously
+// while preventing inconsistent reads during state transitions.
 func (nc *NoiseConn) GetConnectionState() ConnState {
 	return nc.getState()
 }
@@ -342,6 +373,12 @@ func (nc *NoiseConn) SetWriteDeadline(t time.Time) error {
 
 // Handshake performs the Noise Protocol handshake.
 // This must be called before using Read/Write operations.
+//
+// Thread Safety: This method is safe for concurrent use but handshake operations
+// are serialized. Only one handshake can be in progress at a time per connection.
+// If multiple goroutines call Handshake concurrently, they will be queued and
+// execute sequentially. If the handshake is already complete, subsequent calls
+// will return immediately without error.
 func (nc *NoiseConn) Handshake(ctx context.Context) error {
 	nc.handshakeMutex.Lock()
 	defer nc.handshakeMutex.Unlock()

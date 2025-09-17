@@ -7,7 +7,7 @@ A wrapper library around the flynn/noise package that provides `net.Conn`, `net.
 - **Configurable Noise Patterns**: Support for all standard Noise Protocol patterns  
 - **net.Conn Interface**: Compatible with Go's standard network interfaces  
 - **Error Handling**: Contextual error information using samber/oops  
-- **Thread-Safe**: Concurrent connection handling with synchronization  
+- **Thread-Safe**: Concurrent connection handling with synchronization - Read/Write operations can be called concurrently, Close() is idempotent, and state access is atomic  
 - **Memory Management**: Structured buffer management  
 
 ## Supported Noise Patterns
