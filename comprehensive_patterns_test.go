@@ -53,7 +53,8 @@ func TestAllHandshakePatterns(t *testing.T) {
 			require.NoError(t, err, "Failed to create NoiseConn for pattern %s", tc.pattern)
 
 			// Test that pattern is correctly parsed and message count is correct
-			actualMessageCount := nc.getPatternMessageCount()
+			actualMessageCount, err := nc.getPatternMessageCount()
+			require.NoError(t, err, "Failed to get message count for pattern %s", tc.pattern)
 			assert.Equal(t, tc.messageCount, actualMessageCount,
 				"Pattern %s should have %d messages but got %d", tc.pattern, tc.messageCount, actualMessageCount)
 
@@ -96,7 +97,8 @@ func TestFullPatternNames(t *testing.T) {
 			nc, err := NewNoiseConn(mockConn, config)
 			require.NoError(t, err, "Failed to create NoiseConn for full pattern %s", tc.pattern)
 
-			actualMessageCount := nc.getPatternMessageCount()
+			actualMessageCount, err := nc.getPatternMessageCount()
+			require.NoError(t, err, "Failed to get message count for full pattern %s", tc.pattern)
 			assert.Equal(t, tc.messageCount, actualMessageCount,
 				"Full pattern %s should have %d messages but got %d", tc.pattern, tc.messageCount, actualMessageCount)
 		})

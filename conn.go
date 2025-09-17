@@ -584,8 +584,9 @@ func (nc *NoiseConn) performXXInitiator(ctx context.Context) error {
 	return nil
 }
 
-// getPatternMessageCount returns the expected number of handshake messages for each pattern
-func (nc *NoiseConn) getPatternMessageCount() int {
+// getPatternMessageCount returns the expected number of handshake messages for each pattern.
+// Returns an error for unknown patterns instead of defaulting, preventing configuration errors.
+func (nc *NoiseConn) getPatternMessageCount() (int, error) {
 	pattern := nc.config.Pattern
 	nc.logger.Debugf("Getting message count for pattern: %s", pattern)
 
@@ -593,21 +594,21 @@ func (nc *NoiseConn) getPatternMessageCount() int {
 	// One-way patterns (1 message)
 	case "N", "K", "X":
 		nc.logger.Debug("One-way pattern detected: 1 message")
-		return 1
+		return 1, nil
 	// Two-message interactive patterns
 	case "NN", "NK", "NX", "XN", "XK", "KN", "KK", "IN", "IK", "IX":
 		nc.logger.Debug("Two-message interactive pattern detected: 2 messages")
-		return 2
+		return 2, nil
 	// Three-message patterns
 	case "XX", "KX":
 		nc.logger.Debug("Three-message pattern detected: 3 messages")
-		return 3
+		return 3, nil
 	default:
 		// Check for full pattern names
 		if strings.Contains(pattern, "_N_") || strings.Contains(pattern, "_K_") || strings.Contains(pattern, "_X_") {
 			// One-way patterns
 			nc.logger.Debug("Full one-way pattern detected: 1 message")
-			return 1
+			return 1, nil
 		} else if strings.Contains(pattern, "_NN_") || strings.Contains(pattern, "_NK_") ||
 			strings.Contains(pattern, "_NX_") || strings.Contains(pattern, "_XN_") ||
 			strings.Contains(pattern, "_XK_") || strings.Contains(pattern, "_KN_") ||
@@ -615,15 +616,18 @@ func (nc *NoiseConn) getPatternMessageCount() int {
 			strings.Contains(pattern, "_IK_") || strings.Contains(pattern, "_IX_") {
 			// Two-message patterns
 			nc.logger.Debug("Full two-message pattern detected: 2 messages")
-			return 2
+			return 2, nil
 		} else if strings.Contains(pattern, "_XX_") || strings.Contains(pattern, "_KX_") {
 			// Three-message patterns
 			nc.logger.Debug("Full three-message pattern detected: 3 messages")
-			return 3
+			return 3, nil
 		}
-		// Default to 2 for unknown interactive patterns
-		nc.logger.Debugf("Unknown pattern '%s', defaulting to 2 messages", pattern)
-		return 2
+		// Return error for unknown patterns instead of defaulting
+		return 0, oops.
+			Code("UNKNOWN_PATTERN").
+			In("noise").
+			With("pattern", pattern).
+			Errorf("unknown handshake pattern: %s", pattern)
 	}
 }
 
