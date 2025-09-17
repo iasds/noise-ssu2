@@ -224,11 +224,22 @@ func (nc *NoiseConn) Close() error {
 	nc.closeMutex.Lock()
 	defer nc.closeMutex.Unlock()
 
-	if nc.isClosed() {
+	// Check and set state atomically to prevent race conditions
+	nc.stateMutex.Lock()
+	if nc.state == internal.StateClosed {
+		nc.stateMutex.Unlock()
 		return nil // Already closed
 	}
+	
+	oldState := nc.state
+	nc.state = internal.StateClosed
+	nc.stateMutex.Unlock()
 
-	nc.setState(internal.StateClosed)
+	nc.logger.WithFields(logrus.Fields{
+		"old_state": oldState.String(),
+		"new_state": internal.StateClosed.String(),
+	}).Debug("Connection state changed")
+
 	nc.logger.Debug("Closing NoiseConn")
 
 	// Unregister from shutdown manager if set
