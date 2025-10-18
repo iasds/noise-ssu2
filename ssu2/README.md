@@ -15,6 +15,12 @@ This package provides handshake modifiers and utilities for implementing the SSU
    - XOR-based stream cipher (vs block cipher)
    - Automatic state derivation for message 2
 
+2. **SSU2 Padding Modifier**: MTU-aware padding for UDP packet size optimization
+   - MTU range: 1280-1500 bytes (IPv6 minimum to Ethernet maximum)
+   - I2P padding ratios: 0.0-15.9375
+   - Thread-safe dynamic parameter updates
+   - AEAD and cleartext padding modes
+
 ## Protocol Compliance
 
 - **Pattern**: `Noise_XKchaobfse+hs1+hs2+hs3_25519_ChaChaPoly_SHA256`
@@ -117,13 +123,16 @@ All modifiers are thread-safe for concurrent use:
 
 Based on benchmarks on Intel Core i7-10710U @ 1.10GHz:
 
-```
-BenchmarkChaChaObfuscation-12    1000000    1004 ns/op    40 B/op    2 allocs/op
+```text
+BenchmarkChaChaObfuscation-12     1396284    855.2 ns/op    40 B/op     2 allocs/op
+BenchmarkSSU2Padding-12           1000000   1170 ns/op     140 B/op     0 allocs/op
+BenchmarkSSU2PaddingRemoval-12   13712234     73.52 ns/op    0 B/op     0 allocs/op
 ```
 
-- **Throughput**: ~1 million operations/second
-- **Latency**: ~1 microsecond per 32-byte encryption
-- **Memory**: 40 bytes allocated per operation (minimal overhead)
+- **ChaCha20 Throughput**: ~1.4 million operations/second
+- **Padding Overhead**: ~1.2 microseconds per operation
+- **Padding Removal**: ~73 nanoseconds (extremely fast)
+- **Memory**: Minimal allocations (0-140 bytes per operation)
 
 ## Testing
 
@@ -138,7 +147,7 @@ go test -cover ./ssu2/...
 go test -bench=. -benchmem ./ssu2/...
 ```
 
-Current test coverage: **91.1%**
+Current test coverage: **82.7%**
 
 ### Test Scenarios
 
@@ -156,7 +165,7 @@ Current test coverage: **91.1%**
 ### Phase 1: Core Cryptographic Foundation ✅
 
 - [x] **ChaCha20 Obfuscation Modifier**: Complete with 91.1% test coverage
-- [ ] **SSU2 Padding Modifier**: Planned (MTU-aware padding)
+- [x] **SSU2 Padding Modifier**: Complete with 82.7% test coverage (MTU-aware padding)
 - [ ] **SipHash Length Modifier**: Planned (reuse NTCP2 implementation)
 
 ### Phase 2: Address and Configuration Layer (Planned)
