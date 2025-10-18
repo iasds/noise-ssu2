@@ -136,7 +136,21 @@ The library tracks:
 
 ## Implementation Status
 
-Core Noise and NTCP2 implementations completed. SSU2 implementation planned.
+### Core Components ✅
+- **Noise Protocol Wrapper**: Complete with net.Conn interface
+- **NTCP2 Transport**: Complete with AES obfuscation, padding, and SipHash modifiers
+- **Connection Pooling**: Complete with configurable pool management
+- **Listener Support**: Complete for NTCP2 connections
+
+### SSU2 Transport 🚧 (In Progress)
+- **Phase 1.1**: ChaCha20 Obfuscation Modifier ✅ (91.1% test coverage)
+  - ChaCha20 stream cipher for ephemeral key obfuscation
+  - 8-byte IV support for SSU2 protocol
+  - Automatic state derivation between handshake messages
+  - See [ssu2/README.md](ssu2/README.md) for details
+- **Phase 1.2**: SSU2 Padding Modifier (Planned)
+- **Phase 1.3**: SipHash Length Modifier (Planned)
+- **Phase 2+**: Address layer, configuration, connection implementation (See [PLAN.md](PLAN.md))
 
 ## Architecture
 
