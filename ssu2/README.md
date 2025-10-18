@@ -8,26 +8,17 @@ This package provides handshake modifiers and utilities for implementing the SSU
 
 ## Features
 
-### SSU2 Transport 🚧 (In Progress)
-- **Phase 1.1**: ChaCha20 Obfuscation Modifier ✅ (91.1% test coverage)
-  - ChaCha20 stream cipher for ephemeral key obfuscation
-  - 8-byte IV support for SSU2 protocol
-  - Automatic state derivation between handshake messages
-  - See [ssu2/README.md](ssu2/README.md) for details
-- **Phase 1.2**: SSU2 Padding Modifier ✅ (82.7% test coverage)
-  - MTU-aware padding with I2P ratios (0.0-15.9375)
-  - Dynamic MTU adjustment during connection
-  - Thread-safe parameter updates
-- **Phase 1.3**: SipHash Length Modifier ✅ (100% test coverage)
-  - Frame length obfuscation using SipHash-2-4
-  - Wraps NTCP2 implementation for protocol-agnostic use
-- **Phase 2.1**: SSU2 Address Implementation ✅ (100% test coverage)
-  - Complete `net.Addr` interface for UDP-based SSU2 connections
-  - Connection ID generation with cryptographic security
-  - NAT traversal support via introducer addresses
-  - Immutable builder pattern with defensive copying
-- **Phase 2.2**: SSU2 Configuration Builder (Planned)
-- **Phase 3+**: Connection layer, transport functions, utilities (See [PLAN.md](PLAN.md))
+### Completed Components ✅
+
+- **ChaCha20 Obfuscation Modifier** - Ephemeral key obfuscation for handshake messages (91.1% coverage)
+- **SSU2 Padding Modifier** - MTU-aware padding with I2P ratios 0.0-15.9375 (82.7% coverage)
+- **SipHash Length Modifier** - Frame length obfuscation using SipHash-2-4 (100% coverage)
+- **SSU2 Address (`SSU2Addr`)** - Complete `net.Addr` implementation with connection ID and NAT traversal support (100% coverage)
+- **SSU2 Configuration (`SSU2Config`)** - Builder pattern configuration with comprehensive validation (88.4% coverage)
+
+### In Development 🚧
+
+Connection layer, listener, and transport functions. See [PLAN.md](../PLAN.md) for the complete roadmap.
 
 ## Protocol Compliance
 
@@ -228,7 +219,7 @@ go test -cover ./ssu2/...
 go test -bench=. -benchmem ./ssu2/...
 ```
 
-Current test coverage: **82.7%**
+Current test coverage: **88.4%**
 
 ### Test Scenarios
 
@@ -240,23 +231,10 @@ Current test coverage: **82.7%**
 - ✅ Non-32-byte data pass-through
 - ✅ Different keys/IVs produce different output
 - ✅ Symmetric XOR operation
-
-## Implementation Status
-
-### Phase 1: Core Cryptographic Foundation ✅
-
-- [x] **ChaCha20 Obfuscation Modifier**: Complete with 91.1% test coverage
-- [x] **SSU2 Padding Modifier**: Complete with 82.7% test coverage (MTU-aware padding)
-- [x] **SipHash Length Modifier**: Complete with 100% test coverage (wraps NTCP2 implementation)
-
-### Phase 2: Address and Configuration Layer (Planned)
-
-- [ ] SSU2 Address Implementation
-- [ ] SSU2 Configuration Builder
-
-### Future Phases
-
-See [PLAN.md](../PLAN.md) for complete implementation roadmap.
+- ✅ Builder pattern and fluent API
+- ✅ Comprehensive validation coverage
+- ✅ SSU2Addr interface compliance
+- ✅ Connection ID generation
 
 ## Dependencies
 
@@ -282,6 +260,11 @@ MIT License
 
 ## Status
 
-**Development Status**: Phase 1 complete - All core cryptographic modifiers implemented and tested.
+**Development Status**: Phases 1 & 2 complete - Core cryptographic foundation, addressing, and configuration are production-ready.
 
-**Production Ready**: All three modifiers (ChaCha20 obfuscation, SSU2 padding, SipHash length) are complete, well-tested, and suitable for use in SSU2 implementations.
+**What's Available**:
+- Handshake modifiers (ChaCha20, Padding, SipHash) with comprehensive testing
+- `SSU2Addr` implementing `net.Addr` for UDP connections with NAT traversal support
+- `SSU2Config` builder for fluent configuration with automatic modifier setup
+
+**Next Steps**: Phase 3 will implement the connection layer (`SSU2Conn`, `SSU2Listener`) and transport functions. See [PLAN.md](../PLAN.md) for details.
