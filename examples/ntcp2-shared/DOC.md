@@ -83,7 +83,7 @@ ParseNTCP2Args parses NTCP2-specific command-line arguments
 ```go
 func (args *NTCP2Args) ValidateArgs() error
 ```
-ValidateNTCP2Args performs validation on parsed NTCP2 arguments
+ValidateArgs performs validation on parsed NTCP2 arguments
 
 
 
