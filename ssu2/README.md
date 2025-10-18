@@ -8,24 +8,26 @@ This package provides handshake modifiers and utilities for implementing the SSU
 
 ## Features
 
-### Implemented (Phase 1)
-
-1. **ChaCha20 Obfuscation Modifier**: Stream cipher-based ephemeral key obfuscation for handshake messages 1-2
-   - 8-byte IV (vs NTCP2's 16-byte)
-   - XOR-based stream cipher (vs block cipher)
-   - Automatic state derivation for message 2
-
-2. **SSU2 Padding Modifier**: MTU-aware padding for UDP packet size optimization
-   - MTU range: 1280-1500 bytes (IPv6 minimum to Ethernet maximum)
-   - I2P padding ratios: 0.0-15.9375
-   - Thread-safe dynamic parameter updates
-   - AEAD and cleartext padding modes
-
-3. **SipHash Length Modifier**: Frame length obfuscation using SipHash-2-4
-   - Prevents frame length fingerprinting in data phase
-   - Wraps NTCP2 implementation (identical algorithm)
-   - Separate inbound/outbound counters
-   - Minimal overhead (~93 ns/op)
+### SSU2 Transport 🚧 (In Progress)
+- **Phase 1.1**: ChaCha20 Obfuscation Modifier ✅ (91.1% test coverage)
+  - ChaCha20 stream cipher for ephemeral key obfuscation
+  - 8-byte IV support for SSU2 protocol
+  - Automatic state derivation between handshake messages
+  - See [ssu2/README.md](ssu2/README.md) for details
+- **Phase 1.2**: SSU2 Padding Modifier ✅ (82.7% test coverage)
+  - MTU-aware padding with I2P ratios (0.0-15.9375)
+  - Dynamic MTU adjustment during connection
+  - Thread-safe parameter updates
+- **Phase 1.3**: SipHash Length Modifier ✅ (100% test coverage)
+  - Frame length obfuscation using SipHash-2-4
+  - Wraps NTCP2 implementation for protocol-agnostic use
+- **Phase 2.1**: SSU2 Address Implementation ✅ (100% test coverage)
+  - Complete `net.Addr` interface for UDP-based SSU2 connections
+  - Connection ID generation with cryptographic security
+  - NAT traversal support via introducer addresses
+  - Immutable builder pattern with defensive copying
+- **Phase 2.2**: SSU2 Configuration Builder (Planned)
+- **Phase 3+**: Connection layer, transport functions, utilities (See [PLAN.md](PLAN.md))
 
 ## Protocol Compliance
 

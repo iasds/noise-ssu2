@@ -148,9 +148,20 @@ The library tracks:
   - 8-byte IV support for SSU2 protocol
   - Automatic state derivation between handshake messages
   - See [ssu2/README.md](ssu2/README.md) for details
-- **Phase 1.2**: SSU2 Padding Modifier (Planned)
-- **Phase 1.3**: SipHash Length Modifier (Planned)
-- **Phase 2+**: Address layer, configuration, connection implementation (See [PLAN.md](PLAN.md))
+- **Phase 1.2**: SSU2 Padding Modifier ✅ (82.7% test coverage)
+  - MTU-aware padding with I2P ratios (0.0-15.9375)
+  - Dynamic MTU adjustment during connection
+  - Thread-safe parameter updates
+- **Phase 1.3**: SipHash Length Modifier ✅ (100% test coverage)
+  - Frame length obfuscation using SipHash-2-4
+  - Wraps NTCP2 implementation for protocol-agnostic use
+- **Phase 2.1**: SSU2 Address Implementation ✅ (100% test coverage)
+  - Complete `net.Addr` interface for UDP-based SSU2 connections
+  - Connection ID generation with cryptographic security
+  - NAT traversal support via introducer addresses
+  - Immutable builder pattern with defensive copying
+- **Phase 2.2**: SSU2 Configuration Builder (Next)
+- **Phase 3+**: Connection layer, transport functions, utilities (See [PLAN.md](PLAN.md))
 
 ## Architecture
 
