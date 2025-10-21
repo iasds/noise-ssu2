@@ -7,7 +7,6 @@ import (
 
 	"github.com/go-i2p/logger"
 	"github.com/samber/oops"
-	"github.com/sirupsen/logrus"
 )
 
 // NoiseListener implements net.Listener for accepting Noise Protocol connections.
@@ -171,7 +170,7 @@ func NewNoiseListener(underlying net.Listener, config *ListenerConfig) (*NoiseLi
 		closed:     false,
 	}
 
-	log.WithFields(logrus.Fields{
+	log.WithFields(logger.Fields{
 		"pattern":           config.Pattern,
 		"listener_address":  underlying.Addr().String(),
 		"handshake_timeout": config.HandshakeTimeout,
@@ -223,7 +222,7 @@ func (nl *NoiseListener) Accept() (net.Conn, error) {
 			Wrapf(err, "failed to create noise connection")
 	}
 
-	nl.logger.WithFields(logrus.Fields{
+	nl.logger.WithFields(logger.Fields{
 		"listener_addr": nl.addr.String(),
 		"remote_addr":   underlying.RemoteAddr().String(),
 	}).Debug("accepted new noise connection")
@@ -250,7 +249,7 @@ func (nl *NoiseListener) Close() error {
 
 	err := nl.underlying.Close()
 	if err != nil {
-		nl.logger.WithFields(logrus.Fields{
+		nl.logger.WithFields(logger.Fields{
 			"listener_addr": nl.addr.String(),
 			"error":         err.Error(),
 		}).Error("error closing underlying listener")
@@ -262,7 +261,7 @@ func (nl *NoiseListener) Close() error {
 			Wrapf(err, "failed to close underlying listener")
 	}
 
-	nl.logger.WithFields(logrus.Fields{
+	nl.logger.WithFields(logger.Fields{
 		"listener_addr": nl.addr.String(),
 	}).Info("noise listener closed")
 

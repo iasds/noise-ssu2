@@ -7,7 +7,6 @@ import (
 
 	"github.com/go-i2p/logger"
 	"github.com/samber/oops"
-	"github.com/sirupsen/logrus"
 )
 
 // ShutdownManager coordinates graceful shutdown of noise components.
@@ -73,7 +72,7 @@ func (sm *ShutdownManager) RegisterConnection(conn *NoiseConn) {
 	defer sm.mu.Unlock()
 
 	sm.connections[conn] = struct{}{}
-	sm.logger.WithFields(logrus.Fields{
+	sm.logger.WithFields(logger.Fields{
 		"local_addr":  conn.LocalAddr().String(),
 		"remote_addr": conn.RemoteAddr().String(),
 		"total_conns": len(sm.connections),
@@ -91,7 +90,7 @@ func (sm *ShutdownManager) UnregisterConnection(conn *NoiseConn) {
 	defer sm.mu.Unlock()
 
 	delete(sm.connections, conn)
-	sm.logger.WithFields(logrus.Fields{
+	sm.logger.WithFields(logger.Fields{
 		"local_addr":  conn.LocalAddr().String(),
 		"remote_addr": conn.RemoteAddr().String(),
 		"total_conns": len(sm.connections),
@@ -109,7 +108,7 @@ func (sm *ShutdownManager) RegisterListener(listener *NoiseListener) {
 	defer sm.mu.Unlock()
 
 	sm.listeners[listener] = struct{}{}
-	sm.logger.WithFields(logrus.Fields{
+	sm.logger.WithFields(logger.Fields{
 		"listener_addr":   listener.Addr().String(),
 		"total_listeners": len(sm.listeners),
 	}).Debug("registered listener for shutdown management")
@@ -126,7 +125,7 @@ func (sm *ShutdownManager) UnregisterListener(listener *NoiseListener) {
 	defer sm.mu.Unlock()
 
 	delete(sm.listeners, listener)
-	sm.logger.WithFields(logrus.Fields{
+	sm.logger.WithFields(logger.Fields{
 		"listener_addr":   listener.Addr().String(),
 		"total_listeners": len(sm.listeners),
 	}).Debug("unregistered listener from shutdown management")
@@ -159,7 +158,7 @@ func (sm *ShutdownManager) Shutdown() error {
 
 // logShutdownInitiation logs the start of the shutdown process with current state.
 func (sm *ShutdownManager) logShutdownInitiation() {
-	sm.logger.WithFields(logrus.Fields{
+	sm.logger.WithFields(logger.Fields{
 		"timeout":     sm.shutdownTimeout.String(),
 		"connections": len(sm.connections),
 		"listeners":   len(sm.listeners),
@@ -294,7 +293,7 @@ func (sm *ShutdownManager) forceCloseConnections() error {
 	var firstError error
 	for _, conn := range connections {
 		if err := conn.Close(); err != nil {
-			sm.logger.WithError(err).WithFields(logrus.Fields{
+			sm.logger.WithError(err).WithFields(logger.Fields{
 				"local_addr":  conn.LocalAddr().String(),
 				"remote_addr": conn.RemoteAddr().String(),
 			}).Error("error force closing connection during shutdown")

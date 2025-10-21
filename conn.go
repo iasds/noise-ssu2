@@ -11,7 +11,6 @@ import (
 	"github.com/go-i2p/logger"
 	"github.com/go-i2p/noise"
 	"github.com/samber/oops"
-	"github.com/sirupsen/logrus"
 )
 
 // Connection state constants for public API
@@ -239,7 +238,7 @@ func (nc *NoiseConn) writeEncryptedData(originalData, encryptedData []byte) (int
 	// Track metrics for written data
 	nc.metrics.AddBytesWritten(int64(len(originalData)))
 
-	nc.logger.WithFields(logrus.Fields{
+	nc.logger.WithFields(logger.Fields{
 		"plaintext_len": len(originalData),
 		"encrypted_len": len(encryptedData),
 		"written_len":   n,
@@ -278,7 +277,7 @@ func (nc *NoiseConn) Close() error {
 	nc.state = internal.StateClosed
 	nc.stateMutex.Unlock()
 
-	nc.logger.WithFields(logrus.Fields{
+	nc.logger.WithFields(logger.Fields{
 		"old_state": oldState.String(),
 		"new_state": internal.StateClosed.String(),
 	}).Debug("Connection state changed")
@@ -2038,7 +2037,7 @@ func (nc *NoiseConn) copyDecryptedData(b, decrypted []byte, encryptedLen, decryp
 	// Track metrics for read data
 	nc.metrics.AddBytesRead(int64(copied))
 
-	nc.logger.Trace("Data read", logrus.Fields{
+	nc.logger.Trace("Data read", logger.Fields{
 		"encrypted_len": encryptedLen,
 		"decrypted_len": decryptedLen,
 		"copied_len":    copied,
@@ -2195,7 +2194,7 @@ func (nc *NoiseConn) setState(newState internal.ConnState) {
 	oldState := nc.state
 	nc.state = newState
 
-	nc.logger.WithFields(logrus.Fields{
+	nc.logger.WithFields(logger.Fields{
 		"old_state": oldState.String(),
 		"new_state": newState.String(),
 	}).Debug("Connection state changed")
