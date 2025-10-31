@@ -174,10 +174,76 @@ NoiseConn (net.Conn)
 └── Underlying net.Conn (TCP, UDP, etc.)
 ```
 
+## Logging
+
+The library uses structured logging via `github.com/go-i2p/logger` for enhanced observability and debugging.
+
+### Enabling Debug Logging
+
+Enable verbose debug output by setting the `DEBUG_I2P` environment variable:
+
+```bash
+# Enable debug logging
+export DEBUG_I2P=debug
+
+# Run your application
+go run main.go
+
+# Or run tests with debug logging
+DEBUG_I2P=debug go test -v ./...
+```
+
+### Fast-Fail Mode (Testing Only)
+
+For testing and development, enable fast-fail mode to catch warnings and errors immediately:
+
+```bash
+# Enable fast-fail mode (warnings become fatal)
+export WARNFAIL_I2P=true
+export DEBUG_I2P=debug
+
+# Run tests in strict mode
+WARNFAIL_I2P=true DEBUG_I2P=debug go test -v ./...
+```
+
+⚠️ **Warning**: Fast-fail mode should only be used in testing/development environments. Do not enable in production.
+
+### What Gets Logged
+
+The library logs structured information at various levels:
+
+- **Debug**: Connection creation, handshake progress, state transitions, cipher state updates
+- **Info**: Handshake completion, listener events, connection metrics
+- **Warn**: Retry attempts, timeout warnings, recoverable issues
+- **Error**: Handshake failures, connection errors, validation failures
+
+All log entries include structured fields such as:
+
+- `pattern`: Noise protocol pattern (e.g., "XX", "IK")
+- `initiator`: Connection role (true/false)
+- `local_addr`: Local connection address
+- `remote_addr`: Remote connection address
+- `state`: Connection state (Init, Handshaking, Established, Closed)
+
+### Zero-Impact by Default
+
+When `DEBUG_I2P` is not set, logging is completely disabled with zero performance overhead. This ensures production deployments have no logging costs unless explicitly enabled for troubleshooting.
+
+### Example Debug Output
+
+```bash
+$ DEBUG_I2P=debug go run examples/basic/main.go
+[DEBUG] NoiseConn created pattern=XX initiator=true local_addr=127.0.0.1:54321 remote_addr=127.0.0.1:8080
+[INFO] Starting Noise handshake pattern=XX initiator=true local_addr=127.0.0.1:54321 remote_addr=127.0.0.1:8080
+[DEBUG] Starting initiator handshake pattern=XX role=initiator remote_addr=127.0.0.1:8080
+[DEBUG] Cipher state updated - handshake progressing pattern=XX state=cipher_updated
+[INFO] Handshake completed successfully pattern=XX duration=2.3ms
+```
+
 ## Dependencies
 
 - **flynn/noise** v1.1.0: Core Noise Protocol implementation
-- **go-i2p/logger**: Structured logging support
+- **go-i2p/logger**: Structured logging support with environment-based control
 - **samber/oops** v1.19.0: Rich error context
 
 ## Testing
@@ -187,6 +253,7 @@ go test -v ./...
 ```
 
 Current test coverage includes unit and integration tests for core functionality across all components:
+
 - Handshake pattern parsing and validation
 - Configuration validation  
 - NoiseAddr interface compliance

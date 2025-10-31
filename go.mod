@@ -4,10 +4,9 @@ go 1.24.2
 
 require (
 	github.com/dchest/siphash v1.2.3
-	github.com/go-i2p/logger v0.0.0-20251021001827-b7cf9a3377d9
+	github.com/go-i2p/logger v0.0.1
 	github.com/go-i2p/noise v0.0.0-20250805205922-091c71f48c43
 	github.com/samber/oops v1.19.0
-	github.com/sirupsen/logrus v1.9.3
 	github.com/stretchr/testify v1.10.0
 	golang.org/x/crypto v0.40.0
 )
@@ -17,6 +16,7 @@ require (
 	github.com/oklog/ulid/v2 v2.1.1 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/samber/lo v1.51.0 // indirect
+	github.com/sirupsen/logrus v1.9.3 // indirect
 	go.opentelemetry.io/otel v1.37.0 // indirect
 	go.opentelemetry.io/otel/trace v1.37.0 // indirect
 	golang.org/x/sys v0.37.0 // indirect

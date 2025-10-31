@@ -111,7 +111,12 @@ func NewNoiseConn(underlying net.Conn, config *ConnConfig) (*NoiseConn, error) {
 		state:          internal.StateInit,
 	}
 
-	nc.logger.Debug("NoiseConn created")
+	nc.logger.WithFields(logger.Fields{
+		"pattern":     config.Pattern,
+		"initiator":   config.Initiator,
+		"local_addr":  localAddr.String(),
+		"remote_addr": remoteAddr.String(),
+	}).Debug("NoiseConn created")
 	return nc, nil
 }
 
@@ -282,7 +287,10 @@ func (nc *NoiseConn) Close() error {
 		"new_state": internal.StateClosed.String(),
 	}).Debug("Connection state changed")
 
-	nc.logger.Debug("Closing NoiseConn")
+	nc.logger.WithFields(logger.Fields{
+		"local_addr":  nc.LocalAddr().String(),
+		"remote_addr": nc.RemoteAddr().String(),
+	}).Debug("Closing NoiseConn")
 
 	// Unregister from shutdown manager if set
 	if nc.shutdownManager != nil {
@@ -389,7 +397,12 @@ func (nc *NoiseConn) Handshake(ctx context.Context) error {
 
 	nc.setState(internal.StateHandshaking)
 	nc.metrics.SetHandshakeStart()
-	nc.logger.Info("Starting Noise handshake")
+	nc.logger.WithFields(logger.Fields{
+		"pattern":     nc.config.Pattern,
+		"initiator":   nc.config.Initiator,
+		"local_addr":  nc.LocalAddr().String(),
+		"remote_addr": nc.RemoteAddr().String(),
+	}).Info("Starting Noise handshake")
 
 	handshakeCtx := nc.createHandshakeContext(ctx)
 	defer handshakeCtx.cancel()
@@ -406,7 +419,11 @@ func (nc *NoiseConn) Handshake(ctx context.Context) error {
 
 // performInitiatorHandshake handles the initiator side of the handshake.
 func (nc *NoiseConn) performInitiatorHandshake(ctx context.Context) error {
-	nc.logger.Debug("Starting initiator handshake")
+	nc.logger.WithFields(logger.Fields{
+		"pattern":     nc.config.Pattern,
+		"role":        "initiator",
+		"remote_addr": nc.RemoteAddr().String(),
+	}).Debug("Starting initiator handshake")
 
 	pattern := nc.config.Pattern
 	nc.logger.Debugf("Performing %s pattern handshake as initiator", pattern)
@@ -688,16 +705,26 @@ func (nc *NoiseConn) updateCipherStates(cs1, cs2 *noise.CipherState) {
 	// We'll use cs1 as the primary cipher state for simplicity
 	if cs1 != nil {
 		nc.cipherState = cs1
-		nc.logger.Debug("Cipher state updated - handshake progressing")
+		nc.logger.WithFields(logger.Fields{
+			"pattern": nc.config.Pattern,
+			"state":   "cipher_updated",
+		}).Debug("Cipher state updated - handshake progressing")
 	} else if cs2 != nil {
 		nc.cipherState = cs2
-		nc.logger.Debug("Cipher state updated - handshake progressing")
+		nc.logger.WithFields(logger.Fields{
+			"pattern": nc.config.Pattern,
+			"state":   "cipher_updated_alt",
+		}).Debug("Cipher state updated - handshake progressing")
 	}
 }
 
 // performResponderHandshake handles the responder side of the handshake.
 func (nc *NoiseConn) performResponderHandshake(ctx context.Context) error {
-	nc.logger.Debug("Starting responder handshake")
+	nc.logger.WithFields(logger.Fields{
+		"pattern":     nc.config.Pattern,
+		"role":        "responder",
+		"remote_addr": nc.RemoteAddr().String(),
+	}).Debug("Starting responder handshake")
 
 	pattern := nc.config.Pattern
 	nc.logger.Debugf("Performing %s pattern handshake as responder", pattern)
