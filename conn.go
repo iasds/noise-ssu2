@@ -9,9 +9,9 @@ import (
 
 	"github.com/go-i2p/go-noise/internal"
 	"github.com/go-i2p/logger"
+	i2plogger "github.com/go-i2p/logger"
 	"github.com/go-i2p/noise"
 	"github.com/samber/oops"
-	"github.com/sirupsen/logrus"
 )
 
 // Connection state constants for public API
@@ -112,7 +112,7 @@ func NewNoiseConn(underlying net.Conn, config *ConnConfig) (*NoiseConn, error) {
 		state:          internal.StateInit,
 	}
 
-	nc.logger.WithFields(logrus.Fields{
+	nc.logger.WithFields(i2plogger.Fields{
 		"pattern":     nc.config.Pattern,
 		"role":        map[bool]string{true: "initiator", false: "responder"}[nc.config.Initiator],
 		"local_addr":  nc.localAddr.String(),
@@ -244,7 +244,7 @@ func (nc *NoiseConn) writeEncryptedData(originalData, encryptedData []byte) (int
 	// Track metrics for written data
 	nc.metrics.AddBytesWritten(int64(len(originalData)))
 
-	nc.logger.WithFields(logrus.Fields{
+	nc.logger.WithFields(i2plogger.Fields{
 		"plaintext_bytes": len(originalData),
 		"encrypted_bytes": len(encryptedData),
 		"written_bytes":   n,
@@ -283,7 +283,7 @@ func (nc *NoiseConn) Close() error {
 	nc.state = internal.StateClosed
 	nc.stateMutex.Unlock()
 
-	nc.logger.WithFields(logrus.Fields{
+	nc.logger.WithFields(i2plogger.Fields{
 		"old_state": oldState.String(),
 		"new_state": internal.StateClosed.String(),
 	}).Debug("Connection state changed")
@@ -395,7 +395,7 @@ func (nc *NoiseConn) Handshake(ctx context.Context) error {
 
 	nc.setState(internal.StateHandshaking)
 	nc.metrics.SetHandshakeStart()
-	nc.logger.WithFields(logrus.Fields{
+	nc.logger.WithFields(i2plogger.Fields{
 		"pattern":           nc.config.Pattern,
 		"role":              map[bool]string{true: "initiator", false: "responder"}[nc.config.Initiator],
 		"local_addr":        nc.LocalAddr().String(),
@@ -421,7 +421,7 @@ func (nc *NoiseConn) Handshake(ctx context.Context) error {
 // performInitiatorHandshake handles the initiator side of the handshake.
 func (nc *NoiseConn) performInitiatorHandshake(ctx context.Context) error {
 	pattern := nc.config.Pattern
-	nc.logger.WithFields(logrus.Fields{
+	nc.logger.WithFields(i2plogger.Fields{
 		"pattern":     pattern,
 		"role":        "initiator",
 		"local_addr":  nc.LocalAddr().String(),
@@ -608,7 +608,7 @@ func (nc *NoiseConn) getPatternMessageCount() (int, error) {
 	switch pattern {
 	// One-way patterns (1 message)
 	case "N", "K", "X":
-		nc.logger.WithFields(logrus.Fields{
+		nc.logger.WithFields(i2plogger.Fields{
 			"pattern":           pattern,
 			"expected_messages": 1,
 			"pattern_type":      "one-way",
@@ -616,7 +616,7 @@ func (nc *NoiseConn) getPatternMessageCount() (int, error) {
 		return 1, nil
 	// Two-message interactive patterns
 	case "NN", "NK", "NX", "XN", "XK", "KN", "KK", "IN", "IK", "IX":
-		nc.logger.WithFields(logrus.Fields{
+		nc.logger.WithFields(i2plogger.Fields{
 			"pattern":           pattern,
 			"expected_messages": 2,
 			"pattern_type":      "two-message-interactive",
@@ -624,7 +624,7 @@ func (nc *NoiseConn) getPatternMessageCount() (int, error) {
 		return 2, nil
 	// Three-message patterns
 	case "XX", "KX":
-		nc.logger.WithFields(logrus.Fields{
+		nc.logger.WithFields(i2plogger.Fields{
 			"pattern":           pattern,
 			"expected_messages": 3,
 			"pattern_type":      "three-message",
@@ -634,7 +634,7 @@ func (nc *NoiseConn) getPatternMessageCount() (int, error) {
 		// Check for full pattern names
 		if strings.Contains(pattern, "_N_") || strings.Contains(pattern, "_K_") || strings.Contains(pattern, "_X_") {
 			// One-way patterns
-			nc.logger.WithFields(logrus.Fields{
+			nc.logger.WithFields(i2plogger.Fields{
 				"pattern":           pattern,
 				"expected_messages": 1,
 				"pattern_type":      "one-way",
@@ -647,7 +647,7 @@ func (nc *NoiseConn) getPatternMessageCount() (int, error) {
 			strings.Contains(pattern, "_KK_") || strings.Contains(pattern, "_IN_") ||
 			strings.Contains(pattern, "_IK_") || strings.Contains(pattern, "_IX_") {
 			// Two-message patterns
-			nc.logger.WithFields(logrus.Fields{
+			nc.logger.WithFields(i2plogger.Fields{
 				"pattern":           pattern,
 				"expected_messages": 2,
 				"pattern_type":      "two-message-interactive",
@@ -656,7 +656,7 @@ func (nc *NoiseConn) getPatternMessageCount() (int, error) {
 			return 2, nil
 		} else if strings.Contains(pattern, "_XX_") || strings.Contains(pattern, "_KX_") {
 			// Three-message patterns
-			nc.logger.WithFields(logrus.Fields{
+			nc.logger.WithFields(i2plogger.Fields{
 				"pattern":           pattern,
 				"expected_messages": 3,
 				"pattern_type":      "three-message",
@@ -731,7 +731,7 @@ func (nc *NoiseConn) updateCipherStates(cs1, cs2 *noise.CipherState) {
 	// We'll use cs1 as the primary cipher state for simplicity
 	if cs1 != nil {
 		nc.cipherState = cs1
-		nc.logger.WithFields(logrus.Fields{
+		nc.logger.WithFields(i2plogger.Fields{
 			"pattern":            nc.config.Pattern,
 			"role":               map[bool]string{true: "initiator", false: "responder"}[nc.config.Initiator],
 			"cipher_state":       "cs1",
@@ -739,7 +739,7 @@ func (nc *NoiseConn) updateCipherStates(cs1, cs2 *noise.CipherState) {
 		}).Debug("cipher state updated during handshake")
 	} else if cs2 != nil {
 		nc.cipherState = cs2
-		nc.logger.WithFields(logrus.Fields{
+		nc.logger.WithFields(i2plogger.Fields{
 			"pattern":            nc.config.Pattern,
 			"role":               map[bool]string{true: "initiator", false: "responder"}[nc.config.Initiator],
 			"cipher_state":       "cs2",
@@ -751,7 +751,7 @@ func (nc *NoiseConn) updateCipherStates(cs1, cs2 *noise.CipherState) {
 // performResponderHandshake handles the responder side of the handshake.
 func (nc *NoiseConn) performResponderHandshake(ctx context.Context) error {
 	pattern := nc.config.Pattern
-	nc.logger.WithFields(logrus.Fields{
+	nc.logger.WithFields(i2plogger.Fields{
 		"pattern":     pattern,
 		"role":        "responder",
 		"local_addr":  nc.LocalAddr().String(),
@@ -2093,7 +2093,7 @@ func (nc *NoiseConn) copyDecryptedData(b, decrypted []byte, encryptedLen, decryp
 	// Track metrics for read data
 	nc.metrics.AddBytesRead(int64(copied))
 
-	nc.logger.Trace("Data read", logrus.Fields{
+	nc.logger.Trace("Data read", i2plogger.Fields{
 		"encrypted_len": encryptedLen,
 		"decrypted_len": decryptedLen,
 		"copied_len":    copied,
@@ -2250,7 +2250,7 @@ func (nc *NoiseConn) setState(newState internal.ConnState) {
 	oldState := nc.state
 	nc.state = newState
 
-	nc.logger.WithFields(logrus.Fields{
+	nc.logger.WithFields(i2plogger.Fields{
 		"old_state": oldState.String(),
 		"new_state": newState.String(),
 	}).Debug("Connection state changed")

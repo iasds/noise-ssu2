@@ -7,7 +7,7 @@ import (
 
 	"github.com/go-i2p/go-noise/internal"
 	"github.com/samber/oops"
-	"github.com/sirupsen/logrus"
+	i2plogger "github.com/go-i2p/logger"
 )
 
 // HandshakeWithRetry performs a handshake with retry logic based on configuration.
@@ -53,7 +53,7 @@ func (nc *NoiseConn) executeRetryLoop(ctx context.Context) error {
 // logSuccessAfterRetries logs successful handshake completion after retries.
 func (nc *NoiseConn) logSuccessAfterRetries(attempt int) {
 	if attempt > 0 {
-		nc.logger.WithFields(logrus.Fields{
+		nc.logger.WithFields(i2plogger.Fields{
 			"attempts":    attempt + 1,
 			"pattern":     nc.config.Pattern,
 			"remote_addr": nc.RemoteAddr().String(),
@@ -88,7 +88,7 @@ func (nc *NoiseConn) waitForRetry(ctx context.Context, attempt int) error {
 		delay = maxDelay
 	}
 
-	nc.logger.WithFields(logrus.Fields{
+	nc.logger.WithFields(i2plogger.Fields{
 		"attempt":            attempt + 1,
 		"delay_ms":           delay.Milliseconds(),
 		"pattern":            nc.config.Pattern,
@@ -116,7 +116,7 @@ func (nc *NoiseConn) logRetryAttempt(attempt int, lastErr error) {
 		errorCode = oe.Code()
 	}
 
-	nc.logger.WithFields(logrus.Fields{
+	nc.logger.WithFields(i2plogger.Fields{
 		"attempt":         attempt + 1,
 		"max_retries":     nc.config.HandshakeRetries,
 		"pattern":         nc.config.Pattern,
