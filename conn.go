@@ -112,7 +112,12 @@ func NewNoiseConn(underlying net.Conn, config *ConnConfig) (*NoiseConn, error) {
 		state:          internal.StateInit,
 	}
 
-	nc.logger.Debug("NoiseConn created")
+	nc.logger.WithFields(logrus.Fields{
+		"pattern":     nc.config.Pattern,
+		"role":        map[bool]string{true: "initiator", false: "responder"}[nc.config.Initiator],
+		"local_addr":  nc.localAddr.String(),
+		"remote_addr": nc.remoteAddr.String(),
+	}).Debug("noise connection created")
 	return nc, nil
 }
 
@@ -240,10 +245,10 @@ func (nc *NoiseConn) writeEncryptedData(originalData, encryptedData []byte) (int
 	nc.metrics.AddBytesWritten(int64(len(originalData)))
 
 	nc.logger.WithFields(logrus.Fields{
-		"plaintext_len": len(originalData),
-		"encrypted_len": len(encryptedData),
-		"written_len":   n,
-	}).Trace("Data written")
+		"plaintext_bytes": len(originalData),
+		"encrypted_bytes": len(encryptedData),
+		"written_bytes":   n,
+	}).Trace("encrypted data written to wire")
 
 	if n == len(encryptedData) {
 		return len(originalData), nil
@@ -390,7 +395,15 @@ func (nc *NoiseConn) Handshake(ctx context.Context) error {
 
 	nc.setState(internal.StateHandshaking)
 	nc.metrics.SetHandshakeStart()
-	nc.logger.Info("Starting Noise handshake")
+	nc.logger.WithFields(logrus.Fields{
+		"pattern":           nc.config.Pattern,
+		"role":              map[bool]string{true: "initiator", false: "responder"}[nc.config.Initiator],
+		"local_addr":        nc.LocalAddr().String(),
+		"remote_addr":       nc.RemoteAddr().String(),
+		"handshake_timeout": nc.config.HandshakeTimeout,
+		"retry_enabled":     nc.config.HandshakeRetries > 0,
+		"max_retries":       nc.config.HandshakeRetries,
+	}).Info("starting noise protocol handshake")
 
 	handshakeCtx := nc.createHandshakeContext(ctx)
 	defer handshakeCtx.cancel()
@@ -407,10 +420,13 @@ func (nc *NoiseConn) Handshake(ctx context.Context) error {
 
 // performInitiatorHandshake handles the initiator side of the handshake.
 func (nc *NoiseConn) performInitiatorHandshake(ctx context.Context) error {
-	nc.logger.Debug("Starting initiator handshake")
-
 	pattern := nc.config.Pattern
-	nc.logger.Debugf("Performing %s pattern handshake as initiator", pattern)
+	nc.logger.WithFields(logrus.Fields{
+		"pattern":     pattern,
+		"role":        "initiator",
+		"local_addr":  nc.LocalAddr().String(),
+		"remote_addr": nc.RemoteAddr().String(),
+	}).Debug("performing handshake as initiator")
 
 	switch pattern {
 	// One-way patterns (1 message)
@@ -588,26 +604,42 @@ func (nc *NoiseConn) performXXInitiator(ctx context.Context) error {
 // Returns an error for unknown patterns instead of defaulting, preventing configuration errors.
 func (nc *NoiseConn) getPatternMessageCount() (int, error) {
 	pattern := nc.config.Pattern
-	nc.logger.Debugf("Getting message count for pattern: %s", pattern)
 
 	switch pattern {
 	// One-way patterns (1 message)
 	case "N", "K", "X":
-		nc.logger.Debug("One-way pattern detected: 1 message")
+		nc.logger.WithFields(logrus.Fields{
+			"pattern":           pattern,
+			"expected_messages": 1,
+			"pattern_type":      "one-way",
+		}).Debug("detected one-way handshake pattern")
 		return 1, nil
 	// Two-message interactive patterns
 	case "NN", "NK", "NX", "XN", "XK", "KN", "KK", "IN", "IK", "IX":
-		nc.logger.Debug("Two-message interactive pattern detected: 2 messages")
+		nc.logger.WithFields(logrus.Fields{
+			"pattern":           pattern,
+			"expected_messages": 2,
+			"pattern_type":      "two-message-interactive",
+		}).Debug("detected two-message interactive handshake pattern")
 		return 2, nil
 	// Three-message patterns
 	case "XX", "KX":
-		nc.logger.Debug("Three-message pattern detected: 3 messages")
+		nc.logger.WithFields(logrus.Fields{
+			"pattern":           pattern,
+			"expected_messages": 3,
+			"pattern_type":      "three-message",
+		}).Debug("detected three-message handshake pattern")
 		return 3, nil
 	default:
 		// Check for full pattern names
 		if strings.Contains(pattern, "_N_") || strings.Contains(pattern, "_K_") || strings.Contains(pattern, "_X_") {
 			// One-way patterns
-			nc.logger.Debug("Full one-way pattern detected: 1 message")
+			nc.logger.WithFields(logrus.Fields{
+				"pattern":           pattern,
+				"expected_messages": 1,
+				"pattern_type":      "one-way",
+				"pattern_format":    "full",
+			}).Debug("detected full-form one-way handshake pattern")
 			return 1, nil
 		} else if strings.Contains(pattern, "_NN_") || strings.Contains(pattern, "_NK_") ||
 			strings.Contains(pattern, "_NX_") || strings.Contains(pattern, "_XN_") ||
@@ -615,11 +647,21 @@ func (nc *NoiseConn) getPatternMessageCount() (int, error) {
 			strings.Contains(pattern, "_KK_") || strings.Contains(pattern, "_IN_") ||
 			strings.Contains(pattern, "_IK_") || strings.Contains(pattern, "_IX_") {
 			// Two-message patterns
-			nc.logger.Debug("Full two-message pattern detected: 2 messages")
+			nc.logger.WithFields(logrus.Fields{
+				"pattern":           pattern,
+				"expected_messages": 2,
+				"pattern_type":      "two-message-interactive",
+				"pattern_format":    "full",
+			}).Debug("detected full-form two-message handshake pattern")
 			return 2, nil
 		} else if strings.Contains(pattern, "_XX_") || strings.Contains(pattern, "_KX_") {
 			// Three-message patterns
-			nc.logger.Debug("Full three-message pattern detected: 3 messages")
+			nc.logger.WithFields(logrus.Fields{
+				"pattern":           pattern,
+				"expected_messages": 3,
+				"pattern_type":      "three-message",
+				"pattern_format":    "full",
+			}).Debug("detected full-form three-message handshake pattern")
 			return 3, nil
 		}
 		// Return error for unknown patterns instead of defaulting
@@ -689,19 +731,32 @@ func (nc *NoiseConn) updateCipherStates(cs1, cs2 *noise.CipherState) {
 	// We'll use cs1 as the primary cipher state for simplicity
 	if cs1 != nil {
 		nc.cipherState = cs1
-		nc.logger.Debug("Cipher state updated - handshake progressing")
+		nc.logger.WithFields(logrus.Fields{
+			"pattern":            nc.config.Pattern,
+			"role":               map[bool]string{true: "initiator", false: "responder"}[nc.config.Initiator],
+			"cipher_state":       "cs1",
+			"handshake_complete": nc.cipherState != nil,
+		}).Debug("cipher state updated during handshake")
 	} else if cs2 != nil {
 		nc.cipherState = cs2
-		nc.logger.Debug("Cipher state updated - handshake progressing")
+		nc.logger.WithFields(logrus.Fields{
+			"pattern":            nc.config.Pattern,
+			"role":               map[bool]string{true: "initiator", false: "responder"}[nc.config.Initiator],
+			"cipher_state":       "cs2",
+			"handshake_complete": nc.cipherState != nil,
+		}).Debug("cipher state updated during handshake")
 	}
 }
 
 // performResponderHandshake handles the responder side of the handshake.
 func (nc *NoiseConn) performResponderHandshake(ctx context.Context) error {
-	nc.logger.Debug("Starting responder handshake")
-
 	pattern := nc.config.Pattern
-	nc.logger.Debugf("Performing %s pattern handshake as responder", pattern)
+	nc.logger.WithFields(logrus.Fields{
+		"pattern":     pattern,
+		"role":        "responder",
+		"local_addr":  nc.LocalAddr().String(),
+		"remote_addr": nc.RemoteAddr().String(),
+	}).Debug("performing handshake as responder")
 
 	switch pattern {
 	// One-way patterns (1 message)

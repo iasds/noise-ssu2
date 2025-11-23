@@ -54,9 +54,11 @@ func (nc *NoiseConn) executeRetryLoop(ctx context.Context) error {
 func (nc *NoiseConn) logSuccessAfterRetries(attempt int) {
 	if attempt > 0 {
 		nc.logger.WithFields(logrus.Fields{
-			"attempts": attempt + 1,
-			"pattern":  nc.config.Pattern,
-		}).Info("Handshake succeeded after retries")
+			"attempts":    attempt + 1,
+			"pattern":     nc.config.Pattern,
+			"remote_addr": nc.RemoteAddr().String(),
+			"role":        map[bool]string{true: "initiator", false: "responder"}[nc.config.Initiator],
+		}).Info("handshake succeeded after retries")
 	}
 }
 
@@ -87,10 +89,13 @@ func (nc *NoiseConn) waitForRetry(ctx context.Context, attempt int) error {
 	}
 
 	nc.logger.WithFields(logrus.Fields{
-		"attempt": attempt + 1,
-		"delay":   delay,
-		"pattern": nc.config.Pattern,
-	}).Debug("Waiting before handshake retry")
+		"attempt":            attempt + 1,
+		"delay_ms":           delay.Milliseconds(),
+		"pattern":            nc.config.Pattern,
+		"backoff_multiplier": math.Pow(2, float64(attempt)),
+		"capped_at_max":      delay >= maxDelay,
+		"max_delay_ms":       maxDelay.Milliseconds(),
+	}).Debug("waiting before handshake retry with exponential backoff")
 
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
@@ -105,11 +110,21 @@ func (nc *NoiseConn) waitForRetry(ctx context.Context, attempt int) error {
 
 // logRetryAttempt logs information about the retry attempt.
 func (nc *NoiseConn) logRetryAttempt(attempt int, lastErr error) {
+	// Extract error code if available from oops error
+	errorCode := "UNKNOWN"
+	if oe, ok := lastErr.(interface{ Code() string }); ok {
+		errorCode = oe.Code()
+	}
+
 	nc.logger.WithFields(logrus.Fields{
-		"attempt":    attempt + 1,
-		"pattern":    nc.config.Pattern,
-		"last_error": lastErr.Error(),
-	}).Warn("Handshake failed, retrying")
+		"attempt":         attempt + 1,
+		"max_retries":     nc.config.HandshakeRetries,
+		"pattern":         nc.config.Pattern,
+		"last_error":      lastErr.Error(),
+		"last_error_code": errorCode,
+		"remote_addr":     nc.RemoteAddr().String(),
+		"role":            map[bool]string{true: "initiator", false: "responder"}[nc.config.Initiator],
+	}).Warn("handshake failed, retrying with exponential backoff")
 }
 
 // wrapRetryError wraps the final error with retry context information.

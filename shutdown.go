@@ -160,9 +160,11 @@ func (sm *ShutdownManager) Shutdown() error {
 // logShutdownInitiation logs the start of the shutdown process with current state.
 func (sm *ShutdownManager) logShutdownInitiation() {
 	sm.logger.WithFields(logrus.Fields{
-		"timeout":     sm.shutdownTimeout.String(),
-		"connections": len(sm.connections),
-		"listeners":   len(sm.listeners),
+		"timeout":        sm.shutdownTimeout.String(),
+		"connections":    len(sm.connections),
+		"listeners":      len(sm.listeners),
+		"shutdown_phase": "initiation",
+		"timestamp":      time.Now().Format(time.RFC3339),
 	}).Info("initiating graceful shutdown")
 }
 
@@ -265,6 +267,7 @@ func (sm *ShutdownManager) waitForConnectionsDrain() error {
 				In("shutdown").
 				With("remaining_connections", remaining).
 				With("timeout", sm.shutdownTimeout.String()).
+				With("shutdown_phase", "drain_timeout").
 				Errorf("timeout waiting for connections to drain")
 
 		case <-ticker.C:
@@ -277,6 +280,7 @@ func (sm *ShutdownManager) waitForConnectionsDrain() error {
 			}
 
 			sm.logger.WithField("remaining_connections", connectionCount).
+				WithField("shutdown_phase", "draining").
 				Debug("waiting for connections to drain")
 		}
 	}
