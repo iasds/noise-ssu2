@@ -1,6 +1,6 @@
 # go-noise
 
-A wrapper library around the flynn/noise package that provides `net.Conn`, `net.Listener`, and `net.Addr` interfaces for the Noise Protocol Framework. Designed for implementing I2P's NTCP2 and SSU2 transport protocols with extensible handshake modification capabilities.
+A wrapper library around the go-i2p/noise package that provides `net.Conn`, `net.Listener`, and `net.Addr` interfaces for the Noise Protocol Framework. Designed for implementing I2P's NTCP2 and SSU2 transport protocols with extensible handshake modification capabilities.
 
 ## Features
 
@@ -168,7 +168,7 @@ The library tracks:
 ```
 NoiseConn (net.Conn)
 ├── Config (pattern, keys, timeouts)
-├── HandshakeState (flynn/noise)
+├── HandshakeState (go-i2p/noise)
 ├── CipherState (post-handshake encryption)
 ├── NoiseAddr (net.Addr with pattern info)
 └── Underlying net.Conn (TCP, UDP, etc.)
@@ -242,7 +242,7 @@ $ DEBUG_I2P=debug go run examples/basic/main.go
 
 ## Dependencies
 
-- **flynn/noise** v1.1.0: Core Noise Protocol implementation
+- **go-i2p/noise** v1.1.0: Core Noise Protocol implementation
 - **go-i2p/logger**: Structured logging support with environment-based control
 - **samber/oops** v1.19.0: Rich error context
 
