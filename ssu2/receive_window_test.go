@@ -86,7 +86,6 @@ func TestReceiveWindow_InsertExpected(t *testing.T) {
 	packet := &SSU2Packet{
 		PacketNumber: 1000,
 		Timestamp:    time.Now(),
-		Data:         []byte("test"),
 	}
 
 	ready, err := rw.Insert(packet)
@@ -119,7 +118,6 @@ func TestReceiveWindow_InsertFuture(t *testing.T) {
 	packet := &SSU2Packet{
 		PacketNumber: 1005,
 		Timestamp:    time.Now(),
-		Data:         []byte("future"),
 	}
 
 	ready, err := rw.Insert(packet)
@@ -152,7 +150,6 @@ func TestReceiveWindow_InsertOld(t *testing.T) {
 	packet := &SSU2Packet{
 		PacketNumber: 999,
 		Timestamp:    time.Now(),
-		Data:         []byte("old"),
 	}
 
 	ready, err := rw.Insert(packet)
@@ -178,7 +175,6 @@ func TestReceiveWindow_InsertDuplicate(t *testing.T) {
 	packet1 := &SSU2Packet{
 		PacketNumber: 1000,
 		Timestamp:    time.Now(),
-		Data:         []byte("first"),
 	}
 	_, _ = rw.Insert(packet1)
 
@@ -186,7 +182,6 @@ func TestReceiveWindow_InsertDuplicate(t *testing.T) {
 	packet2 := &SSU2Packet{
 		PacketNumber: 1000,
 		Timestamp:    time.Now(),
-		Data:         []byte("duplicate"),
 	}
 
 	ready, err := rw.Insert(packet2)
@@ -208,7 +203,6 @@ func TestReceiveWindow_InsertDuplicateFuture(t *testing.T) {
 	packet1 := &SSU2Packet{
 		PacketNumber: 1005,
 		Timestamp:    time.Now(),
-		Data:         []byte("first"),
 	}
 	_, _ = rw.Insert(packet1)
 
@@ -216,7 +210,6 @@ func TestReceiveWindow_InsertDuplicateFuture(t *testing.T) {
 	packet2 := &SSU2Packet{
 		PacketNumber: 1005,
 		Timestamp:    time.Now(),
-		Data:         []byte("duplicate"),
 	}
 
 	ready, err := rw.Insert(packet2)
@@ -257,7 +250,6 @@ func TestReceiveWindow_SequentialPackets(t *testing.T) {
 		packet := &SSU2Packet{
 			PacketNumber: i,
 			Timestamp:    time.Now(),
-			Data:         []byte{byte(i)},
 		}
 
 		ready, err := rw.Insert(packet)
@@ -290,9 +282,9 @@ func TestReceiveWindow_OutOfOrderRelease(t *testing.T) {
 
 	// Buffer packets out of order: 1002, 1001, 1003
 	packets := []*SSU2Packet{
-		{PacketNumber: 1002, Data: []byte("pkt1002")},
-		{PacketNumber: 1001, Data: []byte("pkt1001")},
-		{PacketNumber: 1003, Data: []byte("pkt1003")},
+		{PacketNumber: 1002},
+		{PacketNumber: 1001},
+		{PacketNumber: 1003},
 	}
 
 	for _, pkt := range packets {
@@ -310,7 +302,7 @@ func TestReceiveWindow_OutOfOrderRelease(t *testing.T) {
 	}
 
 	// Insert missing packet 1000, should release all
-	packet := &SSU2Packet{PacketNumber: 1000, Data: []byte("pkt1000")}
+	packet := &SSU2Packet{PacketNumber: 1000}
 	ready, err := rw.Insert(packet)
 
 	if err != nil {

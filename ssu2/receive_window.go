@@ -2,7 +2,6 @@ package ssu2
 
 import (
 	"sync"
-	"time"
 
 	"github.com/samber/oops"
 )
@@ -43,14 +42,7 @@ type ReceiveWindow struct {
 	mutex sync.RWMutex
 }
 
-// SSU2Packet represents an SSU2 protocol packet (placeholder for now).
-// This will be fully defined in packet.go, but we need the basic structure
-// for ReceiveWindow to work.
-type SSU2Packet struct {
-	PacketNumber uint32    // Sequence number for ordering
-	Timestamp    time.Time // When packet was received
-	Data         []byte    // Packet payload (for now, will expand later)
-}
+// SSU2Packet is defined in packet.go
 
 const (
 	// DefaultMaxWindowSize is the default maximum number of buffered packets.
