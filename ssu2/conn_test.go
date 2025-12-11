@@ -30,10 +30,11 @@ func createTestConfig(t *testing.T) *SSU2Config {
 
 // mockPacketConn implements net.PacketConn for testing.
 type mockPacketConn struct {
-	readChan  chan mockPacket
-	writeChan chan mockPacket
-	localAddr net.Addr
-	closed    bool
+	readChan     chan mockPacket
+	writeChan    chan mockPacket
+	localAddr    net.Addr
+	closed       bool
+	readDeadline time.Time
 }
 
 type mockPacket struct {
@@ -41,6 +42,13 @@ type mockPacket struct {
 	addr net.Addr
 	err  error
 }
+
+// timeoutError implements net.Error for timeout conditions.
+type timeoutError struct{}
+
+func (e *timeoutError) Error() string   { return "i/o timeout" }
+func (e *timeoutError) Timeout() bool   { return true }
+func (e *timeoutError) Temporary() bool { return true }
 
 func newMockPacketConn(localAddr net.Addr) *mockPacketConn {
 	return &mockPacketConn{
@@ -54,12 +62,33 @@ func (m *mockPacketConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
 	if m.closed {
 		return 0, nil, net.ErrClosed
 	}
-	packet := <-m.readChan
-	if packet.err != nil {
-		return 0, nil, packet.err
+
+	// Respect read deadline
+	var timer *time.Timer
+	var timerChan <-chan time.Time
+	if !m.readDeadline.IsZero() {
+		timeout := time.Until(m.readDeadline)
+		if timeout <= 0 {
+			return 0, nil, &net.OpError{Op: "read", Net: "udp", Err: &timeoutError{}}
+		}
+		timer = time.NewTimer(timeout)
+		timerChan = timer.C
+		defer timer.Stop()
 	}
-	n = copy(p, packet.data)
-	return n, packet.addr, nil
+
+	select {
+	case packet, ok := <-m.readChan:
+		if !ok {
+			return 0, nil, net.ErrClosed
+		}
+		if packet.err != nil {
+			return 0, nil, packet.err
+		}
+		n = copy(p, packet.data)
+		return n, packet.addr, nil
+	case <-timerChan:
+		return 0, nil, &net.OpError{Op: "read", Net: "udp", Err: &timeoutError{}}
+	}
 }
 
 func (m *mockPacketConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
@@ -88,6 +117,7 @@ func (m *mockPacketConn) SetDeadline(t time.Time) error {
 }
 
 func (m *mockPacketConn) SetReadDeadline(t time.Time) error {
+	m.readDeadline = t
 	return nil
 }
 
@@ -123,8 +153,13 @@ func TestNewSSU2Conn_ValidInitiator(t *testing.T) {
 
 	remoteAddr := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 9001}
 	routerHash := make([]byte, 32)
+	remoteHash := make([]byte, 32)
+	for i := range remoteHash {
+		remoteHash[i] = byte(i + 1)
+	}
 	config, err := NewSSU2Config(routerHash, true)
 	require.NoError(t, err)
+	config.RemoteRouterHash = remoteHash // Required for initiator
 	config.ConnectionID = 12345
 	config.MTU = 1500
 
