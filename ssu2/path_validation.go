@@ -17,10 +17,10 @@ import (
 // Path validation allows an SSU2 connection to migrate to a new UDP path
 // (different IP address or port) while maintaining security and preventing
 // amplification attacks. This is useful for:
-//  - IP address changes (network switch, VPN, mobile roaming)
-//  - Port changes (NAT rebinding)
-//  - Failover to backup paths
-//  - Load balancing across multiple paths
+//   - IP address changes (network switch, VPN, mobile roaming)
+//   - Port changes (NAT rebinding)
+//   - Failover to backup paths
+//   - Load balancing across multiple paths
 //
 // The validation protocol uses Path Challenge (Type 18) and Path Response (Type 19) blocks
 // to verify bidirectional connectivity on the new path before migration.
