@@ -549,6 +549,144 @@ func (ptm *PeerTestManager) GetStats() map[string]int {
 	return stats
 }
 
+// CreateRelayTest creates a relay test when Bob receives request from Alice.
+//
+// Bob acts as relay between Alice (initiator) and Charlie (responder).
+//
+// Parameters:
+//   - nonce: Test nonce from Alice
+//   - aliceAddr: Alice's address
+//   - charlieAddr: Charlie's address
+//
+// Returns nonce on success, error otherwise.
+func (ptm *PeerTestManager) CreateRelayTest(nonce uint32, aliceAddr, charlieAddr *net.UDPAddr) (uint32, error) {
+	if nonce == 0 {
+		return 0, oops.
+			Code("INVALID_NONCE").
+			In("peertest_manager").
+			Errorf("nonce cannot be zero")
+	}
+	if aliceAddr == nil {
+		return 0, oops.
+			Code("INVALID_ADDRESS").
+			In("peertest_manager").
+			Errorf("alice address cannot be nil")
+	}
+	if charlieAddr == nil {
+		return 0, oops.
+			Code("INVALID_ADDRESS").
+			In("peertest_manager").
+			Errorf("charlie address cannot be nil")
+	}
+
+	ptm.mutex.Lock()
+	defer ptm.mutex.Unlock()
+
+	// Create relay test
+	test := &PeerTest{
+		Nonce:       nonce,
+		Role:        RoleRelay,
+		State:       TestRelayed,
+		AliceAddr:   aliceAddr,
+		CharlieAddr: charlieAddr,
+		StartTime:   time.Now(),
+		Timeouts:    make([]time.Time, 7),
+	}
+
+	ptm.tests[nonce] = test
+
+	return nonce, nil
+}
+
+// CreateResponderTest creates a responder test when Charlie receives relay from Bob.
+//
+// Charlie acts as responder to probe Alice.
+//
+// Parameters:
+//   - nonce: Test nonce
+//   - aliceAddr: Alice's address
+//   - bobAddr: Bob's address
+//
+// Returns error on failure.
+func (ptm *PeerTestManager) CreateResponderTest(nonce uint32, aliceAddr, bobAddr *net.UDPAddr) error {
+	if nonce == 0 {
+		return oops.
+			Code("INVALID_NONCE").
+			In("peertest_manager").
+			Errorf("nonce cannot be zero")
+	}
+	if aliceAddr == nil {
+		return oops.
+			Code("INVALID_ADDRESS").
+			In("peertest_manager").
+			Errorf("alice address cannot be nil")
+	}
+	if bobAddr == nil {
+		return oops.
+			Code("INVALID_ADDRESS").
+			In("peertest_manager").
+			Errorf("bob address cannot be nil")
+	}
+
+	ptm.mutex.Lock()
+	defer ptm.mutex.Unlock()
+
+	// Create responder test
+	test := &PeerTest{
+		Nonce:     nonce,
+		Role:      RoleResponder,
+		State:     TestProbed,
+		AliceAddr: aliceAddr,
+		BobAddr:   bobAddr,
+		StartTime: time.Now(),
+		Timeouts:  make([]time.Time, 7),
+	}
+
+	ptm.tests[nonce] = test
+
+	return nil
+}
+
+// SetAliceAddr sets Alice's address in an existing test.
+//
+// Used when Alice's external address is determined during the test.
+//
+// Parameters:
+//   - nonce: Test nonce
+//   - addr: Alice's address
+//
+// Returns error if test not found.
+func (ptm *PeerTestManager) SetAliceAddr(nonce uint32, addr *net.UDPAddr) error {
+	if nonce == 0 {
+		return oops.
+			Code("INVALID_NONCE").
+			In("peertest_manager").
+			Errorf("nonce cannot be zero")
+	}
+	if addr == nil {
+		return oops.
+			Code("INVALID_ADDRESS").
+			In("peertest_manager").
+			Errorf("address cannot be nil")
+	}
+
+	ptm.mutex.Lock()
+	defer ptm.mutex.Unlock()
+
+	test, exists := ptm.tests[nonce]
+	if !exists {
+		return oops.
+			Code("TEST_NOT_FOUND").
+			In("peertest_manager").
+			With("nonce", nonce).
+			Errorf("peer test not found")
+	}
+
+	test.AliceAddr = addr
+
+	return nil
+}
+
 // DetermineNATType analyzes test results to determine NAT type.
 //
 // Logic per I2P specification:
