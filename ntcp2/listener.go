@@ -253,9 +253,7 @@ func (nl *NTCP2Listener) processAcceptedConnection(noiseConn net.Conn) (*NTCP2Co
 func (nl *NTCP2Listener) logAcceptedConnection(ntcp2Conn *NTCP2Conn) {
 	nl.logger.Debug("accepted new NTCP2 connection",
 		"listener_addr", nl.addr.String(),
-		"remote_addr", ntcp2Conn.RemoteAddr().String(),
-		"remote_router_hash", fmt.Sprintf("%x", ntcp2Conn.RouterHash()[:8]),
-		"connection_type", map[bool]string{true: "tunnel", false: "router-to-router"}[ntcp2Conn.remoteAddr.IsTunnelConnection()])
+		"remote_addr", ntcp2Conn.RemoteAddr().String())
 }
 
 // Close closes the listener and prevents new connections from being accepted.

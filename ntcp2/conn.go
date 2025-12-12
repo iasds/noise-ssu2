@@ -1,7 +1,6 @@
 package ntcp2
 
 import (
-	"fmt"
 	"net"
 	"time"
 
@@ -59,10 +58,7 @@ func NewNTCP2Conn(noiseConn *noise.NoiseConn, localAddr, remoteAddr *NTCP2Addr) 
 
 	conn.logger.Debug("NTCP2 connection created",
 		"local_addr", localAddr.String(),
-		"remote_addr", remoteAddr.String(),
-		"router_hash", fmt.Sprintf("%x", remoteAddr.RouterHash()[:8]),
-		"role", localAddr.Role(),
-		"connection_type", map[bool]string{true: "tunnel", false: "router-to-router"}[remoteAddr.IsTunnelConnection()])
+		"remote_addr", remoteAddr.String())
 
 	return conn, nil
 }
@@ -83,11 +79,8 @@ func (nc *NTCP2Conn) Read(b []byte) (int, error) {
 
 	nc.logger.Trace("NTCP2 data read",
 		"bytes_read", n,
-		"buffer_size", len(b),
-		"buffer_utilization_pct", float64(n)/float64(len(b))*100,
 		"local_addr", nc.localAddr.String(),
-		"remote_addr", nc.remoteAddr.String(),
-		"router_hash", fmt.Sprintf("%x", nc.remoteAddr.RouterHash()[:8]))
+		"remote_addr", nc.remoteAddr.String())
 
 	return n, nil
 }
@@ -108,11 +101,8 @@ func (nc *NTCP2Conn) Write(b []byte) (int, error) {
 
 	nc.logger.Trace("NTCP2 data written",
 		"bytes_written", n,
-		"buffer_size", len(b),
-		"buffer_utilization_pct", float64(n)/float64(len(b))*100,
 		"local_addr", nc.localAddr.String(),
-		"remote_addr", nc.remoteAddr.String(),
-		"router_hash", fmt.Sprintf("%x", nc.remoteAddr.RouterHash()[:8]))
+		"remote_addr", nc.remoteAddr.String())
 
 	return n, nil
 }
@@ -120,14 +110,9 @@ func (nc *NTCP2Conn) Write(b []byte) (int, error) {
 // Close implements net.Conn.Close.
 // Closes the underlying Noise connection and cleans up resources.
 func (nc *NTCP2Conn) Close() error {
-	bytesRead, bytesWritten, handshakeDuration := nc.noiseConn.GetConnectionMetrics()
 	nc.logger.Debug("NTCP2 connection closing",
 		"local_addr", nc.localAddr.String(),
-		"remote_addr", nc.remoteAddr.String(),
-		"bytes_read", bytesRead,
-		"bytes_written", bytesWritten,
-		"handshake_duration_ms", handshakeDuration.Milliseconds(),
-		"router_hash", fmt.Sprintf("%x", nc.remoteAddr.RouterHash()[:8]))
+		"remote_addr", nc.remoteAddr.String())
 
 	err := nc.noiseConn.Close()
 	if err != nil {
