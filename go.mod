@@ -4,8 +4,8 @@ go 1.24.2
 
 require (
 	github.com/dchest/siphash v1.2.3
-	github.com/go-i2p/logger v0.0.1
-	github.com/go-i2p/noise v0.0.0-20251031205429-78905f26a171
+	github.com/go-i2p/logger v0.1.0
+	github.com/go-i2p/noise v0.0.0-20251212204422-ded862d8cdf9
 	github.com/samber/oops v1.19.4
 	github.com/stretchr/testify v1.11.1
 )

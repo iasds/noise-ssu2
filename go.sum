@@ -6,10 +6,10 @@ github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc h1:U9qPSI2PIWSS1
 github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/dchest/siphash v1.2.3 h1:QXwFc8cFOR2dSa/gE6o/HokBMWtLUaNDVd+22aKHeEA=
 github.com/dchest/siphash v1.2.3/go.mod h1:0NvQU092bT0ipiFN++/rXm69QG9tVxLAlQHIXMPAkHc=
-github.com/go-i2p/logger v0.0.1 h1:OFDZMjqiNXbPIm+SDxiwYtI6ocC3mb9V/t5kvZ+6XQ0=
-github.com/go-i2p/logger v0.0.1/go.mod h1:te7Zj3g3oMeIl8uBXAgO62UKmZ6m6kHRNg1Mm+X8Hzk=
-github.com/go-i2p/noise v0.0.0-20251031205429-78905f26a171 h1:eIe/feg7K7zymFpbPRUha8Y+9GVCqcLV0prpkKNn9PM=
-github.com/go-i2p/noise v0.0.0-20251031205429-78905f26a171/go.mod h1:Ax7HUfBiRp57UO3ckPP8rXHL34Q2GT7eXJ9s6lx81C8=
+github.com/go-i2p/logger v0.1.0 h1:S6LIPtyoYigNDbAnx4rGHAfSVHmps++0eXAdpZJDKJY=
+github.com/go-i2p/logger v0.1.0/go.mod h1:8cnb1aRi0bAK8QgrQi5ZXKQaK7QFeZ24Cy2hokqGpAE=
+github.com/go-i2p/noise v0.0.0-20251212204422-ded862d8cdf9 h1:GB+OInR0InM9wXdHwYNBks7kGFoeov8EGwV1IQ+Mjxw=
+github.com/go-i2p/noise v0.0.0-20251212204422-ded862d8cdf9/go.mod h1:I7AHlf/Oq0r0wMwmjwLj+IceRGJMxRLQF1RBRxyCR0I=
 github.com/google/go-cmp v0.7.0 h1:wk8382ETsv4JYUZwIsn6YpYiWiBsYLSJiTsyBybVuN8=
 github.com/google/go-cmp v0.7.0/go.mod h1:pXiqmnSA92OHEEa9HXL2W4E7lf9JzCmGVUdgjX3N/iU=
 github.com/kr/pretty v0.2.1 h1:Fmg33tUaq4/8ym9TJN1x7sLJnHVwhP33CNkpYV/7rwI=
