@@ -3,6 +3,7 @@ package ssu2
 import (
 	"bytes"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -761,4 +762,152 @@ func TestSSU2Block_Constants(t *testing.T) {
 
 	assert.Equal(t, 3, minBlockHeaderSize)
 	assert.Equal(t, 65535, maxBlockLength)
+}
+
+// TestNewNewTokenBlock tests NewToken block creation
+func TestNewNewTokenBlock(t *testing.T) {
+	t.Run("valid token creates block", func(t *testing.T) {
+		expiration := time.Now().Add(60 * time.Second)
+		token := make([]byte, 11) // Minimum size
+		for i := range token {
+			token[i] = byte(i + 1)
+		}
+
+		block, err := NewNewTokenBlock(expiration, token)
+		require.NoError(t, err)
+		require.NotNil(t, block)
+
+		assert.Equal(t, BlockTypeNewToken, block.Type)
+		assert.Equal(t, 15, len(block.Data)) // 4 + 11
+	})
+
+	t.Run("token too short returns error", func(t *testing.T) {
+		expiration := time.Now().Add(60 * time.Second)
+		shortToken := make([]byte, 10) // Too short
+
+		block, err := NewNewTokenBlock(expiration, shortToken)
+		assert.Error(t, err)
+		assert.Nil(t, block)
+		assert.Contains(t, err.Error(), "at least 11 bytes")
+	})
+
+	t.Run("larger token creates larger block", func(t *testing.T) {
+		expiration := time.Now().Add(60 * time.Second)
+		token := make([]byte, 20) // Larger than minimum
+
+		block, err := NewNewTokenBlock(expiration, token)
+		require.NoError(t, err)
+		assert.Equal(t, 24, len(block.Data)) // 4 + 20
+	})
+}
+
+// TestParseNewTokenBlock tests parsing NewToken blocks
+func TestParseNewTokenBlock(t *testing.T) {
+	t.Run("valid block parses correctly", func(t *testing.T) {
+		expiration := time.Now().Add(60 * time.Second)
+		token := make([]byte, 11)
+		for i := range token {
+			token[i] = byte(i + 0xA0)
+		}
+
+		// Create block
+		block, err := NewNewTokenBlock(expiration, token)
+		require.NoError(t, err)
+
+		// Parse it back
+		parsed, err := ParseNewTokenBlock(block)
+		require.NoError(t, err)
+		require.NotNil(t, parsed)
+
+		// Verify expiration (allow 1 second tolerance)
+		assert.InDelta(t, expiration.Unix(), int64(parsed.Expiration), 1)
+
+		// Verify token
+		assert.Equal(t, token, parsed.Token)
+	})
+
+	t.Run("wrong block type returns error", func(t *testing.T) {
+		block := NewSSU2Block(BlockTypePadding, make([]byte, 15))
+
+		parsed, err := ParseNewTokenBlock(block)
+		assert.Error(t, err)
+		assert.Nil(t, parsed)
+		assert.Contains(t, err.Error(), "expected NewToken block")
+	})
+
+	t.Run("block too short returns error", func(t *testing.T) {
+		block := &SSU2Block{
+			Type: BlockTypeNewToken,
+			Data: make([]byte, 10), // Too short
+		}
+
+		parsed, err := ParseNewTokenBlock(block)
+		assert.Error(t, err)
+		assert.Nil(t, parsed)
+		assert.Contains(t, err.Error(), "too short")
+	})
+}
+
+// TestNewTokenBlockRoundTrip tests serialization/deserialization roundtrip
+func TestNewTokenBlockRoundTrip(t *testing.T) {
+	expiration := time.Now().Add(120 * time.Second)
+	token := []byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B}
+
+	// Create block
+	block, err := NewNewTokenBlock(expiration, token)
+	require.NoError(t, err)
+
+	// Serialize
+	data, err := block.Serialize()
+	require.NoError(t, err)
+
+	// Deserialize
+	restored := &SSU2Block{}
+	_, err = restored.Deserialize(data)
+	require.NoError(t, err)
+
+	// Parse
+	parsed, err := ParseNewTokenBlock(restored)
+	require.NoError(t, err)
+
+	// Verify roundtrip
+	assert.Equal(t, uint32(expiration.Unix()), parsed.Expiration)
+	assert.Equal(t, token, parsed.Token)
+}
+
+// TestFindBlockByType tests finding blocks in a slice
+func TestFindBlockByType(t *testing.T) {
+	blocks := []*SSU2Block{
+		NewSSU2Block(BlockTypeDateTime, make([]byte, 7)),
+		NewSSU2Block(BlockTypeOptions, make([]byte, 15)),
+		NewSSU2Block(BlockTypeNewToken, []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}),
+		NewSSU2Block(BlockTypePadding, make([]byte, 10)),
+	}
+
+	t.Run("finds existing block", func(t *testing.T) {
+		found := FindBlockByType(blocks, BlockTypeNewToken)
+		require.NotNil(t, found)
+		assert.Equal(t, BlockTypeNewToken, found.Type)
+	})
+
+	t.Run("finds first matching block", func(t *testing.T) {
+		found := FindBlockByType(blocks, BlockTypeDateTime)
+		require.NotNil(t, found)
+		assert.Equal(t, BlockTypeDateTime, found.Type)
+	})
+
+	t.Run("returns nil for missing type", func(t *testing.T) {
+		found := FindBlockByType(blocks, BlockTypeACK)
+		assert.Nil(t, found)
+	})
+
+	t.Run("handles empty slice", func(t *testing.T) {
+		found := FindBlockByType([]*SSU2Block{}, BlockTypeDateTime)
+		assert.Nil(t, found)
+	})
+
+	t.Run("handles nil slice", func(t *testing.T) {
+		found := FindBlockByType(nil, BlockTypeDateTime)
+		assert.Nil(t, found)
+	})
 }

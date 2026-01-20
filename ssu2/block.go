@@ -2,6 +2,7 @@ package ssu2
 
 import (
 	"encoding/binary"
+	"time"
 
 	"github.com/samber/oops"
 )
@@ -354,4 +355,58 @@ func GetBlockTypeName(blockType uint8) string {
 	default:
 		return "Unknown"
 	}
+}
+
+// NewTokenBlock represents a NewToken (Type 17) block for Retry messages.
+// Per SSU2 spec, this block contains:
+//   - 4 bytes: Token expiration timestamp (seconds since epoch)
+//   - 8 bytes: Reserved/nonce
+//   - Token data (remaining bytes, typically 3+ bytes)
+//
+// Total minimum: 15 bytes
+type NewTokenBlock struct {
+	Expiration uint32 // Unix timestamp when token expires
+	Token      []byte // Token value (must be 11 bytes for 15-byte total)
+}
+
+// NewNewTokenBlock creates a NewToken block with the specified expiration and token.
+// The token must be exactly 11 bytes to meet the 15-byte minimum requirement.
+func NewNewTokenBlock(expiration time.Time, token []byte) (*SSU2Block, error) {
+	if len(token) < 11 {
+		return nil, oops.Errorf("token must be at least 11 bytes for NewToken block, got %d", len(token))
+	}
+
+	// Build block data: expiration (4) + token (11+)
+	data := make([]byte, 4+len(token))
+	binary.BigEndian.PutUint32(data[0:4], uint32(expiration.Unix()))
+	copy(data[4:], token)
+
+	return NewSSU2Block(BlockTypeNewToken, data), nil
+}
+
+// ParseNewTokenBlock extracts the expiration and token from a NewToken block.
+func ParseNewTokenBlock(block *SSU2Block) (*NewTokenBlock, error) {
+	if block.Type != BlockTypeNewToken {
+		return nil, oops.Errorf("expected NewToken block (type %d), got type %d", BlockTypeNewToken, block.Type)
+	}
+
+	if len(block.Data) < minNewTokenSize {
+		return nil, oops.Errorf("NewToken block data too short: %d bytes (minimum %d)", len(block.Data), minNewTokenSize)
+	}
+
+	return &NewTokenBlock{
+		Expiration: binary.BigEndian.Uint32(block.Data[0:4]),
+		Token:      block.Data[4:],
+	}, nil
+}
+
+// FindBlockByType searches for a block of the specified type in a slice of blocks.
+// Returns the first matching block, or nil if not found.
+func FindBlockByType(blocks []*SSU2Block, blockType uint8) *SSU2Block {
+	for _, block := range blocks {
+		if block.Type == blockType {
+			return block
+		}
+	}
+	return nil
 }

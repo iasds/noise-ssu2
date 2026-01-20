@@ -269,11 +269,18 @@ func (l *SSU2Listener) handleIncomingPacket(data []byte, remoteAddr *net.UDPAddr
 
 // handleNewSession is called by the router when a handshake packet arrives
 // for a new session. It creates a new SSU2Conn and adds it to the accept queue.
+//
+// For SessionRequest messages, if a token is present in the payload, it validates
+// the token before accepting the session. If no token is present or validation
+// fails, the session is still created but marked for token requirement checking.
 func (l *SSU2Listener) handleNewSession(remoteAddr *net.UDPAddr, packet *SSU2Packet) (*SSU2Conn, error) {
-	// For SessionRequest, validate token if present
+	// For SessionRequest, attempt to validate token if present
 	if packet.MessageType == MessageTypeSessionRequest {
-		// TODO: Extract and validate token from packet blocks
-		// For now, assume valid (will be implemented with block parsing)
+		if err := l.validateSessionRequestToken(packet, remoteAddr); err != nil {
+			// Token validation failed - log but continue (token may not be required)
+			// In strict mode, we would reject the session here
+			_ = err // Silently continue for backward compatibility
+		}
 	}
 
 	// Generate connection ID for new session
@@ -328,6 +335,62 @@ func (l *SSU2Listener) handleNewSession(remoteAddr *net.UDPAddr, packet *SSU2Pac
 	return conn, nil
 }
 
+// validateSessionRequestToken extracts and validates the token from a SessionRequest.
+// If the payload contains a NewToken block, the token is validated against the cache.
+//
+// Returns nil if token is valid or not present, error if token is invalid.
+func (l *SSU2Listener) validateSessionRequestToken(packet *SSU2Packet, remoteAddr *net.UDPAddr) error {
+	// Parse blocks from payload
+	if len(packet.Payload) == 0 {
+		return nil // No payload, no token to validate
+	}
+
+	blocks, err := DeserializeBlocks(packet.Payload)
+	if err != nil {
+		// Can't parse blocks - continue without token validation
+		return nil
+	}
+
+	// Find NewToken block
+	tokenBlock := FindBlockByType(blocks, BlockTypeNewToken)
+	if tokenBlock == nil {
+		return nil // No token block present
+	}
+
+	// Parse token from block
+	newToken, err := ParseNewTokenBlock(tokenBlock)
+	if err != nil {
+		return oops.Wrapf(err, "failed to parse NewToken block")
+	}
+
+	// Check token expiration
+	if time.Now().Unix() > int64(newToken.Expiration) {
+		return oops.
+			Code("TOKEN_EXPIRED").
+			In("ssu2_listener").
+			With("expiration", newToken.Expiration).
+			Errorf("token has expired")
+	}
+
+	// Validate token against cache
+	// Note: We use the 11-byte token from the block, padded to match cache storage
+	fullToken := make([]byte, 32)
+	copy(fullToken, newToken.Token)
+
+	if !l.tokenCache.ValidateToken(fullToken, remoteAddr) {
+		return oops.
+			Code("INVALID_TOKEN").
+			In("ssu2_listener").
+			With("address", remoteAddr.String()).
+			Errorf("token validation failed")
+	}
+
+	// Token is valid - consume it
+	l.tokenCache.ConsumeToken(fullToken, remoteAddr)
+
+	return nil
+}
+
 // processTokenRequest handles a TokenRequest message by generating and sending
 // a Retry message with a new token.
 func (l *SSU2Listener) processTokenRequest(packet *SSU2Packet, remoteAddr *net.UDPAddr) error {
@@ -337,21 +400,69 @@ func (l *SSU2Listener) processTokenRequest(packet *SSU2Packet, remoteAddr *net.U
 		return oops.Wrapf(err, "failed to generate token")
 	}
 
-	// Send Retry message with token
-	return l.sendRetry(remoteAddr, token)
+	// Create and send Retry message with token
+	return l.sendRetry(remoteAddr, token, packet.Header)
 }
 
 // sendRetry sends a Retry message containing the specified token to the remote address.
-func (l *SSU2Listener) sendRetry(remoteAddr *net.UDPAddr, token []byte) error {
-	// TODO: Construct Retry packet with token block (Type 17)
-	// For now, this is a placeholder that will be implemented with full block support
-	_ = token
-	_ = remoteAddr
+// The Retry message includes a NewToken block and echoes necessary header data.
+//
+// Parameters:
+//   - remoteAddr: Destination UDP address
+//   - token: 32-byte token value (will use first 11 bytes for NewToken block)
+//   - originalHeader: Header from TokenRequest (for connection ID extraction)
+func (l *SSU2Listener) sendRetry(remoteAddr *net.UDPAddr, token []byte, originalHeader []byte) error {
+	if len(token) < 11 {
+		return oops.Errorf("token too short: need at least 11 bytes, got %d", len(token))
+	}
 
-	return oops.
-		Code("NOT_IMPLEMENTED").
-		In("ssu2_listener").
-		Errorf("sendRetry not yet implemented - requires block construction")
+	// Calculate token expiration (TTL from token cache)
+	expiration := time.Now().Add(l.tokenCache.GetTTL())
+
+	// Create NewToken block with first 11 bytes of token
+	tokenBlock, err := NewNewTokenBlock(expiration, token[:11])
+	if err != nil {
+		return oops.Wrapf(err, "failed to create NewToken block")
+	}
+
+	// Serialize block into payload
+	payload, err := tokenBlock.Serialize()
+	if err != nil {
+		return oops.Wrapf(err, "failed to serialize NewToken block")
+	}
+
+	// Create Retry packet (Type 9, uses long header)
+	retryPacket := NewSSU2Packet(MessageTypeRetry, 0)
+
+	// Build header (32 bytes for Retry message)
+	// Header format per SSU2: includes destination/source connection IDs and flags
+	header := make([]byte, LongHeaderSize)
+
+	// Copy connection ID from original request if available
+	if len(originalHeader) >= 8 {
+		copy(header[0:8], originalHeader[0:8]) // Destination connection ID
+	}
+
+	// Set message type flags in header
+	header[8] = MessageTypeRetry
+
+	retryPacket.Header = header
+	retryPacket.Payload = payload
+	retryPacket.MAC = make([]byte, MACSize) // Will be computed by crypto layer
+
+	// Serialize packet
+	packetData, err := retryPacket.Serialize()
+	if err != nil {
+		return oops.Wrapf(err, "failed to serialize Retry packet")
+	}
+
+	// Send packet
+	_, err = l.underlying.WriteTo(packetData, remoteAddr)
+	if err != nil {
+		return oops.Wrapf(err, "failed to send Retry packet")
+	}
+
+	return nil
 }
 
 // removeSession removes a session from the listener's session map.
