@@ -24,7 +24,7 @@ func TestNewSSU2Config(t *testing.T) {
 		assert.Equal(t, "XK", config.Pattern)
 		assert.True(t, config.Initiator)
 		assert.Equal(t, 32, len(config.RouterHash))
-		assert.Equal(t, 30*time.Second, config.HandshakeTimeout)
+		assert.Equal(t, DefaultHandshakeTimeout, config.HandshakeTimeout)
 		assert.Equal(t, time.Duration(0), config.ReadTimeout)
 		assert.Equal(t, time.Duration(0), config.WriteTimeout)
 		assert.Equal(t, 3, config.HandshakeRetries)

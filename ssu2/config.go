@@ -8,6 +8,13 @@ import (
 	"github.com/samber/oops"
 )
 
+// Default timeout values per SSU2 specification (SSU2.md)
+const (
+	// DefaultHandshakeTimeout is the spec-defined handshake timeout of 15 seconds.
+	// Per SSU2.md: "Handshake timeout: 15 seconds"
+	DefaultHandshakeTimeout = 15 * time.Second
+)
+
 // SSU2Config contains configuration for creating SSU2 connections and listeners.
 // SSU2 (Secure Semi-reliable UDP version 2) is I2P's UDP-based transport protocol.
 // It follows the builder pattern for optional configuration and validation.
@@ -32,7 +39,7 @@ type SSU2Config struct {
 	RemoteRouterHash []byte
 
 	// HandshakeTimeout is the maximum time to wait for handshake completion
-	// Default: 30 seconds
+	// Default: 15 seconds (per SSU2 specification)
 	HandshakeTimeout time.Duration
 
 	// ReadTimeout is the timeout for read operations after handshake
@@ -133,7 +140,7 @@ func NewSSU2Config(routerHash []byte, initiator bool) (*SSU2Config, error) {
 		Pattern:                 "XK",
 		Initiator:               initiator,
 		RouterHash:              hash,
-		HandshakeTimeout:        30 * time.Second,
+		HandshakeTimeout:        DefaultHandshakeTimeout,
 		ReadTimeout:             0, // No timeout by default
 		WriteTimeout:            0, // No timeout by default
 		HandshakeRetries:        3,
