@@ -15,7 +15,7 @@ import (
 // - BlockTypeI2NPMessage (Type 3): Complete I2NP messages
 // - BlockTypeFirstFragment (Type 4): First fragment of large message
 // - BlockTypeFollowOnFragment (Type 5): Subsequent fragments
-// - Other blocks: DateTime, ACK, Padding, etc.
+// - All other 17 block types (DateTime, ACK, Relay*, PeerTest, etc.)
 type DataHandler struct {
 	// messageQueue holds complete I2NP messages ready for delivery
 	messageQueue chan []byte
@@ -28,6 +28,61 @@ type DataHandler struct {
 
 	// stats tracks message processing statistics
 	stats DataHandlerStats
+
+	// blockRouter routes non-I2NP blocks to registered handlers
+	blockRouter *BlockRouter
+
+	// callbacks for specific block types
+	callbacks DataHandlerCallbacks
+}
+
+// DataHandlerCallbacks defines optional callbacks for block types
+// that need external handling.
+type DataHandlerCallbacks struct {
+	// OnTermination is called when a Termination block is received
+	OnTermination func(reason uint8, additionalData []byte)
+
+	// OnNewToken is called when a NewToken block is received
+	OnNewToken func(token []byte)
+
+	// OnRelayRequest is called when a RelayRequest block is received
+	OnRelayRequest func(block *SSU2Block) error
+
+	// OnRelayResponse is called when a RelayResponse block is received
+	OnRelayResponse func(block *SSU2Block) error
+
+	// OnRelayIntro is called when a RelayIntro block is received
+	OnRelayIntro func(block *SSU2Block) error
+
+	// OnRelayTagRequest is called when a RelayTagRequest block is received
+	OnRelayTagRequest func(block *SSU2Block) error
+
+	// OnRelayTag is called when a RelayTag block is received
+	OnRelayTag func(block *SSU2Block) error
+
+	// OnPeerTest is called when a PeerTest block is received
+	OnPeerTest func(block *SSU2Block) error
+
+	// OnPathChallenge is called when a PathChallenge block is received
+	OnPathChallenge func(data []byte) error
+
+	// OnPathResponse is called when a PathResponse block is received
+	OnPathResponse func(data []byte) error
+
+	// OnRouterInfo is called when a RouterInfo block is received
+	OnRouterInfo func(data []byte) error
+
+	// OnOptions is called when an Options block is received
+	OnOptions func(data []byte) error
+
+	// OnAddress is called when an Address block is received
+	OnAddress func(data []byte) error
+
+	// OnACK is called when an ACK block is received
+	OnACK func(block *SSU2Block) error
+
+	// OnDateTime is called when a DateTime block is received
+	OnDateTime func(timestamp uint32) error
 }
 
 // DataHandlerStats tracks statistics for monitoring and debugging.
@@ -36,6 +91,8 @@ type DataHandlerStats struct {
 	FragmentsReceived   uint64 // Total fragments received
 	MessagesReassembled uint64 // Messages successfully reassembled
 	MessagesDropped     uint64 // Messages dropped (timeout, errors)
+	BlocksProcessed     uint64 // Total blocks processed
+	UnknownBlocks       uint64 // Unknown block types received
 }
 
 // FragmentSet represents a message being reassembled from fragments.
@@ -58,11 +115,23 @@ func NewDataHandler(queueSize int) *DataHandler {
 	return &DataHandler{
 		messageQueue: make(chan []byte, queueSize),
 		fragments:    make(map[uint32]*FragmentSet),
+		blockRouter:  NewBlockRouter(),
 	}
+}
+
+// SetCallbacks sets the callback handlers for block types.
+func (h *DataHandler) SetCallbacks(callbacks DataHandlerCallbacks) {
+	h.callbacks = callbacks
+}
+
+// GetBlockRouter returns the block router for registering external handlers.
+func (h *DataHandler) GetBlockRouter() *BlockRouter {
+	return h.blockRouter
 }
 
 // ProcessDataPacket processes a Data packet and extracts I2NP messages.
 // Returns extracted blocks and any error encountered.
+// All 20 SSU2 block types are explicitly handled.
 func (h *DataHandler) ProcessDataPacket(packet *SSU2Packet) ([]*SSU2Block, error) {
 	if packet.MessageType != MessageTypeData {
 		return nil, oops.Errorf("expected Data packet (type %d), got type %d",
@@ -76,9 +145,12 @@ func (h *DataHandler) ProcessDataPacket(packet *SSU2Packet) ([]*SSU2Block, error
 		return nil, oops.Wrapf(err, "failed to deserialize blocks from Data packet")
 	}
 
-	// Process each block
+	// Process each block - all 20 types explicitly handled
 	for _, block := range blocks {
+		h.incrementStat(&h.stats.BlocksProcessed)
+
 		switch block.Type {
+		// === Message Blocks (I2NP Data) ===
 		case BlockTypeI2NPMessage:
 			// Complete I2NP message - queue directly
 			if err := h.handleI2NPMessage(block.Data); err != nil {
@@ -97,14 +169,97 @@ func (h *DataHandler) ProcessDataPacket(packet *SSU2Packet) ([]*SSU2Block, error
 				return blocks, err
 			}
 
-		// Other block types (DateTime, ACK, Padding) are handled elsewhere
-		case BlockTypeDateTime, BlockTypeACK, BlockTypePadding:
-			// These are handled by other components
+		// === Session Management Blocks ===
+		case BlockTypeTermination:
+			if err := h.handleTermination(block.Data); err != nil {
+				log.WithField("error", err).Warn("Error handling Termination block")
+			}
+
+		case BlockTypeNewToken:
+			if err := h.handleNewToken(block.Data); err != nil {
+				log.WithField("error", err).Warn("Error handling NewToken block")
+			}
+
+		// === Relay Blocks ===
+		case BlockTypeRelayRequest:
+			if err := h.handleRelayRequest(block); err != nil {
+				log.WithField("error", err).Debug("Error handling RelayRequest block")
+			}
+
+		case BlockTypeRelayResponse:
+			if err := h.handleRelayResponse(block); err != nil {
+				log.WithField("error", err).Debug("Error handling RelayResponse block")
+			}
+
+		case BlockTypeRelayIntro:
+			if err := h.handleRelayIntro(block); err != nil {
+				log.WithField("error", err).Debug("Error handling RelayIntro block")
+			}
+
+		case BlockTypeRelayTagRequest:
+			if err := h.handleRelayTagRequest(block); err != nil {
+				log.WithField("error", err).Debug("Error handling RelayTagRequest block")
+			}
+
+		case BlockTypeRelayTag:
+			if err := h.handleRelayTag(block); err != nil {
+				log.WithField("error", err).Debug("Error handling RelayTag block")
+			}
+
+		// === Peer Test Block ===
+		case BlockTypePeerTest:
+			if err := h.handlePeerTest(block); err != nil {
+				log.WithField("error", err).Debug("Error handling PeerTest block")
+			}
+
+		// === Path Validation Blocks ===
+		case BlockTypePathChallenge:
+			if err := h.handlePathChallenge(block.Data); err != nil {
+				log.WithField("error", err).Debug("Error handling PathChallenge block")
+			}
+
+		case BlockTypePathResponse:
+			if err := h.handlePathResponse(block.Data); err != nil {
+				log.WithField("error", err).Debug("Error handling PathResponse block")
+			}
+
+		// === Metadata Blocks ===
+		case BlockTypeDateTime:
+			if err := h.handleDateTime(block.Data); err != nil {
+				log.WithField("error", err).Debug("Error handling DateTime block")
+			}
+
+		case BlockTypeOptions:
+			if err := h.handleOptions(block.Data); err != nil {
+				log.WithField("error", err).Debug("Error handling Options block")
+			}
+
+		case BlockTypeRouterInfo:
+			if err := h.handleRouterInfo(block.Data); err != nil {
+				log.WithField("error", err).Debug("Error handling RouterInfo block")
+			}
+
+		case BlockTypeAddress:
+			if err := h.handleAddress(block.Data); err != nil {
+				log.WithField("error", err).Debug("Error handling Address block")
+			}
+
+		case BlockTypeACK:
+			if err := h.handleACK(block); err != nil {
+				log.WithField("error", err).Debug("Error handling ACK block")
+			}
+
+		case BlockTypePadding:
+			// Padding blocks are intentionally ignored - no processing needed
 			continue
 
 		default:
-			// Unknown block type - skip but don't error
-			continue
+			// Unknown block type - log warning with details
+			h.incrementStat(&h.stats.UnknownBlocks)
+			log.WithFields(map[string]interface{}{
+				"blockType":  block.Type,
+				"dataLength": len(block.Data),
+			}).Warn("Received unknown block type")
 		}
 	}
 
@@ -322,6 +477,8 @@ func (h *DataHandler) GetStats() DataHandlerStats {
 		FragmentsReceived:   h.stats.FragmentsReceived,
 		MessagesReassembled: h.stats.MessagesReassembled,
 		MessagesDropped:     h.stats.MessagesDropped,
+		BlocksProcessed:     h.stats.BlocksProcessed,
+		UnknownBlocks:       h.stats.UnknownBlocks,
 	}
 }
 
@@ -355,4 +512,195 @@ done:
 func (h *DataHandler) incrementStat(stat *uint64) {
 	// Simple increment - for production use atomic operations
 	*stat++
+}
+
+// === Block Type Handler Methods ===
+// Each method handles a specific SSU2 block type, either directly
+// or by delegating to registered callbacks.
+
+// handleTermination processes a Termination block (Type 6).
+// Termination format: Reason (1 byte) + Additional data (variable)
+func (h *DataHandler) handleTermination(data []byte) error {
+	if len(data) < 1 {
+		return oops.Errorf("Termination block too short: %d bytes", len(data))
+	}
+
+	reason := data[0]
+	additionalData := data[1:]
+
+	log.WithFields(map[string]interface{}{
+		"reason":     reason,
+		"dataLength": len(additionalData),
+	}).Info("Received Termination block")
+
+	if h.callbacks.OnTermination != nil {
+		h.callbacks.OnTermination(reason, additionalData)
+	}
+
+	return nil
+}
+
+// handleNewToken processes a NewToken block (Type 17).
+// NewToken format: Expires (4 bytes) + Token (8 bytes) = 12 bytes minimum
+func (h *DataHandler) handleNewToken(data []byte) error {
+	if len(data) < 12 {
+		return oops.Errorf("NewToken block too short: %d bytes, need 12", len(data))
+	}
+
+	log.WithField("tokenLength", len(data)).Debug("Received NewToken block")
+
+	if h.callbacks.OnNewToken != nil {
+		h.callbacks.OnNewToken(data)
+	}
+
+	return nil
+}
+
+// handleRelayRequest processes a RelayRequest block (Type 7).
+func (h *DataHandler) handleRelayRequest(block *SSU2Block) error {
+	log.WithField("dataLength", len(block.Data)).Debug("Received RelayRequest block")
+
+	if h.callbacks.OnRelayRequest != nil {
+		return h.callbacks.OnRelayRequest(block)
+	}
+
+	// No callback registered - block will be handled by relay manager if connected
+	return nil
+}
+
+// handleRelayResponse processes a RelayResponse block (Type 8).
+func (h *DataHandler) handleRelayResponse(block *SSU2Block) error {
+	log.WithField("dataLength", len(block.Data)).Debug("Received RelayResponse block")
+
+	if h.callbacks.OnRelayResponse != nil {
+		return h.callbacks.OnRelayResponse(block)
+	}
+
+	return nil
+}
+
+// handleRelayIntro processes a RelayIntro block (Type 9).
+func (h *DataHandler) handleRelayIntro(block *SSU2Block) error {
+	log.WithField("dataLength", len(block.Data)).Debug("Received RelayIntro block")
+
+	if h.callbacks.OnRelayIntro != nil {
+		return h.callbacks.OnRelayIntro(block)
+	}
+
+	return nil
+}
+
+// handleRelayTagRequest processes a RelayTagRequest block (Type 15).
+func (h *DataHandler) handleRelayTagRequest(block *SSU2Block) error {
+	log.WithField("dataLength", len(block.Data)).Debug("Received RelayTagRequest block")
+
+	if h.callbacks.OnRelayTagRequest != nil {
+		return h.callbacks.OnRelayTagRequest(block)
+	}
+
+	return nil
+}
+
+// handleRelayTag processes a RelayTag block (Type 16).
+func (h *DataHandler) handleRelayTag(block *SSU2Block) error {
+	log.WithField("dataLength", len(block.Data)).Debug("Received RelayTag block")
+
+	if h.callbacks.OnRelayTag != nil {
+		return h.callbacks.OnRelayTag(block)
+	}
+
+	return nil
+}
+
+// handlePeerTest processes a PeerTest block (Type 10).
+func (h *DataHandler) handlePeerTest(block *SSU2Block) error {
+	log.WithField("dataLength", len(block.Data)).Debug("Received PeerTest block")
+
+	if h.callbacks.OnPeerTest != nil {
+		return h.callbacks.OnPeerTest(block)
+	}
+
+	return nil
+}
+
+// handlePathChallenge processes a PathChallenge block (Type 18).
+func (h *DataHandler) handlePathChallenge(data []byte) error {
+	log.WithField("dataLength", len(data)).Debug("Received PathChallenge block")
+
+	if h.callbacks.OnPathChallenge != nil {
+		return h.callbacks.OnPathChallenge(data)
+	}
+
+	return nil
+}
+
+// handlePathResponse processes a PathResponse block (Type 19).
+func (h *DataHandler) handlePathResponse(data []byte) error {
+	log.WithField("dataLength", len(data)).Debug("Received PathResponse block")
+
+	if h.callbacks.OnPathResponse != nil {
+		return h.callbacks.OnPathResponse(data)
+	}
+
+	return nil
+}
+
+// handleDateTime processes a DateTime block (Type 0).
+// DateTime format: Timestamp (4 bytes, seconds since epoch)
+func (h *DataHandler) handleDateTime(data []byte) error {
+	if len(data) < 4 {
+		return oops.Errorf("DateTime block too short: %d bytes, need 4", len(data))
+	}
+
+	timestamp := uint32(data[0])<<24 | uint32(data[1])<<16 | uint32(data[2])<<8 | uint32(data[3])
+
+	if h.callbacks.OnDateTime != nil {
+		return h.callbacks.OnDateTime(timestamp)
+	}
+
+	return nil
+}
+
+// handleOptions processes an Options block (Type 1).
+func (h *DataHandler) handleOptions(data []byte) error {
+	log.WithField("dataLength", len(data)).Debug("Received Options block")
+
+	if h.callbacks.OnOptions != nil {
+		return h.callbacks.OnOptions(data)
+	}
+
+	return nil
+}
+
+// handleRouterInfo processes a RouterInfo block (Type 2).
+func (h *DataHandler) handleRouterInfo(data []byte) error {
+	log.WithField("dataLength", len(data)).Debug("Received RouterInfo block")
+
+	if h.callbacks.OnRouterInfo != nil {
+		return h.callbacks.OnRouterInfo(data)
+	}
+
+	return nil
+}
+
+// handleAddress processes an Address block (Type 13).
+// Address format: IP (4 or 16 bytes) + Port (2 bytes)
+func (h *DataHandler) handleAddress(data []byte) error {
+	log.WithField("dataLength", len(data)).Debug("Received Address block")
+
+	if h.callbacks.OnAddress != nil {
+		return h.callbacks.OnAddress(data)
+	}
+
+	return nil
+}
+
+// handleACK processes an ACK block (Type 12).
+func (h *DataHandler) handleACK(block *SSU2Block) error {
+	if h.callbacks.OnACK != nil {
+		return h.callbacks.OnACK(block)
+	}
+
+	// ACK blocks are typically handled by the ack_handler component
+	return nil
 }

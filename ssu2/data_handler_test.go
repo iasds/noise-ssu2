@@ -1099,3 +1099,523 @@ func BenchmarkDataHandler_CleanupFragments(b *testing.B) {
 		handler.CleanupExpiredFragments(1 * time.Millisecond)
 	}
 }
+
+// ============================================================================
+// Tests for All 20 Block Type Handlers
+// ============================================================================
+
+// TestDataHandler_AllBlockTypesExplicitlyHandled verifies all 20 block types
+// have explicit handlers and are processed without errors.
+func TestDataHandler_AllBlockTypesExplicitlyHandled(t *testing.T) {
+	handler := NewDataHandler(100)
+
+	// Define test data for each block type with correct minimum sizes
+	tests := []struct {
+		blockType uint8
+		name      string
+		data      []byte
+	}{
+		{BlockTypeDateTime, "DateTime", make([]byte, 7)},       // minDateTimeSize = 7
+		{BlockTypeOptions, "Options", make([]byte, 15)},        // minOptionsSize = 15
+		{BlockTypeRouterInfo, "RouterInfo", make([]byte, 100)}, // Variable
+		{BlockTypeI2NPMessage, "I2NPMessage", []byte("test i2np message")},
+		{BlockTypeFirstFragment, "FirstFragment", append([]byte{0, 0, 0, 1, 0, 0, 0, 100}, make([]byte, 50)...)},
+		{BlockTypeFollowOnFragment, "FollowOnFragment", append([]byte{0, 0, 0, 1, 1}, make([]byte, 50)...)},
+		{BlockTypeTermination, "Termination", make([]byte, 9)},         // minTerminationSize = 9
+		{BlockTypeRelayRequest, "RelayRequest", make([]byte, 50)},      // Variable
+		{BlockTypeRelayResponse, "RelayResponse", make([]byte, 50)},    // Variable
+		{BlockTypeRelayIntro, "RelayIntro", make([]byte, 50)},          // Variable
+		{BlockTypePeerTest, "PeerTest", make([]byte, 50)},              // Variable
+		{BlockTypeACK, "ACK", make([]byte, 5)},                         // minACKSize = 5
+		{BlockTypeAddress, "Address", make([]byte, 9)},                 // minAddressSizeIPv4 = 9
+		{BlockTypeRelayTagRequest, "RelayTagRequest", make([]byte, 3)}, // minRelayTagRequestSize = 3
+		{BlockTypeRelayTag, "RelayTag", make([]byte, 7)},               // minRelayTagSize = 7
+		{BlockTypeNewToken, "NewToken", make([]byte, 15)},              // minNewTokenSize = 15
+		{BlockTypePathChallenge, "PathChallenge", make([]byte, 8)},     // Variable
+		{BlockTypePathResponse, "PathResponse", make([]byte, 8)},       // Variable
+		{BlockTypePadding, "Padding", make([]byte, 16)},                // Variable
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			block := NewSSU2Block(tc.blockType, tc.data)
+			payload, err := SerializeBlocks([]*SSU2Block{block})
+			require.NoError(t, err)
+
+			packet := &SSU2Packet{
+				MessageType: MessageTypeData,
+				Payload:     payload,
+			}
+
+			blocks, err := handler.ProcessDataPacket(packet)
+			assert.NoError(t, err)
+			assert.Len(t, blocks, 1)
+			assert.Equal(t, tc.blockType, blocks[0].Type)
+		})
+	}
+}
+
+// TestDataHandler_SetCallbacks verifies callback registration and invocation.
+func TestDataHandler_SetCallbacks(t *testing.T) {
+	handler := NewDataHandler(100)
+
+	var terminationCalled bool
+	var terminationReason uint8
+	var newTokenCalled bool
+	var dateTimeCalled bool
+	var dateTimeValue uint32
+
+	handler.SetCallbacks(DataHandlerCallbacks{
+		OnTermination: func(reason uint8, data []byte) {
+			terminationCalled = true
+			terminationReason = reason
+		},
+		OnNewToken: func(token []byte) {
+			newTokenCalled = true
+		},
+		OnDateTime: func(timestamp uint32) error {
+			dateTimeCalled = true
+			dateTimeValue = timestamp
+			return nil
+		},
+	})
+
+	// Test Termination callback
+	t.Run("Termination callback", func(t *testing.T) {
+		block := NewSSU2Block(BlockTypeTermination, make([]byte, 9)) // minTerminationSize = 9
+		block.Data[0] = 0x05                                         // Set reason code
+		payload, _ := SerializeBlocks([]*SSU2Block{block})
+		packet := &SSU2Packet{
+			MessageType: MessageTypeData,
+			Payload:     payload,
+		}
+
+		_, err := handler.ProcessDataPacket(packet)
+		assert.NoError(t, err)
+		assert.True(t, terminationCalled)
+		assert.Equal(t, uint8(0x05), terminationReason)
+	})
+
+	// Test NewToken callback
+	t.Run("NewToken callback", func(t *testing.T) {
+		block := NewSSU2Block(BlockTypeNewToken, make([]byte, 15)) // minNewTokenSize = 15
+		payload, _ := SerializeBlocks([]*SSU2Block{block})
+		packet := &SSU2Packet{
+			MessageType: MessageTypeData,
+			Payload:     payload,
+		}
+
+		_, err := handler.ProcessDataPacket(packet)
+		assert.NoError(t, err)
+		assert.True(t, newTokenCalled)
+	})
+
+	// Test DateTime callback
+	t.Run("DateTime callback", func(t *testing.T) {
+		// DateTime needs 7 bytes minimum, timestamp in first 4 bytes: 0x12345678
+		data := make([]byte, 7)
+		data[0] = 0x12
+		data[1] = 0x34
+		data[2] = 0x56
+		data[3] = 0x78
+		block := NewSSU2Block(BlockTypeDateTime, data)
+		payload, _ := SerializeBlocks([]*SSU2Block{block})
+		packet := &SSU2Packet{
+			MessageType: MessageTypeData,
+			Payload:     payload,
+		}
+
+		_, err := handler.ProcessDataPacket(packet)
+		assert.NoError(t, err)
+		assert.True(t, dateTimeCalled)
+		assert.Equal(t, uint32(0x12345678), dateTimeValue)
+	})
+}
+
+// TestDataHandler_RelayCallbacks verifies relay block callbacks.
+func TestDataHandler_RelayCallbacks(t *testing.T) {
+	handler := NewDataHandler(100)
+
+	var relayRequestCalled, relayResponseCalled, relayIntroCalled bool
+	var relayTagRequestCalled, relayTagCalled bool
+
+	handler.SetCallbacks(DataHandlerCallbacks{
+		OnRelayRequest: func(block *SSU2Block) error {
+			relayRequestCalled = true
+			return nil
+		},
+		OnRelayResponse: func(block *SSU2Block) error {
+			relayResponseCalled = true
+			return nil
+		},
+		OnRelayIntro: func(block *SSU2Block) error {
+			relayIntroCalled = true
+			return nil
+		},
+		OnRelayTagRequest: func(block *SSU2Block) error {
+			relayTagRequestCalled = true
+			return nil
+		},
+		OnRelayTag: func(block *SSU2Block) error {
+			relayTagCalled = true
+			return nil
+		},
+	})
+
+	relayTests := []struct {
+		name      string
+		blockType uint8
+		checkVar  *bool
+	}{
+		{"RelayRequest", BlockTypeRelayRequest, &relayRequestCalled},
+		{"RelayResponse", BlockTypeRelayResponse, &relayResponseCalled},
+		{"RelayIntro", BlockTypeRelayIntro, &relayIntroCalled},
+		{"RelayTagRequest", BlockTypeRelayTagRequest, &relayTagRequestCalled},
+		{"RelayTag", BlockTypeRelayTag, &relayTagCalled},
+	}
+
+	for _, tc := range relayTests {
+		t.Run(tc.name, func(t *testing.T) {
+			*tc.checkVar = false
+			block := NewSSU2Block(tc.blockType, make([]byte, 50))
+			payload, _ := SerializeBlocks([]*SSU2Block{block})
+			packet := &SSU2Packet{
+				MessageType: MessageTypeData,
+				Payload:     payload,
+			}
+
+			_, err := handler.ProcessDataPacket(packet)
+			assert.NoError(t, err)
+			assert.True(t, *tc.checkVar, "callback should have been called for %s", tc.name)
+		})
+	}
+}
+
+// TestDataHandler_PathValidationCallbacks verifies path validation callbacks.
+func TestDataHandler_PathValidationCallbacks(t *testing.T) {
+	handler := NewDataHandler(100)
+
+	var pathChallengeCalled, pathResponseCalled bool
+	var challengeData, responseData []byte
+
+	handler.SetCallbacks(DataHandlerCallbacks{
+		OnPathChallenge: func(data []byte) error {
+			pathChallengeCalled = true
+			challengeData = data
+			return nil
+		},
+		OnPathResponse: func(data []byte) error {
+			pathResponseCalled = true
+			responseData = data
+			return nil
+		},
+	})
+
+	t.Run("PathChallenge callback", func(t *testing.T) {
+		testData := []byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08}
+		block := NewSSU2Block(BlockTypePathChallenge, testData)
+		payload, _ := SerializeBlocks([]*SSU2Block{block})
+		packet := &SSU2Packet{
+			MessageType: MessageTypeData,
+			Payload:     payload,
+		}
+
+		_, err := handler.ProcessDataPacket(packet)
+		assert.NoError(t, err)
+		assert.True(t, pathChallengeCalled)
+		assert.Equal(t, testData, challengeData)
+	})
+
+	t.Run("PathResponse callback", func(t *testing.T) {
+		testData := []byte{0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18}
+		block := NewSSU2Block(BlockTypePathResponse, testData)
+		payload, _ := SerializeBlocks([]*SSU2Block{block})
+		packet := &SSU2Packet{
+			MessageType: MessageTypeData,
+			Payload:     payload,
+		}
+
+		_, err := handler.ProcessDataPacket(packet)
+		assert.NoError(t, err)
+		assert.True(t, pathResponseCalled)
+		assert.Equal(t, testData, responseData)
+	})
+}
+
+// TestDataHandler_UnknownBlockTypeLogged verifies unknown blocks are tracked.
+func TestDataHandler_UnknownBlockTypeLogged(t *testing.T) {
+	handler := NewDataHandler(100)
+
+	// Unknown block type 255
+	block := NewSSU2Block(255, []byte{0x01, 0x02, 0x03})
+	payload, _ := SerializeBlocks([]*SSU2Block{block})
+	packet := &SSU2Packet{
+		MessageType: MessageTypeData,
+		Payload:     payload,
+	}
+
+	blocks, err := handler.ProcessDataPacket(packet)
+	assert.NoError(t, err)
+	assert.Len(t, blocks, 1)
+
+	stats := handler.GetStats()
+	assert.Equal(t, uint64(1), stats.UnknownBlocks)
+	assert.Equal(t, uint64(1), stats.BlocksProcessed)
+}
+
+// TestDataHandler_PaddingBlockIgnored verifies padding blocks are silently skipped.
+func TestDataHandler_PaddingBlockIgnored(t *testing.T) {
+	handler := NewDataHandler(100)
+
+	// Create a packet with only padding
+	block := NewSSU2Block(BlockTypePadding, make([]byte, 256))
+	payload, _ := SerializeBlocks([]*SSU2Block{block})
+	packet := &SSU2Packet{
+		MessageType: MessageTypeData,
+		Payload:     payload,
+	}
+
+	blocks, err := handler.ProcessDataPacket(packet)
+	assert.NoError(t, err)
+	assert.Len(t, blocks, 1)
+
+	stats := handler.GetStats()
+	// Padding is processed but not counted as unknown
+	assert.Equal(t, uint64(0), stats.UnknownBlocks)
+	assert.Equal(t, uint64(1), stats.BlocksProcessed)
+}
+
+// TestDataHandler_BlocksProcessedStat verifies BlocksProcessed stat.
+func TestDataHandler_BlocksProcessedStat(t *testing.T) {
+	handler := NewDataHandler(100)
+
+	// Create packet with multiple blocks
+	blocks := []*SSU2Block{
+		NewSSU2Block(BlockTypeDateTime, make([]byte, 7)), // minDateTimeSize = 7
+		NewSSU2Block(BlockTypeOptions, make([]byte, 15)),
+		NewSSU2Block(BlockTypePadding, make([]byte, 16)),
+		NewSSU2Block(BlockTypeI2NPMessage, []byte("test message")),
+	}
+
+	payload, _ := SerializeBlocks(blocks)
+	packet := &SSU2Packet{
+		MessageType: MessageTypeData,
+		Payload:     payload,
+	}
+
+	_, err := handler.ProcessDataPacket(packet)
+	assert.NoError(t, err)
+
+	stats := handler.GetStats()
+	assert.Equal(t, uint64(4), stats.BlocksProcessed)
+}
+
+// TestDataHandler_GetBlockRouter verifies router accessor.
+func TestDataHandler_GetBlockRouter(t *testing.T) {
+	handler := NewDataHandler(100)
+	router := handler.GetBlockRouter()
+
+	require.NotNil(t, router)
+	assert.IsType(t, &BlockRouter{}, router)
+}
+
+// TestDataHandler_TerminationBlockShort verifies handling of malformed Termination.
+// Note: Serialization validates block sizes, so this tests receiving malformed data.
+func TestDataHandler_TerminationBlockShort(t *testing.T) {
+	handler := NewDataHandler(100)
+
+	// Create raw bytes that bypass serialization validation
+	// Block header: Type (1 byte) + Length (2 bytes) + Data
+	// Type 6 (Termination) with 0-byte data
+	rawPayload := []byte{0x06, 0x00, 0x00} // Type=6, Length=0
+
+	packet := &SSU2Packet{
+		MessageType: MessageTypeData,
+		Payload:     rawPayload,
+	}
+
+	// Should process without fatal error, but the block will have empty data
+	blocks, err := handler.ProcessDataPacket(packet)
+	assert.NoError(t, err) // Block errors are logged, not returned
+	assert.Len(t, blocks, 1)
+	assert.Equal(t, BlockTypeTermination, blocks[0].Type)
+}
+
+// TestDataHandler_NewTokenBlockShort verifies handling of malformed NewToken.
+func TestDataHandler_NewTokenBlockShort(t *testing.T) {
+	handler := NewDataHandler(100)
+
+	// Create raw bytes with Type 17 (NewToken) and 2-byte data
+	rawPayload := []byte{0x11, 0x00, 0x02, 0x01, 0x02} // Type=17, Length=2, Data=2 bytes
+
+	packet := &SSU2Packet{
+		MessageType: MessageTypeData,
+		Payload:     rawPayload,
+	}
+
+	// Should process without fatal error
+	blocks, err := handler.ProcessDataPacket(packet)
+	assert.NoError(t, err)
+	assert.Len(t, blocks, 1)
+	assert.Equal(t, BlockTypeNewToken, blocks[0].Type)
+}
+
+// TestDataHandler_DateTimeBlockShort verifies handling of malformed DateTime.
+func TestDataHandler_DateTimeBlockShort(t *testing.T) {
+	handler := NewDataHandler(100)
+
+	// Create raw bytes with Type 0 (DateTime) and 2-byte data
+	rawPayload := []byte{0x00, 0x00, 0x02, 0x01, 0x02} // Type=0, Length=2, Data=2 bytes
+
+	packet := &SSU2Packet{
+		MessageType: MessageTypeData,
+		Payload:     rawPayload,
+	}
+
+	// Should process without fatal error
+	blocks, err := handler.ProcessDataPacket(packet)
+	assert.NoError(t, err)
+	assert.Len(t, blocks, 1)
+	assert.Equal(t, BlockTypeDateTime, blocks[0].Type)
+}
+
+// TestDataHandler_MultipleBlockTypes verifies mixed block handling.
+func TestDataHandler_MultipleBlockTypes(t *testing.T) {
+	handler := NewDataHandler(100)
+
+	var terminationCalled, ackCalled bool
+	handler.SetCallbacks(DataHandlerCallbacks{
+		OnTermination: func(reason uint8, data []byte) {
+			terminationCalled = true
+		},
+		OnACK: func(block *SSU2Block) error {
+			ackCalled = true
+			return nil
+		},
+	})
+
+	blocks := []*SSU2Block{
+		NewSSU2Block(BlockTypeDateTime, make([]byte, 7)),    // minDateTimeSize = 7
+		NewSSU2Block(BlockTypeACK, make([]byte, 5)),         // minACKSize = 5
+		NewSSU2Block(BlockTypeTermination, make([]byte, 9)), // minTerminationSize = 9, first byte is reason
+		NewSSU2Block(BlockTypePadding, make([]byte, 16)),
+	}
+	blocks[2].Data[0] = 0x01 // Set termination reason
+
+	payload, _ := SerializeBlocks(blocks)
+	packet := &SSU2Packet{
+		MessageType: MessageTypeData,
+		Payload:     payload,
+	}
+
+	result, err := handler.ProcessDataPacket(packet)
+	assert.NoError(t, err)
+	assert.Len(t, result, 4)
+	assert.True(t, terminationCalled)
+	assert.True(t, ackCalled)
+}
+
+// TestDataHandler_PeerTestCallback verifies PeerTest callback.
+func TestDataHandler_PeerTestCallback(t *testing.T) {
+	handler := NewDataHandler(100)
+
+	var peerTestCalled bool
+	var receivedBlock *SSU2Block
+
+	handler.SetCallbacks(DataHandlerCallbacks{
+		OnPeerTest: func(block *SSU2Block) error {
+			peerTestCalled = true
+			receivedBlock = block
+			return nil
+		},
+	})
+
+	testData := make([]byte, 50)
+	for i := range testData {
+		testData[i] = byte(i)
+	}
+
+	block := NewSSU2Block(BlockTypePeerTest, testData)
+	payload, _ := SerializeBlocks([]*SSU2Block{block})
+	packet := &SSU2Packet{
+		MessageType: MessageTypeData,
+		Payload:     payload,
+	}
+
+	_, err := handler.ProcessDataPacket(packet)
+	assert.NoError(t, err)
+	assert.True(t, peerTestCalled)
+	assert.Equal(t, BlockTypePeerTest, receivedBlock.Type)
+	assert.Equal(t, testData, receivedBlock.Data)
+}
+
+// TestDataHandler_MetadataBlockCallbacks verifies metadata block callbacks.
+func TestDataHandler_MetadataBlockCallbacks(t *testing.T) {
+	handler := NewDataHandler(100)
+
+	var optionsCalled, routerInfoCalled, addressCalled bool
+	var optionsData, routerInfoData, addressData []byte
+
+	handler.SetCallbacks(DataHandlerCallbacks{
+		OnOptions: func(data []byte) error {
+			optionsCalled = true
+			optionsData = data
+			return nil
+		},
+		OnRouterInfo: func(data []byte) error {
+			routerInfoCalled = true
+			routerInfoData = data
+			return nil
+		},
+		OnAddress: func(data []byte) error {
+			addressCalled = true
+			addressData = data
+			return nil
+		},
+	})
+
+	t.Run("Options callback", func(t *testing.T) {
+		testData := make([]byte, 15)
+		block := NewSSU2Block(BlockTypeOptions, testData)
+		payload, _ := SerializeBlocks([]*SSU2Block{block})
+		packet := &SSU2Packet{
+			MessageType: MessageTypeData,
+			Payload:     payload,
+		}
+
+		_, err := handler.ProcessDataPacket(packet)
+		assert.NoError(t, err)
+		assert.True(t, optionsCalled)
+		assert.Equal(t, testData, optionsData)
+	})
+
+	t.Run("RouterInfo callback", func(t *testing.T) {
+		testData := make([]byte, 100)
+		block := NewSSU2Block(BlockTypeRouterInfo, testData)
+		payload, _ := SerializeBlocks([]*SSU2Block{block})
+		packet := &SSU2Packet{
+			MessageType: MessageTypeData,
+			Payload:     payload,
+		}
+
+		_, err := handler.ProcessDataPacket(packet)
+		assert.NoError(t, err)
+		assert.True(t, routerInfoCalled)
+		assert.Equal(t, testData, routerInfoData)
+	})
+
+	t.Run("Address callback", func(t *testing.T) {
+		testData := make([]byte, 9) // IPv4 + port
+		block := NewSSU2Block(BlockTypeAddress, testData)
+		payload, _ := SerializeBlocks([]*SSU2Block{block})
+		packet := &SSU2Packet{
+			MessageType: MessageTypeData,
+			Payload:     payload,
+		}
+
+		_, err := handler.ProcessDataPacket(packet)
+		assert.NoError(t, err)
+		assert.True(t, addressCalled)
+		assert.Equal(t, testData, addressData)
+	})
+}
