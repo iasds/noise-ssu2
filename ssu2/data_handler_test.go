@@ -1419,14 +1419,14 @@ func TestDataHandler_GetBlockRouter(t *testing.T) {
 	assert.IsType(t, &BlockRouter{}, router)
 }
 
-// TestDataHandler_TerminationBlockShort verifies handling of malformed Termination.
-// Note: Serialization validates block sizes, so this tests receiving malformed data.
+// TestDataHandler_TerminationBlockShort verifies that malformed Termination blocks
+// are rejected during deserialization (validation happens at deserialize time).
 func TestDataHandler_TerminationBlockShort(t *testing.T) {
 	handler := NewDataHandler(100)
 
 	// Create raw bytes that bypass serialization validation
 	// Block header: Type (1 byte) + Length (2 bytes) + Data
-	// Type 6 (Termination) with 0-byte data
+	// Type 6 (Termination) with 0-byte data (minimum is 9 bytes per SSU2 spec)
 	rawPayload := []byte{0x06, 0x00, 0x00} // Type=6, Length=0
 
 	packet := &SSU2Packet{
@@ -1434,18 +1434,19 @@ func TestDataHandler_TerminationBlockShort(t *testing.T) {
 		Payload:     rawPayload,
 	}
 
-	// Should process without fatal error, but the block will have empty data
+	// Malformed blocks are rejected during deserialization per SSU2 spec
 	blocks, err := handler.ProcessDataPacket(packet)
-	assert.NoError(t, err) // Block errors are logged, not returned
-	assert.Len(t, blocks, 1)
-	assert.Equal(t, BlockTypeTermination, blocks[0].Type)
+	assert.Error(t, err) // Validation error during deserialization
+	assert.Nil(t, blocks)
+	assert.Contains(t, err.Error(), "Termination block too short")
 }
 
-// TestDataHandler_NewTokenBlockShort verifies handling of malformed NewToken.
+// TestDataHandler_NewTokenBlockShort verifies that malformed NewToken blocks
+// are rejected during deserialization (validation happens at deserialize time).
 func TestDataHandler_NewTokenBlockShort(t *testing.T) {
 	handler := NewDataHandler(100)
 
-	// Create raw bytes with Type 17 (NewToken) and 2-byte data
+	// Create raw bytes with Type 17 (NewToken) and 2-byte data (minimum is 15 bytes per SSU2 spec)
 	rawPayload := []byte{0x11, 0x00, 0x02, 0x01, 0x02} // Type=17, Length=2, Data=2 bytes
 
 	packet := &SSU2Packet{
@@ -1453,18 +1454,19 @@ func TestDataHandler_NewTokenBlockShort(t *testing.T) {
 		Payload:     rawPayload,
 	}
 
-	// Should process without fatal error
+	// Malformed blocks are rejected during deserialization per SSU2 spec
 	blocks, err := handler.ProcessDataPacket(packet)
-	assert.NoError(t, err)
-	assert.Len(t, blocks, 1)
-	assert.Equal(t, BlockTypeNewToken, blocks[0].Type)
+	assert.Error(t, err) // Validation error during deserialization
+	assert.Nil(t, blocks)
+	assert.Contains(t, err.Error(), "NewToken block too short")
 }
 
-// TestDataHandler_DateTimeBlockShort verifies handling of malformed DateTime.
+// TestDataHandler_DateTimeBlockShort verifies that malformed DateTime blocks
+// are rejected during deserialization (validation happens at deserialize time).
 func TestDataHandler_DateTimeBlockShort(t *testing.T) {
 	handler := NewDataHandler(100)
 
-	// Create raw bytes with Type 0 (DateTime) and 2-byte data
+	// Create raw bytes with Type 0 (DateTime) and 2-byte data (minimum is 7 bytes per SSU2 spec)
 	rawPayload := []byte{0x00, 0x00, 0x02, 0x01, 0x02} // Type=0, Length=2, Data=2 bytes
 
 	packet := &SSU2Packet{
@@ -1472,11 +1474,11 @@ func TestDataHandler_DateTimeBlockShort(t *testing.T) {
 		Payload:     rawPayload,
 	}
 
-	// Should process without fatal error
+	// Malformed blocks are rejected during deserialization per SSU2 spec
 	blocks, err := handler.ProcessDataPacket(packet)
-	assert.NoError(t, err)
-	assert.Len(t, blocks, 1)
-	assert.Equal(t, BlockTypeDateTime, blocks[0].Type)
+	assert.Error(t, err) // Validation error during deserialization
+	assert.Nil(t, blocks)
+	assert.Contains(t, err.Error(), "DateTime block too short")
 }
 
 // TestDataHandler_MultipleBlockTypes verifies mixed block handling.
