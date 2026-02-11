@@ -321,6 +321,35 @@ func (nc *NoiseConn) GetConnectionState() ConnState {
 	return nc.getState()
 }
 
+// Rekey triggers a rekey operation on the underlying cipher state.
+// This advances the encryption key material per the Noise Protocol specification
+// (encrypts 32 zero bytes with nonce 2^64-1, takes first 32 bytes as new key).
+//
+// Rekey requires the handshake to be complete (connection in Established state).
+// It is safe for concurrent use; the underlying CipherState.Rekey() is mutex-protected.
+func (nc *NoiseConn) Rekey() error {
+	if nc.getState() != internal.StateEstablished {
+		return oops.
+			Code("REKEY_INVALID_STATE").
+			In("noise").
+			With("state", nc.getState().String()).
+			Errorf("cannot rekey: connection is not in established state")
+	}
+	if nc.cipherState == nil {
+		return oops.
+			Code("REKEY_NO_CIPHER").
+			In("noise").
+			Errorf("no cipher state available for rekeying")
+	}
+	nc.cipherState.Rekey()
+	nc.logger.WithFields(logger.Fields{
+		"pattern":     nc.config.Pattern,
+		"local_addr":  nc.localAddr.String(),
+		"remote_addr": nc.remoteAddr.String(),
+	}).Info("Rekey completed")
+	return nil
+}
+
 // SetShutdownManager sets the shutdown manager for this connection.
 // If a shutdown manager is set, the connection will be automatically
 // registered for graceful shutdown coordination.

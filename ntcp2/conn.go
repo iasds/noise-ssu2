@@ -218,3 +218,14 @@ func (nc *NTCP2Conn) Role() string {
 func (nc *NTCP2Conn) UnderlyingConn() *noise.NoiseConn {
 	return nc.noiseConn
 }
+
+// Rekey triggers a rekey operation on the underlying Noise connection.
+// This delegates to NoiseConn.Rekey(), which advances the encryption key
+// material per the Noise Protocol specification.
+//
+// This method allows NTCP2Conn to satisfy a Rekeyer interface:
+//
+//	type Rekeyer interface { Rekey() error }
+func (nc *NTCP2Conn) Rekey() error {
+	return nc.noiseConn.Rekey()
+}
