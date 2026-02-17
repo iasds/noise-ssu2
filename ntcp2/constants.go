@@ -22,6 +22,15 @@ const (
 	// MaxFrameSize is the maximum size of an NTCP2 data frame (bytes).
 	MaxFrameSize = 65535
 
+	// SpecMaxFrameSize is the absolute maximum frame size allowed by the I2P spec (uint16 max).
+	// validateFrameConfiguration uses this to reject user-provided values that exceed the wire limit.
+	SpecMaxFrameSize = 65535
+
+	// MinDataPhaseFrameSize is the minimum valid data-phase frame size per the I2P spec.
+	// The spec states the deobfuscated size range is 16–65535. The minimum corresponds
+	// to a ChaChaPoly ciphertext containing only the 16-byte Poly1305 MAC tag (empty payload).
+	MinDataPhaseFrameSize = 16
+
 	// BlockHeaderSize is the size of an I2P block header: [type:1][size:2].
 	BlockHeaderSize = 3
 

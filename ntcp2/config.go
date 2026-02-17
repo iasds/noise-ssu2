@@ -137,10 +137,11 @@ func (nc *NTCP2Config) WithPattern(pattern string) *NTCP2Config {
 }
 
 // WithStaticKey sets the static key for this connection.
-// key must be 32 bytes for Curve25519. Logs a warning and does not set the key if invalid.
+// key must be 32 bytes for Curve25519. Returns the config unchanged and logs a
+// warning if the key length is invalid.
 func (nc *NTCP2Config) WithStaticKey(key []byte) *NTCP2Config {
 	if len(key) != StaticKeySize {
-		log.Warn("WithStaticKey called with invalid key size, ignoring",
+		log.Warn("WithStaticKey: invalid key size, expected 32 bytes",
 			"expected", StaticKeySize,
 			"got", len(key))
 		return nc
@@ -152,10 +153,10 @@ func (nc *NTCP2Config) WithStaticKey(key []byte) *NTCP2Config {
 
 // WithRemoteRouterHash sets the remote peer's router identity.
 // hash must be 32 bytes. Required for outbound connections.
-// Logs a warning and does not set the hash if invalid.
+// Returns the config unchanged and logs a warning if the hash length is invalid.
 func (nc *NTCP2Config) WithRemoteRouterHash(hash []byte) *NTCP2Config {
 	if len(hash) != RouterHashSize {
-		log.Warn("WithRemoteRouterHash called with invalid hash size, ignoring",
+		log.Warn("WithRemoteRouterHash: invalid hash size, expected 32 bytes",
 			"expected", RouterHashSize,
 			"got", len(hash))
 		return nc
@@ -372,6 +373,15 @@ func (nc *NTCP2Config) validateFrameConfiguration() error {
 			Errorf("max frame size must be positive")
 	}
 
+	if nc.MaxFrameSize > SpecMaxFrameSize {
+		return oops.
+			Code("INVALID_MAX_FRAME_SIZE").
+			In("ntcp2").
+			With("max_size", nc.MaxFrameSize).
+			With("spec_max", SpecMaxFrameSize).
+			Errorf("max frame size %d exceeds spec maximum %d", nc.MaxFrameSize, SpecMaxFrameSize)
+	}
+
 	if nc.MinPaddingSize < 0 {
 		return oops.
 			Code("INVALID_MIN_PADDING").
@@ -474,8 +484,12 @@ func (nc *NTCP2Config) createAESModifierIfEnabled() (handshake.HandshakeModifier
 
 	iv := nc.ObfuscationIV
 	if iv == nil {
-		// Derive IV from router hash (last 16 bytes)
-		iv = nc.RouterHash[IVSize:]
+		// The IV must be provided explicitly from the remote peer's published
+		// network database entry ("i=" option). There is no valid fallback.
+		return nil, oops.
+			Code("MISSING_OBFUSCATION_IV").
+			In("ntcp2").
+			Errorf("AES obfuscation IV is required (published in peer's network database entry)")
 	}
 
 	aesModifier, err := NewAESObfuscationModifier("ntcp2-aes", nc.RouterHash, iv)
@@ -488,18 +502,23 @@ func (nc *NTCP2Config) createAESModifierIfEnabled() (handshake.HandshakeModifier
 	return aesModifier, nil
 }
 
-// createSipHashModifierIfEnabled creates a SipHash length modifier if enabled.
+// createSipHashModifierIfEnabled creates a new SipHash length modifier if enabled.
+// A fresh instance is created on every call to prevent shared state between connections.
 func (nc *NTCP2Config) createSipHashModifierIfEnabled() *SipHashLengthModifier {
 	if !nc.EnableSipHashLength {
 		return nil
 	}
-	// SipHash keys will be set up during handshake if not provided
+	// TODO(ntcp2-spec): SipHash keys (sipk1, sipk2) and initial IV must be derived
+	// from the data-phase KDF (HKDF(ask_master, h || "siphash")) after the handshake
+	// completes. Currently the caller must inject derived keys via WithSipHashLength().
+	// Using default zero keys provides no obfuscation and breaks interoperability.
 	return NewSipHashLengthModifier("ntcp2-siphash", nc.SipHashKeys, 0)
 }
 
 // SipHashModifier returns the SipHash length modifier created during ToConnConfig().
 // Returns nil if SipHash length obfuscation is disabled or ToConnConfig() hasn't been called.
-// This is used to pass the modifier to NTCP2Conn for data-phase framing.
+// Each call to ToConnConfig() creates a fresh modifier instance, so configs can be safely
+// reused for multiple connections without sharing IV state.
 func (nc *NTCP2Config) SipHashModifier() *SipHashLengthModifier {
 	return nc.sipHashModifier
 }

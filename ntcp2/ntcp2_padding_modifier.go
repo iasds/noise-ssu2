@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"math"
+	"sync"
 
 	"github.com/go-i2p/go-noise/handshake"
 	"github.com/samber/oops"
@@ -15,7 +16,10 @@ import (
 // - AEAD padding for message 3 and data phase (inside AEAD frames with type 254)
 // - Cryptographically secure random padding distribution
 // - Configurable padding ratios for traffic analysis resistance
+//
+// All exported methods are safe for concurrent use.
 type NTCP2PaddingModifier struct {
+	mu             sync.Mutex
 	name           string
 	minPadding     int
 	maxPadding     int
@@ -108,6 +112,9 @@ func NewNTCP2PaddingModifierForTesting(name string, minPadding, maxPadding int, 
 
 // ModifyOutbound adds NTCP2-specific padding based on message phase.
 func (npm *NTCP2PaddingModifier) ModifyOutbound(phase handshake.HandshakePhase, data []byte) ([]byte, error) {
+	npm.mu.Lock()
+	defer npm.mu.Unlock()
+
 	paddingSize := npm.calculatePaddingSize(len(data))
 	if paddingSize == 0 {
 		return data, nil
@@ -126,6 +133,9 @@ func (npm *NTCP2PaddingModifier) ModifyOutbound(phase handshake.HandshakePhase, 
 
 // ModifyInbound removes NTCP2-specific padding.
 func (npm *NTCP2PaddingModifier) ModifyInbound(phase handshake.HandshakePhase, data []byte) ([]byte, error) {
+	npm.mu.Lock()
+	defer npm.mu.Unlock()
+
 	if npm.useAEADPadding && phase >= handshake.PhaseFinal {
 		// Remove AEAD padding (block format)
 		return npm.removeAEADPadding(data)
@@ -382,17 +392,23 @@ func (npm *NTCP2PaddingModifier) SetPaddingRatio(ratio float64) error {
 			With("padding_ratio", ratio).
 			Errorf("padding ratio must be between 0.0 and %.4f (I2P NTCP2 spec)", MaxPaddingRatio)
 	}
+	npm.mu.Lock()
 	npm.paddingRatio = ratio
+	npm.mu.Unlock()
 	return nil
 }
 
 // GetPaddingRatio returns the current padding ratio.
 func (npm *NTCP2PaddingModifier) GetPaddingRatio() float64 {
+	npm.mu.Lock()
+	defer npm.mu.Unlock()
 	return npm.paddingRatio
 }
 
 // GetPaddingLimits returns the current min/max padding limits.
 func (npm *NTCP2PaddingModifier) GetPaddingLimits() (int, int) {
+	npm.mu.Lock()
+	defer npm.mu.Unlock()
 	return npm.minPadding, npm.maxPadding
 }
 
@@ -424,8 +440,10 @@ func (npm *NTCP2PaddingModifier) SetPaddingLimits(minPadding, maxPadding int) er
 			Errorf("maximum padding cannot exceed %d bytes (I2P NTCP2 spec limit)", MaxBlockDataSize)
 	}
 
+	npm.mu.Lock()
 	npm.minPadding = minPadding
 	npm.maxPadding = maxPadding
+	npm.mu.Unlock()
 	return nil
 }
 

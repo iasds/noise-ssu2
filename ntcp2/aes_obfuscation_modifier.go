@@ -15,6 +15,10 @@ import (
 //
 // Per the NTCP2 spec, the AES state (last ciphertext block) from message 1
 // encryption is carried forward as the IV for message 2 encryption.
+//
+// TODO(ntcp2-spec): Validate that received ephemeral and static keys are valid
+// Curve25519 points before/after AES decryption (spec requires X[31]&0x80==0
+// fast check plus full validation).
 type AESObfuscationModifier struct {
 	mu         sync.Mutex
 	name       string

@@ -242,13 +242,15 @@ func TestWrapNTCP2Conn(t *testing.T) {
 				routerHash := generateRandomBytes(32)
 				remoteHash := generateRandomBytes(32)
 				staticKey := generateRandomBytes(32)
+				obfuscationIV := generateRandomBytes(16)
 
 				config, err := NewNTCP2Config(routerHash, true)
 				require.NoError(t, err)
 
 				return config.
 					WithStaticKey(staticKey).
-					WithRemoteRouterHash(remoteHash)
+					WithRemoteRouterHash(remoteHash).
+					WithAESObfuscation(true, obfuscationIV)
 			},
 			expectError: false,
 		},
@@ -354,6 +356,7 @@ func TestDialNTCP2WithHandshake(t *testing.T) {
 		dialConfig = dialConfig.
 			WithStaticKey(clientStaticKey).
 			WithRemoteRouterHash(routerHash).
+			WithAESObfuscation(true, generateRandomBytes(16)).
 			WithHandshakeTimeout(1 * time.Second)
 
 		// Try to dial with handshake (will fail due to no handshake responder)

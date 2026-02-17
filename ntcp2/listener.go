@@ -168,9 +168,10 @@ func (nl *NTCP2Listener) validateAndCastNoiseConn(conn net.Conn) (*noise.NoiseCo
 
 // createRemoteNTCP2Addr creates the remote NTCP2 address for the accepted connection.
 func (nl *NTCP2Listener) createRemoteNTCP2Addr(noiseConn *noise.NoiseConn) (*NTCP2Addr, error) {
-	// Extract the remote router hash from the completed Noise handshake.
-	// PeerStatic() returns the remote peer's static public key (32 bytes)
-	// after the XK handshake completes.
+	// TODO(ntcp2-spec): PeerStatic() returns the remote peer's Noise static public key,
+	// but the NTCP2 spec defines router hash as SHA-256(RouterIdentity). The static key
+	// is only part of the RouterIdentity. A correct implementation should receive the
+	// full RouterIdentity in message 3 part 2 and compute its SHA-256 hash here.
 	remoteRouterHash := noiseConn.PeerStatic()
 	if len(remoteRouterHash) == 0 {
 		// Fall back to config if handshake didn't provide the peer's static key
@@ -203,9 +204,12 @@ func (nl *NTCP2Listener) wrapInNTCP2Conn(noiseConn *noise.NoiseConn, remoteAddr 
 			Wrapf(err, "failed to create ntcp2 connection")
 	}
 
-	// Set the SipHash length obfuscator for data-phase framing if configured
-	if slm := nl.config.SipHashModifier(); slm != nil {
-		ntcp2Conn.SetLengthObfuscator(slm)
+	// Create a per-connection SipHash modifier to avoid shared IV state.
+	if nl.config.EnableSipHashLength {
+		perConnMod := nl.config.createSipHashModifierIfEnabled()
+		if perConnMod != nil {
+			ntcp2Conn.SetLengthObfuscator(perConnMod)
+		}
 	}
 
 	return ntcp2Conn, nil
@@ -307,7 +311,7 @@ func (nl *NTCP2Listener) Addr() net.Addr {
 }
 
 // isClosed returns true if the listener has been closed.
-// This method is not thread-safe and should only be called while holding closeMutex.
+// Thread-safe: acquires closeMutex internally.
 func (nl *NTCP2Listener) isClosed() bool {
 	nl.closeMutex.Lock()
 	defer nl.closeMutex.Unlock()

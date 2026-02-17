@@ -82,8 +82,8 @@ func TestFramedReadPath_TakenWhenObfuscatorSet(t *testing.T) {
 	// Write an obfuscated frame to the server side that will be read by the client
 	go func() {
 		// Write 2-byte obfuscated length followed by fake ciphertext
-		// The length is 5 bytes of ciphertext
-		plainLen := uint16(5)
+		// The length must be >= MinDataPhaseFrameSize (16) to pass validation
+		plainLen := uint16(20)
 		// Compute the SipHash mask that the reader will use
 		iv := make([]byte, SipHashIVSize)
 		binary.LittleEndian.PutUint64(iv, 0) // initial IV = 0
@@ -91,10 +91,12 @@ func TestFramedReadPath_TakenWhenObfuscatorSet(t *testing.T) {
 		mask := uint16(hash & 0xFFFF)
 		obfuscatedLen := plainLen ^ mask
 
-		buf := make([]byte, 2+5)
+		buf := make([]byte, 2+20)
 		binary.BigEndian.PutUint16(buf[:2], obfuscatedLen)
-		copy(buf[2:], []byte("ABCDE")) // fake ciphertext (will fail to decrypt)
+		copy(buf[2:], []byte("ABCDEFGHIJKLMNOPQRST")) // fake ciphertext (will fail to decrypt)
 		server.Write(buf)
+		// Close after writing so handleAEADError's junk read gets immediate EOF
+		server.Close()
 	}()
 
 	// Read should get past the length deobfuscation but fail at Decrypt
@@ -265,6 +267,8 @@ func TestFramedRead_FrameTooLarge(t *testing.T) {
 			buf[i] = byte(i)
 		}
 		server.Write(buf)
+		// Close after writing so handleAEADError's junk read gets immediate EOF
+		server.Close()
 	}()
 
 	readBuf := make([]byte, 200)
@@ -388,6 +392,9 @@ func TestConfigSipHashModifier(t *testing.T) {
 	config.StaticKey = make([]byte, 32)
 	copy(config.StaticKey, "static-key-32-bytes-long!!!!!!!")
 
+	// AES obfuscation requires an explicit IV
+	config = config.WithAESObfuscation(true, make([]byte, 16))
+
 	// Before ToConnConfig, modifier should be nil
 	assert.Nil(t, config.SipHashModifier())
 
@@ -416,6 +423,9 @@ func TestConfigSipHashModifier_Disabled(t *testing.T) {
 
 	// Disable SipHash
 	config.EnableSipHashLength = false
+
+	// AES obfuscation requires an explicit IV
+	config = config.WithAESObfuscation(true, make([]byte, 16))
 
 	_, err = config.ToConnConfig()
 	require.NoError(t, err)

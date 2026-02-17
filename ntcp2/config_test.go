@@ -273,12 +273,17 @@ func TestNTCP2ConfigToConnConfig(t *testing.T) {
 	_, err = rand.Read(remoteHash)
 	require.NoError(t, err)
 
+	obfuscationIV := make([]byte, 16)
+	_, err = rand.Read(obfuscationIV)
+	require.NoError(t, err)
+
 	ntcp2Config, err := NewNTCP2Config(routerHash, true)
 	require.NoError(t, err)
 
 	ntcp2Config = ntcp2Config.
 		WithStaticKey(staticKey).
 		WithRemoteRouterHash(remoteHash).
+		WithAESObfuscation(true, obfuscationIV).
 		WithHandshakeTimeout(45 * time.Second).
 		WithReadTimeout(10 * time.Second).
 		WithWriteTimeout(15 * time.Second).
@@ -327,6 +332,10 @@ func TestNTCP2ConfigToConnConfigWithCustomModifiers(t *testing.T) {
 	_, err := rand.Read(routerHash)
 	require.NoError(t, err)
 
+	obfuscationIV := make([]byte, 16)
+	_, err = rand.Read(obfuscationIV)
+	require.NoError(t, err)
+
 	// Create custom modifiers
 	xorMod := handshake.NewXORModifier("custom-xor", []byte{0xCC, 0xDD})
 	paddingMod, err := handshake.NewPaddingModifier("custom-padding", 8, 16)
@@ -335,7 +344,9 @@ func TestNTCP2ConfigToConnConfigWithCustomModifiers(t *testing.T) {
 	ntcp2Config, err := NewNTCP2Config(routerHash, false)
 	require.NoError(t, err)
 
-	ntcp2Config = ntcp2Config.WithModifiers(xorMod, paddingMod)
+	ntcp2Config = ntcp2Config.
+		WithAESObfuscation(true, obfuscationIV).
+		WithModifiers(xorMod, paddingMod)
 
 	connConfig, err := ntcp2Config.ToConnConfig()
 	require.NoError(t, err)

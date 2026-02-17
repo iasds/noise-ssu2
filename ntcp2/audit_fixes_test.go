@@ -458,6 +458,8 @@ func TestAudit_ConfigUsesXKPattern(t *testing.T) {
 	validKey := make([]byte, 32)
 	config.WithStaticKey(validKey)
 	config.WithRemoteRouterHash(make([]byte, 32))
+	// AES obfuscation requires an explicit IV (no fallback)
+	config.WithAESObfuscation(true, make([]byte, 16))
 	connConfig, err2 := config.ToConnConfig()
 	require.NoError(t, err2)
 	require.NotNil(t, connConfig)
