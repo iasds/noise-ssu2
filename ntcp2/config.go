@@ -205,9 +205,8 @@ func (nc *NTCP2Config) WithRetryBackoff(backoff time.Duration) *NTCP2Config {
 
 // WithAESObfuscation enables or disables AES-based ephemeral key obfuscation.
 // When enabled with a custom IV, the IV must be exactly 16 bytes.
-// TODO(ntcp2-spec): Options negotiation (padding limits as 4.4 fixed-point,
-// dummy traffic, delay parameters) in messages 2, 3, and the data phase
-// is not yet implemented.
+// Note: Options negotiation (padding limits as 4.4 fixed-point, dummy traffic,
+// delay parameters) is the responsibility of the higher-level router transport.
 func (nc *NTCP2Config) WithAESObfuscation(enabled bool, customIV []byte) *NTCP2Config {
 	nc.EnableAESObfuscation = enabled
 	if len(customIV) == IVSize {

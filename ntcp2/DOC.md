@@ -121,21 +121,13 @@ func (na *NTCP2Addr) RouterHash() []byte
 RouterHash returns a copy of the router identity hash. The returned slice is a
 defensive copy to prevent external modification.
 
-#### func (*NTCP2Addr) SessionTag
-
-```go
-func (na *NTCP2Addr) SessionTag() []byte
-```
-SessionTag returns a copy of the session tag, or nil if not set. The returned
-slice is a defensive copy to prevent external modification.
-
 #### func (*NTCP2Addr) String
 
 ```go
 func (na *NTCP2Addr) String() string
 ```
 String returns a string representation of the NTCP2 address. Format:
-"ntcp2://[router_hash]/[role]/[tcp_address][?dest=dest_hash][&session=session_tag]"
+"ntcp2://[router_hash]/[role]/[tcp_address][?dest=dest_hash]"
 Router hash and optional parameters are base64 encoded for readability.
 
 #### func (*NTCP2Addr) UnderlyingAddr
@@ -152,14 +144,6 @@ func (na *NTCP2Addr) WithDestinationHash(destHash []byte) (*NTCP2Addr, error)
 ```
 WithDestinationHash sets the destination hash for tunnel connections. destHash
 must be exactly 32 bytes or nil for router-to-router connections.
-
-#### func (*NTCP2Addr) WithSessionTag
-
-```go
-func (na *NTCP2Addr) WithSessionTag(sessionTag []byte) (*NTCP2Addr, error)
-```
-WithSessionTag sets the session tag for this connection. sessionTag must be
-exactly 8 bytes or nil.
 
 #### type NTCP2Config
 
@@ -477,14 +461,6 @@ func (nc *NTCP2Conn) RouterHash() []byte
 ```
 RouterHash returns the router hash from the remote address. This is I2P-specific
 functionality for NTCP2 connections.
-
-#### func (*NTCP2Conn) SessionTag
-
-```go
-func (nc *NTCP2Conn) SessionTag() []byte
-```
-SessionTag returns the session tag from the remote address. Returns nil if no
-session tag is set.
 
 #### func (*NTCP2Conn) SetDeadline
 

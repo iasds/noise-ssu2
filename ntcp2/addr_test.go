@@ -88,7 +88,6 @@ func TestNewNTCP2Addr(t *testing.T) {
 				assert.Equal(t, tt.role, addr.role)
 				assert.Equal(t, 32, len(addr.routerHash))
 				assert.Nil(t, addr.destHash)
-				assert.Nil(t, addr.sessionTag)
 			}
 		})
 	}
@@ -163,75 +162,6 @@ func TestNTCP2Addr_WithDestinationHash(t *testing.T) {
 	}
 }
 
-func TestNTCP2Addr_WithSessionTag(t *testing.T) {
-	// Create base address
-	underlying := &net.TCPAddr{IP: net.ParseIP("192.168.1.1"), Port: 8080}
-	routerHash := make([]byte, 32)
-	baseAddr, err := NewNTCP2Addr(underlying, routerHash, "initiator")
-	require.NoError(t, err)
-
-	tests := []struct {
-		name         string
-		sessionTag   []byte
-		expectError  bool
-		errorMessage string
-	}{
-		{
-			name:        "valid_session_tag",
-			sessionTag:  make([]byte, 8),
-			expectError: false,
-		},
-		{
-			name:        "nil_session_tag",
-			sessionTag:  nil,
-			expectError: false,
-		},
-		{
-			name:         "invalid_session_tag_too_short",
-			sessionTag:   make([]byte, 4),
-			expectError:  true,
-			errorMessage: "session tag must be exactly 8 bytes or nil",
-		},
-		{
-			name:         "invalid_session_tag_too_long",
-			sessionTag:   make([]byte, 16),
-			expectError:  true,
-			errorMessage: "session tag must be exactly 8 bytes or nil",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			newAddr, err := baseAddr.WithSessionTag(tt.sessionTag)
-
-			if tt.expectError {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), tt.errorMessage)
-				assert.Nil(t, newAddr)
-			} else {
-				require.NoError(t, err)
-				require.NotNil(t, newAddr)
-
-				// Verify immutability - original should be unchanged
-				assert.Nil(t, baseAddr.sessionTag)
-
-				if tt.sessionTag != nil {
-					assert.Equal(t, 8, len(newAddr.sessionTag))
-					// Test defensive copy by modifying original and verifying it doesn't affect the copy
-					if len(tt.sessionTag) > 0 {
-						originalByte := tt.sessionTag[0]
-						tt.sessionTag[0] = 0xFF
-						assert.NotEqual(t, byte(0xFF), newAddr.sessionTag[0])
-						tt.sessionTag[0] = originalByte // Restore
-					}
-				} else {
-					assert.Nil(t, newAddr.sessionTag)
-				}
-			}
-		})
-	}
-}
-
 func TestNTCP2Addr_NetAddrInterface(t *testing.T) {
 	underlying := &net.TCPAddr{IP: net.ParseIP("192.168.1.1"), Port: 8080}
 	routerHash := make([]byte, 32)
@@ -276,7 +206,7 @@ func TestNTCP2Addr_String(t *testing.T) {
 				"/initiator/",
 				"192.168.1.1:8080",
 			},
-			notContains: []string{"?dest=", "&session="},
+			notContains: []string{"?dest="},
 		},
 		{
 			name: "with_destination_hash",
@@ -292,40 +222,7 @@ func TestNTCP2Addr_String(t *testing.T) {
 				"192.168.1.1:8080",
 				"?dest=",
 			},
-			notContains: []string{"&session="},
-		},
-		{
-			name: "with_session_tag",
-			setupAddr: func(addr *NTCP2Addr) *NTCP2Addr {
-				sessionTag := make([]byte, 8)
-				sessionTag[0] = 0xDD
-				newAddr, _ := addr.WithSessionTag(sessionTag)
-				return newAddr
-			},
-			contains: []string{
-				"ntcp2://",
-				"/initiator/",
-				"192.168.1.1:8080",
-				"?session=",
-			},
-			notContains: []string{"dest="},
-		},
-		{
-			name: "with_both_dest_and_session",
-			setupAddr: func(addr *NTCP2Addr) *NTCP2Addr {
-				destHash := make([]byte, 32)
-				sessionTag := make([]byte, 8)
-				newAddr, _ := addr.WithDestinationHash(destHash)
-				newAddr, _ = newAddr.WithSessionTag(sessionTag)
-				return newAddr
-			},
-			contains: []string{
-				"ntcp2://",
-				"/initiator/",
-				"192.168.1.1:8080",
-				"?dest=",
-				"&session=",
-			},
+			notContains: []string{},
 		},
 	}
 
@@ -389,19 +286,6 @@ func TestNTCP2Addr_AccessorMethods(t *testing.T) {
 
 	assert.False(t, addrWithDest.IsRouterToRouter())
 	assert.True(t, addrWithDest.IsTunnelConnection())
-
-	// Test SessionTag
-	sessionTag := make([]byte, 8)
-	sessionTag[0] = 0xCC
-	addrWithSession, err := addr.WithSessionTag(sessionTag)
-	require.NoError(t, err)
-
-	returnedSession := addrWithSession.SessionTag()
-	assert.Equal(t, 8, len(returnedSession))
-	assert.Equal(t, byte(0xCC), returnedSession[0])
-	// Test defensive copy by modifying returned slice
-	returnedSession[0] = 0xFF
-	assert.Equal(t, byte(0xCC), addrWithSession.SessionTag()[0]) // Original should be unchanged
 }
 
 func TestNTCP2Addr_DefensiveCopying(t *testing.T) {
@@ -439,33 +323,26 @@ func TestNTCP2Addr_BuilderPattern(t *testing.T) {
 	underlying := &net.TCPAddr{IP: net.ParseIP("192.168.1.1"), Port: 8080}
 	routerHash := make([]byte, 32)
 	destHash := make([]byte, 32)
-	sessionTag := make([]byte, 8)
 
 	// Set recognizable bytes
 	routerHash[0] = 0xAA
 	destHash[0] = 0xBB
-	sessionTag[0] = 0xCC
 
 	// Create base address
 	baseAddr, err := NewNTCP2Addr(underlying, routerHash, "initiator")
 	require.NoError(t, err)
 
 	// Chain builder methods
-	addrWithDest, err := baseAddr.WithDestinationHash(destHash)
-	require.NoError(t, err)
-
-	finalAddr, err := addrWithDest.WithSessionTag(sessionTag)
+	finalAddr, err := baseAddr.WithDestinationHash(destHash)
 	require.NoError(t, err)
 
 	// Verify final address has all components
 	assert.Equal(t, byte(0xAA), finalAddr.RouterHash()[0])
 	assert.Equal(t, byte(0xBB), finalAddr.DestinationHash()[0])
-	assert.Equal(t, byte(0xCC), finalAddr.SessionTag()[0])
 	assert.True(t, finalAddr.IsTunnelConnection())
 
 	// Verify original is unchanged (immutability)
 	assert.Nil(t, baseAddr.DestinationHash())
-	assert.Nil(t, baseAddr.SessionTag())
 	assert.True(t, baseAddr.IsRouterToRouter())
 }
 

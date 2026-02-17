@@ -96,19 +96,8 @@ func demonstrateNTCP2Addressing() {
 	fmt.Printf("  Router-to-Router: %v\n", tunnelAddr.IsRouterToRouter())
 	fmt.Println()
 
-	// Add a session tag
-	sessionTag := []byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08}
-	sessionAddr, err := tunnelAddr.WithSessionTag(sessionTag)
-	if err != nil {
-		log.Fatalf("Failed to add session tag: %v", err)
-	}
-
-	fmt.Printf("NTCP2 Address with Session Tag:\n")
-	fmt.Printf("  String: %s\n", sessionAddr.String())
-	fmt.Println()
-
 	// Demonstrate net.Addr interface compliance
-	var netAddr net.Addr = sessionAddr
+	var netAddr net.Addr = tunnelAddr
 	fmt.Printf("net.Addr Interface Compliance:\n")
 	fmt.Printf("  Network(): %s\n", netAddr.Network())
 	fmt.Printf("  String():  %s\n", netAddr.String())

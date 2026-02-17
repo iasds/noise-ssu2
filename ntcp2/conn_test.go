@@ -372,8 +372,6 @@ func TestNTCP2Conn_I2PSpecificMethods(t *testing.T) {
 	destHash := make([]byte, 32)
 	copy(destHash, "test-dest-hash-32-bytes-long!!")
 
-	sessionTag := []byte("session8") // 8 bytes
-
 	tcpAddr := &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 8080}
 
 	localAddr, err := NewNTCP2Addr(tcpAddr, routerHash, "initiator")
@@ -384,10 +382,6 @@ func TestNTCP2Conn_I2PSpecificMethods(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to set destination hash: %v", err)
 	}
-	localAddr, err = localAddr.WithSessionTag(sessionTag)
-	if err != nil {
-		t.Fatalf("Failed to set session tag: %v", err)
-	}
 
 	remoteAddr, err := NewNTCP2Addr(tcpAddr, routerHash, "responder")
 	if err != nil {
@@ -397,10 +391,6 @@ func TestNTCP2Conn_I2PSpecificMethods(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to set destination hash: %v", err)
 	}
-	remoteAddr, err = remoteAddr.WithSessionTag(sessionTag)
-	if err != nil {
-		t.Fatalf("Failed to set session tag: %v", err)
-	}
 
 	conn := createTestNTCP2ConnWithAddrs(&mockNoiseConn{}, localAddr, remoteAddr)
 
@@ -409,9 +399,6 @@ func TestNTCP2Conn_I2PSpecificMethods(t *testing.T) {
 
 	// Test DestinationHash
 	assert.Equal(t, destHash, conn.DestinationHash())
-
-	// Test SessionTag
-	assert.Equal(t, sessionTag, conn.SessionTag())
 
 	// Test Role
 	assert.Equal(t, "initiator", conn.Role())

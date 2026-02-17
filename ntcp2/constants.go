@@ -13,10 +13,6 @@ const (
 	// IVSize is the size of the AES-CBC initialization vector in bytes.
 	IVSize = 16
 
-	// SessionTagSize is the size of an SSU2 session tag in bytes.
-	// Note: session tags are an SSU2 concept, not NTCP2.
-	SessionTagSize = 8
-
 	// PaddingBlockType is the I2P NTCP2 padding block type identifier.
 	PaddingBlockType = 254
 

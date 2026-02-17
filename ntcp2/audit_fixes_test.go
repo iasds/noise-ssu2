@@ -335,7 +335,6 @@ func TestAudit_Quality_Constants(t *testing.T) {
 	assert.Equal(t, 32, RouterHashSize)
 	assert.Equal(t, 32, StaticKeySize)
 	assert.Equal(t, 16, IVSize)
-	assert.Equal(t, 8, SessionTagSize)
 	assert.Equal(t, byte(254), byte(PaddingBlockType))
 	assert.Equal(t, 65516, MaxBlockDataSize)
 	assert.Equal(t, 65535, MaxFrameSize)
