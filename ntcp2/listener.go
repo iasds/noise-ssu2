@@ -168,15 +168,16 @@ func (nl *NTCP2Listener) validateAndCastNoiseConn(conn net.Conn) (*noise.NoiseCo
 
 // createRemoteNTCP2Addr creates the remote NTCP2 address for the accepted connection.
 func (nl *NTCP2Listener) createRemoteNTCP2Addr(noiseConn *noise.NoiseConn) (*NTCP2Addr, error) {
-	// TODO(ntcp2-spec): Extract the remote router hash from the completed
-	// Noise handshake (remote static key). The NoiseConn currently does not
-	// expose PeerStatic() or equivalent. Until upstream adds this, we use
-	// the config's RemoteRouterHash if available, otherwise a placeholder.
-	// This means all accepted connections will report a zero router hash
-	// unless the config provides one, making peer identification impossible.
-	remoteRouterHash := make([]byte, RouterHashSize)
-	if nl.config.RemoteRouterHash != nil {
-		copy(remoteRouterHash, nl.config.RemoteRouterHash)
+	// Extract the remote router hash from the completed Noise handshake.
+	// PeerStatic() returns the remote peer's static public key (32 bytes)
+	// after the XK handshake completes.
+	remoteRouterHash := noiseConn.PeerStatic()
+	if len(remoteRouterHash) == 0 {
+		// Fall back to config if handshake didn't provide the peer's static key
+		remoteRouterHash = make([]byte, RouterHashSize)
+		if nl.config.RemoteRouterHash != nil {
+			copy(remoteRouterHash, nl.config.RemoteRouterHash)
+		}
 	}
 	remoteAddr, err := NewNTCP2Addr(noiseConn.RemoteAddr(), remoteRouterHash, "initiator")
 	if err != nil {

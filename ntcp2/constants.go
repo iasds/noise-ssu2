@@ -32,11 +32,10 @@ const (
 	FrameLengthFieldSize = 2
 
 	// NTCP2ProtocolName is the full Noise protocol name for NTCP2 as defined by the I2P spec.
-	// TODO(ntcp2-spec): The upstream go-i2p/noise library may not support this custom
-	// protocol name (it uses standard Noise naming). Until upstream adds support for
-	// custom protocol names like "Noise_XKaesobfse+hs2+hs3_25519_ChaChaPoly_SHA256",
-	// we use the standard "XK" pattern with ChaChaPoly. The full protocol name is
-	// required for KDF compatibility with other I2P implementations.
+	// TODO(ntcp2-spec): The upstream go-i2p/noise library does not yet support custom
+	// protocol names for InitializeSymmetric(). It constructs the name from the pattern
+	// and cipher suite. Until upstream adds a ProtocolName override to noise.Config,
+	// the KDF will produce different outputs than other I2P implementations.
 	NTCP2ProtocolName = "Noise_XKaesobfse+hs2+hs3_25519_ChaChaPoly_SHA256"
 
 	// NTCP2Pattern is the base Noise pattern used by NTCP2.

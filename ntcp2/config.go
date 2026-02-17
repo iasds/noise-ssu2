@@ -5,6 +5,7 @@ import (
 
 	noise "github.com/go-i2p/go-noise"
 	"github.com/go-i2p/go-noise/handshake"
+	upstreamnoise "github.com/go-i2p/noise"
 	"github.com/samber/oops"
 )
 
@@ -114,10 +115,8 @@ func NewNTCP2Config(routerHash []byte, initiator bool) (*NTCP2Config, error) {
 	// library expands to the standard name. This produces different KDF
 	// outputs, making the handshake incompatible with other I2P routers.
 	//
-	// TODO(ntcp2-spec): NTCP2 mandates ChaChaPoly (ChaCha20-Poly1305 per
-	// RFC 7539). The "XK" pattern alone does not specify the cipher; the
-	// underlying library may default to AESGCM. The config should explicitly
-	// use ChaChaPoly or the full protocol name once upstream supports it.
+	// ChaChaPoly is now configurable via ConnConfig.CipherSuite; the
+	// ToConnConfig() method below sets it correctly for NTCP2.
 	return &NTCP2Config{
 		Pattern:              NTCP2Pattern,
 		Initiator:            initiator,
@@ -432,6 +431,12 @@ func (nc *NTCP2Config) createBaseConnConfig() *noise.ConnConfig {
 		WriteTimeout:     nc.WriteTimeout,
 		HandshakeRetries: nc.HandshakeRetries,
 		RetryBackoff:     nc.RetryBackoff,
+		// NTCP2 mandates ChaChaPoly (ChaCha20-Poly1305 per RFC 7539)
+		CipherSuite: upstreamnoise.NewCipherSuite(
+			upstreamnoise.DH25519,
+			upstreamnoise.CipherChaChaPoly,
+			upstreamnoise.HashSHA256,
+		),
 	}
 }
 

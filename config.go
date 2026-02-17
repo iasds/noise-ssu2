@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/go-i2p/go-noise/handshake"
+	"github.com/go-i2p/noise"
 	"github.com/samber/oops"
 )
 
@@ -48,6 +49,11 @@ type ConnConfig struct {
 	// Modifiers are applied in order during outbound processing and in reverse
 	// order during inbound processing. Default: empty (no modifiers)
 	Modifiers []handshake.HandshakeModifier
+
+	// CipherSuite specifies the Noise cipher suite to use for the handshake.
+	// If nil, defaults to DH25519 + CipherAESGCM + SHA256.
+	// Protocols like NTCP2 require DH25519 + CipherChaChaPoly + SHA256.
+	CipherSuite noise.CipherSuite
 }
 
 // NewConnConfig creates a new ConnConfig with sensible defaults.

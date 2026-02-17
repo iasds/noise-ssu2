@@ -321,6 +321,19 @@ func (nc *NoiseConn) GetConnectionState() ConnState {
 	return nc.getState()
 }
 
+// PeerStatic returns the static public key provided by the remote peer
+// during the Noise handshake. Returns nil if the handshake has not completed
+// or if the handshake pattern does not transmit a static key.
+//
+// Thread Safety: This method is safe for concurrent use. The underlying
+// HandshakeState.PeerStatic() is mutex-protected.
+func (nc *NoiseConn) PeerStatic() []byte {
+	if nc.handshakeState == nil {
+		return nil
+	}
+	return nc.handshakeState.PeerStatic()
+}
+
 // Rekey triggers a rekey operation on the underlying cipher state.
 // This advances the encryption key material per the Noise Protocol specification
 // (encrypts 32 zero bytes with nonce 2^64-1, takes first 32 bytes as new key).
@@ -2159,7 +2172,10 @@ func validateNewConnParams(underlying net.Conn, config *ConnConfig) error {
 
 // createHandshakeState creates and initializes the Noise handshake state.
 func createHandshakeState(config *ConnConfig) (*noise.HandshakeState, error) {
-	cs := noise.NewCipherSuite(noise.DH25519, noise.CipherAESGCM, noise.HashSHA256)
+	cs := config.CipherSuite
+	if cs == nil {
+		cs = noise.NewCipherSuite(noise.DH25519, noise.CipherAESGCM, noise.HashSHA256)
+	}
 
 	pattern, err := parseHandshakePattern(config.Pattern)
 	if err != nil {
