@@ -13,7 +13,6 @@ import (
 // NTCP2Addr implements net.Addr for NTCP2 transport connections.
 // It provides I2P-specific addressing information including router identity,
 // destination hash, and session parameters for the NTCP2 protocol.
-// Moved from: ntcp2/addr.go
 type NTCP2Addr struct {
 	// underlying is the TCP network address
 	underlying net.Addr
@@ -21,8 +20,6 @@ type NTCP2Addr struct {
 	routerHash []byte
 	// destHash is the 32-byte destination hash (optional, nil for router-to-router)
 	destHash []byte
-	// sessionTag is the 8-byte session tag for this connection (optional)
-	sessionTag []byte
 	// role indicates if this is an initiator or responder address
 	role string
 }
@@ -38,12 +35,12 @@ func NewNTCP2Addr(underlying net.Addr, routerHash []byte, role string) (*NTCP2Ad
 			Errorf("underlying address cannot be nil")
 	}
 
-	if len(routerHash) != 32 {
+	if len(routerHash) != RouterHashSize {
 		return nil, oops.
 			Code("INVALID_ROUTER_HASH").
 			In("ntcp2").
 			With("hash_length", len(routerHash)).
-			Errorf("router hash must be exactly 32 bytes")
+			Errorf("router hash must be exactly %d bytes", RouterHashSize)
 	}
 
 	if role != "initiator" && role != "responder" {
@@ -55,7 +52,7 @@ func NewNTCP2Addr(underlying net.Addr, routerHash []byte, role string) (*NTCP2Ad
 	}
 
 	// Make defensive copy of router hash
-	hash := make([]byte, 32)
+	hash := make([]byte, RouterHashSize)
 	copy(hash, routerHash)
 
 	return &NTCP2Addr{
@@ -68,62 +65,25 @@ func NewNTCP2Addr(underlying net.Addr, routerHash []byte, role string) (*NTCP2Ad
 // WithDestinationHash sets the destination hash for tunnel connections.
 // destHash must be exactly 32 bytes or nil for router-to-router connections.
 func (na *NTCP2Addr) WithDestinationHash(destHash []byte) (*NTCP2Addr, error) {
-	if destHash != nil && len(destHash) != 32 {
+	if destHash != nil && len(destHash) != RouterHashSize {
 		return nil, oops.
 			Code("INVALID_DEST_HASH").
 			In("ntcp2").
 			With("hash_length", len(destHash)).
-			Errorf("destination hash must be exactly 32 bytes or nil")
+			Errorf("destination hash must be exactly %d bytes or nil", RouterHashSize)
 	}
 
 	// Create new instance with defensive copy
 	newAddr := &NTCP2Addr{
 		underlying: na.underlying,
-		routerHash: make([]byte, 32),
+		routerHash: make([]byte, RouterHashSize),
 		role:       na.role,
 	}
 	copy(newAddr.routerHash, na.routerHash)
 
 	if destHash != nil {
-		newAddr.destHash = make([]byte, 32)
+		newAddr.destHash = make([]byte, RouterHashSize)
 		copy(newAddr.destHash, destHash)
-	}
-
-	if na.sessionTag != nil {
-		newAddr.sessionTag = make([]byte, 8)
-		copy(newAddr.sessionTag, na.sessionTag)
-	}
-
-	return newAddr, nil
-}
-
-// WithSessionTag sets the session tag for this connection.
-// sessionTag must be exactly 8 bytes or nil.
-func (na *NTCP2Addr) WithSessionTag(sessionTag []byte) (*NTCP2Addr, error) {
-	if sessionTag != nil && len(sessionTag) != 8 {
-		return nil, oops.
-			Code("INVALID_SESSION_TAG").
-			In("ntcp2").
-			With("tag_length", len(sessionTag)).
-			Errorf("session tag must be exactly 8 bytes or nil")
-	}
-
-	// Create new instance with defensive copy
-	newAddr := &NTCP2Addr{
-		underlying: na.underlying,
-		routerHash: make([]byte, 32),
-		role:       na.role,
-	}
-	copy(newAddr.routerHash, na.routerHash)
-
-	if na.destHash != nil {
-		newAddr.destHash = make([]byte, 32)
-		copy(newAddr.destHash, na.destHash)
-	}
-
-	if sessionTag != nil {
-		newAddr.sessionTag = make([]byte, 8)
-		copy(newAddr.sessionTag, sessionTag)
 	}
 
 	return newAddr, nil
@@ -136,7 +96,7 @@ func (na *NTCP2Addr) Network() string {
 }
 
 // String returns a string representation of the NTCP2 address.
-// Format: "ntcp2://[router_hash]/[role]/[tcp_address][?dest=dest_hash][&session=session_tag]"
+// Format: "ntcp2://[router_hash]/[role]/[tcp_address][?dest=dest_hash]"
 // Router hash and optional parameters are base64 encoded for readability.
 func (na *NTCP2Addr) String() string {
 	if na.underlying == nil {
@@ -155,16 +115,6 @@ func (na *NTCP2Addr) String() string {
 		addr += "?dest=" + destB64
 	}
 
-	// Add optional session tag
-	if na.sessionTag != nil {
-		separator := "?"
-		if na.destHash != nil {
-			separator = "&"
-		}
-		sessionB64 := base64.URLEncoding.EncodeToString(na.sessionTag)
-		addr += separator + "session=" + sessionB64
-	}
-
 	return addr
 }
 
@@ -174,7 +124,7 @@ func (na *NTCP2Addr) RouterHash() []byte {
 	if na.routerHash == nil {
 		return nil
 	}
-	hash := make([]byte, 32)
+	hash := make([]byte, RouterHashSize)
 	copy(hash, na.routerHash)
 	return hash
 }
@@ -185,20 +135,9 @@ func (na *NTCP2Addr) DestinationHash() []byte {
 	if na.destHash == nil {
 		return nil
 	}
-	hash := make([]byte, 32)
+	hash := make([]byte, RouterHashSize)
 	copy(hash, na.destHash)
 	return hash
-}
-
-// SessionTag returns a copy of the session tag, or nil if not set.
-// The returned slice is a defensive copy to prevent external modification.
-func (na *NTCP2Addr) SessionTag() []byte {
-	if na.sessionTag == nil {
-		return nil
-	}
-	tag := make([]byte, 8)
-	copy(tag, na.sessionTag)
-	return tag
 }
 
 // Role returns the connection role ("initiator" or "responder").

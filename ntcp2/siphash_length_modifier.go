@@ -2,6 +2,7 @@ package ntcp2
 
 import (
 	"encoding/binary"
+	"sync"
 
 	"github.com/dchest/siphash"
 	"github.com/go-i2p/go-noise/handshake"
@@ -10,14 +11,15 @@ import (
 // SipHashLengthModifier implements NTCP2's SipHash-2-4 length obfuscation
 // for data phase frame lengths. This prevents identification of frame
 // lengths in the data stream.
-// Moved from: ntcp2/modifier.go
+//
+// Per the NTCP2 spec: IV[n] = SipHash-2-4(sipk1, sipk2, IV[n-1]).
+// The input to SipHash is the 8-byte little-endian encoding of the previous IV.
 type SipHashLengthModifier struct {
+	mu         sync.Mutex
 	name       string
 	sipKeys    [2]uint64 // SipHash k1, k2 keys
 	outboundIV uint64    // Current IV value for outbound
 	inboundIV  uint64    // Current IV value for inbound
-	outCounter uint64    // Frame counter for outbound
-	inCounter  uint64    // Frame counter for inbound
 }
 
 // NewSipHashLengthModifier creates a new SipHash length obfuscation modifier.
@@ -29,20 +31,22 @@ func NewSipHashLengthModifier(name string, sipKeys [2]uint64, initialIV uint64) 
 		sipKeys:    sipKeys,
 		outboundIV: initialIV,
 		inboundIV:  initialIV,
-		outCounter: 0,
-		inCounter:  0,
 	}
 }
 
 // ModifyOutbound obfuscates 2-byte frame lengths using SipHash.
 func (slm *SipHashLengthModifier) ModifyOutbound(phase handshake.HandshakePhase, data []byte) ([]byte, error) {
 	// Only apply to data phase (not handshake messages 1, 2, or 3 part 1)
-	if phase != handshake.PhaseFinal || len(data) != 2 {
+	// TODO(ntcp2-spec): Integrate SipHash length obfuscation into the actual
+	// read/write path of NTCP2Conn. Currently this is only applied when
+	// explicitly called by the modifier chain.
+	if phase != handshake.PhaseFinal || len(data) != FrameLengthFieldSize {
 		return data, nil
 	}
 
-	// Get next mask using SipHash for outbound
+	slm.mu.Lock()
 	mask := slm.getNextOutboundMask()
+	slm.mu.Unlock()
 
 	// XOR the 2-byte length with the mask
 	length := binary.BigEndian.Uint16(data)
@@ -57,12 +61,13 @@ func (slm *SipHashLengthModifier) ModifyOutbound(phase handshake.HandshakePhase,
 // ModifyInbound removes SipHash obfuscation from frame lengths.
 func (slm *SipHashLengthModifier) ModifyInbound(phase handshake.HandshakePhase, data []byte) ([]byte, error) {
 	// Only apply to data phase (not handshake messages 1, 2, or 3 part 1)
-	if phase != handshake.PhaseFinal || len(data) != 2 {
+	if phase != handshake.PhaseFinal || len(data) != FrameLengthFieldSize {
 		return data, nil
 	}
 
-	// Get next mask using SipHash for inbound
+	slm.mu.Lock()
 	mask := slm.getNextInboundMask()
+	slm.mu.Unlock()
 
 	// XOR the 2-byte length with the mask (XOR is symmetric)
 	length := binary.BigEndian.Uint16(data)
@@ -75,18 +80,16 @@ func (slm *SipHashLengthModifier) ModifyInbound(phase handshake.HandshakePhase, 
 }
 
 // getNextOutboundMask generates the next SipHash mask for outbound data.
+// Per NTCP2 spec: IV[n] = SipHash-2-4(sipk1, sipk2, IV[n-1]).
 func (slm *SipHashLengthModifier) getNextOutboundMask() uint16 {
-	// Increment counter for next IV
-	slm.outCounter++
-
-	// Use proper SipHash-2-4 with the counter as input
-	input := make([]byte, 8)
-	binary.LittleEndian.PutUint64(input, slm.outCounter)
+	// Use the previous IV as SipHash input (8-byte little-endian)
+	input := make([]byte, SipHashIVSize)
+	binary.LittleEndian.PutUint64(input, slm.outboundIV)
 
 	// Calculate SipHash with k1, k2 keys
 	hash := siphash.Hash(slm.sipKeys[0], slm.sipKeys[1], input)
 
-	// Update IV with the hash result
+	// Update IV with the hash result for next iteration
 	slm.outboundIV = hash
 
 	// Return first 2 bytes as mask
@@ -94,18 +97,16 @@ func (slm *SipHashLengthModifier) getNextOutboundMask() uint16 {
 }
 
 // getNextInboundMask generates the next SipHash mask for inbound data.
+// Per NTCP2 spec: IV[n] = SipHash-2-4(sipk1, sipk2, IV[n-1]).
 func (slm *SipHashLengthModifier) getNextInboundMask() uint16 {
-	// Increment counter for next IV
-	slm.inCounter++
-
-	// Use proper SipHash-2-4 with the counter as input
-	input := make([]byte, 8)
-	binary.LittleEndian.PutUint64(input, slm.inCounter)
+	// Use the previous IV as SipHash input (8-byte little-endian)
+	input := make([]byte, SipHashIVSize)
+	binary.LittleEndian.PutUint64(input, slm.inboundIV)
 
 	// Calculate SipHash with k1, k2 keys
 	hash := siphash.Hash(slm.sipKeys[0], slm.sipKeys[1], input)
 
-	// Update IV with the hash result
+	// Update IV with the hash result for next iteration
 	slm.inboundIV = hash
 
 	// Return first 2 bytes as mask

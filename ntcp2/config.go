@@ -11,7 +11,6 @@ import (
 // NTCP2Config contains configuration for creating NTCP2 connections and listeners.
 // It follows the builder pattern for optional configuration and validation,
 // similar to the main ConnConfig but with NTCP2-specific parameters.
-// Moved from: ntcp2/config.go
 type NTCP2Config struct {
 	// Pattern is the Noise protocol pattern for NTCP2
 	// Default: "XK" (standard NTCP2 pattern)
@@ -95,33 +94,45 @@ type NTCP2Config struct {
 // routerHash must be exactly 32 bytes representing the local router identity.
 // initiator indicates whether this connection will initiate the handshake.
 func NewNTCP2Config(routerHash []byte, initiator bool) (*NTCP2Config, error) {
-	if len(routerHash) != 32 {
+	if len(routerHash) != RouterHashSize {
 		return nil, oops.
 			Code("INVALID_ROUTER_HASH").
 			In("ntcp2").
 			With("hash_length", len(routerHash)).
-			Errorf("router hash must be exactly 32 bytes")
+			Errorf("router hash must be exactly %d bytes", RouterHashSize)
 	}
 
 	// Make defensive copy of router hash
-	hash := make([]byte, 32)
+	hash := make([]byte, RouterHashSize)
 	copy(hash, routerHash)
 
+	// TODO(ntcp2-spec): The NTCP2 spec requires the full protocol name
+	// "Noise_XKaesobfse+hs2+hs3_25519_ChaChaPoly_SHA256" for the initial
+	// KDF InitializeSymmetric() call. The upstream go-i2p/noise library
+	// currently only supports standard Noise protocol names. Until upstream
+	// adds support for this custom protocol name, we use "XK" which the
+	// library expands to the standard name. This produces different KDF
+	// outputs, making the handshake incompatible with other I2P routers.
+	//
+	// TODO(ntcp2-spec): NTCP2 mandates ChaChaPoly (ChaCha20-Poly1305 per
+	// RFC 7539). The "XK" pattern alone does not specify the cipher; the
+	// underlying library may default to AESGCM. The config should explicitly
+	// use ChaChaPoly or the full protocol name once upstream supports it.
 	return &NTCP2Config{
-		Pattern:              "XK",
+		Pattern:              NTCP2Pattern,
 		Initiator:            initiator,
 		RouterHash:           hash,
-		HandshakeTimeout:     30 * time.Second,
-		ReadTimeout:          0, // No timeout by default
-		WriteTimeout:         0, // No timeout by default
-		HandshakeRetries:     3,
+		HandshakeTimeout:     DefaultHandshakeTimeoutSeconds * time.Second,
+		ReadTimeout:          0,
+		WriteTimeout:         0,
+		HandshakeRetries:     DefaultHandshakeRetries,
 		RetryBackoff:         1 * time.Second,
 		EnableAESObfuscation: true,
 		EnableSipHashLength:  true,
-		MaxFrameSize:         16384, // 16KB
+		MaxFrameSize:         DefaultMaxFrameSize,
 		FramePaddingEnabled:  true,
 		MinPaddingSize:       0,
-		MaxPaddingSize:       64,
+		MaxPaddingSize:       DefaultMaxPaddingSize,
 	}, nil
 }
 
@@ -133,22 +144,31 @@ func (nc *NTCP2Config) WithPattern(pattern string) *NTCP2Config {
 }
 
 // WithStaticKey sets the static key for this connection.
-// key must be 32 bytes for Curve25519.
+// key must be 32 bytes for Curve25519. Logs a warning and does not set the key if invalid.
 func (nc *NTCP2Config) WithStaticKey(key []byte) *NTCP2Config {
-	if len(key) == 32 {
-		nc.StaticKey = make([]byte, 32)
-		copy(nc.StaticKey, key)
+	if len(key) != StaticKeySize {
+		log.Warn("WithStaticKey called with invalid key size, ignoring",
+			"expected", StaticKeySize,
+			"got", len(key))
+		return nc
 	}
+	nc.StaticKey = make([]byte, StaticKeySize)
+	copy(nc.StaticKey, key)
 	return nc
 }
 
 // WithRemoteRouterHash sets the remote peer's router identity.
 // hash must be 32 bytes. Required for outbound connections.
+// Logs a warning and does not set the hash if invalid.
 func (nc *NTCP2Config) WithRemoteRouterHash(hash []byte) *NTCP2Config {
-	if len(hash) == 32 {
-		nc.RemoteRouterHash = make([]byte, 32)
-		copy(nc.RemoteRouterHash, hash)
+	if len(hash) != RouterHashSize {
+		log.Warn("WithRemoteRouterHash called with invalid hash size, ignoring",
+			"expected", RouterHashSize,
+			"got", len(hash))
+		return nc
 	}
+	nc.RemoteRouterHash = make([]byte, RouterHashSize)
+	copy(nc.RemoteRouterHash, hash)
 	return nc
 }
 
@@ -185,10 +205,13 @@ func (nc *NTCP2Config) WithRetryBackoff(backoff time.Duration) *NTCP2Config {
 
 // WithAESObfuscation enables or disables AES-based ephemeral key obfuscation.
 // When enabled with a custom IV, the IV must be exactly 16 bytes.
+// TODO(ntcp2-spec): Options negotiation (padding limits as 4.4 fixed-point,
+// dummy traffic, delay parameters) in messages 2, 3, and the data phase
+// is not yet implemented.
 func (nc *NTCP2Config) WithAESObfuscation(enabled bool, customIV []byte) *NTCP2Config {
 	nc.EnableAESObfuscation = enabled
-	if len(customIV) == 16 {
-		nc.ObfuscationIV = make([]byte, 16)
+	if len(customIV) == IVSize {
+		nc.ObfuscationIV = make([]byte, IVSize)
 		copy(nc.ObfuscationIV, customIV)
 	}
 	return nc
@@ -264,12 +287,12 @@ func (nc *NTCP2Config) validateBasicConfiguration() error {
 	}
 
 	// Validate router hash
-	if len(nc.RouterHash) != 32 {
+	if len(nc.RouterHash) != RouterHashSize {
 		return oops.
 			Code("INVALID_ROUTER_HASH").
 			In("ntcp2").
 			With("hash_length", len(nc.RouterHash)).
-			Errorf("router hash must be exactly 32 bytes")
+			Errorf("router hash must be exactly %d bytes", RouterHashSize)
 	}
 
 	return nil
@@ -278,21 +301,21 @@ func (nc *NTCP2Config) validateBasicConfiguration() error {
 // validateCryptographicParameters checks static keys, remote hashes, and obfuscation settings.
 func (nc *NTCP2Config) validateCryptographicParameters() error {
 	// Validate static key if provided
-	if len(nc.StaticKey) > 0 && len(nc.StaticKey) != 32 {
+	if len(nc.StaticKey) > 0 && len(nc.StaticKey) != StaticKeySize {
 		return oops.
 			Code("INVALID_STATIC_KEY").
 			In("ntcp2").
 			With("key_length", len(nc.StaticKey)).
-			Errorf("static key must be 32 bytes")
+			Errorf("static key must be %d bytes", StaticKeySize)
 	}
 
 	// Validate remote router hash if provided
-	if len(nc.RemoteRouterHash) > 0 && len(nc.RemoteRouterHash) != 32 {
+	if len(nc.RemoteRouterHash) > 0 && len(nc.RemoteRouterHash) != RouterHashSize {
 		return oops.
 			Code("INVALID_REMOTE_ROUTER_HASH").
 			In("ntcp2").
 			With("hash_length", len(nc.RemoteRouterHash)).
-			Errorf("remote router hash must be 32 bytes")
+			Errorf("remote router hash must be %d bytes", RouterHashSize)
 	}
 
 	// For initiator connections, remote router hash is required
@@ -304,12 +327,12 @@ func (nc *NTCP2Config) validateCryptographicParameters() error {
 	}
 
 	// Validate AES obfuscation IV if provided
-	if nc.ObfuscationIV != nil && len(nc.ObfuscationIV) != 16 {
+	if nc.ObfuscationIV != nil && len(nc.ObfuscationIV) != IVSize {
 		return oops.
 			Code("INVALID_OBFUSCATION_IV").
 			In("ntcp2").
 			With("iv_length", len(nc.ObfuscationIV)).
-			Errorf("obfuscation IV must be 16 bytes")
+			Errorf("obfuscation IV must be %d bytes", IVSize)
 	}
 
 	return nil
@@ -450,7 +473,7 @@ func (nc *NTCP2Config) createAESModifierIfEnabled() (handshake.HandshakeModifier
 	iv := nc.ObfuscationIV
 	if iv == nil {
 		// Derive IV from router hash (last 16 bytes)
-		iv = nc.RouterHash[16:]
+		iv = nc.RouterHash[IVSize:]
 	}
 
 	aesModifier, err := NewAESObfuscationModifier("ntcp2-aes", nc.RouterHash, iv)

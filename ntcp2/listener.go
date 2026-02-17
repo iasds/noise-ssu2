@@ -13,7 +13,6 @@ import (
 // NTCP2Listener implements net.Listener for accepting NTCP2 transport connections.
 // It wraps a NoiseListener and provides NTCP2-specific addressing and connection handling
 // with I2P router identity management and session establishment.
-// Moved from: ntcp2/listener.go
 type NTCP2Listener struct {
 	// noiseListener is the underlying Noise protocol listener
 	noiseListener *noise.NoiseListener
@@ -169,9 +168,16 @@ func (nl *NTCP2Listener) validateAndCastNoiseConn(conn net.Conn) (*noise.NoiseCo
 
 // createRemoteNTCP2Addr creates the remote NTCP2 address for the accepted connection.
 func (nl *NTCP2Listener) createRemoteNTCP2Addr(noiseConn *noise.NoiseConn) (*NTCP2Addr, error) {
-	// Create remote NTCP2 address (we'll use placeholder router hash for now)
-	// In a real implementation, this would be extracted from the handshake
-	remoteRouterHash := make([]byte, 32) // Placeholder - would be from handshake
+	// TODO(ntcp2-spec): Extract the remote router hash from the completed
+	// Noise handshake (remote static key). The NoiseConn currently does not
+	// expose PeerStatic() or equivalent. Until upstream adds this, we use
+	// the config's RemoteRouterHash if available, otherwise a placeholder.
+	// This means all accepted connections will report a zero router hash
+	// unless the config provides one, making peer identification impossible.
+	remoteRouterHash := make([]byte, RouterHashSize)
+	if nl.config.RemoteRouterHash != nil {
+		copy(remoteRouterHash, nl.config.RemoteRouterHash)
+	}
 	remoteAddr, err := NewNTCP2Addr(noiseConn.RemoteAddr(), remoteRouterHash, "initiator")
 	if err != nil {
 		return nil, oops.

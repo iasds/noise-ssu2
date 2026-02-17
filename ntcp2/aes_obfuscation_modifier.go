@@ -3,6 +3,7 @@ package ntcp2
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"sync"
 
 	"github.com/go-i2p/go-noise/handshake"
 	"github.com/samber/oops"
@@ -11,38 +12,41 @@ import (
 // AESObfuscationModifier implements NTCP2's AES-based ephemeral key obfuscation.
 // This modifier encrypts/decrypts the X and Y ephemeral keys in messages 1 and 2
 // using AES-256-CBC with the router hash as key and published IV.
-// Moved from: ntcp2/modifier.go
+//
+// Per the NTCP2 spec, the AES state (last ciphertext block) from message 1
+// encryption is carried forward as the IV for message 2 encryption.
 type AESObfuscationModifier struct {
+	mu         sync.Mutex
 	name       string
 	routerHash []byte // 32-byte router hash (RH_B)
 	iv         []byte // 16-byte IV from network database
-	aesState   []byte // AES state for message 2 (reused from message 1)
+	aesState   []byte // AES state for message 2 (last ciphertext block from message 1)
 }
 
 // NewAESObfuscationModifier creates a new AES obfuscation modifier for NTCP2.
 // routerHash must be 32 bytes (RH_B), iv must be 16 bytes from network database.
 func NewAESObfuscationModifier(name string, routerHash, iv []byte) (*AESObfuscationModifier, error) {
-	if len(routerHash) != 32 {
+	if len(routerHash) != RouterHashSize {
 		return nil, oops.
 			Code("INVALID_ROUTER_HASH").
 			In("ntcp2").
 			With("hash_length", len(routerHash)).
-			Errorf("router hash must be exactly 32 bytes")
+			Errorf("router hash must be exactly %d bytes", RouterHashSize)
 	}
 
-	if len(iv) != 16 {
+	if len(iv) != IVSize {
 		return nil, oops.
 			Code("INVALID_IV").
 			In("ntcp2").
 			With("iv_length", len(iv)).
-			Errorf("IV must be exactly 16 bytes")
+			Errorf("IV must be exactly %d bytes", IVSize)
 	}
 
 	// Make defensive copies
-	hash := make([]byte, 32)
+	hash := make([]byte, RouterHashSize)
 	copy(hash, routerHash)
 
-	initIV := make([]byte, 16)
+	initIV := make([]byte, IVSize)
 	copy(initIV, iv)
 
 	return &AESObfuscationModifier{
@@ -56,8 +60,11 @@ func NewAESObfuscationModifier(name string, routerHash, iv []byte) (*AESObfuscat
 // For message 1: encrypts X key with RH_B and published IV
 // For message 2: encrypts Y key with RH_B and AES state from message 1
 func (aom *AESObfuscationModifier) ModifyOutbound(phase handshake.HandshakePhase, data []byte) ([]byte, error) {
+	aom.mu.Lock()
+	defer aom.mu.Unlock()
+
 	// Only apply to 32-byte ephemeral keys (X or Y values)
-	if len(data) != 32 {
+	if len(data) != StaticKeySize {
 		return data, nil
 	}
 
@@ -75,9 +82,6 @@ func (aom *AESObfuscationModifier) ModifyOutbound(phase handshake.HandshakePhase
 	case handshake.PhaseInitial:
 		// Message 1: use published IV
 		mode = cipher.NewCBCEncrypter(block, aom.iv)
-		// Save AES state for message 2
-		aom.aesState = make([]byte, 16)
-		copy(aom.aesState, aom.iv)
 	case handshake.PhaseExchange:
 		// Message 2: use AES state from message 1
 		if aom.aesState == nil {
@@ -93,17 +97,27 @@ func (aom *AESObfuscationModifier) ModifyOutbound(phase handshake.HandshakePhase
 		return data, nil
 	}
 
-	result := make([]byte, 32)
+	result := make([]byte, StaticKeySize)
 	copy(result, data)
 	mode.CryptBlocks(result, result)
+
+	// Per NTCP2 spec: save the last ciphertext block as AES state for message 2.
+	// For outbound encryption, the state is result[16:32] captured AFTER encryption.
+	if phase == handshake.PhaseInitial {
+		aom.aesState = make([]byte, IVSize)
+		copy(aom.aesState, result[IVSize:StaticKeySize])
+	}
 
 	return result, nil
 }
 
 // ModifyInbound removes AES obfuscation from ephemeral keys in handshake messages.
 func (aom *AESObfuscationModifier) ModifyInbound(phase handshake.HandshakePhase, data []byte) ([]byte, error) {
+	aom.mu.Lock()
+	defer aom.mu.Unlock()
+
 	// Only apply to 32-byte ephemeral keys (X or Y values)
-	if len(data) != 32 {
+	if len(data) != StaticKeySize {
 		return data, nil
 	}
 
@@ -116,14 +130,19 @@ func (aom *AESObfuscationModifier) ModifyInbound(phase handshake.HandshakePhase,
 			Wrap(err)
 	}
 
+	// Per NTCP2 spec: for inbound (decryption), save the last ciphertext block
+	// BEFORE decryption as the AES state for message 2.
+	// The state is data[16:32] (the last ciphertext block of the 32-byte input).
+	if phase == handshake.PhaseInitial {
+		aom.aesState = make([]byte, IVSize)
+		copy(aom.aesState, data[IVSize:StaticKeySize])
+	}
+
 	var mode cipher.BlockMode
 	switch phase {
 	case handshake.PhaseInitial:
 		// Message 1: use published IV
 		mode = cipher.NewCBCDecrypter(block, aom.iv)
-		// Save AES state for message 2
-		aom.aesState = make([]byte, 16)
-		copy(aom.aesState, aom.iv)
 	case handshake.PhaseExchange:
 		// Message 2: use AES state from message 1
 		if aom.aesState == nil {
@@ -139,7 +158,7 @@ func (aom *AESObfuscationModifier) ModifyInbound(phase handshake.HandshakePhase,
 		return data, nil
 	}
 
-	result := make([]byte, 32)
+	result := make([]byte, StaticKeySize)
 	copy(result, data)
 	mode.CryptBlocks(result, result)
 

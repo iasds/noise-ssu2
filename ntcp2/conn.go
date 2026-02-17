@@ -11,7 +11,18 @@ import (
 
 // NTCP2Conn implements net.Conn for NTCP2 transport connections.
 // It wraps a NoiseConn with NTCP2-specific addressing and protocol handling.
-// Moved from: ntcp2/conn.go
+//
+// TODO(ntcp2-spec): NTCP2Conn reads/writes raw bytes without I2NP block framing.
+// The NTCP2 spec defines a modified I2NP header format (9 bytes: type + msg_id +
+// short_exp) inside block type 3. Data-phase frames should use the I2P block
+// format: [type:1][size:2][data].
+//
+// TODO(ntcp2-spec): No termination block (type 4) support. The spec defines an
+// explicit termination block with reason codes (0-17), valid frame count, and
+// additional data. Connections are simply TCP-closed instead.
+//
+// TODO(ntcp2-spec): No key zeroing / secure memory cleanup. The spec requires
+// zeroing ephemeral keys, DH results, and temp keys after use.
 type NTCP2Conn struct {
 	// noiseConn is the underlying encrypted connection
 	noiseConn *noise.NoiseConn
@@ -87,6 +98,10 @@ func (nc *NTCP2Conn) Read(b []byte) (int, error) {
 
 // Write implements net.Conn.Write.
 // Writes data to the underlying encrypted Noise connection.
+//
+// TODO(ntcp2-spec): The spec requires implementations to buffer and flush entire
+// message contents at once (e.g., TCP_NODELAY or explicit flush), especially
+// for Alice's first message including padding.
 func (nc *NTCP2Conn) Write(b []byte) (int, error) {
 	n, err := nc.noiseConn.Write(b)
 	if err != nil {

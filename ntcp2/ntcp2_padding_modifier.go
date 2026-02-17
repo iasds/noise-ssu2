@@ -68,21 +68,21 @@ func NewNTCP2PaddingModifierWithRatio(name string, minPadding, maxPadding int, u
 	}
 
 	// I2P NTCP2 spec: maximum single block data size is 65516 bytes
-	if maxPadding > 65516 {
+	if maxPadding > MaxBlockDataSize {
 		return nil, oops.
 			Code("INVALID_PADDING").
 			In("ntcp2").
 			With("max_padding", maxPadding).
-			Errorf("maximum padding cannot exceed 65516 bytes (I2P NTCP2 spec limit)")
+			Errorf("maximum padding cannot exceed %d bytes (I2P NTCP2 spec limit)", MaxBlockDataSize)
 	}
 
 	// I2P NTCP2 spec: padding ratio range is 0.0 to 15.9375
-	if paddingRatio < 0.0 || paddingRatio > 15.9375 {
+	if paddingRatio < 0.0 || paddingRatio > MaxPaddingRatio {
 		return nil, oops.
 			Code("INVALID_PADDING_RATIO").
 			In("ntcp2").
 			With("padding_ratio", paddingRatio).
-			Errorf("padding ratio must be between 0.0 and 15.9375 (I2P NTCP2 spec)")
+			Errorf("padding ratio must be between 0.0 and %.4f (I2P NTCP2 spec)", MaxPaddingRatio)
 	}
 
 	return &NTCP2PaddingModifier{
@@ -198,7 +198,8 @@ func (npm *NTCP2PaddingModifier) calculateSecureRandomPadding(paddingSize, paddi
 	}
 
 	randomValue := binary.BigEndian.Uint32(randomBytes)
-	randomPadding := int(randomValue) % (paddingRange + 1)
+	// Use unsigned modulus before converting to int to avoid negative values on 32-bit platforms.
+	randomPadding := int(randomValue % uint32(paddingRange+1))
 
 	if npm.paddingRatio > 0.0 {
 		if randomPadding > paddingSize-npm.minPadding {
@@ -253,7 +254,7 @@ func (npm *NTCP2PaddingModifier) addAEADPadding(data []byte, paddingSize int) ([
 	copy(result, data)
 
 	offset := len(data)
-	result[offset] = 254                                               // Padding block type (I2P NTCP2 spec)
+	result[offset] = PaddingBlockType                                  // Padding block type (I2P NTCP2 spec)
 	binary.BigEndian.PutUint16(result[offset+1:], uint16(paddingSize)) // Padding size (big-endian)
 
 	// Generate cryptographically secure random padding data
@@ -297,7 +298,7 @@ func (npm *NTCP2PaddingModifier) removeAEADPadding(data []byte) ([]byte, error) 
 // This works for simple cases where we have data + single padding block.
 func (npm *NTCP2PaddingModifier) removePaddingFromEnd(data []byte) []byte {
 	for i := len(data) - 1; i >= 2; i-- {
-		if data[i-2] == 254 { // Found potential padding block type
+		if data[i-2] == PaddingBlockType { // Found potential padding block type
 			if i-1 < len(data) {
 				paddingSize := binary.BigEndian.Uint16(data[i-1 : i+1])
 				expectedEnd := i + 1 + int(paddingSize)
@@ -337,7 +338,7 @@ func (npm *NTCP2PaddingModifier) parseBlockStructure(data []byte) blockParseResu
 		}
 
 		result.foundValidBlocks = true
-		if blockType == 254 {
+		if blockType == PaddingBlockType {
 			return result // Found padding block
 		}
 
@@ -374,12 +375,12 @@ func (npm *NTCP2PaddingModifier) validateBlockSize(data []byte, offset, blockSiz
 // SetPaddingRatio updates the padding ratio for dynamic adjustment during connection.
 // This supports I2P NTCP2 options negotiation where padding parameters can be updated.
 func (npm *NTCP2PaddingModifier) SetPaddingRatio(ratio float64) error {
-	if ratio < 0.0 || ratio > 15.9375 {
+	if ratio < 0.0 || ratio > MaxPaddingRatio {
 		return oops.
 			Code("INVALID_PADDING_RATIO").
 			In("ntcp2").
 			With("padding_ratio", ratio).
-			Errorf("padding ratio must be between 0.0 and 15.9375 (I2P NTCP2 spec)")
+			Errorf("padding ratio must be between 0.0 and %.4f (I2P NTCP2 spec)", MaxPaddingRatio)
 	}
 	npm.paddingRatio = ratio
 	return nil
@@ -415,12 +416,12 @@ func (npm *NTCP2PaddingModifier) SetPaddingLimits(minPadding, maxPadding int) er
 			Errorf("maximum padding cannot be less than minimum padding")
 	}
 
-	if maxPadding > 65516 {
+	if maxPadding > MaxBlockDataSize {
 		return oops.
 			Code("INVALID_PADDING").
 			In("ntcp2").
 			With("max_padding", maxPadding).
-			Errorf("maximum padding cannot exceed 65516 bytes (I2P NTCP2 spec limit)")
+			Errorf("maximum padding cannot exceed %d bytes (I2P NTCP2 spec limit)", MaxBlockDataSize)
 	}
 
 	npm.minPadding = minPadding
@@ -496,7 +497,7 @@ func (npm *NTCP2PaddingModifier) parseFrameBlockHeader(data []byte, offset int) 
 
 // validateFramePaddingRules enforces I2P NTCP2 padding block ordering rules
 func (npm *NTCP2PaddingModifier) validateFramePaddingRules(blockType byte, blockSize, offset, dataLen int, hasPadding *bool) bool {
-	if blockType == 254 { // Padding block
+	if blockType == PaddingBlockType { // Padding block
 		if *hasPadding {
 			return false // Multiple padding blocks not allowed
 		}
