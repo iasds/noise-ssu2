@@ -107,16 +107,6 @@ func NewNTCP2Config(routerHash []byte, initiator bool) (*NTCP2Config, error) {
 	hash := make([]byte, RouterHashSize)
 	copy(hash, routerHash)
 
-	// TODO(ntcp2-spec): The NTCP2 spec requires the full protocol name
-	// "Noise_XKaesobfse+hs2+hs3_25519_ChaChaPoly_SHA256" for the initial
-	// KDF InitializeSymmetric() call. The upstream go-i2p/noise library
-	// currently only supports standard Noise protocol names. Until upstream
-	// adds support for this custom protocol name, we use "XK" which the
-	// library expands to the standard name. This produces different KDF
-	// outputs, making the handshake incompatible with other I2P routers.
-	//
-	// ChaChaPoly is now configurable via ConnConfig.CipherSuite; the
-	// ToConnConfig() method below sets it correctly for NTCP2.
 	return &NTCP2Config{
 		Pattern:              NTCP2Pattern,
 		Initiator:            initiator,
@@ -437,6 +427,8 @@ func (nc *NTCP2Config) createBaseConnConfig() *noise.ConnConfig {
 			upstreamnoise.CipherChaChaPoly,
 			upstreamnoise.HashSHA256,
 		),
+		// NTCP2 uses a non-standard protocol name for InitializeSymmetric()
+		ProtocolName: []byte(NTCP2ProtocolName),
 	}
 }
 

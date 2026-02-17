@@ -2187,10 +2187,11 @@ func createHandshakeState(config *ConnConfig) (*noise.HandshakeState, error) {
 	}
 
 	hs, err := noise.NewHandshakeState(noise.Config{
-		CipherSuite: cs,
-		Random:      nil, // Use crypto/rand
-		Pattern:     pattern,
-		Initiator:   config.Initiator,
+		CipherSuite:  cs,
+		Random:       nil, // Use crypto/rand
+		Pattern:      pattern,
+		Initiator:    config.Initiator,
+		ProtocolName: config.ProtocolName,
 		StaticKeypair: noise.DHKey{
 			Private: config.StaticKey,
 			Public:  nil, // Will be computed

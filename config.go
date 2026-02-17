@@ -54,6 +54,14 @@ type ConnConfig struct {
 	// If nil, defaults to DH25519 + CipherAESGCM + SHA256.
 	// Protocols like NTCP2 require DH25519 + CipherChaChaPoly + SHA256.
 	CipherSuite noise.CipherSuite
+
+	// ProtocolName overrides the auto-generated Noise protocol name used
+	// for InitializeSymmetric(). When set, this exact byte string is used
+	// instead of constructing "Noise_" + Pattern.Name + "_" + CipherSuite.Name().
+	// Required for protocols like NTCP2 that use non-standard protocol names
+	// (e.g., "Noise_XKaesobfse+hs2+hs3_25519_ChaChaPoly_SHA256").
+	// If nil/empty, the standard Noise protocol name is constructed as usual.
+	ProtocolName []byte
 }
 
 // NewConnConfig creates a new ConnConfig with sensible defaults.
