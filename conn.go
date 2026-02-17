@@ -172,6 +172,45 @@ func (nc *NoiseConn) Write(b []byte) (int, error) {
 	return nc.writeEncryptedData(b, encrypted)
 }
 
+// Encrypt encrypts plaintext data using the connection's cipher state
+// without writing to the underlying connection. This allows callers to
+// separate encryption from wire-level framing (e.g., for NTCP2's
+// SipHash-obfuscated length prefix).
+//
+// The connection must have completed the Noise handshake.
+// Thread Safety: Same guarantees as Write().
+func (nc *NoiseConn) Encrypt(data []byte) ([]byte, error) {
+	if err := nc.validateWriteState(); err != nil {
+		return nil, err
+	}
+	return nc.encryptData(data)
+}
+
+// Decrypt decrypts ciphertext data using the connection's cipher state
+// without reading from the underlying connection. This allows callers to
+// separate decryption from wire-level framing (e.g., for NTCP2's
+// SipHash-obfuscated length prefix).
+//
+// The connection must have completed the Noise handshake.
+// Thread Safety: Same guarantees as Read().
+func (nc *NoiseConn) Decrypt(encrypted []byte) ([]byte, error) {
+	if err := nc.validateReadState(); err != nil {
+		return nil, err
+	}
+	return nc.decryptData(encrypted, len(encrypted))
+}
+
+// Underlying returns the underlying net.Conn for direct wire access.
+// This is needed for protocols like NTCP2 that add framing (e.g.,
+// SipHash-obfuscated length prefixes) between the TCP connection and
+// the encrypted Noise frames.
+//
+// Callers should use Encrypt/Decrypt for crypto and write/read the
+// resulting bytes to/from this connection with their own framing.
+func (nc *NoiseConn) Underlying() net.Conn {
+	return nc.underlying
+}
+
 // validateWriteState validates the connection state before writing.
 func (nc *NoiseConn) validateWriteState() error {
 	if nc.isClosed() {

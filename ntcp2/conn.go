@@ -1,6 +1,8 @@
 package ntcp2
 
 import (
+	"encoding/binary"
+	"io"
 	"net"
 	"time"
 
@@ -26,6 +28,13 @@ type NTCP2Conn struct {
 
 	// remoteAddr is the NTCP2-specific remote address
 	remoteAddr *NTCP2Addr
+
+	// lengthObfuscator applies SipHash-2-4 frame length obfuscation
+	// in the data phase. When non-nil, Read/Write use framed I/O:
+	//   Write: [2-byte SipHash-obfuscated length][ChaChaPoly ciphertext]
+	//   Read:  deobfuscate 2-byte length, read exact frame, decrypt
+	// When nil, Read/Write delegate directly to NoiseConn (no framing).
+	lengthObfuscator *SipHashLengthModifier
 
 	// logger for connection events
 	logger logger.Logger
@@ -68,9 +77,31 @@ func NewNTCP2Conn(noiseConn *noise.NoiseConn, localAddr, remoteAddr *NTCP2Addr) 
 	return conn, nil
 }
 
+// SetLengthObfuscator sets the SipHash length obfuscator for data-phase framing.
+// When set, Read/Write will use framed I/O with SipHash-obfuscated length prefixes.
+// This should be called before any data-phase Read/Write operations.
+func (nc *NTCP2Conn) SetLengthObfuscator(slm *SipHashLengthModifier) {
+	nc.lengthObfuscator = slm
+}
+
 // Read implements net.Conn.Read.
-// Reads data from the underlying encrypted Noise connection.
+// When a length obfuscator is set, reads use NTCP2 framed I/O:
+//  1. Read exactly 2 bytes from the underlying TCP connection
+//  2. XOR with SipHash inbound mask to recover the frame length
+//  3. Read exactly frameLength bytes of ciphertext from TCP
+//  4. Decrypt the ciphertext via the Noise cipher state
+//  5. Copy plaintext into the caller's buffer
+//
+// When no length obfuscator is set, delegates directly to NoiseConn.Read.
 func (nc *NTCP2Conn) Read(b []byte) (int, error) {
+	if nc.lengthObfuscator == nil {
+		return nc.readDirect(b)
+	}
+	return nc.readFramed(b)
+}
+
+// readDirect delegates directly to the underlying NoiseConn for unframed reads.
+func (nc *NTCP2Conn) readDirect(b []byte) (int, error) {
 	n, err := nc.noiseConn.Read(b)
 	if err != nil {
 		return 0, oops.
@@ -82,7 +113,7 @@ func (nc *NTCP2Conn) Read(b []byte) (int, error) {
 			Wrapf(err, "ntcp2 read failed")
 	}
 
-	nc.logger.Trace("NTCP2 data read",
+	nc.logger.Trace("NTCP2 data read (direct)",
 		"bytes_read", n,
 		"local_addr", nc.localAddr.String(),
 		"remote_addr", nc.remoteAddr.String())
@@ -90,11 +121,105 @@ func (nc *NTCP2Conn) Read(b []byte) (int, error) {
 	return n, nil
 }
 
+// readFramed reads an NTCP2 data-phase frame with SipHash length deobfuscation.
+func (nc *NTCP2Conn) readFramed(b []byte) (int, error) {
+	underlying := nc.noiseConn.Underlying()
+
+	// Step 1: Read the 2-byte obfuscated length field
+	lengthBuf := make([]byte, FrameLengthFieldSize)
+	if _, err := io.ReadFull(underlying, lengthBuf); err != nil {
+		return 0, oops.
+			Code("READ_LENGTH_FAILED").
+			In("ntcp2").
+			With("local_addr", nc.localAddr.String()).
+			With("remote_addr", nc.remoteAddr.String()).
+			Wrapf(err, "failed to read frame length")
+	}
+
+	// Step 2: Deobfuscate using SipHash inbound mask
+	nc.lengthObfuscator.mu.Lock()
+	mask := nc.lengthObfuscator.getNextInboundMask()
+	nc.lengthObfuscator.mu.Unlock()
+
+	obfuscatedLen := binary.BigEndian.Uint16(lengthBuf)
+	frameLen := obfuscatedLen ^ mask
+
+	if frameLen == 0 {
+		return 0, oops.
+			Code("ZERO_FRAME_LENGTH").
+			In("ntcp2").
+			With("local_addr", nc.localAddr.String()).
+			With("remote_addr", nc.remoteAddr.String()).
+			Errorf("received zero-length frame")
+	}
+
+	if int(frameLen) > MaxFrameSize {
+		return 0, oops.
+			Code("FRAME_TOO_LARGE").
+			In("ntcp2").
+			With("frame_length", frameLen).
+			With("max_frame_size", MaxFrameSize).
+			With("local_addr", nc.localAddr.String()).
+			With("remote_addr", nc.remoteAddr.String()).
+			Errorf("frame length %d exceeds maximum %d", frameLen, MaxFrameSize)
+	}
+
+	// Step 3: Read exactly frameLen bytes of ciphertext
+	ciphertext := make([]byte, frameLen)
+	if _, err := io.ReadFull(underlying, ciphertext); err != nil {
+		return 0, oops.
+			Code("READ_FRAME_FAILED").
+			In("ntcp2").
+			With("frame_length", frameLen).
+			With("local_addr", nc.localAddr.String()).
+			With("remote_addr", nc.remoteAddr.String()).
+			Wrapf(err, "failed to read frame data")
+	}
+
+	// Step 4: Decrypt using the Noise cipher state
+	plaintext, err := nc.noiseConn.Decrypt(ciphertext)
+	if err != nil {
+		return 0, oops.
+			Code("DECRYPT_FAILED").
+			In("ntcp2").
+			With("frame_length", frameLen).
+			With("local_addr", nc.localAddr.String()).
+			With("remote_addr", nc.remoteAddr.String()).
+			Wrapf(err, "failed to decrypt frame")
+	}
+
+	// Step 5: Copy plaintext into caller's buffer
+	n := copy(b, plaintext)
+
+	nc.logger.Trace("NTCP2 data read (framed)",
+		"frame_length", frameLen,
+		"plaintext_length", len(plaintext),
+		"bytes_copied", n,
+		"local_addr", nc.localAddr.String(),
+		"remote_addr", nc.remoteAddr.String())
+
+	return n, nil
+}
+
 // Write implements net.Conn.Write.
-// Writes data to the underlying encrypted Noise connection.
+// When a length obfuscator is set, writes use NTCP2 framed I/O:
+//  1. Encrypt the plaintext via the Noise cipher state
+//  2. Compute the ciphertext length as a uint16
+//  3. XOR with SipHash outbound mask to obfuscate the length
+//  4. Write [2-byte obfuscated length][ciphertext] to the underlying TCP connection
+//
+// When no length obfuscator is set, delegates directly to NoiseConn.Write.
 // Note: The NTCP2 spec requires buffering and flushing entire messages at once
 // (TCP_NODELAY). This is the responsibility of the higher-level router transport.
 func (nc *NTCP2Conn) Write(b []byte) (int, error) {
+	if nc.lengthObfuscator == nil {
+		return nc.writeDirect(b)
+	}
+	return nc.writeFramed(b)
+}
+
+// writeDirect delegates directly to the underlying NoiseConn for unframed writes.
+func (nc *NTCP2Conn) writeDirect(b []byte) (int, error) {
 	n, err := nc.noiseConn.Write(b)
 	if err != nil {
 		return 0, oops.
@@ -106,12 +231,82 @@ func (nc *NTCP2Conn) Write(b []byte) (int, error) {
 			Wrapf(err, "ntcp2 write failed")
 	}
 
-	nc.logger.Trace("NTCP2 data written",
+	nc.logger.Trace("NTCP2 data written (direct)",
 		"bytes_written", n,
 		"local_addr", nc.localAddr.String(),
 		"remote_addr", nc.remoteAddr.String())
 
 	return n, nil
+}
+
+// writeFramed writes an NTCP2 data-phase frame with SipHash length obfuscation.
+func (nc *NTCP2Conn) writeFramed(b []byte) (int, error) {
+	// Step 1: Encrypt the plaintext
+	encrypted, err := nc.noiseConn.Encrypt(b)
+	if err != nil {
+		return 0, oops.
+			Code("ENCRYPT_FAILED").
+			In("ntcp2").
+			With("plaintext_len", len(b)).
+			With("local_addr", nc.localAddr.String()).
+			With("remote_addr", nc.remoteAddr.String()).
+			Wrapf(err, "failed to encrypt frame")
+	}
+
+	// Step 2: Validate frame size
+	if len(encrypted) > MaxFrameSize {
+		return 0, oops.
+			Code("FRAME_TOO_LARGE").
+			In("ntcp2").
+			With("encrypted_len", len(encrypted)).
+			With("max_frame_size", MaxFrameSize).
+			Errorf("encrypted frame (%d bytes) exceeds maximum frame size (%d)", len(encrypted), MaxFrameSize)
+	}
+
+	// Step 3: Compute obfuscated length
+	frameLen := uint16(len(encrypted))
+
+	nc.lengthObfuscator.mu.Lock()
+	mask := nc.lengthObfuscator.getNextOutboundMask()
+	nc.lengthObfuscator.mu.Unlock()
+
+	obfuscatedLen := frameLen ^ mask
+
+	// Step 4: Build the wire frame: [2-byte obfuscated length][ciphertext]
+	frame := make([]byte, FrameLengthFieldSize+len(encrypted))
+	binary.BigEndian.PutUint16(frame[:FrameLengthFieldSize], obfuscatedLen)
+	copy(frame[FrameLengthFieldSize:], encrypted)
+
+	// Step 5: Write the entire frame atomically to the underlying TCP connection
+	underlying := nc.noiseConn.Underlying()
+	n, err := underlying.Write(frame)
+	if err != nil {
+		return 0, oops.
+			Code("WRITE_FRAME_FAILED").
+			In("ntcp2").
+			With("frame_length", len(frame)).
+			With("local_addr", nc.localAddr.String()).
+			With("remote_addr", nc.remoteAddr.String()).
+			Wrapf(err, "failed to write frame")
+	}
+
+	if n != len(frame) {
+		return 0, oops.
+			Code("PARTIAL_WRITE").
+			In("ntcp2").
+			With("expected", len(frame)).
+			With("written", n).
+			Errorf("partial frame write: wrote %d of %d bytes", n, len(frame))
+	}
+
+	nc.logger.Trace("NTCP2 data written (framed)",
+		"plaintext_length", len(b),
+		"encrypted_length", len(encrypted),
+		"frame_length", len(frame),
+		"local_addr", nc.localAddr.String(),
+		"remote_addr", nc.remoteAddr.String())
+
+	return len(b), nil
 }
 
 // Close implements net.Conn.Close.

@@ -89,6 +89,10 @@ type NTCP2Config struct {
 	// MaxPaddingSize is the maximum padding size for frames
 	// Default: 64 bytes
 	MaxPaddingSize int
+
+	// sipHashModifier stores the SipHash modifier created during ToConnConfig()
+	// so it can be passed to NTCP2Conn for data-phase framing.
+	sipHashModifier *SipHashLengthModifier
 }
 
 // NewNTCP2Config creates a new NTCP2Config with sensible defaults.
@@ -453,6 +457,8 @@ func (nc *NTCP2Config) setupNTCP2Modifiers() ([]handshake.HandshakeModifier, err
 
 	sipModifier := nc.createSipHashModifierIfEnabled()
 	if sipModifier != nil {
+		// Store reference for data-phase use in NTCP2Conn
+		nc.sipHashModifier = sipModifier
 		modifiers = append(modifiers, sipModifier)
 	}
 
@@ -483,10 +489,17 @@ func (nc *NTCP2Config) createAESModifierIfEnabled() (handshake.HandshakeModifier
 }
 
 // createSipHashModifierIfEnabled creates a SipHash length modifier if enabled.
-func (nc *NTCP2Config) createSipHashModifierIfEnabled() handshake.HandshakeModifier {
+func (nc *NTCP2Config) createSipHashModifierIfEnabled() *SipHashLengthModifier {
 	if !nc.EnableSipHashLength {
 		return nil
 	}
 	// SipHash keys will be set up during handshake if not provided
 	return NewSipHashLengthModifier("ntcp2-siphash", nc.SipHashKeys, 0)
+}
+
+// SipHashModifier returns the SipHash length modifier created during ToConnConfig().
+// Returns nil if SipHash length obfuscation is disabled or ToConnConfig() hasn't been called.
+// This is used to pass the modifier to NTCP2Conn for data-phase framing.
+func (nc *NTCP2Config) SipHashModifier() *SipHashLengthModifier {
+	return nc.sipHashModifier
 }

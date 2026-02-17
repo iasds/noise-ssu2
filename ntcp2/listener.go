@@ -202,6 +202,12 @@ func (nl *NTCP2Listener) wrapInNTCP2Conn(noiseConn *noise.NoiseConn, remoteAddr 
 			With("remote_addr", noiseConn.RemoteAddr().String()).
 			Wrapf(err, "failed to create ntcp2 connection")
 	}
+
+	// Set the SipHash length obfuscator for data-phase framing if configured
+	if slm := nl.config.SipHashModifier(); slm != nil {
+		ntcp2Conn.SetLengthObfuscator(slm)
+	}
+
 	return ntcp2Conn, nil
 }
 

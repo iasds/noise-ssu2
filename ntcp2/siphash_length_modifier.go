@@ -37,9 +37,6 @@ func NewSipHashLengthModifier(name string, sipKeys [2]uint64, initialIV uint64) 
 // ModifyOutbound obfuscates 2-byte frame lengths using SipHash.
 func (slm *SipHashLengthModifier) ModifyOutbound(phase handshake.HandshakePhase, data []byte) ([]byte, error) {
 	// Only apply to data phase (not handshake messages 1, 2, or 3 part 1)
-	// TODO(ntcp2): Wire SipHash length obfuscation into NTCP2Conn.Read/Write
-	// so that data-phase frames are automatically length-obfuscated. This is
-	// an ntcp2 package task, not an upstream dependency.
 	if phase != handshake.PhaseFinal || len(data) != FrameLengthFieldSize {
 		return data, nil
 	}

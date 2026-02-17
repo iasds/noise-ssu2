@@ -112,7 +112,17 @@ func WrapNTCP2Conn(conn net.Conn, config *NTCP2Config) (*NTCP2Conn, error) {
 			Wrapf(err, "failed to create NTCP2 addresses")
 	}
 
-	return NewNTCP2Conn(noiseConn, localAddr, remoteAddr)
+	ntcp2Conn, err := NewNTCP2Conn(noiseConn, localAddr, remoteAddr)
+	if err != nil {
+		return nil, err
+	}
+
+	// Set the SipHash length obfuscator for data-phase framing if configured
+	if slm := config.SipHashModifier(); slm != nil {
+		ntcp2Conn.SetLengthObfuscator(slm)
+	}
+
+	return ntcp2Conn, nil
 }
 
 // validateWrapConnParams validates the input parameters for WrapNTCP2Conn.
@@ -377,6 +387,11 @@ func buildNTCP2Connection(noiseConn *noise.NoiseConn, conn net.Conn, config *NTC
 			With("network", network).
 			With("address", addr).
 			Wrapf(err, "failed to create NTCP2 connection")
+	}
+
+	// Set the SipHash length obfuscator for data-phase framing if configured
+	if slm := config.SipHashModifier(); slm != nil {
+		ntcp2Conn.SetLengthObfuscator(slm)
 	}
 
 	return ntcp2Conn, nil
