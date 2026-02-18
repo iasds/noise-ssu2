@@ -316,7 +316,6 @@ func (nc *NTCP2Conn) applyProbingResistanceDelay() {
 //  3. Close the connection (caller responsibility).
 func (nc *NTCP2Conn) handleAEADError(underlying net.Conn) {
 	// Best-effort: send termination block (reason 4 = AEAD failure).
-	// nc.sendTerminationBlock(underlying, TerminationReasonAEADFailure)
 
 	// Generate a random byte count (0–AEADErrorMaxJunkBytes) to read before returning.
 	var rndBuf [2]byte
