@@ -13,7 +13,7 @@
         <a href="../index.html">go-i2p/go-noise</a>
       </h2>
       <div class="repo-meta">
-        📝 56 commits
+        📝 79 commits
          • 📜 License
       </div>
     </div>
@@ -48,17 +48,17 @@
         
           <li><a href="../docs/DOC.html" >noise</a></li>
         
-          <li><a href="../docs/ntcp2/DOC.html" class="active">ntcp2</a></li>
-        
           <li><a href="../docs/examples/ntcp2/DOC.html" >ntcp2</a></li>
+        
+          <li><a href="../docs/ntcp2/DOC.html" class="active">ntcp2</a></li>
         
           <li><a href="../docs/examples/ntcp2-config/DOC.html" >ntcp2-config</a></li>
         
           <li><a href="../docs/examples/ntcp2-listener/DOC.html" >ntcp2-listener</a></li>
         
-          <li><a href="../docs/pool/DOC.html" >pool</a></li>
-        
           <li><a href="../docs/examples/pool/DOC.html" >pool</a></li>
+        
+          <li><a href="../docs/pool/DOC.html" >pool</a></li>
         
           <li><a href="../docs/examples/retry/DOC.html" >retry</a></li>
         
@@ -323,11 +323,12 @@ configuration.</p>
 
 <h4 id="func-ntcp2config-withaesobfuscation">func (*NTCP2Config) WithAESObfuscation</h4>
 
-<pre><code class="language-go">func (nc *NTCP2Config) WithAESObfuscation(enabled bool, customIV []byte) *NTCP2Config
+<pre><code class="language-go">func (nc *NTCP2Config) WithAESObfuscation(enabled bool, customIV []byte) (*NTCP2Config, error)
 </code></pre>
 
 <p>WithAESObfuscation enables or disables AES-based ephemeral key obfuscation. When
-enabled with a custom IV, the IV must be exactly 16 bytes.</p>
+enabled with a custom IV, the IV must be exactly 16 bytes. Returns an error if
+the custom IV has an invalid (non-zero, non-16) length.</p>
 
 <h4 id="func-ntcp2config-withframesettings">func (*NTCP2Config) WithFrameSettings</h4>
 
@@ -814,7 +815,7 @@ IV from the data phase KDF.</p>
     </main>
     
     <footer class="page-footer">
-      <p>Generated on 2026-02-18 22:37:31 • <a href="https://github.com/go-i2p/go-noise" target="_blank">View on GitHub</a></p>
+      <p>Generated on 2026-02-18 22:53:08 • <a href="https://github.com/go-i2p/go-noise" target="_blank">View on GitHub</a></p>
     </footer>
   </div>
 </body>
