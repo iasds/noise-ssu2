@@ -313,37 +313,53 @@ func (npm *NTCP2PaddingModifier) removeAEADPadding(data []byte) ([]byte, error) 
 // removeTrailingPaddingBlock looks for a valid padding block at the end of the data
 // by iterating through possible padding sizes and verifying the block header matches.
 // The search is bounded by the modifier's maxPadding field to avoid O(n) scans on
-// large frames. This is safe because it requires an exact match: data[start] ==
-// PaddingBlockType and the declared big-endian size equals the number of trailing
-// bytes after the header.
+// large frames.
 func (npm *NTCP2PaddingModifier) removeTrailingPaddingBlock(data []byte) ([]byte, error) {
-	maxPadding := len(data) - BlockHeaderSize
+	maxPadding := npm.computeMaxTrailingPaddingScan(len(data))
 	if maxPadding < 0 {
 		return data, nil
 	}
-	// Bound the scan by the modifier's configured maxPadding to avoid O(n)
-	// iteration on large frames. Also respect MaxBlockDataSize as an upper limit.
+
+	for paddingSize := 0; paddingSize <= maxPadding; paddingSize++ {
+		if trimmed, ok := npm.matchTrailingPaddingAt(data, paddingSize); ok {
+			return trimmed, nil
+		}
+	}
+	return data, nil
+}
+
+// computeMaxTrailingPaddingScan returns the upper bound of the padding scan range,
+// clamped by both the modifier's maxPadding and MaxBlockDataSize.
+func (npm *NTCP2PaddingModifier) computeMaxTrailingPaddingScan(dataLen int) int {
+	maxPadding := dataLen - BlockHeaderSize
+	if maxPadding < 0 {
+		return -1
+	}
 	if npm.maxPadding > 0 && maxPadding > npm.maxPadding {
 		maxPadding = npm.maxPadding
 	}
 	if maxPadding > MaxBlockDataSize {
 		maxPadding = MaxBlockDataSize
 	}
+	return maxPadding
+}
 
-	for paddingSize := 0; paddingSize <= maxPadding; paddingSize++ {
-		start := len(data) - BlockHeaderSize - paddingSize
-		if start < 0 {
-			break
-		}
-		if data[start] == PaddingBlockType {
-			declaredSize := int(binary.BigEndian.Uint16(data[start+1 : start+3]))
-			if declaredSize == paddingSize {
-				return data[:start], nil
-			}
-		}
+// matchTrailingPaddingAt checks whether a valid padding block of the given size
+// exists at the expected trailing position in data. Returns the trimmed data and
+// true if a match is found.
+func (npm *NTCP2PaddingModifier) matchTrailingPaddingAt(data []byte, paddingSize int) ([]byte, bool) {
+	start := len(data) - BlockHeaderSize - paddingSize
+	if start < 0 {
+		return nil, false
 	}
-
-	return data, nil
+	if data[start] != PaddingBlockType {
+		return nil, false
+	}
+	declaredSize := int(binary.BigEndian.Uint16(data[start+1 : start+3]))
+	if declaredSize == paddingSize {
+		return data[:start], true
+	}
+	return nil, false
 }
 
 // removePaddingFromBlocks parses data as proper I2P block structure to locate padding blocks.

@@ -213,82 +213,24 @@ func (nc *NTCP2Conn) readDirect(b []byte) (int, error) {
 
 // readFramed reads an NTCP2 data-phase frame with SipHash length deobfuscation.
 func (nc *NTCP2Conn) readFramed(b []byte) (int, error) {
-	// Guard: reject operations when the nonce counter has reached MaxNonce.
-	// Per the spec: "Connection must be dropped and restarted after it reaches
-	// that value. The value 2^64−1 must never be sent."
-	if nc.readNonce >= MaxNonce {
-		nc.broken.Store(true)
-		return 0, oops.
-			Code("NONCE_EXHAUSTED").
-			In("ntcp2").
-			With("read_nonce", nc.readNonce).
-			With("max_nonce", MaxNonce).
-			Errorf("read nonce exhausted (reached %d), connection must be terminated", nc.readNonce)
+	if err := nc.guardReadNonce(); err != nil {
+		return 0, err
 	}
 
 	slm := nc.lengthObfuscator.Load()
 	underlying := nc.noiseConn.Underlying()
 
-	// Step 1: Read the 2-byte obfuscated length field
-	lengthBuf := make([]byte, FrameLengthFieldSize)
-	if _, err := io.ReadFull(underlying, lengthBuf); err != nil {
-		return 0, oops.
-			Code("READ_LENGTH_FAILED").
-			In("ntcp2").
-			With("local_addr", nc.localAddr.String()).
-			With("remote_addr", nc.remoteAddr.String()).
-			Wrapf(err, "failed to read frame length")
-	}
-
-	// Step 2: Deobfuscate using SipHash inbound mask
-	mask := slm.NextInboundMask()
-	// NOTE: After this point, the SipHash inbound state has advanced.
-	// Any error from here on means the connection is irrecoverably desynchronized.
-
-	obfuscatedLen := binary.BigEndian.Uint16(lengthBuf)
-	frameLen := obfuscatedLen ^ mask
-
-	if err := nc.validateFrameLength(frameLen); err != nil {
-		nc.broken.Store(true)
+	frameLen, err := nc.readObfuscatedFrameLength(underlying, slm)
+	if err != nil {
 		return 0, err
 	}
 
-	// Step 3: Read exactly frameLen bytes of ciphertext
-	ciphertext := make([]byte, frameLen)
-	if _, err := io.ReadFull(underlying, ciphertext); err != nil {
-		nc.broken.Store(true)
-		return 0, oops.
-			Code("READ_FRAME_FAILED").
-			In("ntcp2").
-			With("frame_length", frameLen).
-			With("local_addr", nc.localAddr.String()).
-			With("remote_addr", nc.remoteAddr.String()).
-			Wrapf(err, "failed to read frame data")
-	}
-
-	// Step 4: Decrypt using the Noise cipher state
-	plaintext, err := nc.noiseConn.Decrypt(ciphertext)
+	plaintext, err := nc.readAndDecryptFrame(underlying, frameLen)
 	if err != nil {
-		nc.broken.Store(true)
-		// Probing resistance: read random junk before returning the error,
-		// so the connection is not trivially distinguishable from random data.
-		nc.handleAEADError(underlying)
-		return 0, oops.
-			Code("DECRYPT_FAILED").
-			In("ntcp2").
-			With("frame_length", frameLen).
-			With("local_addr", nc.localAddr.String()).
-			With("remote_addr", nc.remoteAddr.String()).
-			Wrapf(err, "failed to decrypt frame")
+		return 0, err
 	}
 
-	// Step 5: Copy plaintext into caller's buffer; buffer any remainder
-	n := copy(b, plaintext)
-	if n < len(plaintext) {
-		nc.readBuffer = make([]byte, len(plaintext)-n)
-		copy(nc.readBuffer, plaintext[n:])
-	}
-
+	n := nc.bufferPlaintext(b, plaintext)
 	nc.readNonce++
 
 	nc.logger.Trace("NTCP2 data read (framed)",
@@ -300,6 +242,88 @@ func (nc *NTCP2Conn) readFramed(b []byte) (int, error) {
 		"remote_addr", nc.remoteAddr.String())
 
 	return n, nil
+}
+
+// guardReadNonce rejects read operations when the nonce counter has reached MaxNonce.
+// Per the spec: "Connection must be dropped and restarted after it reaches that value."
+func (nc *NTCP2Conn) guardReadNonce() error {
+	if nc.readNonce >= MaxNonce {
+		nc.broken.Store(true)
+		return oops.
+			Code("NONCE_EXHAUSTED").
+			In("ntcp2").
+			With("read_nonce", nc.readNonce).
+			With("max_nonce", MaxNonce).
+			Errorf("read nonce exhausted (reached %d), connection must be terminated", nc.readNonce)
+	}
+	return nil
+}
+
+// readObfuscatedFrameLength reads and deobfuscates the 2-byte SipHash frame length field.
+// After this call the SipHash inbound state has advanced; any subsequent error means
+// the connection is irrecoverably desynchronized.
+func (nc *NTCP2Conn) readObfuscatedFrameLength(underlying net.Conn, slm *SipHashLengthModifier) (uint16, error) {
+	lengthBuf := make([]byte, FrameLengthFieldSize)
+	if _, err := io.ReadFull(underlying, lengthBuf); err != nil {
+		return 0, oops.
+			Code("READ_LENGTH_FAILED").
+			In("ntcp2").
+			With("local_addr", nc.localAddr.String()).
+			With("remote_addr", nc.remoteAddr.String()).
+			Wrapf(err, "failed to read frame length")
+	}
+
+	mask := slm.NextInboundMask()
+	obfuscatedLen := binary.BigEndian.Uint16(lengthBuf)
+	frameLen := obfuscatedLen ^ mask
+
+	if err := nc.validateFrameLength(frameLen); err != nil {
+		nc.broken.Store(true)
+		return 0, err
+	}
+	return frameLen, nil
+}
+
+// readAndDecryptFrame reads exactly frameLen bytes of ciphertext from the underlying
+// connection and decrypts them via the Noise cipher state. On AEAD failure, applies
+// probing-resistance behaviour before returning the error.
+func (nc *NTCP2Conn) readAndDecryptFrame(underlying net.Conn, frameLen uint16) ([]byte, error) {
+	ciphertext := make([]byte, frameLen)
+	if _, err := io.ReadFull(underlying, ciphertext); err != nil {
+		nc.broken.Store(true)
+		return nil, oops.
+			Code("READ_FRAME_FAILED").
+			In("ntcp2").
+			With("frame_length", frameLen).
+			With("local_addr", nc.localAddr.String()).
+			With("remote_addr", nc.remoteAddr.String()).
+			Wrapf(err, "failed to read frame data")
+	}
+
+	plaintext, err := nc.noiseConn.Decrypt(ciphertext)
+	if err != nil {
+		nc.broken.Store(true)
+		nc.handleAEADError(underlying)
+		return nil, oops.
+			Code("DECRYPT_FAILED").
+			In("ntcp2").
+			With("frame_length", frameLen).
+			With("local_addr", nc.localAddr.String()).
+			With("remote_addr", nc.remoteAddr.String()).
+			Wrapf(err, "failed to decrypt frame")
+	}
+	return plaintext, nil
+}
+
+// bufferPlaintext copies decrypted plaintext into the caller's buffer and stores
+// any remainder in readBuffer for subsequent Read calls.
+func (nc *NTCP2Conn) bufferPlaintext(b []byte, plaintext []byte) int {
+	n := copy(b, plaintext)
+	if n < len(plaintext) {
+		nc.readBuffer = make([]byte, len(plaintext)-n)
+		copy(nc.readBuffer, plaintext[n:])
+	}
+	return n
 }
 
 // validateFrameLength checks that the deobfuscated frame length is within the
@@ -459,79 +483,20 @@ func (nc *NTCP2Conn) writeFramed(b []byte) (int, error) {
 
 // writeSingleFrame encrypts one chunk and writes it as an NTCP2 wire frame.
 func (nc *NTCP2Conn) writeSingleFrame(b []byte) (int, error) {
-	// Guard: reject operations when the nonce counter has reached MaxNonce.
-	// Per the spec: "Connection must be dropped and restarted after it reaches
-	// that value. The value 2^64−1 must never be sent."
-	if nc.writeNonce >= MaxNonce {
-		nc.broken.Store(true)
-		return 0, oops.
-			Code("NONCE_EXHAUSTED").
-			In("ntcp2").
-			With("write_nonce", nc.writeNonce).
-			With("max_nonce", MaxNonce).
-			Errorf("write nonce exhausted (reached %d), connection must be terminated", nc.writeNonce)
+	if err := nc.guardWriteNonce(); err != nil {
+		return 0, err
+	}
+
+	encrypted, err := nc.encryptFrame(b)
+	if err != nil {
+		return 0, err
 	}
 
 	slm := nc.lengthObfuscator.Load()
+	frame := nc.buildWireFrame(encrypted, slm)
 
-	// Step 1: Encrypt the plaintext
-	encrypted, err := nc.noiseConn.Encrypt(b)
-	if err != nil {
-		return 0, oops.
-			Code("ENCRYPT_FAILED").
-			In("ntcp2").
-			With("plaintext_len", len(b)).
-			With("local_addr", nc.localAddr.String()).
-			With("remote_addr", nc.remoteAddr.String()).
-			Wrapf(err, "failed to encrypt frame")
-	}
-
-	// Step 2: Validate frame size (should never fire after splitting)
-	if len(encrypted) > SpecMaxFrameSize {
-		return 0, oops.
-			Code("FRAME_TOO_LARGE").
-			In("ntcp2").
-			With("encrypted_len", len(encrypted)).
-			With("max_frame_size", SpecMaxFrameSize).
-			Errorf("encrypted frame (%d bytes) exceeds maximum frame size (%d)", len(encrypted), SpecMaxFrameSize)
-	}
-
-	// Step 3: Compute obfuscated length
-	frameLen := uint16(len(encrypted))
-
-	mask := slm.NextOutboundMask()
-	// NOTE: After this point, the SipHash outbound state has advanced.
-	// Any error from here on means the connection is irrecoverably desynchronized.
-
-	obfuscatedLen := frameLen ^ mask
-
-	// Step 4: Build the wire frame: [2-byte obfuscated length][ciphertext]
-	frame := make([]byte, FrameLengthFieldSize+len(encrypted))
-	binary.BigEndian.PutUint16(frame[:FrameLengthFieldSize], obfuscatedLen)
-	copy(frame[FrameLengthFieldSize:], encrypted)
-
-	// Step 5: Write the entire frame atomically to the underlying TCP connection
-	underlying := nc.noiseConn.Underlying()
-	n, err := underlying.Write(frame)
-	if err != nil {
-		nc.broken.Store(true)
-		return 0, oops.
-			Code("WRITE_FRAME_FAILED").
-			In("ntcp2").
-			With("frame_length", len(frame)).
-			With("local_addr", nc.localAddr.String()).
-			With("remote_addr", nc.remoteAddr.String()).
-			Wrapf(err, "failed to write frame")
-	}
-
-	if n != len(frame) {
-		nc.broken.Store(true)
-		return 0, oops.
-			Code("PARTIAL_WRITE").
-			In("ntcp2").
-			With("expected", len(frame)).
-			With("written", n).
-			Errorf("partial frame write: wrote %d of %d bytes", n, len(frame))
+	if err := nc.writeWireFrame(frame); err != nil {
+		return 0, err
 	}
 
 	nc.writeNonce++
@@ -544,6 +509,87 @@ func (nc *NTCP2Conn) writeSingleFrame(b []byte) (int, error) {
 		"remote_addr", nc.remoteAddr.String())
 
 	return len(b), nil
+}
+
+// guardWriteNonce rejects write operations when the nonce counter has reached MaxNonce.
+// Per the spec: "Connection must be dropped and restarted after it reaches that value."
+func (nc *NTCP2Conn) guardWriteNonce() error {
+	if nc.writeNonce >= MaxNonce {
+		nc.broken.Store(true)
+		return oops.
+			Code("NONCE_EXHAUSTED").
+			In("ntcp2").
+			With("write_nonce", nc.writeNonce).
+			With("max_nonce", MaxNonce).
+			Errorf("write nonce exhausted (reached %d), connection must be terminated", nc.writeNonce)
+	}
+	return nil
+}
+
+// encryptFrame encrypts plaintext and validates the resulting ciphertext size
+// against the NTCP2 maximum frame size.
+func (nc *NTCP2Conn) encryptFrame(b []byte) ([]byte, error) {
+	encrypted, err := nc.noiseConn.Encrypt(b)
+	if err != nil {
+		return nil, oops.
+			Code("ENCRYPT_FAILED").
+			In("ntcp2").
+			With("plaintext_len", len(b)).
+			With("local_addr", nc.localAddr.String()).
+			With("remote_addr", nc.remoteAddr.String()).
+			Wrapf(err, "failed to encrypt frame")
+	}
+
+	if len(encrypted) > SpecMaxFrameSize {
+		return nil, oops.
+			Code("FRAME_TOO_LARGE").
+			In("ntcp2").
+			With("encrypted_len", len(encrypted)).
+			With("max_frame_size", SpecMaxFrameSize).
+			Errorf("encrypted frame (%d bytes) exceeds maximum frame size (%d)", len(encrypted), SpecMaxFrameSize)
+	}
+	return encrypted, nil
+}
+
+// buildWireFrame constructs the NTCP2 wire frame by prepending a 2-byte SipHash-obfuscated
+// length to the ciphertext. After this call the SipHash outbound state has advanced.
+func (nc *NTCP2Conn) buildWireFrame(encrypted []byte, slm *SipHashLengthModifier) []byte {
+	frameLen := uint16(len(encrypted))
+	mask := slm.NextOutboundMask()
+	obfuscatedLen := frameLen ^ mask
+
+	frame := make([]byte, FrameLengthFieldSize+len(encrypted))
+	binary.BigEndian.PutUint16(frame[:FrameLengthFieldSize], obfuscatedLen)
+	copy(frame[FrameLengthFieldSize:], encrypted)
+	return frame
+}
+
+// writeWireFrame writes the complete wire frame atomically to the underlying TCP connection.
+// Marks the connection as broken on any write error or partial write.
+func (nc *NTCP2Conn) writeWireFrame(frame []byte) error {
+	underlying := nc.noiseConn.Underlying()
+	n, err := underlying.Write(frame)
+	if err != nil {
+		nc.broken.Store(true)
+		return oops.
+			Code("WRITE_FRAME_FAILED").
+			In("ntcp2").
+			With("frame_length", len(frame)).
+			With("local_addr", nc.localAddr.String()).
+			With("remote_addr", nc.remoteAddr.String()).
+			Wrapf(err, "failed to write frame")
+	}
+
+	if n != len(frame) {
+		nc.broken.Store(true)
+		return oops.
+			Code("PARTIAL_WRITE").
+			In("ntcp2").
+			With("expected", len(frame)).
+			With("written", n).
+			Errorf("partial frame write: wrote %d of %d bytes", n, len(frame))
+	}
+	return nil
 }
 
 // getMaxFrameSize returns the configured maximum frame size for frame splitting.

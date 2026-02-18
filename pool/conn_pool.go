@@ -97,11 +97,7 @@ func (p *ConnPool) Put(conn net.Conn) error {
 			Errorf("cannot put nil connection in pool")
 	}
 
-	// Unwrap PoolConnWrapper to avoid wrapper-inside-wrapper
-	if wrapper, ok := conn.(*PoolConnWrapper); ok {
-		conn = wrapper.Conn
-	}
-
+	conn = unwrapPoolConn(conn)
 	remoteAddr := conn.RemoteAddr().String()
 
 	p.mu.Lock()
@@ -113,33 +109,58 @@ func (p *ConnPool) Put(conn net.Conn) error {
 
 	connList := p.conns[remoteAddr]
 
-	// Check per-address limit
+	if p.exceedsCapacity(connList) {
+		return conn.Close()
+	}
+
+	if p.isDuplicateConn(connList, conn) {
+		return nil
+	}
+
+	p.conns[remoteAddr] = append(connList, newPooledConn(conn, remoteAddr))
+	return nil
+}
+
+// unwrapPoolConn extracts the underlying net.Conn from a PoolConnWrapper to avoid
+// wrapper-inside-wrapper nesting.
+func unwrapPoolConn(conn net.Conn) net.Conn {
+	if wrapper, ok := conn.(*PoolConnWrapper); ok {
+		return wrapper.Conn
+	}
+	return conn
+}
+
+// exceedsCapacity returns true if the pool has no room for a new connection,
+// considering both per-address and global limits.
+func (p *ConnPool) exceedsCapacity(connList []*PooledConn) bool {
 	if len(connList) >= p.maxSize {
-		return conn.Close()
+		return true
 	}
-
-	// Check global pool size limit
 	if p.maxTotal > 0 && p.totalConnsLocked() >= p.maxTotal {
-		return conn.Close()
+		return true
 	}
+	return false
+}
 
-	// Check for duplicate connection
+// isDuplicateConn checks whether the connection is already present in the pool.
+func (p *ConnPool) isDuplicateConn(connList []*PooledConn, conn net.Conn) bool {
 	for _, existing := range connList {
 		if existing.Conn == conn {
-			return nil
+			return true
 		}
 	}
+	return false
+}
 
-	pooledConn := &PooledConn{
+// newPooledConn creates a new PooledConn entry with current timestamps.
+func newPooledConn(conn net.Conn, remoteAddr string) *PooledConn {
+	return &PooledConn{
 		Conn:       conn,
 		Created:    time.Now(),
 		LastUsed:   time.Now(),
 		InUse:      false,
 		RemoteAddr: remoteAddr,
 	}
-
-	p.conns[remoteAddr] = append(connList, pooledConn)
-	return nil
 }
 
 // Release marks a connection as no longer in use, making it available for reuse.
