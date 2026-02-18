@@ -227,6 +227,8 @@ func TestE2E_PostHandshakeHook_DerivesCorrectKeys(t *testing.T) {
 	require.NoError(t, err)
 	initiatorConfig, err = initiatorConfig.WithRemoteRouterHash(remoteHash)
 	require.NoError(t, err)
+	initiatorConfig, err = initiatorConfig.WithRemoteStaticKey(generateRandomBytes(32))
+	require.NoError(t, err)
 	initiatorConfig, err = initiatorConfig.WithAESObfuscation(true, obfuscationIV)
 	require.NoError(t, err)
 
@@ -317,6 +319,8 @@ func TestE2E_AESObfuscationModifier_Creation(t *testing.T) {
 	config, err = config.WithStaticKey(staticKey)
 	require.NoError(t, err)
 	config, err = config.WithRemoteRouterHash(remoteHash)
+	require.NoError(t, err)
+	config, err = config.WithRemoteStaticKey(generateRandomBytes(32))
 	require.NoError(t, err)
 	config, err = config.WithAESObfuscation(true, obfuscationIV)
 	require.NoError(t, err)

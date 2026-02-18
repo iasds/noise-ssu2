@@ -33,6 +33,11 @@ type NTCP2Config struct {
 	// Required for outbound connections, optional for listeners
 	RemoteRouterHash []byte
 
+	// RemoteStaticKey is the remote peer's Curve25519 static public key (32 bytes)
+	// Required for initiator connections using XK pattern (pre-message: ← s)
+	// Distinct from RemoteRouterHash (which is SHA-256 of RouterIdentity)
+	RemoteStaticKey []byte
+
 	// HandshakeTimeout is the maximum time to wait for handshake completion
 	// Default: 30 seconds
 	HandshakeTimeout time.Duration
@@ -169,6 +174,25 @@ func (nc *NTCP2Config) WithRemoteRouterHash(hash []byte) (*NTCP2Config, error) {
 	}
 	nc.RemoteRouterHash = make([]byte, RouterHashSize)
 	copy(nc.RemoteRouterHash, hash)
+	return nc, nil
+}
+
+// WithRemoteStaticKey sets the remote peer's Curve25519 static public key.
+// key must be exactly 32 bytes. Required for initiator connections using the
+// XK pattern, where the initiator must know the responder's static key as a
+// pre-message (← s). This is distinct from RemoteRouterHash (which is
+// SHA-256 of the RouterIdentity).
+func (nc *NTCP2Config) WithRemoteStaticKey(key []byte) (*NTCP2Config, error) {
+	if len(key) != StaticKeySize {
+		return nc, oops.
+			Code("INVALID_REMOTE_STATIC_KEY").
+			In("ntcp2").
+			With("expected", StaticKeySize).
+			With("got", len(key)).
+			Errorf("remote static key must be exactly %d bytes", StaticKeySize)
+	}
+	nc.RemoteStaticKey = make([]byte, StaticKeySize)
+	copy(nc.RemoteStaticKey, key)
 	return nc, nil
 }
 
@@ -331,6 +355,23 @@ func (nc *NTCP2Config) validateCryptographicParameters() error {
 			Code("MISSING_REMOTE_ROUTER_HASH").
 			In("ntcp2").
 			Errorf("remote router hash is required for initiator connections")
+	}
+
+	// Validate remote static key length if provided
+	if len(nc.RemoteStaticKey) > 0 && len(nc.RemoteStaticKey) != StaticKeySize {
+		return oops.
+			Code("INVALID_REMOTE_STATIC_KEY").
+			In("ntcp2").
+			With("key_length", len(nc.RemoteStaticKey)).
+			Errorf("remote static key must be %d bytes", StaticKeySize)
+	}
+
+	// For initiator XK connections, remote static key is required (pre-message: ← s)
+	if nc.Initiator && nc.Pattern == NTCP2Pattern && len(nc.RemoteStaticKey) == 0 {
+		return oops.
+			Code("MISSING_REMOTE_STATIC_KEY").
+			In("ntcp2").
+			Errorf("remote static key is required for initiator XK connections (pre-message: ← s)")
 	}
 
 	// Validate AES obfuscation IV if provided
@@ -517,10 +558,19 @@ func (nc *NTCP2Config) createBaseConnConfig() *noise.ConnConfig {
 		copy(staticKey, nc.StaticKey)
 	}
 
+	// When no remote static key is provided, use nil so the upstream
+	// library can distinguish "no key" from "empty key".
+	var remoteKey []byte
+	if len(nc.RemoteStaticKey) > 0 {
+		remoteKey = make([]byte, len(nc.RemoteStaticKey))
+		copy(remoteKey, nc.RemoteStaticKey)
+	}
+
 	return &noise.ConnConfig{
 		Pattern:          nc.Pattern,
 		Initiator:        nc.Initiator,
 		StaticKey:        staticKey,
+		RemoteKey:        remoteKey,
 		HandshakeTimeout: nc.HandshakeTimeout,
 		ReadTimeout:      nc.ReadTimeout,
 		WriteTimeout:     nc.WriteTimeout,
@@ -650,6 +700,10 @@ func (nc *NTCP2Config) Clone() *NTCP2Config {
 	if nc.RemoteRouterHash != nil {
 		clone.RemoteRouterHash = make([]byte, len(nc.RemoteRouterHash))
 		copy(clone.RemoteRouterHash, nc.RemoteRouterHash)
+	}
+	if nc.RemoteStaticKey != nil {
+		clone.RemoteStaticKey = make([]byte, len(nc.RemoteStaticKey))
+		copy(clone.RemoteStaticKey, nc.RemoteStaticKey)
 	}
 	if nc.ObfuscationIV != nil {
 		clone.ObfuscationIV = make([]byte, len(nc.ObfuscationIV))

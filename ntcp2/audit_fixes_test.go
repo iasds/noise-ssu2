@@ -468,6 +468,8 @@ func TestAudit_ConfigUsesXKPattern(t *testing.T) {
 	require.NoError(t, err)
 	config, err = config.WithRemoteRouterHash(make([]byte, 32))
 	require.NoError(t, err)
+	config, err = config.WithRemoteStaticKey(make([]byte, 32))
+	require.NoError(t, err)
 	// AES obfuscation requires an explicit IV (no fallback)
 	config, err = config.WithAESObfuscation(true, make([]byte, 16))
 	require.NoError(t, err)

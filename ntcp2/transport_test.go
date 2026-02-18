@@ -41,6 +41,8 @@ func TestDialNTCP2(t *testing.T) {
 				require.NoError(t, err)
 				config, err = config.WithRemoteRouterHash(remoteHash)
 				require.NoError(t, err)
+				config, err = config.WithRemoteStaticKey(generateRandomBytes(32))
+				require.NoError(t, err)
 				return config.
 					WithHandshakeTimeout(5 * time.Second)
 			},
@@ -254,6 +256,8 @@ func TestWrapNTCP2Conn(t *testing.T) {
 				require.NoError(t, err)
 				config, err = config.WithRemoteRouterHash(remoteHash)
 				require.NoError(t, err)
+				config, err = config.WithRemoteStaticKey(generateRandomBytes(32))
+				require.NoError(t, err)
 				config, err = config.WithAESObfuscation(true, obfuscationIV)
 				require.NoError(t, err)
 				return config
@@ -365,6 +369,8 @@ func TestDialNTCP2WithHandshake(t *testing.T) {
 		require.NoError(t, err)
 		dialConfig, err = dialConfig.WithRemoteRouterHash(routerHash)
 		require.NoError(t, err)
+		dialConfig, err = dialConfig.WithRemoteStaticKey(generateRandomBytes(32))
+		require.NoError(t, err)
 		dialConfig, err = dialConfig.WithAESObfuscation(true, generateRandomBytes(16))
 		require.NoError(t, err)
 		dialConfig = dialConfig.
@@ -408,6 +414,7 @@ func TestValidateDialParams(t *testing.T) {
 				config, _ := NewNTCP2Config(routerHash, true)
 				config, _ = config.WithStaticKey(staticKey)
 				config, _ = config.WithRemoteRouterHash(remoteHash)
+				config, _ = config.WithRemoteStaticKey(generateRandomBytes(32))
 				return config
 			},
 			expectError: false,

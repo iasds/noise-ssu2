@@ -2324,6 +2324,7 @@ func createHandshakeState(config *ConnConfig) (*noise.HandshakeState, error) {
 			Private: config.StaticKey,
 			Public:  nil, // Will be computed
 		},
+		PeerStatic: config.RemoteKey,
 	})
 	if err != nil {
 		return nil, oops.

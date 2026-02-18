@@ -288,6 +288,8 @@ func TestNTCP2ConfigToConnConfig(t *testing.T) {
 	require.NoError(t, err)
 	ntcp2Config, err = ntcp2Config.WithRemoteRouterHash(remoteHash)
 	require.NoError(t, err)
+	ntcp2Config, err = ntcp2Config.WithRemoteStaticKey(generateRandomBytes(32))
+	require.NoError(t, err)
 	ntcp2Config, err = ntcp2Config.WithAESObfuscation(true, obfuscationIV)
 	require.NoError(t, err)
 	ntcp2Config = ntcp2Config.

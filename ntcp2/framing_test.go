@@ -378,6 +378,10 @@ func TestConfigSipHashModifier(t *testing.T) {
 	config.StaticKey = make([]byte, 32)
 	copy(config.StaticKey, "static-key-32-bytes-long!!!!!!!")
 
+	// Provide remote static key (required for initiator XK)
+	config.RemoteStaticKey = make([]byte, 32)
+	copy(config.RemoteStaticKey, "remote-static-key-32-bytes!!!!!")
+
 	// AES obfuscation requires an explicit IV
 	config, err = config.WithAESObfuscation(true, make([]byte, 16))
 	require.NoError(t, err)
@@ -420,6 +424,10 @@ func TestConfigSipHashModifier_Disabled(t *testing.T) {
 	copy(config.RemoteRouterHash, "remote-hash-32-bytes-long!!!!!")
 	config.StaticKey = make([]byte, 32)
 	copy(config.StaticKey, "static-key-32-bytes-long!!!!!!!")
+
+	// Provide remote static key (required for initiator XK)
+	config.RemoteStaticKey = make([]byte, 32)
+	copy(config.RemoteStaticKey, "remote-static-key-32-bytes!!!!!")
 
 	// Disable SipHash
 	config.EnableSipHashLength = false
