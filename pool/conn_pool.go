@@ -10,14 +10,16 @@ import (
 
 // ConnPool manages a pool of reusable connections for performance optimization.
 // It only uses interface types (net.Conn, net.Addr) for maximum compatibility.
-// Moved from: pool/buffer.go
 type ConnPool struct {
-	mu      sync.RWMutex
-	conns   map[string][]*PooledConn // keyed by remote address
-	maxSize int
-	maxAge  time.Duration
-	maxIdle time.Duration
-	closed  bool
+	mu          sync.RWMutex
+	conns       map[string][]*PooledConn // keyed by remote address
+	maxSize     int
+	maxTotal    int
+	maxAge      time.Duration
+	maxIdle     time.Duration
+	healthCheck func(net.Conn) bool
+	closed      bool
+	done        chan struct{}
 }
 
 // NewConnPool creates a new connection pool with the given configuration
@@ -31,10 +33,13 @@ func NewConnPool(config *PoolConfig) *ConnPool {
 	}
 
 	pool := &ConnPool{
-		conns:   make(map[string][]*PooledConn),
-		maxSize: config.MaxSize,
-		maxAge:  config.MaxAge,
-		maxIdle: config.MaxIdle,
+		conns:       make(map[string][]*PooledConn),
+		maxSize:     config.MaxSize,
+		maxTotal:    config.MaxTotal,
+		maxAge:      config.MaxAge,
+		maxIdle:     config.MaxIdle,
+		healthCheck: config.HealthCheck,
+		done:        make(chan struct{}),
 	}
 
 	// Start cleanup goroutine
@@ -58,16 +63,25 @@ func (p *ConnPool) Get(remoteAddr string) net.Conn {
 		return nil
 	}
 
-	// Find an available connection
-	for _, pooledConn := range connList {
-		if !pooledConn.InUse && p.isValid(pooledConn) {
-			pooledConn.InUse = true
-			pooledConn.LastUsed = time.Now()
-			return &PoolConnWrapper{
-				Conn: pooledConn.Conn,
-				pool: p,
-				addr: remoteAddr,
-			}
+	// Find an available, valid, and healthy connection
+	for i := 0; i < len(connList); i++ {
+		pooledConn := connList[i]
+		if pooledConn.InUse || !p.isValid(pooledConn) {
+			continue
+		}
+		if p.healthCheck != nil && !p.healthCheck(pooledConn.Conn) {
+			pooledConn.Conn.Close()
+			connList = append(connList[:i], connList[i+1:]...)
+			i--
+			p.updateConnectionMap(remoteAddr, connList)
+			continue
+		}
+		pooledConn.InUse = true
+		pooledConn.LastUsed = time.Now()
+		return &PoolConnWrapper{
+			Conn: pooledConn.Conn,
+			pool: p,
+			addr: remoteAddr,
 		}
 	}
 
@@ -83,6 +97,11 @@ func (p *ConnPool) Put(conn net.Conn) error {
 			Errorf("cannot put nil connection in pool")
 	}
 
+	// Unwrap PoolConnWrapper to avoid wrapper-inside-wrapper
+	if wrapper, ok := conn.(*PoolConnWrapper); ok {
+		conn = wrapper.Conn
+	}
+
 	remoteAddr := conn.RemoteAddr().String()
 
 	p.mu.Lock()
@@ -94,9 +113,21 @@ func (p *ConnPool) Put(conn net.Conn) error {
 
 	connList := p.conns[remoteAddr]
 
-	// Check if we've reached the maximum pool size for this address
+	// Check per-address limit
 	if len(connList) >= p.maxSize {
 		return conn.Close()
+	}
+
+	// Check global pool size limit
+	if p.maxTotal > 0 && p.totalConnsLocked() >= p.maxTotal {
+		return conn.Close()
+	}
+
+	// Check for duplicate connection
+	for _, existing := range connList {
+		if existing.Conn == conn {
+			return nil
+		}
 	}
 
 	pooledConn := &PooledConn{
@@ -111,26 +142,67 @@ func (p *ConnPool) Put(conn net.Conn) error {
 	return nil
 }
 
-// Release marks a connection as no longer in use, making it available for reuse
-func (p *ConnPool) Release(remoteAddr string, conn net.Conn) {
+// Release marks a connection as no longer in use, making it available for reuse.
+// Returns an error if the pool is closed or the connection is not found.
+func (p *ConnPool) Release(remoteAddr string, conn net.Conn) error {
+	// Unwrap PoolConnWrapper for correct identity comparison
+	if wrapper, ok := conn.(*PoolConnWrapper); ok {
+		conn = wrapper.Conn
+	}
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	if p.closed {
+		return conn.Close()
+	}
+
 	connList, exists := p.conns[remoteAddr]
 	if !exists {
-		return
+		return oops.Code("CONNECTION_NOT_FOUND").In("pool").
+			Errorf("connection not found for address %s", remoteAddr)
 	}
 
 	for _, pooledConn := range connList {
 		if pooledConn.Conn == conn {
 			pooledConn.InUse = false
 			pooledConn.LastUsed = time.Now()
-			return
+			return nil
 		}
 	}
+
+	return oops.Code("CONNECTION_NOT_FOUND").In("pool").
+		Errorf("connection not found in pool for address %s", remoteAddr)
 }
 
-// Close closes all connections in the pool and prevents new connections from being added
+// Remove closes a connection and permanently removes it from the pool.
+// Use this when a connection is known to be broken.
+func (p *ConnPool) Remove(remoteAddr string, conn net.Conn) error {
+	if wrapper, ok := conn.(*PoolConnWrapper); ok {
+		conn = wrapper.Conn
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	connList, exists := p.conns[remoteAddr]
+	if !exists {
+		return conn.Close()
+	}
+
+	for i, pooledConn := range connList {
+		if pooledConn.Conn == conn {
+			connList = append(connList[:i], connList[i+1:]...)
+			p.updateConnectionMap(remoteAddr, connList)
+			return conn.Close()
+		}
+	}
+
+	return conn.Close()
+}
+
+// Close closes idle connections and prevents new connections from being added.
+// In-use connections are closed when returned via Release() or Discard().
 func (p *ConnPool) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -140,15 +212,18 @@ func (p *ConnPool) Close() error {
 	}
 
 	p.closed = true
+	close(p.done)
 
-	// Close all connections
+	// Close only idle connections; in-use connections will be
+	// closed when returned via Release() or Discard().
 	for _, connList := range p.conns {
 		for _, pooledConn := range connList {
-			pooledConn.Conn.Close()
+			if !pooledConn.InUse {
+				pooledConn.Conn.Close()
+			}
 		}
 	}
 
-	// Clear the pool
 	p.conns = make(map[string][]*PooledConn)
 
 	return nil
@@ -196,16 +271,30 @@ func (p *ConnPool) isValid(pooledConn *PooledConn) bool {
 	return true
 }
 
+// totalConnsLocked returns the total connection count. Must hold mu.
+func (p *ConnPool) totalConnsLocked() int {
+	total := 0
+	for _, list := range p.conns {
+		total += len(list)
+	}
+	return total
+}
+
 // cleanup runs periodically to remove expired connections
 func (p *ConnPool) cleanup() {
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		if p.shouldStopCleanup() {
+	for {
+		select {
+		case <-ticker.C:
+			if p.shouldStopCleanup() {
+				return
+			}
+			p.performCleanupCycle()
+		case <-p.done:
 			return
 		}
-		p.performCleanupCycle()
 	}
 }
 

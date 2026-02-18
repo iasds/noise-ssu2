@@ -6,7 +6,6 @@ import (
 )
 
 // PooledConn represents a connection in the pool with metadata
-// Moved from: pool/buffer.go
 type PooledConn struct {
 	Conn       net.Conn
 	Created    time.Time

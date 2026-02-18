@@ -1,6 +1,7 @@
 package benchmarks
 
 import (
+	"fmt"
 	"net"
 	"testing"
 	"time"
@@ -144,7 +145,7 @@ func BenchmarkConnPool_Stats(b *testing.B) {
 	// Pre-populate pool with various addresses
 	for i := 0; i < 50; i++ {
 		for j := 0; j < 2; j++ {
-			conn := newMockConn("127.0.0.1:" + string(rune(8080+i)))
+			conn := newMockConn(fmt.Sprintf("127.0.0.1:%d", 8080+i))
 			pool.Put(conn)
 		}
 	}
