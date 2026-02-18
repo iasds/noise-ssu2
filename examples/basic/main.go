@@ -38,6 +38,11 @@ func main() {
 	}
 
 	// Run client or server based on arguments
+	dispatchMode(args, staticKey, remoteKey)
+}
+
+// dispatchMode runs the appropriate mode based on arguments
+func dispatchMode(args *shared.CommonArgs, staticKey, remoteKey []byte) {
 	if args.ServerAddr != "" {
 		runBasicServer(args, staticKey)
 	} else if args.ClientAddr != "" {
@@ -58,32 +63,31 @@ func handleSpecialModes(args *shared.CommonArgs) bool {
 	return false
 }
 
+// logKeyIfVerbose prints key info when verbose mode is enabled
+func logKeyIfVerbose(args *shared.CommonArgs, label string, key []byte) {
+	if args.Verbose {
+		fmt.Printf("🔑 Using %s key: %s\n", label, shared.KeyToHex(key))
+	}
+}
+
 // parseKeys handles key parsing and generation for the selected pattern
 func parseKeys(args *shared.CommonArgs) (staticKey, remoteKey []byte, err error) {
 	needsLocal, needsRemote := shared.GetPatternRequirements(args.Pattern)
 
-	// Parse or generate static key if needed
 	if needsLocal {
 		staticKey, err = shared.ParseKeyFromHex(args.StaticKey)
 		if err != nil {
 			return nil, nil, err
 		}
-
-		if args.Verbose {
-			fmt.Printf("🔑 Using static key: %s\n", shared.KeyToHex(staticKey))
-		}
+		logKeyIfVerbose(args, "static", staticKey)
 	}
 
-	// Parse or generate remote key if needed
 	if needsRemote {
 		remoteKey, err = shared.ParseKeyFromHex(args.RemoteKey)
 		if err != nil {
 			return nil, nil, err
 		}
-
-		if args.Verbose {
-			fmt.Printf("🔑 Using remote key: %s\n", shared.KeyToHex(remoteKey))
-		}
+		logKeyIfVerbose(args, "remote", remoteKey)
 	}
 
 	return staticKey, remoteKey, nil
