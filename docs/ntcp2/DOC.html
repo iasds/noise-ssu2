@@ -13,7 +13,7 @@
         <a href="../index.html">go-i2p/go-noise</a>
       </h2>
       <div class="repo-meta">
-        📝 41 commits
+        📝 52 commits
          • 📜 License
       </div>
     </div>
@@ -48,9 +48,9 @@
         
           <li><a href="../docs/DOC.html" >noise</a></li>
         
-          <li><a href="../docs/ntcp2/DOC.html" class="active">ntcp2</a></li>
-        
           <li><a href="../docs/examples/ntcp2/DOC.html" >ntcp2</a></li>
+        
+          <li><a href="../docs/ntcp2/DOC.html" class="active">ntcp2</a></li>
         
           <li><a href="../docs/examples/ntcp2-config/DOC.html" >ntcp2-config</a></li>
         
@@ -62,9 +62,9 @@
         
           <li><a href="../docs/examples/retry/DOC.html" >retry</a></li>
         
-          <li><a href="../docs/examples/shared/DOC.html" >shared</a></li>
-        
           <li><a href="../docs/examples/ntcp2-shared/DOC.html" >shared</a></li>
+        
+          <li><a href="../docs/examples/shared/DOC.html" >shared</a></li>
         
           <li><a href="../docs/examples/shutdown/DOC.html" >shutdown</a></li>
         
@@ -110,8 +110,7 @@ session management.</p>
 
 <p>AESObfuscationModifier implements NTCP2&rsquo;s AES-based ephemeral key obfuscation.
 This modifier encrypts/decrypts the X and Y ephemeral keys in messages 1 and 2
-using AES-256-CBC with the router hash as key and published IV. Moved from:
-ntcp2/modifier.go</p>
+using AES-256-CBC with the router hash as key and published IV.</p>
 
 <h4 id="func-newaesobfuscationmodifier">func  NewAESObfuscationModifier</h4>
 
@@ -152,7 +151,7 @@ Y key with RH_B and AES state from message 1</p>
 
 <p>NTCP2Addr implements net.Addr for NTCP2 transport connections. It provides
 I2P-specific addressing information including router identity, destination hash,
-and session parameters for the NTCP2 protocol. Moved from: ntcp2/addr.go</p>
+and session parameters for the NTCP2 protocol.</p>
 
 <h4 id="func-newntcp2addr">func  NewNTCP2Addr</h4>
 
@@ -163,30 +162,14 @@ and session parameters for the NTCP2 protocol. Moved from: ntcp2/addr.go</p>
 hash. routerHash must be exactly 32 bytes representing the I2P router identity.
 role should be either &ldquo;initiator&rdquo; or &ldquo;responder&rdquo;.</p>
 
-<h4 id="func-ntcp2addr-destinationhash">func (*NTCP2Addr) DestinationHash</h4>
+<h4 id="func-ntcp2addr-identhash">func (*NTCP2Addr) IdentHash</h4>
 
-<pre><code class="language-go">func (na *NTCP2Addr) DestinationHash() []byte
+<pre><code class="language-go">func (na *NTCP2Addr) IdentHash() data.Hash
 </code></pre>
 
-<p>DestinationHash returns a copy of the destination hash, or nil for
-router-to-router connections. The returned slice is a defensive copy to prevent
-external modification.</p>
-
-<h4 id="func-ntcp2addr-isroutertorouter">func (*NTCP2Addr) IsRouterToRouter</h4>
-
-<pre><code class="language-go">func (na *NTCP2Addr) IsRouterToRouter() bool
-</code></pre>
-
-<p>IsRouterToRouter returns true if this is a router-to-router connection (no
-destination hash).</p>
-
-<h4 id="func-ntcp2addr-istunnelconnection">func (*NTCP2Addr) IsTunnelConnection</h4>
-
-<pre><code class="language-go">func (na *NTCP2Addr) IsTunnelConnection() bool
-</code></pre>
-
-<p>IsTunnelConnection returns true if this is a tunnel connection (has destination
-hash).</p>
+<p>IdentHash returns the router identity hash as a common/data.Hash.
+This provides the router hash in the type used by go-i2p/common for
+use by the router transport layer (github.com/go-i2p/go-i2p/lib/transport/ntcp).</p>
 
 <h4 id="func-ntcp2addr-network">func (*NTCP2Addr) Network</h4>
 
@@ -211,22 +194,14 @@ implements the net.Addr interface requirement.</p>
 <p>RouterHash returns a copy of the router identity hash. The returned slice is a
 defensive copy to prevent external modification.</p>
 
-<h4 id="func-ntcp2addr-sessiontag">func (*NTCP2Addr) SessionTag</h4>
-
-<pre><code class="language-go">func (na *NTCP2Addr) SessionTag() []byte
-</code></pre>
-
-<p>SessionTag returns a copy of the session tag, or nil if not set. The returned
-slice is a defensive copy to prevent external modification.</p>
-
 <h4 id="func-ntcp2addr-string">func (*NTCP2Addr) String</h4>
 
 <pre><code class="language-go">func (na *NTCP2Addr) String() string
 </code></pre>
 
 <p>String returns a string representation of the NTCP2 address. Format:
-&ldquo;ntcp2://[router_hash]/[role]/[tcp_address][?dest=dest_hash][&amp;session=session_tag]&rdquo;
-Router hash and optional parameters are base64 encoded for readability.</p>
+&ldquo;ntcp2://[router_hash]/[role]/[tcp_address]&rdquo;
+Router hash is base64 encoded for readability.</p>
 
 <h4 id="func-ntcp2addr-underlyingaddr">func (*NTCP2Addr) UnderlyingAddr</h4>
 
@@ -234,22 +209,6 @@ Router hash and optional parameters are base64 encoded for readability.</p>
 </code></pre>
 
 <p>UnderlyingAddr returns the underlying TCP network address.</p>
-
-<h4 id="func-ntcp2addr-withdestinationhash">func (*NTCP2Addr) WithDestinationHash</h4>
-
-<pre><code class="language-go">func (na *NTCP2Addr) WithDestinationHash(destHash []byte) (*NTCP2Addr, error)
-</code></pre>
-
-<p>WithDestinationHash sets the destination hash for tunnel connections. destHash
-must be exactly 32 bytes or nil for router-to-router connections.</p>
-
-<h4 id="func-ntcp2addr-withsessiontag">func (*NTCP2Addr) WithSessionTag</h4>
-
-<pre><code class="language-go">func (na *NTCP2Addr) WithSessionTag(sessionTag []byte) (*NTCP2Addr, error)
-</code></pre>
-
-<p>WithSessionTag sets the session tag for this connection. sessionTag must be
-exactly 8 bytes or nil.</p>
 
 <h4 id="type-ntcp2config">type NTCP2Config</h4>
 
@@ -335,8 +294,7 @@ exactly 8 bytes or nil.</p>
 
 <p>NTCP2Config contains configuration for creating NTCP2 connections and listeners.
 It follows the builder pattern for optional configuration and validation,
-similar to the main ConnConfig but with NTCP2-specific parameters. Moved from:
-ntcp2/config.go</p>
+similar to the main ConnConfig but with NTCP2-specific parameters.</p>
 
 <h4 id="func-newntcp2config">func  NewNTCP2Config</h4>
 
@@ -464,8 +422,7 @@ Curve25519.</p>
 </code></pre>
 
 <p>NTCP2Conn implements net.Conn for NTCP2 transport connections. It wraps a
-NoiseConn with NTCP2-specific addressing and protocol handling. Moved from:
-ntcp2/conn.go</p>
+NoiseConn with NTCP2-specific addressing and protocol handling.</p>
 
 <h4 id="func-dialntcp2">func  DialNTCP2</h4>
 
@@ -519,13 +476,15 @@ the necessary Noise wrapper and NTCP2 addressing.</p>
 <p>Close implements net.Conn.Close. Closes the underlying Noise connection and
 cleans up resources.</p>
 
-<h4 id="func-ntcp2conn-destinationhash">func (*NTCP2Conn) DestinationHash</h4>
+<h4 id="func-ntcp2conn-peerstatickey">func (*NTCP2Conn) PeerStaticKey</h4>
 
-<pre><code class="language-go">func (nc *NTCP2Conn) DestinationHash() []byte
+<pre><code class="language-go">func (nc *NTCP2Conn) PeerStaticKey() []byte
 </code></pre>
 
-<p>DestinationHash returns the destination hash from the remote address. Returns
-nil for router-to-router connections.</p>
+<p>PeerStaticKey returns the remote peer&rsquo;s static public key from the completed
+handshake. This is the raw X25519 public key, not the router hash. The router
+transport layer (github.com/go-i2p/go-i2p/lib/transport/ntcp) can use this
+along with the known RouterIdentity to verify the peer&rsquo;s identity.</p>
 
 <h4 id="func-ntcp2conn-localaddr">func (*NTCP2Conn) LocalAddr</h4>
 
@@ -565,14 +524,6 @@ address.</p>
 
 <p>RouterHash returns the router hash from the remote address. This is I2P-specific
 functionality for NTCP2 connections.</p>
-
-<h4 id="func-ntcp2conn-sessiontag">func (*NTCP2Conn) SessionTag</h4>
-
-<pre><code class="language-go">func (nc *NTCP2Conn) SessionTag() []byte
-</code></pre>
-
-<p>SessionTag returns the session tag from the remote address. Returns nil if no
-session tag is set.</p>
 
 <h4 id="func-ntcp2conn-setdeadline">func (*NTCP2Conn) SetDeadline</h4>
 
@@ -821,7 +772,7 @@ spec.</p>
 
 <p>SipHashLengthModifier implements NTCP2&rsquo;s SipHash-2-4 length obfuscation for data
 phase frame lengths. This prevents identification of frame lengths in the data
-stream. Moved from: ntcp2/modifier.go</p>
+stream.</p>
 
 <h4 id="func-newsiphashlengthmodifier">func  NewSipHashLengthModifier</h4>
 
@@ -863,7 +814,7 @@ IV from the data phase KDF.</p>
     </main>
     
     <footer class="page-footer">
-      <p>Generated on 2026-02-17 23:34:09 • <a href="https://github.com/go-i2p/go-noise" target="_blank">View on GitHub</a></p>
+      <p>Generated on 2026-02-18 02:13:59 • <a href="https://github.com/go-i2p/go-noise" target="_blank">View on GitHub</a></p>
     </footer>
   </div>
 </body>
