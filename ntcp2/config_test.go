@@ -421,3 +421,49 @@ func TestNTCP2ConfigValidationEdgeCases(t *testing.T) {
 	err = config.Validate()
 	assert.NoError(t, err)
 }
+
+// TestNTCP2ConfigEdgeCases tests edge cases for NTCP2Config validation.
+func TestNTCP2ConfigEdgeCases(t *testing.T) {
+	routerHash := make([]byte, 32)
+	_, err := rand.Read(routerHash)
+	require.NoError(t, err)
+
+	t.Run("valid config with all options", func(t *testing.T) {
+		config, err := NewNTCP2Config(routerHash, false)
+		require.NoError(t, err)
+
+		staticKey := make([]byte, 32)
+		_, err = rand.Read(staticKey)
+		require.NoError(t, err)
+
+		config, err = config.WithStaticKey(staticKey)
+		require.NoError(t, err)
+		config = config.
+			WithHandshakeTimeout(10 * time.Second).
+			WithReadTimeout(5 * time.Second).
+			WithWriteTimeout(5 * time.Second)
+
+		err = config.Validate()
+		assert.NoError(t, err)
+
+		// Verify defensive copying in config
+		originalHash := make([]byte, 32)
+		copy(originalHash, routerHash)
+		routerHash[0] = 0xFF // Modify original
+
+		assert.Equal(t, originalHash, config.BobRouterHash) // Should be unchanged
+	})
+
+	t.Run("invalid static key in WithStaticKey", func(t *testing.T) {
+		config, err := NewNTCP2Config(routerHash, false)
+		require.NoError(t, err)
+
+		// Try to set invalid static key (wrong size) - should return error
+		invalidKey := make([]byte, 16)
+		_, err = config.WithStaticKey(invalidKey)
+		assert.Error(t, err)
+
+		// StaticKey should remain nil
+		assert.Nil(t, config.StaticKey)
+	})
+}

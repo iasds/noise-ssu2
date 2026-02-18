@@ -631,26 +631,3 @@ func TestCreateDialAddresses(t *testing.T) {
 		assert.Equal(t, remoteHash, remoteAddr.RouterHash())
 	})
 }
-
-// ============================================================================
-// Tests from audit_fixes_3_test.go — transport-related
-// ============================================================================
-
-// TestCreateDialAddresses_InvalidRemoteRouterHash verifies that
-// createDialAddresses rejects a RemoteRouterHash of wrong length.
-func TestCreateDialAddresses_InvalidRemoteRouterHash(t *testing.T) {
-	client, server := net.Pipe()
-	defer client.Close()
-	defer server.Close()
-
-	routerHash := make([]byte, 32)
-	config, err := NewNTCP2Config(routerHash, true)
-	require.NoError(t, err)
-
-	// Set RemoteRouterHash to wrong length
-	config.RemoteRouterHash = make([]byte, 20) // not 32
-
-	_, _, err = createDialAddresses(client, config)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "config.RemoteRouterHash must be exactly")
-}

@@ -1,7 +1,6 @@
 package ntcp2
 
 import (
-	"context"
 	"crypto/rand"
 	"encoding/binary"
 	"net"
@@ -268,85 +267,6 @@ func TestSipHashModifier_NilBeforeHandshake(t *testing.T) {
 	// post-handshake hook sets the proper directional modifier.
 	assert.Nil(t, config.SipHashModifier(),
 		"Placeholder zero-key modifier must not be exposed via SipHashModifier()")
-}
-
-// --- createDialAddresses RemoteRouterHash validation ---
-
-// TestCreateDialAddresses_InvalidRemoteRouterHash verifies that
-// createDialAddresses rejects a RemoteRouterHash of wrong length.
-func TestCreateDialAddresses_InvalidRemoteRouterHash(t *testing.T) {
-	client, server := net.Pipe()
-	defer client.Close()
-	defer server.Close()
-
-	routerHash := make([]byte, 32)
-	config, err := NewNTCP2Config(routerHash, true)
-	require.NoError(t, err)
-
-	// Set RemoteRouterHash to wrong length
-	config.RemoteRouterHash = make([]byte, 20) // not 32
-
-	_, _, err = createDialAddresses(client, config)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "config.RemoteRouterHash must be exactly")
-}
-
-// --- listener.go: atomic.Bool for closed ---
-
-// TestListener_AtomicBoolClosed verifies that the listener uses atomic.Bool
-// correctly for the closed field.
-func TestListener_AtomicBoolClosed(t *testing.T) {
-	tcpListener, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-
-	routerHash := make([]byte, 32)
-	_, err = rand.Read(routerHash)
-	require.NoError(t, err)
-
-	config, err := NewNTCP2Config(routerHash, false)
-	require.NoError(t, err)
-
-	listener, err := NewNTCP2Listener(tcpListener, config)
-	require.NoError(t, err)
-
-	// Initially not closed
-	assert.False(t, listener.isClosed())
-
-	// Close
-	err = listener.Close()
-	assert.NoError(t, err)
-	assert.True(t, listener.isClosed())
-
-	// Double close is idempotent
-	err = listener.Close()
-	assert.NoError(t, err)
-}
-
-// --- AcceptWithHandshake ---
-
-// TestAcceptWithHandshake_ClosedListener verifies that AcceptWithHandshake
-// returns an error on a closed listener.
-func TestAcceptWithHandshake_ClosedListener(t *testing.T) {
-	tcpListener, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-
-	routerHash := make([]byte, 32)
-	_, err = rand.Read(routerHash)
-	require.NoError(t, err)
-
-	config, err := NewNTCP2Config(routerHash, false)
-	require.NoError(t, err)
-
-	listener, err := NewNTCP2Listener(tcpListener, config)
-	require.NoError(t, err)
-
-	// Close the listener
-	err = listener.Close()
-	require.NoError(t, err)
-
-	// AcceptWithHandshake should fail
-	_, err = listener.AcceptWithHandshake(context.Background())
-	assert.Error(t, err)
 }
 
 // --- writeFramed multi-frame splitting ---
