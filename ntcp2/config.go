@@ -209,6 +209,12 @@ func (nc *NTCP2Config) WithAESObfuscation(enabled bool, customIV []byte) *NTCP2C
 	if len(customIV) == IVSize {
 		nc.ObfuscationIV = make([]byte, IVSize)
 		copy(nc.ObfuscationIV, customIV)
+	} else if len(customIV) > 0 {
+		// Warn about invalid IV length rather than silently ignoring it.
+		// Validate() will catch this later, but early feedback aids debugging.
+		log.WithField("expected", IVSize).
+			WithField("got", len(customIV)).
+			Warn("WithAESObfuscation: custom IV has invalid length; ignoring")
 	}
 	return nc
 }
@@ -540,8 +546,11 @@ func (nc *NTCP2Config) setupNTCP2Modifiers() ([]handshake.HandshakeModifier, err
 
 	sipModifier := nc.createSipHashModifierIfEnabled()
 	if sipModifier != nil {
-		// Store reference for data-phase use in NTCP2Conn
-		nc.sipHashModifier = sipModifier
+		// Add placeholder to the handshake modifier list (no-op for non-PhaseFinal).
+		// Do NOT store as nc.sipHashModifier — that is set by the post-handshake
+		// hook with proper per-direction keys. Storing the zero-key placeholder
+		// would expose a predictable modifier via SipHashModifier() before the
+		// handshake completes.
 		modifiers = append(modifiers, sipModifier)
 	}
 

@@ -138,6 +138,10 @@ func (nc *NTCP2Conn) Read(b []byte) (int, error) {
 		nc.readBuffer = nc.readBuffer[n:]
 		if len(nc.readBuffer) == 0 {
 			// Zero accessible backing memory to limit plaintext lingering.
+			// After the reslice above, nc.readBuffer has len==0 but cap>0.
+			// Reslicing to [:cap] exposes the original backing array so we
+			// can zero it before releasing the reference. This is a standard
+			// Go idiom for wiping slice-backed memory without allocating.
 			if c := cap(nc.readBuffer); c > 0 {
 				tail := nc.readBuffer[:c]
 				for i := range tail {
@@ -253,8 +257,14 @@ func (nc *NTCP2Conn) readFramed(b []byte) (int, error) {
 
 // validateFrameLength checks that the deobfuscated frame length is within the
 // NTCP2 spec range of MinDataPhaseFrameSize–MaxFrameSize.
+// validateFrameLength checks that the deobfuscated frame length is within the
+// NTCP2 spec range of MinDataPhaseFrameSize–MaxFrameSize.
+// Per the spec: "Take the same error action for an invalid length field value
+// in the data phase" — i.e., the probing-resistance delay from handleAEADError
+// is applied before returning the error.
 func (nc *NTCP2Conn) validateFrameLength(frameLen uint16) error {
 	if frameLen == 0 {
+		nc.applyProbingResistanceDelay()
 		return oops.
 			Code("ZERO_FRAME_LENGTH").
 			In("ntcp2").
@@ -264,6 +274,7 @@ func (nc *NTCP2Conn) validateFrameLength(frameLen uint16) error {
 	}
 
 	if frameLen < MinDataPhaseFrameSize {
+		nc.applyProbingResistanceDelay()
 		return oops.
 			Code("FRAME_TOO_SMALL").
 			In("ntcp2").
@@ -275,6 +286,7 @@ func (nc *NTCP2Conn) validateFrameLength(frameLen uint16) error {
 	}
 
 	if int(frameLen) > MaxFrameSize {
+		nc.applyProbingResistanceDelay()
 		return oops.
 			Code("FRAME_TOO_LARGE").
 			In("ntcp2").
@@ -288,13 +300,22 @@ func (nc *NTCP2Conn) validateFrameLength(frameLen uint16) error {
 	return nil
 }
 
+// applyProbingResistanceDelay applies the same probing-resistance delay
+// as handleAEADError, per the NTCP2 spec: "Take the same error action
+// for an invalid length field value in the data phase."
+func (nc *NTCP2Conn) applyProbingResistanceDelay() {
+	if underlying := nc.noiseConn.Underlying(); underlying != nil {
+		nc.handleAEADError(underlying)
+	}
+}
+
 // handleAEADError implements a best-effort probing-resistance delay
 // before the connection is closed by the caller. Per the NTCP2 spec,
 // on an AEAD authentication failure the receiver should read random
 // bytes for a random duration before closing.
 func (nc *NTCP2Conn) handleAEADError(underlying net.Conn) {
-	// Generate a random byte count (0–1024) to read before returning.
-	nBig, err := rand.Int(rand.Reader, big.NewInt(1024))
+	// Generate a random byte count (0–AEADErrorMaxJunkBytes) to read before returning.
+	nBig, err := rand.Int(rand.Reader, big.NewInt(AEADErrorMaxJunkBytes))
 	if err != nil {
 		return // best effort
 	}
@@ -305,7 +326,7 @@ func (nc *NTCP2Conn) handleAEADError(underlying net.Conn) {
 	// Set a short deadline so we don't block forever if the peer stops sending.
 	// NOTE: we do NOT restore the previous deadline afterwards — the caller
 	// is expected to close the connection after an AEAD failure.
-	underlying.SetReadDeadline(time.Now().Add(2 * time.Second)) //nolint:errcheck
+	underlying.SetReadDeadline(time.Now().Add(AEADErrorTimeout)) //nolint:errcheck
 	junk := make([]byte, junkLen)
 	underlying.Read(junk) //nolint:errcheck // best effort
 }
@@ -625,4 +646,16 @@ func (nc *NTCP2Conn) PeerStaticKey() []byte {
 // Returns nil if the handshake has not been initiated.
 func (nc *NTCP2Conn) HandshakeHash() []byte {
 	return nc.noiseConn.ChannelBinding()
+}
+
+// NonceExhaustionImminent returns true if either the read or write nonce
+// counter has reached NonceRekeyThreshold, indicating that the connection
+// is approaching the maximum nonce limit and should be replaced.
+//
+// The Noise Protocol's Rekey() operation does NOT reset nonce counters,
+// so the correct response to imminent exhaustion is to establish a new
+// connection rather than attempt a rekey.
+func (nc *NTCP2Conn) NonceExhaustionImminent() bool {
+	return nc.writeNonce.Load() >= NonceRekeyThreshold ||
+		nc.readNonce.Load() >= NonceRekeyThreshold
 }

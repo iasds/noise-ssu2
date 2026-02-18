@@ -1,5 +1,7 @@
 package ntcp2
 
+import "time"
+
 // NTCP2 protocol constants per the I2P NTCP2 specification.
 // Reference: https://i2p.net/en/docs/specs/ntcp2
 
@@ -70,4 +72,20 @@ const (
 	// Connections MUST be terminated before the nonce reaches 2^64 - 2.
 	// Using 2^64 - 2 = 18446744073709551614.
 	MaxNonce uint64 = 18446744073709551614
+
+	// AEADErrorMaxJunkBytes is the maximum number of random bytes to read
+	// on an AEAD authentication failure for probing resistance. Per the spec:
+	// "random number of bytes (range TBD)" — we use 1024 as a reasonable upper bound.
+	AEADErrorMaxJunkBytes = 1024
+
+	// AEADErrorTimeout is the maximum duration to wait while reading random
+	// bytes on an AEAD authentication failure. Per the spec: "random timeout
+	// (range TBD)" — we use 2 seconds as a reasonable upper bound.
+	AEADErrorTimeout = 2 * time.Second
+
+	// NonceRekeyThreshold is the nonce value at which the connection should
+	// be considered approaching exhaustion. Since Noise Rekey() does not reset
+	// the nonce counter, the correct response is to establish a new connection.
+	// Set to MaxNonce - 1000 to provide advance warning.
+	NonceRekeyThreshold = MaxNonce - 1000
 )

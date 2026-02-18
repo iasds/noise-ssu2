@@ -304,6 +304,17 @@ func createDialAddresses(conn net.Conn, config *NTCP2Config) (*NTCP2Addr, *NTCP2
 			Wrapf(err, "failed to create local NTCP2 address")
 	}
 
+	// Validate RemoteRouterHash length early so the error clearly
+	// indicates the config source rather than a generic NewNTCP2Addr failure.
+	if config.RemoteRouterHash != nil && len(config.RemoteRouterHash) != RouterHashSize {
+		return nil, nil, oops.
+			Code("INVALID_REMOTE_ROUTER_HASH").
+			In("ntcp2").
+			With("expected", RouterHashSize).
+			With("got", len(config.RemoteRouterHash)).
+			Errorf("config.RemoteRouterHash must be exactly %d bytes", RouterHashSize)
+	}
+
 	// Create remote address from connection's remote address and config
 	var remoteRouterHash []byte
 	if config.RemoteRouterHash != nil {

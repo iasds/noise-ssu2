@@ -1,9 +1,11 @@
 package ntcp2
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
 
 	noise "github.com/go-i2p/go-noise"
 	"github.com/go-i2p/logger"
@@ -27,11 +29,8 @@ type NTCP2Listener struct {
 	// logger for listener events
 	logger logger.Logger
 
-	// closed indicates if the listener has been closed
-	closed bool
-
-	// closeMutex protects close operations
-	closeMutex sync.Mutex
+	// closed indicates if the listener has been closed (atomic for lock-free reads)
+	closed atomic.Bool
 
 	// acceptMutex protects accept operations
 	acceptMutex sync.Mutex
@@ -101,7 +100,6 @@ func initializeListener(underlying net.Listener, config *NTCP2Config, ntcp2Addr 
 		config:     config,
 		addr:       ntcp2Addr,
 		logger:     *log,
-		closed:     false,
 	}
 
 	nl.logger.Info("NTCP2 listener created",
@@ -264,14 +262,9 @@ func (nl *NTCP2Listener) logAcceptedConnection(ntcp2Conn *NTCP2Conn) {
 // Close closes the listener and prevents new connections from being accepted.
 // Any blocked Accept operations will be unblocked and return errors.
 func (nl *NTCP2Listener) Close() error {
-	nl.closeMutex.Lock()
-	defer nl.closeMutex.Unlock()
-
-	if nl.closed {
+	if !nl.closed.CompareAndSwap(false, true) {
 		return nil // Already closed
 	}
-
-	nl.closed = true
 
 	err := nl.underlying.Close()
 	if err != nil {
@@ -299,11 +292,9 @@ func (nl *NTCP2Listener) Addr() net.Addr {
 }
 
 // isClosed returns true if the listener has been closed.
-// Thread-safe: acquires closeMutex internally.
+// Thread-safe: uses atomic.Bool.Load().
 func (nl *NTCP2Listener) isClosed() bool {
-	nl.closeMutex.Lock()
-	defer nl.closeMutex.Unlock()
-	return nl.closed
+	return nl.closed.Load()
 }
 
 // formatRouterHash formats a router hash for logging (first 8 bytes as hex).
@@ -312,4 +303,24 @@ func formatRouterHash(hash []byte) string {
 		return "invalid"
 	}
 	return fmt.Sprintf("%x...", hash[:8])
+}
+
+// AcceptWithHandshake waits for the next connection and automatically
+// performs the NTCP2 handshake. This mirrors DialNTCP2WithHandshakeContext
+// for the responder side.
+func (nl *NTCP2Listener) AcceptWithHandshake(ctx context.Context) (*NTCP2Conn, error) {
+	conn, err := nl.Accept()
+	if err != nil {
+		return nil, err
+	}
+	ntcp2Conn := conn.(*NTCP2Conn)
+	if err := ntcp2Conn.UnderlyingConn().Handshake(ctx); err != nil {
+		ntcp2Conn.Close()
+		return nil, oops.
+			Code("HANDSHAKE_FAILED").
+			In("ntcp2").
+			With("listener_addr", nl.addr.String()).
+			Wrapf(err, "NTCP2 handshake failed during accept")
+	}
+	return ntcp2Conn, nil
 }
