@@ -184,7 +184,11 @@ func demonstrateResponderConfiguration(routerHash, staticKey []byte, args *ntcp2
 
 	// Apply NTCP2-specific features based on arguments
 	if args.EnableAESObfuscation {
-		config = config.WithAESObfuscation(args.EnableAESObfuscation, nil)
+		config, err = config.WithAESObfuscation(args.EnableAESObfuscation, nil)
+		if err != nil {
+			fmt.Printf("❌ Failed to set AES obfuscation: %v\n", err)
+			return
+		}
 	}
 
 	if args.EnableSipHashLength {
@@ -254,7 +258,11 @@ func applyNTCP2Features(configBuilder *ntcp2.NTCP2Config, remoteRouterHash []byt
 
 	// Apply NTCP2-specific features
 	if args.EnableAESObfuscation {
-		configBuilder = configBuilder.WithAESObfuscation(args.EnableAESObfuscation, nil)
+		var err error
+		configBuilder, err = configBuilder.WithAESObfuscation(args.EnableAESObfuscation, nil)
+		if err != nil {
+			log.Fatalf("Failed to set AES obfuscation: %v", err)
+		}
 	}
 
 	if args.EnableSipHashLength {

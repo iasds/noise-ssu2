@@ -206,10 +206,6 @@ func (nc *NTCP2Conn) readDirect(b []byte) (int, error) {
 
 // readFramed reads an NTCP2 data-phase frame with SipHash length deobfuscation.
 func (nc *NTCP2Conn) readFramed(b []byte) (int, error) {
-	if err := nc.checkReadNonceLimit(); err != nil {
-		return 0, err
-	}
-
 	slm := nc.lengthObfuscator.Load()
 	underlying := nc.noiseConn.Underlying()
 
@@ -424,42 +420,8 @@ func (nc *NTCP2Conn) writeFramed(b []byte) (int, error) {
 	return totalWritten, nil
 }
 
-// checkReadNonceLimit returns an error if the read nonce has reached MaxNonce.
-// Must be called under readMu.
-func (nc *NTCP2Conn) checkReadNonceLimit() error {
-	if nc.readNonce >= MaxNonce {
-		return oops.
-			Code("NONCE_LIMIT_REACHED").
-			In("ntcp2").
-			With("direction", "inbound").
-			With("local_addr", nc.localAddr.String()).
-			With("remote_addr", nc.remoteAddr.String()).
-			Errorf("nonce limit reached (2^64-2); connection must be terminated")
-	}
-	return nil
-}
-
-// checkWriteNonceLimit returns an error if the write nonce has reached MaxNonce.
-// Must be called under writeMu.
-func (nc *NTCP2Conn) checkWriteNonceLimit() error {
-	if nc.writeNonce >= MaxNonce {
-		return oops.
-			Code("NONCE_LIMIT_REACHED").
-			In("ntcp2").
-			With("direction", "outbound").
-			With("local_addr", nc.localAddr.String()).
-			With("remote_addr", nc.remoteAddr.String()).
-			Errorf("nonce limit reached (2^64-2); connection must be terminated")
-	}
-	return nil
-}
-
 // writeSingleFrame encrypts one chunk and writes it as an NTCP2 wire frame.
 func (nc *NTCP2Conn) writeSingleFrame(b []byte) (int, error) {
-	if err := nc.checkWriteNonceLimit(); err != nil {
-		return 0, err
-	}
-
 	slm := nc.lengthObfuscator.Load()
 
 	// Step 1: Encrypt the plaintext

@@ -235,10 +235,11 @@ Validate checks if the configuration is valid for NTCP2.
 #### func (*NTCP2Config) WithAESObfuscation
 
 ```go
-func (nc *NTCP2Config) WithAESObfuscation(enabled bool, customIV []byte) *NTCP2Config
+func (nc *NTCP2Config) WithAESObfuscation(enabled bool, customIV []byte) (*NTCP2Config, error)
 ```
 WithAESObfuscation enables or disables AES-based ephemeral key obfuscation. When
-enabled with a custom IV, the IV must be exactly 16 bytes.
+enabled with a custom IV, the IV must be exactly 16 bytes. Returns an error if
+the custom IV has an invalid (non-zero, non-16) length.
 
 #### func (*NTCP2Config) WithFrameSettings
 

@@ -72,7 +72,7 @@ The NTCP2 protocol implementation is split between this package (`go-i2p/go-nois
 | ChaChaPoly AEAD frame encryption/decryption | `NTCP2Conn.Read()` / `Write()` |
 | Data-phase AEAD error handling (probing resistance) | `handleAEADError()` |
 | Frame padding (type 254 padding blocks) | `NTCP2PaddingModifier` |
-| Nonce management and exhaustion detection | `checkReadNonceLimit()` / `checkWriteNonceLimit()` |
+| Nonce management and exhaustion detection | `NonceExhaustionImminent()` advisory (upstream `CipherState` enforces hard limit) |
 | KDF intermediate material zeroing | `zeroBytes()` in `kdf.go` |
 | Connection configuration and validation | `NTCP2Config` |
 

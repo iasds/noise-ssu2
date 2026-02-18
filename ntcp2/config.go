@@ -205,21 +205,23 @@ func (nc *NTCP2Config) WithRetryBackoff(backoff time.Duration) *NTCP2Config {
 
 // WithAESObfuscation enables or disables AES-based ephemeral key obfuscation.
 // When enabled with a custom IV, the IV must be exactly 16 bytes.
+// Returns an error if the custom IV has an invalid (non-zero, non-16) length.
 // Note: Options negotiation (padding limits as 4.4 fixed-point, dummy traffic,
 // delay parameters) is the responsibility of the higher-level router transport.
-func (nc *NTCP2Config) WithAESObfuscation(enabled bool, customIV []byte) *NTCP2Config {
+func (nc *NTCP2Config) WithAESObfuscation(enabled bool, customIV []byte) (*NTCP2Config, error) {
 	nc.EnableAESObfuscation = enabled
 	if len(customIV) == IVSize {
 		nc.ObfuscationIV = make([]byte, IVSize)
 		copy(nc.ObfuscationIV, customIV)
 	} else if len(customIV) > 0 {
-		// Warn about invalid IV length rather than silently ignoring it.
-		// Validate() will catch this later, but early feedback aids debugging.
-		log.WithField("expected", IVSize).
-			WithField("got", len(customIV)).
-			Warn("WithAESObfuscation: custom IV has invalid length; ignoring")
+		return nil, oops.
+			Code("INVALID_IV_LENGTH").
+			In("ntcp2").
+			With("expected", IVSize).
+			With("got", len(customIV)).
+			Errorf("WithAESObfuscation: custom IV must be exactly %d bytes, got %d", IVSize, len(customIV))
 	}
-	return nc
+	return nc, nil
 }
 
 // WithSipHashLength enables or disables SipHash-based frame length obfuscation.

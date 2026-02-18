@@ -117,30 +117,30 @@ func TestNonceExhaustionImminent(t *testing.T) {
 	assert.False(t, conn.NonceExhaustionImminent())
 }
 
-// --- checkNonceLimit nonce exhaustion path ---
+// --- nonce exhaustion advisory ---
 
-// TestCheckNonceLimit_AtMaxNonce verifies that checkWriteNonceLimit returns
-// an error when the nonce has reached MaxNonce.
-func TestCheckNonceLimit_AtMaxNonce(t *testing.T) {
+// TestNonceExhaustion_UpstreamCipherStateHandlesLimit verifies that the
+// upstream CipherState is the sole gatekeeper for nonce limits, and that
+// NTCP2Conn.readNonce/writeNonce are used only for the NonceExhaustionImminent
+// advisory. The redundant pre-check guards (checkReadNonceLimit, checkWriteNonceLimit)
+// have been removed per the audit.
+func TestNonceExhaustion_AdvisoryOnly(t *testing.T) {
 	conn := createTestNTCP2Conn(&mockNoiseConn{})
 
-	conn.writeMu.Lock()
-	conn.writeNonce = MaxNonce
-	err := conn.checkWriteNonceLimit()
-	conn.writeMu.Unlock()
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "nonce limit reached")
-}
-
-// TestCheckNonceLimit_BelowMaxNonce verifies normal operation.
-func TestCheckNonceLimit_BelowMaxNonce(t *testing.T) {
-	conn := createTestNTCP2Conn(&mockNoiseConn{})
-
+	// Below threshold: not imminent
 	conn.writeMu.Lock()
 	conn.writeNonce = 0
-	err := conn.checkWriteNonceLimit()
 	conn.writeMu.Unlock()
-	assert.NoError(t, err)
+	conn.readMu.Lock()
+	conn.readNonce = 0
+	conn.readMu.Unlock()
+	assert.False(t, conn.NonceExhaustionImminent())
+
+	// At threshold: imminent
+	conn.writeMu.Lock()
+	conn.writeNonce = NonceRekeyThreshold
+	conn.writeMu.Unlock()
+	assert.True(t, conn.NonceExhaustionImminent())
 }
 
 // --- zeroKeyMaterial ---
@@ -210,9 +210,9 @@ func TestPeerStaticKey(t *testing.T) {
 
 // --- WithAESObfuscation wrong IV length ---
 
-// TestWithAESObfuscation_WrongIVLengthLogsWarning verifies that an IV
-// of wrong length is not silently set — the ObfuscationIV remains nil.
-func TestWithAESObfuscation_WrongIVLengthLogsWarning(t *testing.T) {
+// TestWithAESObfuscation_WrongIVLengthReturnsError verifies that an IV
+// of wrong length causes WithAESObfuscation to return an error.
+func TestWithAESObfuscation_WrongIVLengthReturnsError(t *testing.T) {
 	routerHash := make([]byte, 32)
 	_, err := rand.Read(routerHash)
 	require.NoError(t, err)
@@ -221,15 +221,21 @@ func TestWithAESObfuscation_WrongIVLengthLogsWarning(t *testing.T) {
 	require.NoError(t, err)
 	config.EnableAESObfuscation = false // Start fresh
 
-	// Wrong length IV — should not be set
+	// Wrong length IV — should return an error
 	wrongIV := make([]byte, 10) // not 16
-	config = config.WithAESObfuscation(true, wrongIV)
-	assert.Nil(t, config.ObfuscationIV, "Wrong-length IV must not be set")
+	_, err = config.WithAESObfuscation(true, wrongIV)
+	assert.Error(t, err, "Wrong-length IV must return an error")
+	assert.Contains(t, err.Error(), "INVALID_IV_LENGTH")
 
 	// Correct length IV
 	correctIV := make([]byte, 16)
-	config = config.WithAESObfuscation(true, correctIV)
+	config, err = config.WithAESObfuscation(true, correctIV)
+	require.NoError(t, err)
 	assert.NotNil(t, config.ObfuscationIV, "Correct-length IV must be set")
+
+	// nil IV (disabled) — should succeed
+	config, err = config.WithAESObfuscation(false, nil)
+	require.NoError(t, err)
 }
 
 // --- SipHashModifier placeholder ---
@@ -248,7 +254,8 @@ func TestSipHashModifier_NilBeforeHandshake(t *testing.T) {
 	config, err := NewNTCP2Config(routerHash, false)
 	require.NoError(t, err)
 
-	config = config.WithAESObfuscation(true, obfuscationIV)
+	config, err = config.WithAESObfuscation(true, obfuscationIV)
+	require.NoError(t, err)
 
 	// Before ToConnConfig, sipHashModifier is nil
 	assert.Nil(t, config.SipHashModifier())
@@ -420,7 +427,8 @@ func TestKDF_ASKLabelConfigured(t *testing.T) {
 
 	config, err := NewNTCP2Config(routerHash, false)
 	require.NoError(t, err)
-	config = config.WithAESObfuscation(true, obfuscationIV)
+	config, err = config.WithAESObfuscation(true, obfuscationIV)
+	require.NoError(t, err)
 
 	connConfig, err := config.ToConnConfig()
 	require.NoError(t, err)

@@ -67,12 +67,14 @@ func TestNTCP2ConfigBuilderMethods(t *testing.T) {
 	require.NoError(t, err)
 	config = config.
 		WithPattern("XK").
-		WithHandshakeTimeout(45*time.Second).
-		WithReadTimeout(10*time.Second).
-		WithWriteTimeout(15*time.Second).
+		WithHandshakeTimeout(45 * time.Second).
+		WithReadTimeout(10 * time.Second).
+		WithWriteTimeout(15 * time.Second).
 		WithHandshakeRetries(5).
-		WithRetryBackoff(2*time.Second).
-		WithAESObfuscation(true, obfuscationIV).
+		WithRetryBackoff(2 * time.Second)
+	config, err = config.WithAESObfuscation(true, obfuscationIV)
+	require.NoError(t, err)
+	config = config.
 		WithSipHashLength(true, 0x123456789ABCDEF0, 0xFEDCBA9876543210).
 		WithFrameSettings(32768, false, 16, 128)
 
@@ -286,8 +288,9 @@ func TestNTCP2ConfigToConnConfig(t *testing.T) {
 	require.NoError(t, err)
 	ntcp2Config, err = ntcp2Config.WithRemoteRouterHash(remoteHash)
 	require.NoError(t, err)
+	ntcp2Config, err = ntcp2Config.WithAESObfuscation(true, obfuscationIV)
+	require.NoError(t, err)
 	ntcp2Config = ntcp2Config.
-		WithAESObfuscation(true, obfuscationIV).
 		WithHandshakeTimeout(45 * time.Second).
 		WithReadTimeout(10 * time.Second).
 		WithWriteTimeout(15 * time.Second).
@@ -320,8 +323,9 @@ func TestNTCP2ConfigToConnConfigWithDisabledModifiers(t *testing.T) {
 	require.NoError(t, err)
 
 	// Disable all modifiers
+	ntcp2Config, err = ntcp2Config.WithAESObfuscation(false, nil)
+	require.NoError(t, err)
 	ntcp2Config = ntcp2Config.
-		WithAESObfuscation(false, nil).
 		WithSipHashLength(false, 0, 0)
 
 	connConfig, err := ntcp2Config.ToConnConfig()
@@ -348,8 +352,9 @@ func TestNTCP2ConfigToConnConfigWithCustomModifiers(t *testing.T) {
 	ntcp2Config, err := NewNTCP2Config(routerHash, false)
 	require.NoError(t, err)
 
+	ntcp2Config, err = ntcp2Config.WithAESObfuscation(true, obfuscationIV)
+	require.NoError(t, err)
 	ntcp2Config = ntcp2Config.
-		WithAESObfuscation(true, obfuscationIV).
 		WithModifiers(xorMod, paddingMod)
 
 	connConfig, err := ntcp2Config.ToConnConfig()

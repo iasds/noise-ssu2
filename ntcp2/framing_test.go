@@ -379,7 +379,8 @@ func TestConfigSipHashModifier(t *testing.T) {
 	copy(config.StaticKey, "static-key-32-bytes-long!!!!!!!")
 
 	// AES obfuscation requires an explicit IV
-	config = config.WithAESObfuscation(true, make([]byte, 16))
+	config, err = config.WithAESObfuscation(true, make([]byte, 16))
+	require.NoError(t, err)
 
 	// Before ToConnConfig, modifier should be nil
 	assert.Nil(t, config.SipHashModifier())
@@ -424,7 +425,8 @@ func TestConfigSipHashModifier_Disabled(t *testing.T) {
 	config.EnableSipHashLength = false
 
 	// AES obfuscation requires an explicit IV
-	config = config.WithAESObfuscation(true, make([]byte, 16))
+	config, err = config.WithAESObfuscation(true, make([]byte, 16))
+	require.NoError(t, err)
 
 	_, err = config.ToConnConfig()
 	require.NoError(t, err)

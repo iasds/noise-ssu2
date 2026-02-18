@@ -254,8 +254,9 @@ func TestWrapNTCP2Conn(t *testing.T) {
 				require.NoError(t, err)
 				config, err = config.WithRemoteRouterHash(remoteHash)
 				require.NoError(t, err)
-				return config.
-					WithAESObfuscation(true, obfuscationIV)
+				config, err = config.WithAESObfuscation(true, obfuscationIV)
+				require.NoError(t, err)
+				return config
 			},
 			expectError: false,
 		},
@@ -364,8 +365,9 @@ func TestDialNTCP2WithHandshake(t *testing.T) {
 		require.NoError(t, err)
 		dialConfig, err = dialConfig.WithRemoteRouterHash(routerHash)
 		require.NoError(t, err)
+		dialConfig, err = dialConfig.WithAESObfuscation(true, generateRandomBytes(16))
+		require.NoError(t, err)
 		dialConfig = dialConfig.
-			WithAESObfuscation(true, generateRandomBytes(16)).
 			WithHandshakeTimeout(1 * time.Second)
 
 		// Try to dial with handshake (will fail due to no handshake responder)
