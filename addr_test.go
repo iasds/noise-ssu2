@@ -381,3 +381,80 @@ func TestNoiseAddrEquality(t *testing.T) {
 		t.Errorf("Addresses with same underlying network should have same network")
 	}
 }
+
+// TestAddressFormattingComprehensive tests address string formatting for different scenarios
+func TestAddressFormattingComprehensive(t *testing.T) {
+	tests := []struct {
+		name           string
+		network        string
+		address        string
+		pattern        string
+		role           string
+		expectedString string
+		expectedNet    string
+	}{
+		{
+			name:           "IPv4 TCP",
+			network:        "tcp",
+			address:        "192.168.1.100:8080",
+			pattern:        "XX",
+			role:           "initiator",
+			expectedString: "noise://XX/initiator/192.168.1.100:8080",
+			expectedNet:    "noise+tcp",
+		},
+		{
+			name:           "IPv6 TCP",
+			network:        "tcp",
+			address:        "[::1]:8080",
+			pattern:        "NN",
+			role:           "responder",
+			expectedString: "noise://NN/responder/[::1]:8080",
+			expectedNet:    "noise+tcp",
+		},
+		{
+			name:           "UDP with port",
+			network:        "udp",
+			address:        "10.0.0.1:9000",
+			pattern:        "IK",
+			role:           "initiator",
+			expectedString: "noise://IK/initiator/10.0.0.1:9000",
+			expectedNet:    "noise+udp",
+		},
+		{
+			name:           "Unix domain socket",
+			network:        "unix",
+			address:        "/var/run/app.sock",
+			pattern:        "NK",
+			role:           "responder",
+			expectedString: "noise://NK/responder//var/run/app.sock",
+			expectedNet:    "noise+unix",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			underlying := &mockNetAddr{network: tt.network, address: tt.address}
+			addr := NewNoiseAddr(underlying, tt.pattern, tt.role)
+
+			if addr.String() != tt.expectedString {
+				t.Errorf("Expected string %s, got %s", tt.expectedString, addr.String())
+			}
+
+			if addr.Network() != tt.expectedNet {
+				t.Errorf("Expected network %s, got %s", tt.expectedNet, addr.Network())
+			}
+
+			if addr.Pattern() != tt.pattern {
+				t.Errorf("Expected pattern %s, got %s", tt.pattern, addr.Pattern())
+			}
+
+			if addr.Role() != tt.role {
+				t.Errorf("Expected role %s, got %s", tt.role, addr.Role())
+			}
+
+			if addr.Underlying() != underlying {
+				t.Errorf("Underlying address mismatch")
+			}
+		})
+	}
+}

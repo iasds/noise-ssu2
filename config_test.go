@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/go-i2p/go-noise/handshake"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestNewConnConfig(t *testing.T) {
@@ -549,4 +550,90 @@ func (thm *testHandshakeModifier) ModifyInbound(phase handshake.HandshakePhase, 
 
 func (thm *testHandshakeModifier) Name() string {
 	return thm.name
+}
+
+// TestExtremeValidationCases tests boundary cases for validation
+func TestExtremeValidationCases(t *testing.T) {
+	tests := []struct {
+		name         string
+		staticKey    []byte
+		remoteKey    []byte
+		expectError  bool
+		errorContent string
+	}{
+		{
+			name:         "Static key exactly 31 bytes",
+			staticKey:    make([]byte, 31),
+			expectError:  true,
+			errorContent: "static key must be 32 bytes",
+		},
+		{
+			name:         "Static key exactly 33 bytes",
+			staticKey:    make([]byte, 33),
+			expectError:  true,
+			errorContent: "static key must be 32 bytes",
+		},
+		{
+			name:         "Remote key exactly 31 bytes",
+			remoteKey:    make([]byte, 31),
+			expectError:  true,
+			errorContent: "remote key must be 32 bytes",
+		},
+		{
+			name:         "Remote key exactly 33 bytes",
+			remoteKey:    make([]byte, 33),
+			expectError:  true,
+			errorContent: "remote key must be 32 bytes",
+		},
+		{
+			name:        "Both keys exactly 32 bytes",
+			staticKey:   make([]byte, 32),
+			remoteKey:   make([]byte, 32),
+			expectError: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			config := NewConnConfig("XX", true).WithHandshakeTimeout(5 * time.Second)
+
+			if tc.staticKey != nil {
+				config = config.WithStaticKey(tc.staticKey)
+			}
+			if tc.remoteKey != nil {
+				config = config.WithRemoteKey(tc.remoteKey)
+			}
+
+			err := config.Validate()
+
+			if tc.expectError {
+				assert.Error(t, err, "Should return error")
+				assert.Contains(t, err.Error(), tc.errorContent, "Error should contain expected message")
+			} else {
+				assert.NoError(t, err, "Should not return error")
+			}
+		})
+	}
+}
+
+// TestParseHandshakePatternConcurrency tests concurrent access to pattern parsing
+func TestParseHandshakePatternConcurrency(t *testing.T) {
+	patterns := []string{"XX", "NN", "NK", "IK", "KK"}
+	results := make(chan error, len(patterns)*10)
+
+	for _, pattern := range patterns {
+		for i := 0; i < 10; i++ {
+			go func(p string) {
+				_, err := parseHandshakePattern(p)
+				results <- err
+			}(pattern)
+		}
+	}
+
+	for i := 0; i < len(patterns)*10; i++ {
+		err := <-results
+		if err != nil {
+			t.Errorf("Concurrent pattern parsing failed: %v", err)
+		}
+	}
 }
