@@ -7,17 +7,52 @@ import (
 	"github.com/go-i2p/go-noise"
 )
 
+// patternInfo describes a Noise protocol pattern for testing
+type patternInfo struct {
+	name     string
+	pattern  string
+	msgCount int
+	category string
+}
+
+// testAllPatterns tests each pattern and returns the success count
+func testAllPatterns(patterns []patternInfo) int {
+	successCount := 0
+	for _, p := range patterns {
+		config := noise.NewConnConfig(p.pattern, true)
+		if config != nil {
+			fmt.Printf("✅ %-25s %-20s %d messages\n", p.name, fmt.Sprintf("(%s)", p.category), p.msgCount)
+			successCount++
+		} else {
+			fmt.Printf("❌ %-25s Failed to create config\n", p.name)
+		}
+	}
+	return successCount
+}
+
+// printPatternSummary displays the summary of pattern testing
+func printPatternSummary(successCount, total int) {
+	fmt.Printf("\n🎯 Summary: %d/%d patterns supported (%.1f%%)\n",
+		successCount, total, float64(successCount)/float64(total)*100)
+
+	if successCount == total {
+		fmt.Println("🚀 COMPLETE: Full Noise Protocol specification coverage achieved!")
+		fmt.Println("\nSupported pattern categories:")
+		fmt.Println("  • One-way patterns (N, K, X)")
+		fmt.Println("  • Two-message interactive patterns (NN, NK, NX, XN, XK, KN, KK, IN, IK, IX)")
+		fmt.Println("  • Three-message patterns (XX, KX)")
+		fmt.Println("\nAll patterns support both full specification names (e.g., 'Noise_XX_25519_AESGCM_SHA256') and short names (e.g., 'XX').")
+	} else {
+		log.Printf("Warning: Only %d out of %d patterns are supported", successCount, total)
+	}
+}
+
 // demonstratePatternSupport shows all supported Noise patterns
 func main() {
 	fmt.Println("🔐 Comprehensive Noise Protocol Pattern Support Verification")
 	fmt.Println("===========================================================")
 
-	patterns := []struct {
-		name     string
-		pattern  string
-		msgCount int
-		category string
-	}{
+	patterns := []patternInfo{
 		// One-way patterns
 		{"N (Basic one-way)", "N", 1, "One-way"},
 		{"K (Pre-shared static)", "K", 1, "One-way"},
@@ -42,29 +77,6 @@ func main() {
 
 	fmt.Printf("Testing %d Noise Protocol patterns:\n\n", len(patterns))
 
-	successCount := 0
-	for _, p := range patterns {
-		// Test that pattern is recognized and can create config
-		config := noise.NewConnConfig(p.pattern, true)
-		if config != nil {
-			fmt.Printf("✅ %-25s %-20s %d messages\n", p.name, fmt.Sprintf("(%s)", p.category), p.msgCount)
-			successCount++
-		} else {
-			fmt.Printf("❌ %-25s Failed to create config\n", p.name)
-		}
-	}
-
-	fmt.Printf("\n🎯 Summary: %d/%d patterns supported (%.1f%%)\n",
-		successCount, len(patterns), float64(successCount)/float64(len(patterns))*100)
-
-	if successCount == len(patterns) {
-		fmt.Println("🚀 COMPLETE: Full Noise Protocol specification coverage achieved!")
-		fmt.Println("\nSupported pattern categories:")
-		fmt.Println("  • One-way patterns (N, K, X)")
-		fmt.Println("  • Two-message interactive patterns (NN, NK, NX, XN, XK, KN, KK, IN, IK, IX)")
-		fmt.Println("  • Three-message patterns (XX, KX)")
-		fmt.Println("\nAll patterns support both full specification names (e.g., 'Noise_XX_25519_AESGCM_SHA256') and short names (e.g., 'XX').")
-	} else {
-		log.Printf("Warning: Only %d out of %d patterns are supported", successCount, len(patterns))
-	}
+	successCount := testAllPatterns(patterns)
+	printPatternSummary(successCount, len(patterns))
 }

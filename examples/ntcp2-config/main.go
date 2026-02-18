@@ -163,6 +163,36 @@ func demonstrateAdvancedConfigurations(routerHash []byte) {
 	fmt.Printf("  Frame Padding: %t\n", config.FramePaddingEnabled)
 }
 
+// applyResponderFeatures applies NTCP2-specific features to the responder config
+func applyResponderFeatures(config *ntcp2.NTCP2Config, args *ntcp2shared.NTCP2Args) (*ntcp2.NTCP2Config, error) {
+	var err error
+	if args.EnableAESObfuscation {
+		config, err = config.WithAESObfuscation(args.EnableAESObfuscation, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to set AES obfuscation: %w", err)
+		}
+	}
+	if args.EnableSipHashLength {
+		config = config.WithSipHashLength(args.EnableSipHashLength, 0, 0)
+	}
+	if args.MaxFrameSize > 0 {
+		config = config.WithFrameSettings(args.MaxFrameSize, false, 0, 0)
+	}
+	return config, nil
+}
+
+// displayResponderConfig prints the responder configuration details
+func displayResponderConfig(config *ntcp2.NTCP2Config) {
+	fmt.Printf("  Pattern: %s\n", config.Pattern)
+	fmt.Printf("  Role: Responder\n")
+	fmt.Printf("  Timeouts: handshake=%v, read=%v, write=%v\n",
+		config.HandshakeTimeout, config.ReadTimeout, config.WriteTimeout)
+	fmt.Printf("  AES Obfuscation: %t\n", config.EnableAESObfuscation)
+	fmt.Printf("  SipHash Length: %t\n", config.EnableSipHashLength)
+	fmt.Printf("  Max Frame Size: %d bytes\n", config.MaxFrameSize)
+	fmt.Println("✅ Responder configuration valid")
+}
+
 // demonstrateResponderConfiguration shows responder (server) configuration
 func demonstrateResponderConfiguration(routerHash, staticKey []byte, args *ntcp2shared.NTCP2Args) {
 	fmt.Println("\n🔧 Responder (Server) Configuration:")
@@ -182,37 +212,18 @@ func demonstrateResponderConfiguration(routerHash, staticKey []byte, args *ntcp2
 		WithReadTimeout(args.ReadTimeout).
 		WithWriteTimeout(args.WriteTimeout)
 
-	// Apply NTCP2-specific features based on arguments
-	if args.EnableAESObfuscation {
-		config, err = config.WithAESObfuscation(args.EnableAESObfuscation, nil)
-		if err != nil {
-			fmt.Printf("❌ Failed to set AES obfuscation: %v\n", err)
-			return
-		}
+	config, err = applyResponderFeatures(config, args)
+	if err != nil {
+		fmt.Printf("❌ %v\n", err)
+		return
 	}
 
-	if args.EnableSipHashLength {
-		config = config.WithSipHashLength(args.EnableSipHashLength, 0, 0)
-	}
-
-	if args.MaxFrameSize > 0 {
-		config = config.WithFrameSettings(args.MaxFrameSize, false, 0, 0)
-	}
-
-	// Validate configuration
 	if err := config.Validate(); err != nil {
 		fmt.Printf("❌ Invalid configuration: %v\n", err)
 		return
 	}
 
-	fmt.Printf("  Pattern: %s\n", config.Pattern)
-	fmt.Printf("  Role: Responder\n")
-	fmt.Printf("  Timeouts: handshake=%v, read=%v, write=%v\n",
-		config.HandshakeTimeout, config.ReadTimeout, config.WriteTimeout)
-	fmt.Printf("  AES Obfuscation: %t\n", config.EnableAESObfuscation)
-	fmt.Printf("  SipHash Length: %t\n", config.EnableSipHashLength)
-	fmt.Printf("  Max Frame Size: %d bytes\n", config.MaxFrameSize)
-	fmt.Println("✅ Responder configuration valid")
+	displayResponderConfig(config)
 }
 
 // demonstrateInitiatorConfiguration shows initiator (client) configuration

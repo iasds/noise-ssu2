@@ -89,6 +89,35 @@ func demonstrateNTCP2Addressing() {
 	fmt.Println()
 }
 
+// displayAddressInfo prints NTCP2 address details
+func displayAddressInfo(ntcpAddr *ntcp2.NTCP2Addr, routerHash []byte) {
+	fmt.Printf("NTCP2 Address with User Router Hash:\n")
+	fmt.Printf("  Network: %s\n", ntcpAddr.Network())
+	fmt.Printf("  String:  %s\n", ntcpAddr.String())
+	fmt.Printf("  Role:    %s\n", ntcpAddr.Role())
+	fmt.Printf("  Router Hash: %x...\n", routerHash[:8])
+	fmt.Println()
+}
+
+// displayKeyMaterial shows the optional key material
+func displayKeyMaterial(remoteRouterHash, staticKey, destHash []byte) {
+	if remoteRouterHash != nil {
+		fmt.Printf("Remote Router Information:\n")
+		fmt.Printf("  Remote Router Hash: %x...\n", remoteRouterHash[:8])
+		fmt.Println()
+	}
+	if staticKey != nil {
+		fmt.Printf("Static Key Information:\n")
+		fmt.Printf("  Static Key: %x...\n", staticKey[:8])
+		fmt.Println()
+	}
+	if destHash != nil {
+		fmt.Printf("Destination Hash:\n")
+		fmt.Printf("  Destination Hash: %x...\n", destHash[:8])
+		fmt.Println()
+	}
+}
+
 // demonstrateNTCP2AddressingWithKeys shows NTCP2 addressing with user-provided keys
 func demonstrateNTCP2AddressingWithKeys(routerHash, remoteRouterHash, destHash, staticKey []byte) {
 	fmt.Println("📍 NTCP2 Addressing with User Keys:")
@@ -100,45 +129,18 @@ func demonstrateNTCP2AddressingWithKeys(routerHash, remoteRouterHash, destHash, 
 		return
 	}
 
-	// Create a TCP address for the underlying connection
 	tcpAddr := &net.TCPAddr{
 		IP:   net.ParseIP("127.0.0.1"),
 		Port: 7654,
 	}
 
-	// Create NTCP2 address with user-provided router hash
 	ntcpAddr, err := ntcp2.NewNTCP2Addr(tcpAddr, routerHash, "initiator")
 	if err != nil {
 		log.Fatalf("Failed to create NTCP2 address: %v", err)
 	}
 
-	fmt.Printf("NTCP2 Address with User Router Hash:\n")
-	fmt.Printf("  Network: %s\n", ntcpAddr.Network())
-	fmt.Printf("  String:  %s\n", ntcpAddr.String())
-	fmt.Printf("  Role:    %s\n", ntcpAddr.Role())
-	fmt.Printf("  Router Hash: %x...\n", routerHash[:8])
-	fmt.Println()
-
-	// Show remote router hash if provided
-	if remoteRouterHash != nil {
-		fmt.Printf("Remote Router Information:\n")
-		fmt.Printf("  Remote Router Hash: %x...\n", remoteRouterHash[:8])
-		fmt.Println()
-	}
-
-	// Show static key information if provided
-	if staticKey != nil {
-		fmt.Printf("Static Key Information:\n")
-		fmt.Printf("  Static Key: %x...\n", staticKey[:8])
-		fmt.Println()
-	}
-
-	// Add destination hash for tunnel connections if provided
-	if destHash != nil {
-		fmt.Printf("Destination Hash:\n")
-		fmt.Printf("  Destination Hash: %x...\n", destHash[:8])
-		fmt.Println()
-	}
+	displayAddressInfo(ntcpAddr, routerHash)
+	displayKeyMaterial(remoteRouterHash, staticKey, destHash)
 
 	fmt.Println("✅ NTCP2 addressing demonstration completed!")
 	fmt.Println("🔗 Use NTCP2 listener/client examples for full connection functionality")

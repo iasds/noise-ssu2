@@ -274,42 +274,29 @@ func RunNTCP2Demo() {
 	demonstrateNTCP2Configuration()
 }
 
-// RunNTCP2Generate generates and displays NTCP2 cryptographic material
-func RunNTCP2Generate() {
-	fmt.Println("=== NTCP2 Cryptographic Material Generation ===")
-	fmt.Println()
-
-	fmt.Println("Generating NTCP2 material for testing...")
-
-	// Generate router hashes and keys
-	routerHash, err := shared.GenerateRandomKey()
+// generateNTCP2Material generates all 4 pieces of NTCP2 crypto material
+func generateNTCP2Material() (routerHash, remoteRouterHash, staticKey, destinationHash []byte, err error) {
+	routerHash, err = shared.GenerateRandomKey()
 	if err != nil {
-		fmt.Printf("❌ Failed to generate router hash: %v\n", err)
-		return
+		return nil, nil, nil, nil, fmt.Errorf("failed to generate router hash: %w", err)
 	}
-
-	remoteRouterHash, err := shared.GenerateRandomKey()
+	remoteRouterHash, err = shared.GenerateRandomKey()
 	if err != nil {
-		fmt.Printf("❌ Failed to generate remote router hash: %v\n", err)
-		return
+		return nil, nil, nil, nil, fmt.Errorf("failed to generate remote router hash: %w", err)
 	}
-
-	staticKey, err := shared.GenerateRandomKey()
+	staticKey, err = shared.GenerateRandomKey()
 	if err != nil {
-		fmt.Printf("❌ Failed to generate static key: %v\n", err)
-		return
+		return nil, nil, nil, nil, fmt.Errorf("failed to generate static key: %w", err)
 	}
-
-	destinationHash, err := shared.GenerateRandomKey()
+	destinationHash, err = shared.GenerateRandomKey()
 	if err != nil {
-		fmt.Printf("❌ Failed to generate destination hash: %v\n", err)
-		return
+		return nil, nil, nil, nil, fmt.Errorf("failed to generate destination hash: %w", err)
 	}
+	return routerHash, remoteRouterHash, staticKey, destinationHash, nil
+}
 
-	fmt.Println("✅ NTCP2 material generated successfully!")
-	fmt.Println()
-
-	// Display material
+// displayNTCP2Material prints the generated material and usage examples
+func displayNTCP2Material(routerHash, remoteRouterHash, staticKey, destinationHash []byte) {
 	fmt.Printf("🔑 NTCP2 Cryptographic Material:\n")
 	fmt.Printf("  Router Hash:        %s\n", shared.KeyToHex(routerHash))
 	fmt.Printf("  Remote Router Hash: %s\n", shared.KeyToHex(remoteRouterHash))
@@ -317,7 +304,6 @@ func RunNTCP2Generate() {
 	fmt.Printf("  Destination Hash:   %s\n", shared.KeyToHex(destinationHash))
 	fmt.Println()
 
-	// Show usage examples
 	fmt.Println("Usage in commands:")
 	fmt.Printf("  -router-hash %s\n", shared.KeyToHex(routerHash))
 	fmt.Printf("  -remote-router-hash %s\n", shared.KeyToHex(remoteRouterHash))
@@ -329,6 +315,25 @@ func RunNTCP2Generate() {
 	fmt.Println("\nExample client command:")
 	fmt.Printf("  go run main.go -client localhost:7654 -router-hash %s -remote-router-hash %s -static-key %s\n",
 		shared.KeyToHex(routerHash), shared.KeyToHex(remoteRouterHash), shared.KeyToHex(staticKey))
+}
+
+// RunNTCP2Generate generates and displays NTCP2 cryptographic material
+func RunNTCP2Generate() {
+	fmt.Println("=== NTCP2 Cryptographic Material Generation ===")
+	fmt.Println()
+
+	fmt.Println("Generating NTCP2 material for testing...")
+
+	routerHash, remoteRouterHash, staticKey, destinationHash, err := generateNTCP2Material()
+	if err != nil {
+		fmt.Printf("❌ %v\n", err)
+		return
+	}
+
+	fmt.Println("✅ NTCP2 material generated successfully!")
+	fmt.Println()
+
+	displayNTCP2Material(routerHash, remoteRouterHash, staticKey, destinationHash)
 }
 
 // demonstrateNTCP2Pattern shows NTCP2's use of the IK pattern

@@ -198,11 +198,8 @@ func testContextCancellation(serverAddr string, config *noise.ConnConfig) {
 	}
 }
 
-// demonstrateRetryConfigurations shows various retry configuration examples
-func demonstrateRetryConfigurations() {
-	fmt.Println("=== Handshake Retry Configuration Examples ===")
-
-	// Example 1: Basic retry configuration
+// showBasicRetryConfig displays basic retry configuration examples
+func showBasicRetryConfig() {
 	fmt.Println("\n1. Basic Retry Configuration:")
 	config := noise.NewConnConfig("XX", true).
 		WithHandshakeRetries(3).
@@ -214,14 +211,12 @@ func demonstrateRetryConfigurations() {
 	fmt.Printf("   - Retry Backoff: %v\n", config.RetryBackoff)
 	fmt.Printf("   - Handshake Timeout: %v\n", config.HandshakeTimeout)
 
-	// Example 2: No retry configuration
 	fmt.Println("\n2. No Retry Configuration (single attempt):")
 	noRetryConfig := noise.NewConnConfig("NN", true).
 		WithHandshakeRetries(0)
 
 	fmt.Printf("   - Handshake Retries: %d\n", noRetryConfig.HandshakeRetries)
 
-	// Example 3: Infinite retry configuration
 	fmt.Println("\n3. Infinite Retry Configuration:")
 	infiniteConfig := noise.NewConnConfig("NN", true).
 		WithHandshakeRetries(-1).
@@ -229,8 +224,10 @@ func demonstrateRetryConfigurations() {
 
 	fmt.Printf("   - Handshake Retries: %d (infinite)\n", infiniteConfig.HandshakeRetries)
 	fmt.Printf("   - Retry Backoff: %v\n", infiniteConfig.RetryBackoff)
+}
 
-	// Example 4: Backoff calculation demonstration
+// showBackoffCalculation displays exponential backoff calculations
+func showBackoffCalculation() {
 	fmt.Println("\n4. Backoff Calculation (exponential):")
 	baseBackoff := 100 * time.Millisecond
 	for attempt := 0; attempt < 5; attempt++ {
@@ -240,8 +237,10 @@ func demonstrateRetryConfigurations() {
 		}
 		fmt.Printf("   Attempt %d: %v\n", attempt+1, backoff)
 	}
+}
 
-	// Example 5: Configuration validation
+// showConfigValidation displays configuration validation examples
+func showConfigValidation() {
 	fmt.Println("\n5. Configuration Validation:")
 
 	configs := map[string]*noise.ConnConfig{
@@ -263,6 +262,15 @@ func demonstrateRetryConfigurations() {
 	fmt.Println("   - DialNoiseWithHandshakeContext(ctx, network, addr, config)")
 	fmt.Println("   - DialNoiseWithPoolAndHandshake(network, addr, config)")
 	fmt.Println("   - DialNoiseWithPoolAndHandshakeContext(ctx, network, addr, config)")
+}
+
+// demonstrateRetryConfigurations shows various retry configuration examples
+func demonstrateRetryConfigurations() {
+	fmt.Println("=== Handshake Retry Configuration Examples ===")
+
+	showBasicRetryConfig()
+	showBackoffCalculation()
+	showConfigValidation()
 }
 
 // startRetryTestServer starts a simple server for retry testing

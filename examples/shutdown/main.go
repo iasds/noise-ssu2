@@ -112,53 +112,35 @@ func runShutdownServer(args *shared.CommonArgs, staticKey []byte) {
 	}
 }
 
-// runShutdownServerFunc implements the server logic
-func runShutdownServerFunc(addr, pattern string, staticKey []byte) error {
-	// Create server configuration
-	config := noise.NewConnConfig(pattern, false). // initiator = false
-							WithHandshakeTimeout(30 * time.Second).
-							WithReadTimeout(60 * time.Second).
-							WithWriteTimeout(60 * time.Second)
+// createShutdownListener creates the server config and TCP listener
+func createShutdownListener(addr, pattern string, staticKey []byte) (net.Listener, *noise.ConnConfig, error) {
+	config := noise.NewConnConfig(pattern, false).
+		WithHandshakeTimeout(30 * time.Second).
+		WithReadTimeout(60 * time.Second).
+		WithWriteTimeout(60 * time.Second)
 
 	if staticKey != nil {
 		config = config.WithStaticKey(staticKey)
 	}
 
-	// Create TCP listener
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
-		return fmt.Errorf("failed to create listener: %w", err)
+		return nil, nil, fmt.Errorf("failed to create listener: %w", err)
 	}
-	defer listener.Close()
+	return listener, config, nil
+}
 
-	fmt.Printf("✓ Server configuration: pattern=%s\n", pattern)
-	fmt.Printf("✓ Listening on %s\n", listener.Addr())
-
-	// Set up signal handling
+// awaitShutdownSignal waits for a shutdown signal and handles graceful shutdown
+func awaitShutdownSignal(cancel context.CancelFunc, wg *sync.WaitGroup) {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	// Context for graceful shutdown
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// Start accepting connections
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		acceptConnections(ctx, listener, config)
-	}()
-
-	// Wait for signal
 	sig := <-sigChan
 	fmt.Printf("\n🛑 Received signal: %v\n", sig)
 	fmt.Println("Initiating graceful shutdown...")
 
-	// Cancel context to stop accepting new connections
 	cancel()
 
-	// Wait for connections to finish with timeout
 	done := make(chan struct{})
 	go func() {
 		wg.Wait()
@@ -171,6 +153,30 @@ func runShutdownServerFunc(addr, pattern string, staticKey []byte) error {
 	case <-time.After(10 * time.Second):
 		fmt.Println("⚠️  Shutdown timeout reached")
 	}
+}
+
+// runShutdownServerFunc implements the server logic
+func runShutdownServerFunc(addr, pattern string, staticKey []byte) error {
+	listener, config, err := createShutdownListener(addr, pattern, staticKey)
+	if err != nil {
+		return err
+	}
+	defer listener.Close()
+
+	fmt.Printf("✓ Server configuration: pattern=%s\n", pattern)
+	fmt.Printf("✓ Listening on %s\n", listener.Addr())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		acceptConnections(ctx, listener, config)
+	}()
+
+	awaitShutdownSignal(cancel, &wg)
 
 	return nil
 }
@@ -295,30 +301,9 @@ func handleConnection(rawConn net.Conn) {
 	}
 }
 
-// runLongRunningClient simulates a client that runs for a while
-func runLongRunningClient(addr, pattern string, clientID int, staticKey []byte) {
-	fmt.Printf("🔗 Client %d connecting to %s\n", clientID, addr)
-
-	config := noise.NewConnConfig(pattern, true). // initiator = true
-							WithHandshakeTimeout(10 * time.Second).
-							WithReadTimeout(5 * time.Second).
-							WithWriteTimeout(5 * time.Second)
-
-	if staticKey != nil {
-		config = config.WithStaticKey(staticKey)
-	}
-
-	conn, err := noise.DialNoise("tcp", addr, config)
-	if err != nil {
-		log.Printf("Client %d connection failed: %v", clientID, err)
-		return
-	}
-	defer conn.Close()
-
-	fmt.Printf("✅ Client %d connected\n", clientID)
-
-	// Send messages periodically
-	for i := 0; i < 5; i++ {
+// sendPeriodicMessages sends messages and reads responses in a loop
+func sendPeriodicMessages(conn net.Conn, clientID, count int) {
+	for i := 0; i < count; i++ {
 		message := fmt.Sprintf("Client %d message %d at %v", clientID, i+1, time.Now().Format("15:04:05"))
 		_, err := conn.Write([]byte(message))
 		if err != nil {
@@ -336,6 +321,31 @@ func runLongRunningClient(addr, pattern string, clientID int, staticKey []byte) 
 		fmt.Printf("✓ Client %d received: %s\n", clientID, buffer[:n])
 		time.Sleep(500 * time.Millisecond)
 	}
+}
+
+// runLongRunningClient simulates a client that runs for a while
+func runLongRunningClient(addr, pattern string, clientID int, staticKey []byte) {
+	fmt.Printf("🔗 Client %d connecting to %s\n", clientID, addr)
+
+	config := noise.NewConnConfig(pattern, true).
+		WithHandshakeTimeout(10 * time.Second).
+		WithReadTimeout(5 * time.Second).
+		WithWriteTimeout(5 * time.Second)
+
+	if staticKey != nil {
+		config = config.WithStaticKey(staticKey)
+	}
+
+	conn, err := noise.DialNoise("tcp", addr, config)
+	if err != nil {
+		log.Printf("Client %d connection failed: %v", clientID, err)
+		return
+	}
+	defer conn.Close()
+
+	fmt.Printf("✅ Client %d connected\n", clientID)
+
+	sendPeriodicMessages(conn, clientID, 5)
 
 	fmt.Printf("✅ Client %d finished\n", clientID)
 }
