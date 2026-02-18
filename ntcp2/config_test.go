@@ -467,3 +467,340 @@ func TestNTCP2ConfigEdgeCases(t *testing.T) {
 		assert.Nil(t, config.StaticKey)
 	})
 }
+
+// ============================================================================
+// Tests from audit_fixes_test.go — config-related
+// ============================================================================
+
+func TestAudit_Quality_SilentRejection(t *testing.T) {
+	routerHash := make([]byte, 32)
+	config, err := NewNTCP2Config(routerHash, true)
+	require.NoError(t, err)
+	require.NotNil(t, config)
+
+	_, err = config.WithStaticKey(make([]byte, 31))
+	assert.Error(t, err)
+	assert.Nil(t, config.StaticKey, "Invalid static key must not be set")
+
+	validKey := make([]byte, 32)
+	for i := range validKey {
+		validKey[i] = byte(i)
+	}
+	config, err = config.WithStaticKey(validKey)
+	require.NoError(t, err)
+	assert.Equal(t, validKey, config.StaticKey, "Valid static key must be set")
+
+	_, err = config.WithRemoteRouterHash(make([]byte, 31))
+	assert.Error(t, err)
+	assert.Nil(t, config.RemoteRouterHash, "Invalid router hash must not be set")
+
+	validHash := make([]byte, 32)
+	for i := range validHash {
+		validHash[i] = byte(i + 100)
+	}
+	config, err = config.WithRemoteRouterHash(validHash)
+	require.NoError(t, err)
+	assert.Equal(t, validHash, config.RemoteRouterHash, "Valid router hash must be set")
+}
+
+func TestAudit_Quality_Constants(t *testing.T) {
+	assert.Equal(t, 32, RouterHashSize)
+	assert.Equal(t, 32, StaticKeySize)
+	assert.Equal(t, 16, IVSize)
+	assert.Equal(t, byte(254), byte(PaddingBlockType))
+	assert.Equal(t, 65516, MaxBlockDataSize)
+	assert.Equal(t, 65535, MaxFrameSize)
+	assert.Equal(t, 3, BlockHeaderSize)
+	assert.Equal(t, 8, SipHashIVSize)
+	assert.Equal(t, 2, FrameLengthFieldSize)
+	assert.Equal(t, "XK", NTCP2Pattern)
+	assert.Equal(t, "Noise_XKaesobfse+hs2+hs3_25519_ChaChaPoly_SHA256", NTCP2ProtocolName)
+}
+
+func TestAudit_ConfigUsesXKPattern(t *testing.T) {
+	routerHash := make([]byte, 32)
+	config, err := NewNTCP2Config(routerHash, true)
+	require.NoError(t, err)
+	require.NotNil(t, config)
+
+	assert.Equal(t, "XK", NTCP2Pattern)
+
+	validKey := make([]byte, 32)
+	config, err = config.WithStaticKey(validKey)
+	require.NoError(t, err)
+	config, err = config.WithRemoteRouterHash(make([]byte, 32))
+	require.NoError(t, err)
+	config, err = config.WithRemoteStaticKey(make([]byte, 32))
+	require.NoError(t, err)
+	config, err = config.WithAESObfuscation(true, make([]byte, 16))
+	require.NoError(t, err)
+	connConfig, err2 := config.ToConnConfig()
+	require.NoError(t, err2)
+	require.NotNil(t, connConfig)
+	assert.Equal(t, "XK", connConfig.Pattern)
+}
+
+// ============================================================================
+// Tests from audit_fixes_3_test.go — config-related
+// ============================================================================
+
+func TestWithAESObfuscation_WrongIVLengthReturnsError(t *testing.T) {
+	routerHash := make([]byte, 32)
+	_, err := rand.Read(routerHash)
+	require.NoError(t, err)
+
+	config, err := NewNTCP2Config(routerHash, false)
+	require.NoError(t, err)
+	config.EnableAESObfuscation = false
+
+	wrongIV := make([]byte, 10)
+	_, err = config.WithAESObfuscation(true, wrongIV)
+	assert.Error(t, err, "Wrong-length IV must return an error")
+	assert.Contains(t, err.Error(), "custom IV must be exactly")
+
+	correctIV := make([]byte, 16)
+	config, err = config.WithAESObfuscation(true, correctIV)
+	require.NoError(t, err)
+	assert.NotNil(t, config.ObfuscationIV, "Correct-length IV must be set")
+
+	config, err = config.WithAESObfuscation(false, nil)
+	require.NoError(t, err)
+}
+
+func TestSipHashModifier_NilBeforeHandshake(t *testing.T) {
+	routerHash := make([]byte, 32)
+	_, err := rand.Read(routerHash)
+	require.NoError(t, err)
+
+	obfuscationIV := make([]byte, 16)
+	_, err = rand.Read(obfuscationIV)
+	require.NoError(t, err)
+
+	config, err := NewNTCP2Config(routerHash, false)
+	require.NoError(t, err)
+
+	config, err = config.WithAESObfuscation(true, obfuscationIV)
+	require.NoError(t, err)
+
+	assert.Nil(t, config.SipHashModifier())
+
+	_, err = config.ToConnConfig()
+	require.NoError(t, err)
+
+	assert.Nil(t, config.SipHashModifier(),
+		"Placeholder zero-key modifier must not be exposed via SipHashModifier()")
+}
+
+func TestKDF_ASKLabelConfigured(t *testing.T) {
+	routerHash := make([]byte, 32)
+	_, err := rand.Read(routerHash)
+	require.NoError(t, err)
+
+	obfuscationIV := make([]byte, 16)
+	_, err = rand.Read(obfuscationIV)
+	require.NoError(t, err)
+
+	config, err := NewNTCP2Config(routerHash, false)
+	require.NoError(t, err)
+	config, err = config.WithAESObfuscation(true, obfuscationIV)
+	require.NoError(t, err)
+
+	connConfig, err := config.ToConnConfig()
+	require.NoError(t, err)
+
+	assert.Len(t, connConfig.AdditionalSymmetricKeyLabels, 1)
+	assert.Equal(t, []byte("ask"), connConfig.AdditionalSymmetricKeyLabels[0])
+
+	assert.NotNil(t, connConfig.PostHandshakeHook)
+}
+
+// ============================================================================
+// Tests from audit_fixes_4_test.go — config-related
+// ============================================================================
+
+func TestAuditFix_Clone_IndependentConfig(t *testing.T) {
+	original := &NTCP2Config{
+		Pattern:       "XK",
+		MaxFrameSize:  16384,
+		BobRouterHash: []byte("original-hash-32-bytes-long!!!!!"),
+	}
+
+	clone := original.Clone()
+
+	clone.MaxFrameSize = 8192
+	clone.BobRouterHash[0] = 0xFF
+
+	assert.Equal(t, 16384, original.MaxFrameSize, "clone modification should not affect original")
+	assert.NotEqual(t, byte(0xFF), original.BobRouterHash[0], "clone byte slice modification should not affect original")
+}
+
+// ============================================================================
+// Tests from audit_fixes_5_test.go — config-related
+// ============================================================================
+
+func TestAuditFix_BobRouterHash_FieldRenamed(t *testing.T) {
+	rhb := make([]byte, 32)
+	for i := range rhb {
+		rhb[i] = byte(i + 1)
+	}
+
+	config, err := NewNTCP2Config(rhb, true)
+	require.NoError(t, err)
+	assert.Equal(t, rhb, config.BobRouterHash, "BobRouterHash must be set by constructor")
+}
+
+func TestAuditFix_BobRouterHash_ValidationWorks(t *testing.T) {
+	_, err := NewNTCP2Config(make([]byte, 16), true)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "bob router hash must be exactly 32 bytes")
+
+	config, err := NewNTCP2Config(make([]byte, 32), false)
+	require.NoError(t, err)
+
+	config.BobRouterHash = make([]byte, 10)
+	err = config.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "bob router hash must be exactly 32 bytes")
+}
+
+func TestAuditFix_BobRouterHash_DefensiveCopy(t *testing.T) {
+	rhb := make([]byte, 32)
+	config, err := NewNTCP2Config(rhb, true)
+	require.NoError(t, err)
+
+	rhb[0] = 0xFF
+	assert.NotEqual(t, byte(0xFF), config.BobRouterHash[0],
+		"BobRouterHash must be a defensive copy")
+}
+
+func TestAuditFix_BobRouterHash_AESModifierUsesIt(t *testing.T) {
+	rhb := make([]byte, 32)
+	for i := range rhb {
+		rhb[i] = byte(i + 10)
+	}
+	iv := make([]byte, 16)
+	for i := range iv {
+		iv[i] = byte(i + 0x30)
+	}
+
+	config, err := NewNTCP2Config(rhb, false)
+	require.NoError(t, err)
+	config, err = config.WithAESObfuscation(true, iv)
+	require.NoError(t, err)
+
+	mod, err := config.createAESModifierIfEnabled()
+	require.NoError(t, err)
+	assert.NotNil(t, mod)
+}
+
+func TestAuditFix_BobRouterHash_ClonePreserves(t *testing.T) {
+	rhb := make([]byte, 32)
+	for i := range rhb {
+		rhb[i] = byte(i)
+	}
+	config, err := NewNTCP2Config(rhb, true)
+	require.NoError(t, err)
+
+	clone := config.Clone()
+	assert.Equal(t, config.BobRouterHash, clone.BobRouterHash)
+
+	clone.BobRouterHash[0] = 0xFF
+	assert.NotEqual(t, config.BobRouterHash[0], clone.BobRouterHash[0])
+}
+
+func TestAuditFix_Clone_DocCommentsPresent(t *testing.T) {
+	rhb := make([]byte, 32)
+	config, err := NewNTCP2Config(rhb, true)
+	require.NoError(t, err)
+
+	clone := config.Clone()
+
+	clone.Pattern = "NN"
+	assert.Equal(t, "XK", config.Pattern, "Clone must not share value fields")
+
+	clone.BobRouterHash[0] = 0xFF
+	assert.NotEqual(t, byte(0xFF), config.BobRouterHash[0],
+		"Clone must deep-copy BobRouterHash")
+}
+
+// TestConfigSipHashModifier verifies that NTCP2Config stores and returns
+// the SipHash modifier after ToConnConfig() is called.
+func TestConfigSipHashModifier(t *testing.T) {
+	routerHash := make([]byte, 32)
+	copy(routerHash, "test-router-hash-32-bytes-long!")
+
+	config, err := NewNTCP2Config(routerHash, true)
+	require.NoError(t, err)
+
+	// Set remote router hash (required for initiator)
+	config.RemoteRouterHash = make([]byte, 32)
+	copy(config.RemoteRouterHash, "remote-hash-32-bytes-long!!!!!")
+
+	// Provide a static key
+	config.StaticKey = make([]byte, 32)
+	copy(config.StaticKey, "static-key-32-bytes-long!!!!!!!")
+
+	// Provide remote static key (required for initiator XK)
+	config.RemoteStaticKey = make([]byte, 32)
+	copy(config.RemoteStaticKey, "remote-static-key-32-bytes!!!!!")
+
+	// AES obfuscation requires an explicit IV
+	config, err = config.WithAESObfuscation(true, make([]byte, 16))
+	require.NoError(t, err)
+
+	// Before ToConnConfig, modifier should be nil
+	assert.Nil(t, config.SipHashModifier())
+
+	// Call ToConnConfig
+	connConfig, err := config.ToConnConfig()
+	require.NoError(t, err)
+
+	// After ToConnConfig (before handshake), SipHashModifier() should be nil
+	// because the placeholder zero-key modifier is no longer exposed.
+	// The proper directional modifier is set by the post-handshake hook.
+	assert.Nil(t, config.SipHashModifier(),
+		"Placeholder zero-key modifier must not be exposed pre-handshake")
+
+	// But the SipHash modifier is still in the modifier list for the handshake
+	hasSipHashMod := false
+	for _, mod := range connConfig.Modifiers {
+		if mod.Name() == "ntcp2-siphash" {
+			hasSipHashMod = true
+			break
+		}
+	}
+	assert.True(t, hasSipHashMod,
+		"SipHash modifier should be in the handshake modifier list")
+}
+
+// TestConfigSipHashModifier_Disabled verifies that the modifier is nil
+// when SipHash is disabled.
+func TestConfigSipHashModifier_Disabled(t *testing.T) {
+	routerHash := make([]byte, 32)
+	copy(routerHash, "test-router-hash-32-bytes-long!")
+
+	config, err := NewNTCP2Config(routerHash, true)
+	require.NoError(t, err)
+
+	config.RemoteRouterHash = make([]byte, 32)
+	copy(config.RemoteRouterHash, "remote-hash-32-bytes-long!!!!!")
+	config.StaticKey = make([]byte, 32)
+	copy(config.StaticKey, "static-key-32-bytes-long!!!!!!!")
+
+	// Provide remote static key (required for initiator XK)
+	config.RemoteStaticKey = make([]byte, 32)
+	copy(config.RemoteStaticKey, "remote-static-key-32-bytes!!!!!")
+
+	// Disable SipHash
+	config.EnableSipHashLength = false
+
+	// AES obfuscation requires an explicit IV
+	config, err = config.WithAESObfuscation(true, make([]byte, 16))
+	require.NoError(t, err)
+
+	_, err = config.ToConnConfig()
+	require.NoError(t, err)
+
+	// Modifier should be nil
+	assert.Nil(t, config.SipHashModifier())
+}

@@ -2,12 +2,19 @@ package ntcp2
 
 import (
 	"bytes"
+	"encoding/binary"
+	"errors"
+	"io"
 	"net"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/dchest/siphash"
 	noise "github.com/go-i2p/go-noise"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // mockNoiseConn implements a mock NoiseConn for testing
@@ -456,4 +463,1149 @@ func createTestNTCP2ConnWithAddrs(mockNoise *mockNoiseConn, localAddr, remoteAdd
 		panic(err) // This should not happen in tests
 	}
 	return conn
+}
+
+// ============================================================================
+// Tests from audit_fixes_3_test.go — conn-related
+// ============================================================================
+
+func TestValidateFrameLength_ZeroAppliesProbingDelay(t *testing.T) {
+	client, server := net.Pipe()
+	defer server.Close()
+
+	config := noise.NewConnConfig("XK", true)
+	noiseConn, err := noise.NewNoiseConn(client, config)
+	require.NoError(t, err)
+	defer noiseConn.Close()
+
+	localAddr := createTestNTCP2Addr("local", "initiator")
+	remoteAddr := createTestNTCP2Addr("remote", "responder")
+	ntcp2Conn, err := NewNTCP2Conn(noiseConn, localAddr, remoteAddr)
+	require.NoError(t, err)
+
+	err = ntcp2Conn.validateFrameLength(0)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "frame length 0 below minimum 16")
+}
+
+func TestValidateFrameLength_TooSmallAppliesProbingDelay(t *testing.T) {
+	client, server := net.Pipe()
+	defer server.Close()
+
+	config := noise.NewConnConfig("XK", true)
+	noiseConn, err := noise.NewNoiseConn(client, config)
+	require.NoError(t, err)
+	defer noiseConn.Close()
+
+	localAddr := createTestNTCP2Addr("local", "initiator")
+	remoteAddr := createTestNTCP2Addr("remote", "responder")
+	ntcp2Conn, err := NewNTCP2Conn(noiseConn, localAddr, remoteAddr)
+	require.NoError(t, err)
+
+	err = ntcp2Conn.validateFrameLength(1)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "below minimum")
+}
+
+func TestValidateFrameLength_ValidLength(t *testing.T) {
+	conn := createTestNTCP2Conn(&mockNoiseConn{})
+
+	err := conn.validateFrameLength(MinDataPhaseFrameSize)
+	assert.NoError(t, err)
+
+	err = conn.validateFrameLength(1024)
+	assert.NoError(t, err)
+
+	err = conn.validateFrameLength(uint16(MaxFrameSize))
+	assert.NoError(t, err)
+}
+
+func TestAEADErrorConstants(t *testing.T) {
+	assert.Equal(t, 1024, AEADErrorMaxJunkBytes)
+	assert.Greater(t, AEADErrorTimeout.Seconds(), 0.0)
+	assert.Greater(t, NonceRekeyThreshold, uint64(0))
+	assert.Less(t, NonceRekeyThreshold, MaxNonce)
+}
+
+func TestNonceExhaustionImminent(t *testing.T) {
+	conn := createTestNTCP2Conn(&mockNoiseConn{})
+
+	assert.False(t, conn.NonceExhaustionImminent())
+
+	conn.writeMu.Lock()
+	conn.writeNonce = NonceRekeyThreshold
+	conn.writeMu.Unlock()
+	assert.True(t, conn.NonceExhaustionImminent())
+
+	conn.writeMu.Lock()
+	conn.writeNonce = 0
+	conn.writeMu.Unlock()
+	conn.readMu.Lock()
+	conn.readNonce = NonceRekeyThreshold
+	conn.readMu.Unlock()
+	assert.True(t, conn.NonceExhaustionImminent())
+
+	conn.readMu.Lock()
+	conn.readNonce = 0
+	conn.readMu.Unlock()
+	assert.False(t, conn.NonceExhaustionImminent())
+}
+
+func TestNonceExhaustion_AdvisoryOnly(t *testing.T) {
+	conn := createTestNTCP2Conn(&mockNoiseConn{})
+
+	conn.writeMu.Lock()
+	conn.writeNonce = 0
+	conn.writeMu.Unlock()
+	conn.readMu.Lock()
+	conn.readNonce = 0
+	conn.readMu.Unlock()
+	assert.False(t, conn.NonceExhaustionImminent())
+
+	conn.writeMu.Lock()
+	conn.writeNonce = NonceRekeyThreshold
+	conn.writeMu.Unlock()
+	assert.True(t, conn.NonceExhaustionImminent())
+}
+
+func TestZeroKeyMaterial(t *testing.T) {
+	conn := createTestNTCP2Conn(&mockNoiseConn{})
+
+	keys := [2]uint64{0xDEADBEEF, 0xCAFEBABE}
+	slm := NewSipHashLengthModifier("test", keys, 0x12345678)
+	conn.SetLengthObfuscator(slm)
+
+	conn.readMu.Lock()
+	conn.readBuffer = []byte("sensitive plaintext data")
+	conn.readMu.Unlock()
+
+	conn.zeroKeyMaterial()
+
+	assert.Equal(t, uint64(0), slm.outboundKeys[0])
+	assert.Equal(t, uint64(0), slm.outboundKeys[1])
+	assert.Equal(t, uint64(0), slm.inboundKeys[0])
+	assert.Equal(t, uint64(0), slm.inboundKeys[1])
+	assert.Equal(t, uint64(0), slm.outboundIV)
+	assert.Equal(t, uint64(0), slm.inboundIV)
+
+	conn.readMu.Lock()
+	assert.Nil(t, conn.readBuffer)
+	conn.readMu.Unlock()
+}
+
+func TestRekey(t *testing.T) {
+	conn := createTestNTCP2Conn(&mockNoiseConn{})
+	err := conn.Rekey()
+	_ = err
+}
+
+func TestHandshakeHash(t *testing.T) {
+	conn := createTestNTCP2Conn(&mockNoiseConn{})
+	h := conn.HandshakeHash()
+	assert.NotNil(t, h)
+	assert.Equal(t, 32, len(h))
+}
+
+func TestPeerStaticKey(t *testing.T) {
+	conn := createTestNTCP2Conn(&mockNoiseConn{})
+	key := conn.PeerStaticKey()
+	assert.Nil(t, key)
+}
+
+func TestWriteFramed_MultiFrameSplit(t *testing.T) {
+	conn := createTestNTCP2Conn(&mockNoiseConn{})
+
+	slm := NewSipHashLengthModifier("test", [2]uint64{0x1234, 0x5678}, 0)
+	conn.SetLengthObfuscator(slm)
+
+	maxPlaintext := MaxFrameSize - Poly1305Overhead
+	largePayload := make([]byte, maxPlaintext+100)
+
+	_, err := conn.Write(largePayload)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to encrypt frame")
+}
+
+func TestReadFramed_BufferRemainder(t *testing.T) {
+	client, server := net.Pipe()
+	defer server.Close()
+
+	config := noise.NewConnConfig("XK", true)
+	noiseConn, err := noise.NewNoiseConn(client, config)
+	require.NoError(t, err)
+	defer noiseConn.Close()
+
+	localAddr := createTestNTCP2Addr("local", "initiator")
+	remoteAddr := createTestNTCP2Addr("remote", "responder")
+	ntcp2Conn, err := NewNTCP2Conn(noiseConn, localAddr, remoteAddr)
+	require.NoError(t, err)
+
+	ntcp2Conn.readMu.Lock()
+	ntcp2Conn.readBuffer = []byte("buffered-remainder-data")
+	ntcp2Conn.readMu.Unlock()
+
+	slm := NewSipHashLengthModifier("test", [2]uint64{0x1234, 0x5678}, 0)
+	ntcp2Conn.SetLengthObfuscator(slm)
+
+	smallBuf := make([]byte, 8)
+	n, err := ntcp2Conn.Read(smallBuf)
+	assert.NoError(t, err)
+	assert.Equal(t, 8, n)
+	assert.Equal(t, "buffered", string(smallBuf[:n]))
+
+	remainBuf := make([]byte, 32)
+	n, err = ntcp2Conn.Read(remainBuf)
+	assert.NoError(t, err)
+	assert.Equal(t, "-remainder-data", string(remainBuf[:n]))
+}
+
+// ============================================================================
+// Tests from audit_fixes_4_test.go — conn-related
+// ============================================================================
+
+func TestAuditFix_NonceExhaustion_WriteRejectsAtMaxNonce(t *testing.T) {
+	conn := createTestNTCP2Conn(&mockNoiseConn{})
+	slm := NewSipHashLengthModifier("test", [2]uint64{0x1234, 0x5678}, 0)
+	conn.SetLengthObfuscator(slm)
+
+	conn.writeNonce = MaxNonce
+
+	_, err := conn.Write([]byte("hello"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "nonce exhausted")
+}
+
+func TestAuditFix_NonceExhaustion_ReadRejectsAtMaxNonce(t *testing.T) {
+	conn := createTestNTCP2Conn(&mockNoiseConn{})
+	slm := NewSipHashLengthModifier("test", [2]uint64{0x1234, 0x5678}, 0)
+	conn.SetLengthObfuscator(slm)
+
+	conn.readNonce = MaxNonce
+
+	buf := make([]byte, 64)
+	_, err := conn.Read(buf)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "nonce exhausted")
+}
+
+func TestAuditFix_NonceExhaustion_BelowMaxNonceAllowed(t *testing.T) {
+	conn := createTestNTCP2Conn(&mockNoiseConn{})
+	slm := NewSipHashLengthModifier("test", [2]uint64{0x1234, 0x5678}, 0)
+	conn.SetLengthObfuscator(slm)
+
+	conn.writeNonce = MaxNonce - 1
+
+	_, err := conn.Write([]byte("hello"))
+	if err != nil {
+		assert.NotContains(t, err.Error(), "nonce exhausted",
+			"nonce just below MaxNonce should not trigger exhaustion")
+	}
+}
+
+func TestAuditFix_NonceExhaustion_ReadBelowMaxNonceAllowed(t *testing.T) {
+	conn := createTestNTCP2Conn(&mockNoiseConn{
+		readData: make([]byte, 100),
+	})
+	slm := NewSipHashLengthModifier("test", [2]uint64{0x1234, 0x5678}, 0)
+	conn.SetLengthObfuscator(slm)
+
+	conn.readNonce = MaxNonce - 1
+
+	buf := make([]byte, 64)
+	_, err := conn.Read(buf)
+	if err != nil {
+		assert.NotContains(t, err.Error(), "nonce exhausted",
+			"nonce just below MaxNonce should not trigger exhaustion")
+	}
+}
+
+func TestAuditFix_BrokenFlag_WriteRejects(t *testing.T) {
+	conn := createTestNTCP2Conn(&mockNoiseConn{})
+	slm := NewSipHashLengthModifier("test", [2]uint64{0x1234, 0x5678}, 0)
+	conn.SetLengthObfuscator(slm)
+
+	conn.broken.Store(true)
+
+	_, err := conn.Write([]byte("hello"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "connection is broken")
+}
+
+func TestAuditFix_BrokenFlag_ReadRejects(t *testing.T) {
+	conn := createTestNTCP2Conn(&mockNoiseConn{})
+	slm := NewSipHashLengthModifier("test", [2]uint64{0x1234, 0x5678}, 0)
+	conn.SetLengthObfuscator(slm)
+
+	conn.broken.Store(true)
+
+	buf := make([]byte, 64)
+	_, err := conn.Read(buf)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "connection is broken")
+}
+
+func TestAuditFix_BrokenFlag_NotBrokenInitially(t *testing.T) {
+	conn := createTestNTCP2Conn(&mockNoiseConn{})
+	assert.False(t, conn.broken.Load(), "new connection should not be broken")
+}
+
+func TestAuditFix_BrokenFlag_DirectReadChecked(t *testing.T) {
+	conn := createTestNTCP2Conn(&mockNoiseConn{})
+	conn.broken.Store(true)
+
+	buf := make([]byte, 64)
+	_, err := conn.Read(buf)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "connection is broken")
+}
+
+func TestAuditFix_BrokenFlag_DirectWriteChecked(t *testing.T) {
+	conn := createTestNTCP2Conn(&mockNoiseConn{})
+	conn.broken.Store(true)
+
+	_, err := conn.Write([]byte("hello"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "connection is broken")
+}
+
+func TestAuditFix_HandleAEADError_MarksBroken(t *testing.T) {
+	conn := createTestNTCP2Conn(&mockNoiseConn{})
+	assert.False(t, conn.broken.Load())
+
+	mockUnderlying := &mockNoiseConn{}
+	conn.handleAEADError(mockUnderlying)
+
+	assert.True(t, conn.broken.Load(), "handleAEADError should mark connection as broken")
+}
+
+func TestAuditFix_HandleAEADError_ClosesConnection(t *testing.T) {
+	conn := createTestNTCP2Conn(&mockNoiseConn{})
+
+	mockUnderlying := &mockNoiseConn{}
+	conn.handleAEADError(mockUnderlying)
+
+	assert.True(t, mockUnderlying.closed, "handleAEADError should close the underlying connection")
+}
+
+func TestAuditFix_SendTCPRST_FallbackCloseForNonTCP(t *testing.T) {
+	conn := createTestNTCP2Conn(&mockNoiseConn{})
+
+	mockUnderlying := &mockNoiseConn{}
+	conn.sendTCPRST(mockUnderlying)
+
+	assert.True(t, mockUnderlying.closed, "sendTCPRST should close non-TCP connections via fallback")
+}
+
+func TestAuditFix_GetMaxFrameSize_DefaultsToConstant(t *testing.T) {
+	conn := createTestNTCP2Conn(&mockNoiseConn{})
+	assert.Equal(t, MaxFrameSize, conn.getMaxFrameSize())
+}
+
+func TestAuditFix_GetMaxFrameSize_UsesConfigValue(t *testing.T) {
+	conn := createTestNTCP2Conn(&mockNoiseConn{})
+	cfg := &NTCP2Config{MaxFrameSize: 16384}
+	conn.SetNTCP2Config(cfg)
+
+	assert.Equal(t, 16384, conn.getMaxFrameSize())
+}
+
+func TestAuditFix_GetMaxFrameSize_IgnoresZeroConfig(t *testing.T) {
+	conn := createTestNTCP2Conn(&mockNoiseConn{})
+	cfg := &NTCP2Config{MaxFrameSize: 0}
+	conn.SetNTCP2Config(cfg)
+
+	assert.Equal(t, MaxFrameSize, conn.getMaxFrameSize(),
+		"zero MaxFrameSize in config should fall back to constant")
+}
+
+func TestAuditFix_GetMaxFrameSize_IgnoresOversizedConfig(t *testing.T) {
+	conn := createTestNTCP2Conn(&mockNoiseConn{})
+	cfg := &NTCP2Config{MaxFrameSize: MaxFrameSize + 100}
+	conn.SetNTCP2Config(cfg)
+
+	assert.Equal(t, MaxFrameSize, conn.getMaxFrameSize(),
+		"oversized MaxFrameSize should fall back to constant")
+}
+
+func TestAuditFix_SetNTCP2Config_ThreadSafe(t *testing.T) {
+	conn := createTestNTCP2Conn(&mockNoiseConn{})
+
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			cfg := &NTCP2Config{MaxFrameSize: 1000 + i}
+			conn.SetNTCP2Config(cfg)
+		}(i)
+	}
+
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = conn.getMaxFrameSize()
+		}()
+	}
+
+	wg.Wait()
+}
+
+func TestAuditFix_PropagateSipHash_ThreadSafe(t *testing.T) {
+	conn := createTestNTCP2Conn(&mockNoiseConn{})
+
+	var wg sync.WaitGroup
+
+	for i := 0; i < 50; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			cfg := &NTCP2Config{EnableSipHashLength: true}
+			conn.SetNTCP2Config(cfg)
+		}()
+		go func() {
+			defer wg.Done()
+			conn.PropagateSipHash()
+		}()
+	}
+
+	wg.Wait()
+}
+
+func TestAuditFix_ReadDirect_NoDoubleWrapping(t *testing.T) {
+	conn := createTestNTCP2Conn(&mockNoiseConn{})
+
+	buf := make([]byte, 64)
+	_, err := conn.Read(buf)
+	require.Error(t, err)
+
+	assert.NotContains(t, err.Error(), "ntcp2 read failed",
+		"readDirect should not double-wrap errors from NoiseConn")
+}
+
+func TestAuditFix_WriteDirect_NoDoubleWrapping(t *testing.T) {
+	conn := createTestNTCP2Conn(&mockNoiseConn{})
+
+	_, err := conn.Write([]byte("hello"))
+	require.Error(t, err)
+
+	assert.NotContains(t, err.Error(), "ntcp2 write failed",
+		"writeDirect should not double-wrap errors from NoiseConn")
+}
+
+func TestAuditFix_NonceExhaustionImminent_Advisory(t *testing.T) {
+	conn := createTestNTCP2Conn(&mockNoiseConn{})
+
+	conn.writeNonce = 0
+	conn.readNonce = 0
+	assert.False(t, conn.NonceExhaustionImminent())
+
+	conn.writeNonce = NonceRekeyThreshold
+	assert.True(t, conn.NonceExhaustionImminent())
+
+	conn.writeNonce = 0
+	conn.readNonce = NonceRekeyThreshold
+	assert.True(t, conn.NonceExhaustionImminent())
+}
+
+func TestAuditFix_BrokenAndNonceExhausted_BrokenTakesPriority(t *testing.T) {
+	conn := createTestNTCP2Conn(&mockNoiseConn{})
+	slm := NewSipHashLengthModifier("test", [2]uint64{0x1234, 0x5678}, 0)
+	conn.SetLengthObfuscator(slm)
+
+	conn.broken.Store(true)
+	conn.writeNonce = MaxNonce
+
+	_, err := conn.Write([]byte("hello"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "connection is broken")
+}
+
+func TestAuditFix_NonceExhaustionError_ContainsCode(t *testing.T) {
+	conn := createTestNTCP2Conn(&mockNoiseConn{})
+	slm := NewSipHashLengthModifier("test", [2]uint64{0x1234, 0x5678}, 0)
+	conn.SetLengthObfuscator(slm)
+
+	conn.writeNonce = MaxNonce
+
+	_, err := conn.Write([]byte("hello"))
+	require.Error(t, err)
+	errStr := err.Error()
+	assert.True(t,
+		strings.Contains(errStr, "NONCE_EXHAUSTED") || strings.Contains(errStr, "nonce exhausted"),
+		"error should indicate nonce exhaustion, got: %s", errStr)
+}
+
+func TestAuditFix_LoggerIsPointer(t *testing.T) {
+	conn := createTestNTCP2Conn(&mockNoiseConn{})
+	assert.NotNil(t, conn.logger, "logger should be set to package-level log pointer")
+}
+
+// ============================================================================
+// Tests from audit_fixes_5_test.go — conn-related
+// ============================================================================
+
+func TestAuditFix_Close_SuppressesErrorOnBrokenConn(t *testing.T) {
+	mock := &mockNoiseConn{
+		closeErr: errors.New("use of closed network connection"),
+	}
+	conn := createTestNTCP2Conn(mock)
+
+	conn.broken.Store(true)
+
+	err := conn.Close()
+	assert.NoError(t, err, "Close() must suppress errors on broken connections")
+}
+
+func TestAuditFix_Close_PropagatesErrorOnHealthyConn(t *testing.T) {
+	mock := &mockNoiseConn{
+		closeErr: errors.New("unexpected close error"),
+	}
+	conn := createTestNTCP2Conn(mock)
+
+	err := conn.Close()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "ntcp2 close failed")
+}
+
+func TestAuditFix_NonceExhaustion_ReadMarksBroken(t *testing.T) {
+	client, server := net.Pipe()
+	defer server.Close()
+
+	config := noise.NewConnConfig("XK", true)
+	noiseConn, err := noise.NewNoiseConn(client, config)
+	require.NoError(t, err)
+	defer noiseConn.Close()
+
+	localAddr := createTestNTCP2Addr("local", "initiator")
+	remoteAddr := createTestNTCP2Addr("remote", "responder")
+	conn, err := NewNTCP2Conn(noiseConn, localAddr, remoteAddr)
+	require.NoError(t, err)
+
+	slm := NewSipHashLengthModifier("test", [2]uint64{1, 2}, 0)
+	conn.SetLengthObfuscator(slm)
+
+	conn.readNonce = MaxNonce
+
+	buf := make([]byte, 64)
+	conn.readMu.Lock()
+	_, err = conn.readFramed(buf)
+	conn.readMu.Unlock()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "nonce exhausted")
+	assert.True(t, conn.broken.Load(), "connection must be marked broken on read nonce exhaustion")
+}
+
+func TestAuditFix_NonceExhaustion_WriteMarksBroken(t *testing.T) {
+	client, server := net.Pipe()
+	defer server.Close()
+
+	config := noise.NewConnConfig("XK", true)
+	noiseConn, err := noise.NewNoiseConn(client, config)
+	require.NoError(t, err)
+	defer noiseConn.Close()
+
+	localAddr := createTestNTCP2Addr("local", "initiator")
+	remoteAddr := createTestNTCP2Addr("remote", "responder")
+	conn, err := NewNTCP2Conn(noiseConn, localAddr, remoteAddr)
+	require.NoError(t, err)
+
+	slm := NewSipHashLengthModifier("test", [2]uint64{1, 2}, 0)
+	conn.SetLengthObfuscator(slm)
+
+	conn.writeNonce = MaxNonce
+
+	_, err = conn.writeSingleFrame([]byte("hello"))
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "nonce exhausted")
+	assert.True(t, conn.broken.Load(), "connection must be marked broken on write nonce exhaustion")
+}
+
+func TestAuditFix_NonceExhaustion_PreventsSubsequentIO(t *testing.T) {
+	client, server := net.Pipe()
+	defer server.Close()
+
+	config := noise.NewConnConfig("XK", true)
+	noiseConn, err := noise.NewNoiseConn(client, config)
+	require.NoError(t, err)
+	defer noiseConn.Close()
+
+	localAddr := createTestNTCP2Addr("local", "initiator")
+	remoteAddr := createTestNTCP2Addr("remote", "responder")
+	conn, err := NewNTCP2Conn(noiseConn, localAddr, remoteAddr)
+	require.NoError(t, err)
+
+	slm := NewSipHashLengthModifier("test", [2]uint64{1, 2}, 0)
+	conn.SetLengthObfuscator(slm)
+
+	conn.broken.Store(true)
+
+	buf := make([]byte, 64)
+	_, readErr := conn.Read(buf)
+	assert.Error(t, readErr)
+	assert.Contains(t, readErr.Error(), "connection is broken")
+
+	_, writeErr := conn.Write([]byte("test"))
+	assert.Error(t, writeErr)
+	assert.Contains(t, writeErr.Error(), "connection is broken")
+}
+
+func TestAuditFix_ValidateFrameLength_ZeroHandledByMinCheck(t *testing.T) {
+	client, server := net.Pipe()
+	defer server.Close()
+
+	config := noise.NewConnConfig("XK", true)
+	noiseConn, err := noise.NewNoiseConn(client, config)
+	require.NoError(t, err)
+	defer noiseConn.Close()
+
+	conn, err := NewNTCP2Conn(noiseConn,
+		createTestNTCP2Addr("local", "initiator"),
+		createTestNTCP2Addr("remote", "responder"))
+	require.NoError(t, err)
+
+	err = conn.validateFrameLength(0)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "below minimum")
+	assert.Contains(t, err.Error(), "16")
+}
+
+func TestAuditFix_ValidateFrameLength_AllBelowMin(t *testing.T) {
+	client, server := net.Pipe()
+	defer server.Close()
+
+	config := noise.NewConnConfig("XK", true)
+	noiseConn, err := noise.NewNoiseConn(client, config)
+	require.NoError(t, err)
+	defer noiseConn.Close()
+
+	conn, err := NewNTCP2Conn(noiseConn,
+		createTestNTCP2Addr("local", "initiator"),
+		createTestNTCP2Addr("remote", "responder"))
+	require.NoError(t, err)
+
+	for i := uint16(0); i < MinDataPhaseFrameSize; i++ {
+		err := conn.validateFrameLength(i)
+		assert.Error(t, err, "frameLen=%d should be rejected", i)
+	}
+
+	err = conn.validateFrameLength(MinDataPhaseFrameSize)
+	assert.NoError(t, err)
+}
+
+func TestAuditFix_ValidateFrameLength_UsesSpecMaxFrameSize(t *testing.T) {
+	client, server := net.Pipe()
+	defer server.Close()
+
+	config := noise.NewConnConfig("XK", true)
+	noiseConn, err := noise.NewNoiseConn(client, config)
+	require.NoError(t, err)
+	defer noiseConn.Close()
+
+	conn, err := NewNTCP2Conn(noiseConn,
+		createTestNTCP2Addr("local", "initiator"),
+		createTestNTCP2Addr("remote", "responder"))
+	require.NoError(t, err)
+
+	err = conn.validateFrameLength(uint16(SpecMaxFrameSize))
+	assert.NoError(t, err, "SpecMaxFrameSize must be accepted")
+
+	err = conn.validateFrameLength(uint16(DefaultMaxFrameSize + 1000))
+	assert.NoError(t, err, "frames between DefaultMaxFrameSize and SpecMaxFrameSize must be accepted")
+}
+
+func TestAuditFix_AEADErrorMaxJunkBytes_IsPowerOfTwo(t *testing.T) {
+	assert.Equal(t, 1024, AEADErrorMaxJunkBytes)
+	assert.Equal(t, 0, AEADErrorMaxJunkBytes&(AEADErrorMaxJunkBytes-1),
+		"AEADErrorMaxJunkBytes must be a power of two for bitmask to avoid modulo bias")
+}
+
+func TestAuditFix_ReadDirect_PartialReadWithError(t *testing.T) {
+	conn := createTestNTCP2Conn(&mockNoiseConn{})
+	buf := make([]byte, 64)
+	_, err := conn.Read(buf)
+	assert.Error(t, err)
+}
+
+func TestAuditFix_Close_Idempotent(t *testing.T) {
+	mock := &mockNoiseConn{}
+	conn := createTestNTCP2Conn(mock)
+
+	err1 := conn.Close()
+	assert.NoError(t, err1)
+
+	err2 := conn.Close()
+	assert.NoError(t, err2)
+
+	assert.True(t, mock.closed)
+}
+
+func TestAuditFix_HandleAEADError_SetsBroken(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+
+	config := noise.NewConnConfig("XK", true)
+	noiseConn, err := noise.NewNoiseConn(client, config)
+	require.NoError(t, err)
+
+	conn, err := NewNTCP2Conn(noiseConn,
+		createTestNTCP2Addr("local", "initiator"),
+		createTestNTCP2Addr("remote", "responder"))
+	require.NoError(t, err)
+
+	assert.False(t, conn.broken.Load())
+
+	go func() {
+		server.Write(make([]byte, 2048))
+		time.Sleep(50 * time.Millisecond)
+		server.Close()
+	}()
+
+	underlying := noiseConn.Underlying()
+	conn.handleAEADError(underlying)
+
+	assert.True(t, conn.broken.Load(), "handleAEADError must set broken flag")
+}
+
+func TestAuditFix_GetMaxFrameSize_FallsBackToSpecMax(t *testing.T) {
+	conn := createTestNTCP2Conn(&mockNoiseConn{})
+	assert.Equal(t, SpecMaxFrameSize, conn.getMaxFrameSize())
+}
+
+func TestAuditFix_GetMaxFrameSize_RespectsConfig(t *testing.T) {
+	conn := createTestNTCP2Conn(&mockNoiseConn{})
+	cfg := &NTCP2Config{MaxFrameSize: 8192}
+	conn.ntcp2Config.Store(cfg)
+	assert.Equal(t, 8192, conn.getMaxFrameSize())
+}
+
+// TestSetLengthObfuscator verifies the setter for the SipHash length obfuscator.
+func TestSetLengthObfuscator(t *testing.T) {
+	conn := createTestNTCP2Conn(&mockNoiseConn{})
+
+	// Initially nil
+	assert.Nil(t, conn.lengthObfuscator.Load())
+
+	// Set it
+	slm := NewSipHashLengthModifier("test-siphash", [2]uint64{0x1234, 0x5678}, 0)
+	conn.SetLengthObfuscator(slm)
+	assert.Equal(t, slm, conn.lengthObfuscator.Load())
+
+	// Can set to nil to disable
+	conn.SetLengthObfuscator(nil)
+	assert.Nil(t, conn.lengthObfuscator.Load())
+}
+
+// TestFramedWritePath_TakenWhenObfuscatorSet verifies that the framed write
+// path is taken when a length obfuscator is set. Since the handshake isn't
+// complete, we verify by the error: framed path calls Encrypt which fails
+// with "handshake not completed" or "cipher state not initialized".
+func TestFramedWritePath_TakenWhenObfuscatorSet(t *testing.T) {
+	conn := createTestNTCP2Conn(&mockNoiseConn{})
+	slm := NewSipHashLengthModifier("test-siphash", [2]uint64{0x1234, 0x5678}, 0)
+	conn.SetLengthObfuscator(slm)
+
+	_, err := conn.Write([]byte("test data"))
+	assert.Error(t, err)
+	// The framed path calls noiseConn.Encrypt → validateWriteState → fails
+	// The error wraps through NTCP2Conn's "ENCRYPT_FAILED" code
+	assert.Contains(t, err.Error(), "failed to encrypt frame")
+}
+
+// TestDirectWritePath_TakenWhenNoObfuscator verifies that the direct write
+// path is taken when no length obfuscator is set.
+func TestDirectWritePath_TakenWhenNoObfuscator(t *testing.T) {
+	conn := createTestNTCP2Conn(&mockNoiseConn{})
+
+	// No obfuscator set
+	_, err := conn.Write([]byte("test data"))
+	assert.Error(t, err)
+	// The direct path calls noiseConn.Write → validates state → fails
+	// NoiseConn returns "handshake not completed" before the write can proceed
+	assert.Contains(t, err.Error(), "handshake not completed")
+}
+
+// TestFramedReadPath_TakenWhenObfuscatorSet verifies that the framed read
+// path is taken when a length obfuscator is set.
+func TestFramedReadPath_TakenWhenObfuscatorSet(t *testing.T) {
+	// Use a pipe so the underlying connection has actual I/O
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	config := noise.NewConnConfig("XK", true)
+	noiseConn, err := noise.NewNoiseConn(client, config)
+	require.NoError(t, err)
+
+	localAddr := createTestNTCP2Addr("local", "initiator")
+	remoteAddr := createTestNTCP2Addr("remote", "responder")
+	ntcp2Conn, err := NewNTCP2Conn(noiseConn, localAddr, remoteAddr)
+	require.NoError(t, err)
+
+	slm := NewSipHashLengthModifier("test-siphash", [2]uint64{0x1234, 0x5678}, 0)
+	ntcp2Conn.SetLengthObfuscator(slm)
+
+	// Write an obfuscated frame to the server side that will be read by the client
+	go func() {
+		// Write 2-byte obfuscated length followed by fake ciphertext
+		// The length must be >= MinDataPhaseFrameSize (16) to pass validation
+		plainLen := uint16(20)
+		// Compute the SipHash mask that the reader will use
+		iv := make([]byte, SipHashIVSize)
+		binary.LittleEndian.PutUint64(iv, 0) // initial IV = 0
+		hash := siphash.Hash(0x1234, 0x5678, iv)
+		mask := uint16(hash & 0xFFFF)
+		obfuscatedLen := plainLen ^ mask
+
+		buf := make([]byte, 2+20)
+		binary.BigEndian.PutUint16(buf[:2], obfuscatedLen)
+		copy(buf[2:], []byte("ABCDEFGHIJKLMNOPQRST")) // fake ciphertext (will fail to decrypt)
+		server.Write(buf)
+		// Close after writing so handleAEADError's junk read gets immediate EOF
+		server.Close()
+	}()
+
+	// Read should get past the length deobfuscation but fail at Decrypt
+	// (since no handshake was done, cipher state is not initialized)
+	readBuf := make([]byte, 64)
+	_, err = ntcp2Conn.Read(readBuf)
+	assert.Error(t, err)
+	// The framed path reads 2 bytes, deobfuscates, reads the frame, then tries Decrypt
+	assert.Contains(t, err.Error(), "failed to decrypt frame")
+}
+
+// TestDirectReadPath_TakenWhenNoObfuscator verifies direct delegation.
+func TestDirectReadPath_TakenWhenNoObfuscator(t *testing.T) {
+	conn := createTestNTCP2Conn(&mockNoiseConn{})
+
+	buf := make([]byte, 64)
+	_, err := conn.Read(buf)
+	assert.Error(t, err)
+	// Direct path delegates to NoiseConn.Read which returns "handshake not completed"
+	assert.Contains(t, err.Error(), "handshake not completed")
+}
+
+// TestFrameLengthObfuscation_RoundTrip verifies that the SipHash length
+// obfuscation math is correct: encode → wire → decode gives back the original length.
+func TestFrameLengthObfuscation_RoundTrip(t *testing.T) {
+	keys := [2]uint64{0xDEADBEEF, 0xCAFEBABE}
+	initialIV := uint64(42)
+
+	// Create two separate modifiers (sender and receiver) with same keys/IV
+	sender := NewSipHashLengthModifier("sender", keys, initialIV)
+	receiver := NewSipHashLengthModifier("receiver", keys, initialIV)
+
+	testLengths := []uint16{0, 1, 2, 255, 256, 1024, 16384, 65535}
+
+	for _, originalLen := range testLengths {
+		// Sender: obfuscate
+		outMask := sender.NextOutboundMask()
+		obfuscated := originalLen ^ outMask
+
+		// Put on "wire" as big-endian
+		wire := make([]byte, 2)
+		binary.BigEndian.PutUint16(wire, obfuscated)
+
+		// Receiver: deobfuscate
+		inMask := receiver.NextInboundMask()
+		recovered := binary.BigEndian.Uint16(wire) ^ inMask
+
+		assert.Equal(t, originalLen, recovered, "round-trip failed for length %d", originalLen)
+	}
+}
+
+// TestFrameLengthObfuscation_MultipleFrames verifies that mask sequences
+// stay in sync across multiple frames.
+func TestFrameLengthObfuscation_MultipleFrames(t *testing.T) {
+	keys := [2]uint64{0x0102030405060708, 0x090A0B0C0D0E0F10}
+	initialIV := uint64(0xABCDEF)
+
+	sender := NewSipHashLengthModifier("sender", keys, initialIV)
+	receiver := NewSipHashLengthModifier("receiver", keys, initialIV)
+
+	// Simulate 100 frames with various lengths
+	for i := 0; i < 100; i++ {
+		originalLen := uint16(i*137 + 1) // Arbitrary non-trivial lengths
+
+		outMask := sender.NextOutboundMask()
+
+		obfuscated := originalLen ^ outMask
+
+		inMask := receiver.NextInboundMask()
+
+		recovered := obfuscated ^ inMask
+		assert.Equal(t, originalLen, recovered, "round-trip failed at frame %d", i)
+	}
+}
+
+// TestFramedRead_ZeroLengthFrame verifies that a zero-length frame is rejected.
+func TestFramedRead_ZeroLengthFrame(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	config := noise.NewConnConfig("XK", true)
+	noiseConn, err := noise.NewNoiseConn(client, config)
+	require.NoError(t, err)
+
+	localAddr := createTestNTCP2Addr("local", "initiator")
+	remoteAddr := createTestNTCP2Addr("remote", "responder")
+	ntcp2Conn, err := NewNTCP2Conn(noiseConn, localAddr, remoteAddr)
+	require.NoError(t, err)
+
+	// Create a modifier and compute the mask value
+	keys := [2]uint64{0x1111, 0x2222}
+	slm := NewSipHashLengthModifier("test", keys, 0)
+	ntcp2Conn.SetLengthObfuscator(slm)
+
+	// Compute what mask the reader will use for the first frame
+	probe := NewSipHashLengthModifier("probe", keys, 0)
+	mask := probe.NextInboundMask()
+
+	go func() {
+		// Write a 2-byte value that deobfuscates to zero
+		zeroObfuscated := uint16(0) ^ mask // XOR with mask to get zero after deobfuscation
+		buf := make([]byte, 2)
+		binary.BigEndian.PutUint16(buf, zeroObfuscated)
+		server.Write(buf)
+	}()
+
+	readBuf := make([]byte, 64)
+	_, err = ntcp2Conn.Read(readBuf)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "below minimum")
+}
+
+// TestFramedRead_FrameTooLarge verifies that frames exceeding MaxFrameSize are rejected.
+func TestFramedRead_FrameTooLarge(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	config := noise.NewConnConfig("XK", true)
+	noiseConn, err := noise.NewNoiseConn(client, config)
+	require.NoError(t, err)
+
+	localAddr := createTestNTCP2Addr("local", "initiator")
+	remoteAddr := createTestNTCP2Addr("remote", "responder")
+	ntcp2Conn, err := NewNTCP2Conn(noiseConn, localAddr, remoteAddr)
+	require.NoError(t, err)
+
+	// Use keys that produce a specific mask
+	keys := [2]uint64{0, 0}
+	slm := NewSipHashLengthModifier("test", keys, 0)
+	ntcp2Conn.SetLengthObfuscator(slm)
+
+	// Compute what mask the reader will use
+	probe := NewSipHashLengthModifier("probe", keys, 0)
+	mask := probe.NextInboundMask()
+
+	go func() {
+		// Construct a length that deobfuscates to MaxFrameSize + 1
+		// This is impossible since MaxFrameSize is 65535 and uint16 max is 65535
+		// So we just need to ensure that MaxFrameSize (65535) itself is accepted
+		// Actually MaxFrameSize = 65535 = max uint16, so frame_too_large can't happen
+		// with the current constant. Let's verify the check works if we could somehow
+		// trigger it. Since uint16 max = 65535 = MaxFrameSize, the check is a guard
+		// for future constant changes.
+
+		// Instead, let's test that MaxFrameSize is exactly accepted by checking
+		// a valid length doesn't trigger the error. We'll send a valid-length frame
+		// that fails later at decryption.
+		validLen := uint16(100)
+		obfuscated := validLen ^ mask
+		buf := make([]byte, 2+100)
+		binary.BigEndian.PutUint16(buf[:2], obfuscated)
+		// Fill with fake ciphertext
+		for i := 2; i < len(buf); i++ {
+			buf[i] = byte(i)
+		}
+		server.Write(buf)
+		// Close after writing so handleAEADError's junk read gets immediate EOF
+		server.Close()
+	}()
+
+	readBuf := make([]byte, 200)
+	_, err = ntcp2Conn.Read(readBuf)
+	assert.Error(t, err)
+	// Should get past length validation and fail at decrypt
+	assert.Contains(t, err.Error(), "failed to decrypt frame")
+}
+
+// TestFramedRead_ConnectionClosedDuringLengthRead verifies graceful handling
+// when the connection closes while reading the length field.
+func TestFramedRead_ConnectionClosedDuringLengthRead(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+
+	config := noise.NewConnConfig("XK", true)
+	noiseConn, err := noise.NewNoiseConn(client, config)
+	require.NoError(t, err)
+
+	localAddr := createTestNTCP2Addr("local", "initiator")
+	remoteAddr := createTestNTCP2Addr("remote", "responder")
+	ntcp2Conn, err := NewNTCP2Conn(noiseConn, localAddr, remoteAddr)
+	require.NoError(t, err)
+
+	slm := NewSipHashLengthModifier("test", [2]uint64{1, 2}, 0)
+	ntcp2Conn.SetLengthObfuscator(slm)
+
+	// Close the server side immediately - reader gets EOF
+	server.Close()
+
+	readBuf := make([]byte, 64)
+	_, err = ntcp2Conn.Read(readBuf)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to read frame length")
+}
+
+// TestFramedRead_PartialLengthRead verifies handling when only 1 of 2 bytes
+// is available for the length field.
+func TestFramedRead_PartialLengthRead(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+
+	config := noise.NewConnConfig("XK", true)
+	noiseConn, err := noise.NewNoiseConn(client, config)
+	require.NoError(t, err)
+
+	localAddr := createTestNTCP2Addr("local", "initiator")
+	remoteAddr := createTestNTCP2Addr("remote", "responder")
+	ntcp2Conn, err := NewNTCP2Conn(noiseConn, localAddr, remoteAddr)
+	require.NoError(t, err)
+
+	slm := NewSipHashLengthModifier("test", [2]uint64{1, 2}, 0)
+	ntcp2Conn.SetLengthObfuscator(slm)
+
+	go func() {
+		// Write only 1 byte then close
+		server.Write([]byte{0x42})
+		server.Close()
+	}()
+
+	readBuf := make([]byte, 64)
+	_, err = ntcp2Conn.Read(readBuf)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to read frame length")
+}
+
+// TestFramedRead_PartialFrameRead verifies handling when the connection
+// closes mid-frame (after length, before full ciphertext).
+func TestFramedRead_PartialFrameRead(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+
+	config := noise.NewConnConfig("XK", true)
+	noiseConn, err := noise.NewNoiseConn(client, config)
+	require.NoError(t, err)
+
+	localAddr := createTestNTCP2Addr("local", "initiator")
+	remoteAddr := createTestNTCP2Addr("remote", "responder")
+	ntcp2Conn, err := NewNTCP2Conn(noiseConn, localAddr, remoteAddr)
+	require.NoError(t, err)
+
+	keys := [2]uint64{0, 0}
+	slm := NewSipHashLengthModifier("test", keys, 0)
+	ntcp2Conn.SetLengthObfuscator(slm)
+
+	// Compute what mask the reader will use
+	probe := NewSipHashLengthModifier("probe", keys, 0)
+	mask := probe.NextInboundMask()
+
+	go func() {
+		// Write a valid length (100) but only 10 bytes of frame data, then close
+		obfuscated := uint16(100) ^ mask
+		buf := make([]byte, 2+10)
+		binary.BigEndian.PutUint16(buf[:2], obfuscated)
+		server.Write(buf)
+		server.Close()
+	}()
+
+	readBuf := make([]byte, 200)
+	_, err = ntcp2Conn.Read(readBuf)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to read frame data")
+}
+
+// TestFrameWireFormat verifies the exact wire format produced by the
+// framing logic: [2-byte big-endian obfuscated length][ciphertext].
+func TestFrameWireFormat(t *testing.T) {
+	keys := [2]uint64{0xAAAA, 0xBBBB}
+	initialIV := uint64(99)
+
+	sender := NewSipHashLengthModifier("sender", keys, initialIV)
+
+	// Compute expected mask
+	iv := make([]byte, SipHashIVSize)
+	binary.LittleEndian.PutUint64(iv, initialIV)
+	hash := siphash.Hash(keys[0], keys[1], iv)
+	expectedMask := uint16(hash & 0xFFFF)
+
+	plainLen := uint16(42)
+	expectedObfuscated := plainLen ^ expectedMask
+
+	// Simulate what writeFramed does for the length field
+	mask := sender.NextOutboundMask()
+	assert.Equal(t, expectedMask, mask)
+
+	obfuscated := plainLen ^ mask
+	assert.Equal(t, expectedObfuscated, obfuscated)
+
+	// Verify wire encoding
+	wire := make([]byte, 2)
+	binary.BigEndian.PutUint16(wire, obfuscated)
+
+	// Decode and verify
+	recovered := binary.BigEndian.Uint16(wire)
+	assert.Equal(t, obfuscated, recovered)
+}
+
+// TestFrameIO_FullPipeRoundTrip tests the full frame I/O path using a net.Pipe.
+// This verifies that data written by writeFramed can be read back by readFramed,
+// using a mock encrypt/decrypt approach (bypassing actual Noise crypto).
+func TestFrameIO_FullPipeRoundTrip(t *testing.T) {
+	// This test uses raw pipe I/O to verify the frame encoding matches
+	// between writer and reader, without needing actual Noise handshake.
+	keys := [2]uint64{0xDEAD, 0xBEEF}
+	initialIV := uint64(0)
+
+	// Compute the first mask
+	senderMod := NewSipHashLengthModifier("sender", keys, initialIV)
+	outMask := senderMod.NextOutboundMask()
+
+	receiverMod := NewSipHashLengthModifier("receiver", keys, initialIV)
+	inMask := receiverMod.NextInboundMask()
+
+	// Masks should match
+	assert.Equal(t, outMask, inMask, "sender and receiver masks should match")
+
+	// Simulate a frame on the wire
+	fakeCiphertext := []byte("encrypted-payload-here")
+	frameLen := uint16(len(fakeCiphertext))
+	obfuscatedLen := frameLen ^ outMask
+
+	// Build wire frame
+	var wire bytes.Buffer
+	lengthBuf := make([]byte, FrameLengthFieldSize)
+	binary.BigEndian.PutUint16(lengthBuf, obfuscatedLen)
+	wire.Write(lengthBuf)
+	wire.Write(fakeCiphertext)
+
+	// Now verify reading
+	reader := bytes.NewReader(wire.Bytes())
+	// Read 2 bytes
+	readLenBuf := make([]byte, FrameLengthFieldSize)
+	_, err := io.ReadFull(reader, readLenBuf)
+	require.NoError(t, err)
+
+	// Deobfuscate
+	recoveredLen := binary.BigEndian.Uint16(readLenBuf) ^ inMask
+	assert.Equal(t, frameLen, recoveredLen)
+
+	// Read frame
+	frame := make([]byte, recoveredLen)
+	_, err = io.ReadFull(reader, frame)
+	require.NoError(t, err)
+
+	assert.Equal(t, fakeCiphertext, frame)
 }

@@ -2,9 +2,12 @@ package ntcp2
 
 import (
 	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
 	"encoding/binary"
 	"testing"
 
+	"github.com/dchest/siphash"
 	"github.com/go-i2p/go-noise/handshake"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -706,4 +709,476 @@ func TestNTCP2PaddingModifier_I2PCompliance(t *testing.T) {
 			assert.Error(t, err, "Ratio %f should be invalid", ratio)
 		}
 	})
+}
+
+// ============================================================================
+// Tests from audit_fixes_test.go — modifier-related
+// ============================================================================
+
+func TestAudit_AESStatePropagation_CrossMessage(t *testing.T) {
+	routerHash := make([]byte, 32)
+	for i := range routerHash {
+		routerHash[i] = byte(i + 1)
+	}
+	iv := make([]byte, 16)
+	for i := range iv {
+		iv[i] = byte(i + 0x80)
+	}
+
+	sender, err := NewAESObfuscationModifier("sender", routerHash, iv)
+	require.NoError(t, err)
+	receiver, err := NewAESObfuscationModifier("receiver", routerHash, iv)
+	require.NoError(t, err)
+
+	keyX := make([]byte, 32)
+	for i := range keyX {
+		keyX[i] = byte(i + 0x40)
+	}
+	keyY := make([]byte, 32)
+	for i := range keyY {
+		keyY[i] = byte(i + 0xC0)
+	}
+	keyY[31] &= 0x7F
+
+	cipherX, err := sender.ModifyOutbound(handshake.PhaseInitial, keyX)
+	require.NoError(t, err)
+	assert.NotEqual(t, keyX, cipherX, "X must be encrypted")
+
+	recoveredX, err := receiver.ModifyInbound(handshake.PhaseInitial, cipherX)
+	require.NoError(t, err)
+	assert.Equal(t, keyX, recoveredX, "Receiver must recover original X")
+
+	cipherY, err := sender.ModifyOutbound(handshake.PhaseExchange, keyY)
+	require.NoError(t, err)
+	assert.NotEqual(t, keyY, cipherY, "Y must be encrypted")
+
+	recoveredY, err := receiver.ModifyInbound(handshake.PhaseExchange, cipherY)
+	require.NoError(t, err)
+	assert.Equal(t, keyY, recoveredY, "Receiver must recover original Y using state from msg1")
+}
+
+func TestAudit_AESState_IsLastCiphertextBlock(t *testing.T) {
+	routerHash := make([]byte, 32)
+	for i := range routerHash {
+		routerHash[i] = byte(i + 10)
+	}
+	iv := make([]byte, 16)
+	for i := range iv {
+		iv[i] = byte(i + 50)
+	}
+
+	keyX := make([]byte, 32)
+	for i := range keyX {
+		keyX[i] = byte(i + 100)
+	}
+
+	block, err := aes.NewCipher(routerHash)
+	require.NoError(t, err)
+
+	manualCipher := make([]byte, 32)
+	copy(manualCipher, keyX)
+	mode := cipher.NewCBCEncrypter(block, iv)
+	mode.CryptBlocks(manualCipher, manualCipher)
+
+	expectedState := manualCipher[16:32]
+
+	keyY := make([]byte, 32)
+	for i := range keyY {
+		keyY[i] = byte(i + 200)
+	}
+	manualCipherY := make([]byte, 32)
+	copy(manualCipherY, keyY)
+	mode2 := cipher.NewCBCEncrypter(block, expectedState)
+	mode2.CryptBlocks(manualCipherY, manualCipherY)
+
+	modifier, err := NewAESObfuscationModifier("verify", routerHash, iv)
+	require.NoError(t, err)
+
+	cipherX, err := modifier.ModifyOutbound(handshake.PhaseInitial, keyX)
+	require.NoError(t, err)
+	assert.Equal(t, manualCipher, cipherX, "msg1 encryption must match manual AES-CBC")
+
+	cipherY, err := modifier.ModifyOutbound(handshake.PhaseExchange, keyY)
+	require.NoError(t, err)
+	assert.Equal(t, manualCipherY, cipherY,
+		"msg2 encryption must use last ciphertext block from msg1 as IV")
+}
+
+func TestAudit_AESMissingState_Error(t *testing.T) {
+	routerHash := make([]byte, 32)
+	iv := make([]byte, 16)
+
+	modifier, err := NewAESObfuscationModifier("test", routerHash, iv)
+	require.NoError(t, err)
+
+	keyY := make([]byte, 32)
+	_, err = modifier.ModifyOutbound(handshake.PhaseExchange, keyY)
+	assert.Error(t, err, "PhaseExchange without prior PhaseInitial must fail")
+	assert.Contains(t, err.Error(), "AES state not available")
+
+	_, err = modifier.ModifyInbound(handshake.PhaseExchange, keyY)
+	assert.Error(t, err, "PhaseExchange inbound without prior PhaseInitial must fail")
+	assert.Contains(t, err.Error(), "AES state not available")
+}
+
+func TestAudit_SipHashIVChaining(t *testing.T) {
+	sipKeys := [2]uint64{0xDEADBEEFCAFEBABE, 0x0123456789ABCDEF}
+	initialIV := uint64(0xAAAABBBBCCCCDDDD)
+
+	mod1 := NewSipHashLengthModifier("mod1", sipKeys, initialIV)
+	mod2 := NewSipHashLengthModifier("mod2", sipKeys, initialIV)
+
+	lengthData := make([]byte, 2)
+	binary.BigEndian.PutUint16(lengthData, 1000)
+
+	for i := 0; i < 20; i++ {
+		result1, err := mod1.ModifyOutbound(handshake.PhaseFinal, lengthData)
+		require.NoError(t, err)
+		result2, err := mod2.ModifyOutbound(handshake.PhaseFinal, lengthData)
+		require.NoError(t, err)
+		assert.Equal(t, result1, result2,
+			"Identically-configured modifiers must produce same mask at step %d", i)
+	}
+}
+
+func TestAudit_SipHashIVChaining_MatchesSpec(t *testing.T) {
+	k1 := uint64(0x1111111122222222)
+	k2 := uint64(0x3333333344444444)
+	iv0 := uint64(0x5555555566666666)
+
+	var expectedMasks [5]uint16
+	currentIV := iv0
+	for i := 0; i < 5; i++ {
+		input := make([]byte, 8)
+		binary.LittleEndian.PutUint64(input, currentIV)
+		hash := siphash.Hash(k1, k2, input)
+		expectedMasks[i] = uint16(hash & 0xFFFF)
+		currentIV = hash
+	}
+
+	mod := NewSipHashLengthModifier("spec_test", [2]uint64{k1, k2}, iv0)
+	for i := 0; i < 5; i++ {
+		data := make([]byte, 2)
+		binary.BigEndian.PutUint16(data, 0)
+		result, err := mod.ModifyOutbound(handshake.PhaseFinal, data)
+		require.NoError(t, err)
+		mask := binary.BigEndian.Uint16(result)
+		assert.Equal(t, expectedMasks[i], mask,
+			"Mask at step %d must match spec-computed value", i)
+	}
+}
+
+func TestAudit_SipHashIVChaining_NotCounterBased(t *testing.T) {
+	sipKeys := [2]uint64{0xABCDEF0123456789, 0x9876543210FEDCBA}
+	initialIV := uint64(0x1234567890ABCDEF)
+
+	mod := NewSipHashLengthModifier("chain_test", sipKeys, initialIV)
+
+	chainedMasks := make([]uint16, 10)
+	for i := 0; i < 10; i++ {
+		data := make([]byte, 2)
+		binary.BigEndian.PutUint16(data, 0)
+		result, err := mod.ModifyOutbound(handshake.PhaseFinal, data)
+		require.NoError(t, err)
+		chainedMasks[i] = binary.BigEndian.Uint16(result)
+	}
+
+	counterMasks := make([]uint16, 10)
+	for i := 0; i < 10; i++ {
+		input := make([]byte, 8)
+		binary.LittleEndian.PutUint64(input, uint64(i))
+		hash := siphash.Hash(sipKeys[0], sipKeys[1], input)
+		counterMasks[i] = uint16(hash & 0xFFFF)
+	}
+
+	assert.False(t, masksEqual(chainedMasks, counterMasks),
+		"IV-chained masks must differ from counter-based masks")
+}
+
+func TestAudit_SipHashOutboundInbound_Symmetric(t *testing.T) {
+	sipKeys := [2]uint64{0x0102030405060708, 0x090A0B0C0D0E0F10}
+	initialIV := uint64(0xFEDCBA9876543210)
+
+	mod := NewSipHashLengthModifier("sym_test", sipKeys, initialIV)
+
+	for i := 0; i < 10; i++ {
+		original := uint16(100 + i*50)
+		data := make([]byte, 2)
+		binary.BigEndian.PutUint16(data, original)
+
+		obfuscated, err := mod.ModifyOutbound(handshake.PhaseFinal, data)
+		require.NoError(t, err)
+
+		recovered, err := mod.ModifyInbound(handshake.PhaseFinal, obfuscated)
+		require.NoError(t, err)
+
+		got := binary.BigEndian.Uint16(recovered)
+		assert.Equal(t, original, got,
+			"Round-trip at step %d failed: original=%d, got=%d", i, original, got)
+	}
+}
+
+func TestAudit_Quality_32BitModulus(t *testing.T) {
+	modifier, err := NewNTCP2PaddingModifier("modulus_test", 0, 100, false)
+	require.NoError(t, err)
+
+	testData := make([]byte, 50)
+	for i := 0; i < 200; i++ {
+		padded, err := modifier.ModifyOutbound(handshake.PhaseInitial, testData)
+		require.NoError(t, err)
+		paddingLen := len(padded) - len(testData)
+		assert.GreaterOrEqual(t, paddingLen, 0,
+			"Padding must never be negative (iteration %d)", i)
+		assert.LessOrEqual(t, paddingLen, 100,
+			"Padding must not exceed maxPadding (iteration %d)", i)
+	}
+}
+
+func TestAudit_Quality_ThreadSafety(t *testing.T) {
+	routerHash := make([]byte, 32)
+	iv := make([]byte, 16)
+
+	t.Run("AES concurrent access", func(t *testing.T) {
+		modifier, err := NewAESObfuscationModifier("thread_test", routerHash, iv)
+		require.NoError(t, err)
+
+		key := make([]byte, 32)
+		_, err = modifier.ModifyOutbound(handshake.PhaseInitial, key)
+		require.NoError(t, err)
+
+		done := make(chan struct{})
+		for i := 0; i < 10; i++ {
+			go func() {
+				defer func() { done <- struct{}{} }()
+				k := make([]byte, 32)
+				modifier.ModifyOutbound(handshake.PhaseExchange, k) //nolint:errcheck
+				modifier.ModifyInbound(handshake.PhaseExchange, k)  //nolint:errcheck
+			}()
+		}
+		for i := 0; i < 10; i++ {
+			<-done
+		}
+	})
+
+	t.Run("SipHash concurrent access", func(t *testing.T) {
+		sipKeys := [2]uint64{0x1234, 0x5678}
+		modifier := NewSipHashLengthModifier("thread_test", sipKeys, 42)
+
+		done := make(chan struct{})
+		for i := 0; i < 10; i++ {
+			go func() {
+				defer func() { done <- struct{}{} }()
+				data := make([]byte, 2)
+				binary.BigEndian.PutUint16(data, 1000)
+				modifier.ModifyOutbound(handshake.PhaseFinal, data) //nolint:errcheck
+				modifier.ModifyInbound(handshake.PhaseFinal, data)  //nolint:errcheck
+			}()
+		}
+		for i := 0; i < 10; i++ {
+			<-done
+		}
+	})
+}
+
+func TestAudit_PhaseFinal_NoAESObfuscation(t *testing.T) {
+	routerHash := make([]byte, 32)
+	iv := make([]byte, 16)
+	modifier, err := NewAESObfuscationModifier("noop", routerHash, iv)
+	require.NoError(t, err)
+
+	key := make([]byte, 32)
+	for i := range key {
+		key[i] = byte(i)
+	}
+
+	result, err := modifier.ModifyOutbound(handshake.PhaseFinal, key)
+	require.NoError(t, err)
+	assert.Equal(t, key, result, "PhaseFinal must not apply AES obfuscation")
+
+	result, err = modifier.ModifyInbound(handshake.PhaseFinal, key)
+	require.NoError(t, err)
+	assert.Equal(t, key, result, "PhaseFinal must not apply AES obfuscation")
+}
+
+func TestAudit_SipHash_NonDataPhasePassthrough(t *testing.T) {
+	sipKeys := [2]uint64{0xAAAA, 0xBBBB}
+	mod := NewSipHashLengthModifier("passthrough", sipKeys, 0xCCCC)
+
+	data := []byte{0x04, 0x00}
+	phases := []handshake.HandshakePhase{
+		handshake.PhaseInitial,
+		handshake.PhaseExchange,
+	}
+	for _, phase := range phases {
+		result, err := mod.ModifyOutbound(phase, data)
+		require.NoError(t, err)
+		assert.Equal(t, data, result, "Non-data phase must pass through")
+
+		result, err = mod.ModifyInbound(phase, data)
+		require.NoError(t, err)
+		assert.Equal(t, data, result, "Non-data phase must pass through")
+	}
+}
+
+func TestAudit_SipHashDirectional_RoundTrip(t *testing.T) {
+	keysAB := [2]uint64{0xAAAABBBBCCCCDDDD, 0x1111222233334444}
+	keysBA := [2]uint64{0x5555666677778888, 0x9999AAAABBBBCCCC}
+	ivAB := uint64(0x1234567890ABCDEF)
+	ivBA := uint64(0xFEDCBA0987654321)
+
+	initiator := NewSipHashLengthModifierDirectional("alice", keysAB, keysBA, ivAB, ivBA)
+	responder := NewSipHashLengthModifierDirectional("bob", keysBA, keysAB, ivBA, ivAB)
+
+	for i := 0; i < 50; i++ {
+		originalLen := uint16(100 + i*7)
+		data := make([]byte, 2)
+		binary.BigEndian.PutUint16(data, originalLen)
+
+		obfuscated, err := initiator.ModifyOutbound(handshake.PhaseFinal, data)
+		require.NoError(t, err)
+
+		recovered, err := responder.ModifyInbound(handshake.PhaseFinal, obfuscated)
+		require.NoError(t, err)
+
+		got := binary.BigEndian.Uint16(recovered)
+		assert.Equal(t, originalLen, got,
+			"Directional round-trip failed at frame %d: original=%d, got=%d", i, originalLen, got)
+	}
+
+	responder2 := NewSipHashLengthModifierDirectional("bob2", keysBA, keysAB, ivBA, ivAB)
+	initiator2 := NewSipHashLengthModifierDirectional("alice2", keysAB, keysBA, ivAB, ivBA)
+
+	for i := 0; i < 50; i++ {
+		originalLen := uint16(200 + i*3)
+		data := make([]byte, 2)
+		binary.BigEndian.PutUint16(data, originalLen)
+
+		obfuscated, err := responder2.ModifyOutbound(handshake.PhaseFinal, data)
+		require.NoError(t, err)
+
+		recovered, err := initiator2.ModifyInbound(handshake.PhaseFinal, obfuscated)
+		require.NoError(t, err)
+
+		got := binary.BigEndian.Uint16(recovered)
+		assert.Equal(t, originalLen, got,
+			"Reverse round-trip failed at frame %d: original=%d, got=%d", i, originalLen, got)
+	}
+}
+
+func TestAudit_SipHashDirectional_KeysMatter(t *testing.T) {
+	keysAB := [2]uint64{0x1111, 0x2222}
+	keysBA := [2]uint64{0x3333, 0x4444}
+	iv := uint64(0)
+
+	directional := NewSipHashLengthModifierDirectional("dir", keysAB, keysBA, iv, iv)
+	shared := NewSipHashLengthModifier("shared", keysAB, iv)
+
+	data := make([]byte, 2)
+	out1, _ := directional.ModifyOutbound(handshake.PhaseFinal, data)
+	out2, _ := shared.ModifyOutbound(handshake.PhaseFinal, data)
+	assert.Equal(t, out1, out2, "Outbound with same keys should match")
+
+	directional2 := NewSipHashLengthModifierDirectional("dir2", keysAB, keysBA, iv, iv)
+	shared2 := NewSipHashLengthModifier("shared2", keysAB, iv)
+
+	in1, _ := directional2.ModifyInbound(handshake.PhaseFinal, data)
+	in2, _ := shared2.ModifyInbound(handshake.PhaseFinal, data)
+	assert.NotEqual(t, in1, in2, "Inbound with different keys must differ")
+}
+
+// ============================================================================
+// Tests from audit_fixes_3_test.go — modifier-related
+// ============================================================================
+
+func TestFrameLengthObfuscation_DirectionalRoundTrip(t *testing.T) {
+	askMaster := make([]byte, 32)
+	for i := range askMaster {
+		askMaster[i] = byte(i)
+	}
+	handshakeHash := make([]byte, 32)
+	for i := range handshakeHash {
+		handshakeHash[i] = byte(i + 128)
+	}
+
+	keysAB, ivAB, keysBA, ivBA, err := DeriveSipHashKeys(askMaster, handshakeHash)
+	require.NoError(t, err)
+
+	initiator := NewSipHashLengthModifierDirectional("alice", keysAB, keysBA, ivAB, ivBA)
+	responder := NewSipHashLengthModifierDirectional("bob", keysBA, keysAB, ivBA, ivAB)
+
+	for i := 0; i < 20; i++ {
+		originalLen := uint16(16 + i*100)
+
+		outMask := initiator.NextOutboundMask()
+		obfuscated := originalLen ^ outMask
+
+		wire := make([]byte, 2)
+		binary.BigEndian.PutUint16(wire, obfuscated)
+
+		inMask := responder.NextInboundMask()
+		recovered := binary.BigEndian.Uint16(wire) ^ inMask
+
+		assert.Equal(t, originalLen, recovered,
+			"Directional round-trip failed at frame %d", i)
+	}
+}
+
+// ============================================================================
+// Tests from audit_fixes_4_test.go — padding modifier-related
+// ============================================================================
+
+func TestAuditFix_RemoveTrailingPaddingBlock_BoundedByMaxPadding(t *testing.T) {
+	modifier, err := NewNTCP2PaddingModifier("test", 0, 16, false)
+	require.NoError(t, err)
+
+	paddingSize := 100
+	payload := []byte("real data here and some more data to fill it up!!")
+	data := make([]byte, len(payload)+3+paddingSize)
+	copy(data[:len(payload)], payload)
+	data[len(payload)] = PaddingBlockType
+	data[len(payload)+1] = byte(paddingSize >> 8)
+	data[len(payload)+2] = byte(paddingSize)
+
+	result, err := modifier.removeTrailingPaddingBlock(data)
+	require.NoError(t, err)
+
+	assert.Equal(t, len(data), len(result),
+		"padding block exceeding maxPadding should not be removed")
+}
+
+func TestAuditFix_RemoveTrailingPaddingBlock_WithinMaxPadding(t *testing.T) {
+	modifier, err := NewNTCP2PaddingModifier("test", 0, 64, false)
+	require.NoError(t, err)
+
+	payloadStr := "real data"
+	payload := []byte(payloadStr)
+	paddingSize := 10
+	data := make([]byte, len(payload)+3+paddingSize)
+	copy(data, payload)
+	data[len(payload)] = PaddingBlockType
+	data[len(payload)+1] = 0
+	data[len(payload)+2] = byte(paddingSize)
+
+	result, err := modifier.removeTrailingPaddingBlock(data)
+	require.NoError(t, err)
+
+	assert.Equal(t, len(payload), len(result),
+		"padding block within maxPadding should be removed")
+	assert.Equal(t, payloadStr, string(result))
+}
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+func masksEqual(a, b []uint16) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
