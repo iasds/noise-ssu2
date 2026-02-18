@@ -57,6 +57,51 @@ ratioPadding, err := ntcp2.NewNTCP2PaddingModifierWithRatio("ratio_padding", 4, 
 testPadding, err := ntcp2.NewNTCP2PaddingModifierForTesting("test_padding", 4, 16, false)
 ```
 
+## Package Responsibilities
+
+The NTCP2 protocol implementation is split between this package (`go-i2p/go-noise/ntcp2`) and the router transport layer (`go-i2p/go-i2p/lib/transport/ntcp`). Each layer has clearly defined responsibilities:
+
+### This package (`go-noise/ntcp2`) — Noise Protocol Layer
+
+| Responsibility | Implementation |
+|---|---|
+| Noise XK handshake execution | `NTCP2Conn` via `NoiseConn` |
+| AES-256-CBC ephemeral key obfuscation (messages 1 & 2) | `AESObfuscationModifier` |
+| SipHash-2-4 frame length obfuscation (data phase) | `SipHashLengthModifier` |
+| SipHash key derivation from `ask_master` + handshake hash | `DeriveSipHashKeys()` in `kdf.go` |
+| ChaChaPoly AEAD frame encryption/decryption | `NTCP2Conn.Read()` / `Write()` |
+| Data-phase AEAD error handling (probing resistance) | `handleAEADError()` |
+| Plaintext termination block on AEAD failure | `sendTerminationBlock()` |
+| Frame padding (type 254 padding blocks) | `NTCP2PaddingModifier` |
+| Nonce management and exhaustion detection | `checkReadNonceLimit()` / `checkWriteNonceLimit()` |
+| KDF intermediate material zeroing | `zeroBytes()` in `kdf.go` |
+| Connection configuration and validation | `NTCP2Config` |
+
+### Router transport layer (`go-i2p/go-i2p/lib/transport/ntcp`)
+
+| Responsibility | Notes |
+|---|---|
+| Handshake-phase probing resistance | Random delay + junk read on message 1/2 AEAD failure |
+| Encrypted termination blocks | All 18 reason codes, AEAD-encrypted for graceful close |
+| I2NP block framing | Block types 0–4, 254: demuxing, parsing, serialization |
+| Options negotiation | Type 1 block: padding limits, dummy traffic, delay |
+| Clock skew validation | ±60s tolerance on messages 1 & 2 timestamps |
+| Replay cache | Per-router ephemeral key (X value) cache with TTL eviction |
+| `RemoteStaticKey` lookup | Network database → `RouterInfo` → `s=` static key |
+| RouterIdentity parsing | Full `RouterIdentity` from message 3 part 2 |
+| Router hash computation | `SHA-256(RouterIdentity)` via `common/data.HashData()` |
+| Version detection | NTCP2 version negotiation |
+
+### Integration Points
+
+The router transport layer integrates with this package through:
+
+- **`NTCP2Config`** — Connection configuration with handshake parameters, modifier toggles, and keys
+- **`NTCP2Conn`** — Exposes `PeerStaticKey()`, `HandshakeHash()`, `SetLengthObfuscator()`, and standard `net.Conn` interface
+- **`DeriveSipHashKeys()`** — Called by `PostHandshakeHook` to derive per-direction SipHash keys
+- **`PostHandshakeHook`** — Callback mechanism for post-handshake key derivation
+- **`AdditionalSymmetricKeyLabels`** — `{"ask"}` label triggers `SplitWithASK()` for the `ask_master` secret
+
 ## Integration with ConnConfig
 
 All modifiers integrate with the existing ConnConfig builder pattern:
