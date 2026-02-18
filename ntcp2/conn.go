@@ -58,6 +58,12 @@ type NTCP2Conn struct {
 	// and the subsequent TCP write are atomic with respect to each other.
 	writeMu sync.Mutex
 
+	// ntcp2Config is the per-connection NTCP2Config used to create this conn.
+	// Retained so that after Handshake() fires the PostHandshakeHook (which
+	// stores derived SipHash keys on the config), the caller can call
+	// PropagateSipHash() to copy them to lengthObfuscator.
+	ntcp2Config *NTCP2Config
+
 	// closeOnce ensures Close is idempotent and key material is zeroed exactly once.
 	closeOnce sync.Once
 
@@ -117,6 +123,24 @@ func NewNTCP2Conn(noiseConn *noise.NoiseConn, localAddr, remoteAddr *NTCP2Addr) 
 // This is safe to call concurrently with Read/Write (uses atomic.Pointer).
 func (nc *NTCP2Conn) SetLengthObfuscator(slm *SipHashLengthModifier) {
 	nc.lengthObfuscator.Store(slm)
+}
+
+// SetNTCP2Config stores a reference to the originating NTCP2Config so that
+// PropagateSipHash can copy PostHandshakeHook-derived keys after handshake.
+func (nc *NTCP2Conn) SetNTCP2Config(cfg *NTCP2Config) {
+	nc.ntcp2Config = cfg
+}
+
+// PropagateSipHash copies the SipHash modifier from the stored NTCP2Config
+// (populated by the PostHandshakeHook during Handshake) into this connection's
+// lengthObfuscator. Call this immediately after a successful Handshake().
+func (nc *NTCP2Conn) PropagateSipHash() {
+	if nc.ntcp2Config == nil {
+		return
+	}
+	if slm := nc.ntcp2Config.SipHashModifier(); slm != nil {
+		nc.lengthObfuscator.Store(slm)
+	}
 }
 
 // Read implements net.Conn.Read.

@@ -44,6 +44,9 @@ func DialNTCP2WithHandshakeContext(ctx context.Context, network, addr string, co
 		return nil, err
 	}
 
+	// Store the config so PropagateSipHash can read the PostHandshakeHook output.
+	ntcp2Conn.SetNTCP2Config(config)
+
 	// Perform the handshake with the provided context on the underlying NoiseConn
 	if err := ntcp2Conn.UnderlyingConn().Handshake(ctx); err != nil {
 		ntcp2Conn.Close()
@@ -54,6 +57,9 @@ func DialNTCP2WithHandshakeContext(ctx context.Context, network, addr string, co
 			With("address", addr).
 			Wrapf(err, "NTCP2 handshake failed")
 	}
+
+	// Propagate SipHash keys derived by the PostHandshakeHook to the conn.
+	ntcp2Conn.PropagateSipHash()
 
 	return ntcp2Conn, nil
 }
@@ -117,7 +123,10 @@ func WrapNTCP2Conn(conn net.Conn, config *NTCP2Config) (*NTCP2Conn, error) {
 		return nil, err
 	}
 
-	// Set the SipHash length obfuscator for data-phase framing if configured
+	// Store the config so PropagateSipHash() can be called after handshake.
+	ntcp2Conn.SetNTCP2Config(config)
+
+	// Set the SipHash length obfuscator for data-phase framing if already available.
 	if slm := config.SipHashModifier(); slm != nil {
 		ntcp2Conn.SetLengthObfuscator(slm)
 	}
@@ -291,11 +300,20 @@ func validateListenConfiguration(config *NTCP2Config) error {
 
 // createDialAddresses creates the local and remote NTCP2 addresses for dial operations
 func createDialAddresses(conn net.Conn, config *NTCP2Config) (*NTCP2Addr, *NTCP2Addr, error) {
+	// Determine roles from the config's Initiator flag so WrapNTCP2Conn
+	// labels them correctly for both initiator and responder connections.
+	localRole := "initiator"
+	remoteRole := "responder"
+	if !config.Initiator {
+		localRole = "responder"
+		remoteRole = "initiator"
+	}
+
 	// Create local address from connection's local address
 	localAddr, err := NewNTCP2Addr(
 		conn.LocalAddr(),
 		config.RouterHash,
-		"initiator", // Dial operations are always initiators
+		localRole,
 	)
 	if err != nil {
 		return nil, nil, oops.
@@ -331,7 +349,7 @@ func createDialAddresses(conn net.Conn, config *NTCP2Config) (*NTCP2Addr, *NTCP2
 	remoteAddr, err := NewNTCP2Addr(
 		conn.RemoteAddr(),
 		remoteRouterHash,
-		"responder", // Remote side is the responder in dial operations
+		remoteRole,
 	)
 	if err != nil {
 		return nil, nil, oops.
@@ -406,7 +424,12 @@ func buildNTCP2Connection(noiseConn *noise.NoiseConn, conn net.Conn, config *NTC
 			Wrapf(err, "failed to create NTCP2 connection")
 	}
 
-	// Set the SipHash length obfuscator for data-phase framing if configured
+	// Store the config so PropagateSipHash() can be called after handshake.
+	ntcp2Conn.SetNTCP2Config(config)
+
+	// Set the SipHash length obfuscator for data-phase framing if already available.
+	// This covers the case where SipHash keys were pre-configured rather than
+	// derived via PostHandshakeHook.
 	if slm := config.SipHashModifier(); slm != nil {
 		ntcp2Conn.SetLengthObfuscator(slm)
 	}

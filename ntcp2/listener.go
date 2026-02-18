@@ -113,39 +113,22 @@ func initializeListener(underlying net.Listener, config *NTCP2Config, ntcp2Addr 
 // createResponderConnConfig creates a ConnConfig for an accepted (responder)
 // connection via the full NTCP2Config.ToConnConfig() path, ensuring the
 // CipherSuite, ProtocolName, and Modifiers are all correctly set.
-func (nl *NTCP2Listener) createResponderConnConfig() (*noise.ConnConfig, error) {
-	// Build a fresh config rather than copying the listener's config by value,
-	// because NTCP2Config contains an atomic.Pointer which must not be copied.
-	responderCfg := &NTCP2Config{
-		Pattern:              nl.config.Pattern,
-		Initiator:            false,
-		RouterHash:           nl.config.RouterHash,
-		StaticKey:            nl.config.StaticKey,
-		RemoteRouterHash:     nl.config.RemoteRouterHash,
-		HandshakeTimeout:     nl.config.HandshakeTimeout,
-		ReadTimeout:          nl.config.ReadTimeout,
-		WriteTimeout:         nl.config.WriteTimeout,
-		HandshakeRetries:     nl.config.HandshakeRetries,
-		RetryBackoff:         nl.config.RetryBackoff,
-		EnableAESObfuscation: nl.config.EnableAESObfuscation,
-		ObfuscationIV:        nl.config.ObfuscationIV,
-		EnableSipHashLength:  nl.config.EnableSipHashLength,
-		SipHashKeys:          nl.config.SipHashKeys,
-		Modifiers:            nl.config.Modifiers,
-		MaxFrameSize:         nl.config.MaxFrameSize,
-		FramePaddingEnabled:  nl.config.FramePaddingEnabled,
-		MinPaddingSize:       nl.config.MinPaddingSize,
-		MaxPaddingSize:       nl.config.MaxPaddingSize,
-	}
+// It also returns the per-connection NTCP2Config so the PostHandshakeHook's
+// SipHash keys can be propagated to the NTCP2Conn after handshake.
+func (nl *NTCP2Listener) createResponderConnConfig() (*noise.ConnConfig, *NTCP2Config, error) {
+	// Clone the listener's config to get an independent per-connection config.
+	// Clone() avoids copying the atomic.Pointer and is resilient to new fields.
+	responderCfg := nl.config.Clone()
+	responderCfg.Initiator = false
 	connConfig, err := responderCfg.ToConnConfig()
 	if err != nil {
-		return nil, oops.
+		return nil, nil, oops.
 			Code("CONN_CONFIG_FAILED").
 			In("ntcp2").
 			With("listener_addr", nl.addr.String()).
 			Wrapf(err, "failed to create responder ConnConfig")
 	}
-	return connConfig, nil
+	return connConfig, responderCfg, nil
 }
 
 // createRemoteNTCP2Addr creates the remote NTCP2 address for the accepted connection.
@@ -179,7 +162,10 @@ func (nl *NTCP2Listener) createRemoteNTCP2Addr(noiseConn *noise.NoiseConn) (*NTC
 }
 
 // wrapInNTCP2Conn wraps the noise connection in an NTCP2Conn.
-func (nl *NTCP2Listener) wrapInNTCP2Conn(noiseConn *noise.NoiseConn, remoteAddr *NTCP2Addr) (*NTCP2Conn, error) {
+// perConnConfig is the per-connection NTCP2Config whose PostHandshakeHook
+// will store derived SipHash keys; it is saved on the conn so that
+// PropagateSipHash() can copy them after the handshake completes.
+func (nl *NTCP2Listener) wrapInNTCP2Conn(noiseConn *noise.NoiseConn, remoteAddr *NTCP2Addr, perConnConfig *NTCP2Config) (*NTCP2Conn, error) {
 	ntcp2Conn, err := NewNTCP2Conn(noiseConn, nl.addr, remoteAddr)
 	if err != nil {
 		return nil, oops.
@@ -190,13 +176,8 @@ func (nl *NTCP2Listener) wrapInNTCP2Conn(noiseConn *noise.NoiseConn, remoteAddr 
 			Wrapf(err, "failed to create ntcp2 connection")
 	}
 
-	// Create a per-connection SipHash modifier to avoid shared IV state.
-	if nl.config.EnableSipHashLength {
-		perConnMod := nl.config.createSipHashModifierIfEnabled()
-		if perConnMod != nil {
-			ntcp2Conn.SetLengthObfuscator(perConnMod)
-		}
-	}
+	// Store the per-connection config so PropagateSipHash can read derived keys.
+	ntcp2Conn.SetNTCP2Config(perConnConfig)
 
 	return ntcp2Conn, nil
 }
@@ -226,7 +207,7 @@ func (nl *NTCP2Listener) Accept() (net.Conn, error) {
 	}
 
 	// Create ConnConfig with full NTCP2 settings (CipherSuite, ProtocolName, Modifiers).
-	connConfig, err := nl.createResponderConnConfig()
+	connConfig, perConnConfig, err := nl.createResponderConnConfig()
 	if err != nil {
 		underlying.Close()
 		return nil, err
@@ -250,7 +231,7 @@ func (nl *NTCP2Listener) Accept() (net.Conn, error) {
 		return nil, err
 	}
 
-	ntcp2Conn, err := nl.wrapInNTCP2Conn(noiseConn, remoteAddr)
+	ntcp2Conn, err := nl.wrapInNTCP2Conn(noiseConn, remoteAddr, perConnConfig)
 	if err != nil {
 		noiseConn.Close()
 		return nil, err
@@ -342,5 +323,7 @@ func (nl *NTCP2Listener) AcceptWithHandshake(ctx context.Context) (*NTCP2Conn, e
 			With("listener_addr", nl.addr.String()).
 			Wrapf(err, "NTCP2 handshake failed during accept")
 	}
+	// Propagate SipHash keys derived by the PostHandshakeHook to the conn.
+	ntcp2Conn.PropagateSipHash()
 	return ntcp2Conn, nil
 }

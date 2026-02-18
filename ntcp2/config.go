@@ -614,3 +614,48 @@ func (nc *NTCP2Config) createSipHashModifierIfEnabled() *SipHashLengthModifier {
 func (nc *NTCP2Config) SipHashModifier() *SipHashLengthModifier {
 	return nc.sipHashModifier.Load()
 }
+
+// Clone creates a deep copy of this NTCP2Config that is safe to use
+// independently (e.g., for per-connection configs on the listener path).
+// The atomic.Pointer[SipHashLengthModifier] field is NOT copied — the
+// returned config has a fresh zero-value atomic, which is correct
+// because the PostHandshakeHook will populate it after the handshake.
+func (nc *NTCP2Config) Clone() *NTCP2Config {
+	clone := &NTCP2Config{
+		Pattern:              nc.Pattern,
+		Initiator:            nc.Initiator,
+		HandshakeTimeout:     nc.HandshakeTimeout,
+		ReadTimeout:          nc.ReadTimeout,
+		WriteTimeout:         nc.WriteTimeout,
+		HandshakeRetries:     nc.HandshakeRetries,
+		RetryBackoff:         nc.RetryBackoff,
+		EnableAESObfuscation: nc.EnableAESObfuscation,
+		EnableSipHashLength:  nc.EnableSipHashLength,
+		SipHashKeys:          nc.SipHashKeys,
+		MaxFrameSize:         nc.MaxFrameSize,
+		FramePaddingEnabled:  nc.FramePaddingEnabled,
+		MinPaddingSize:       nc.MinPaddingSize,
+		MaxPaddingSize:       nc.MaxPaddingSize,
+	}
+	if nc.RouterHash != nil {
+		clone.RouterHash = make([]byte, len(nc.RouterHash))
+		copy(clone.RouterHash, nc.RouterHash)
+	}
+	if nc.StaticKey != nil {
+		clone.StaticKey = make([]byte, len(nc.StaticKey))
+		copy(clone.StaticKey, nc.StaticKey)
+	}
+	if nc.RemoteRouterHash != nil {
+		clone.RemoteRouterHash = make([]byte, len(nc.RemoteRouterHash))
+		copy(clone.RemoteRouterHash, nc.RemoteRouterHash)
+	}
+	if nc.ObfuscationIV != nil {
+		clone.ObfuscationIV = make([]byte, len(nc.ObfuscationIV))
+		copy(clone.ObfuscationIV, nc.ObfuscationIV)
+	}
+	if nc.Modifiers != nil {
+		clone.Modifiers = make([]handshake.HandshakeModifier, len(nc.Modifiers))
+		copy(clone.Modifiers, nc.Modifiers)
+	}
+	return clone
+}
