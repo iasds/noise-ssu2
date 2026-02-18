@@ -413,3 +413,37 @@ func contains(s, substr string) bool {
 	}
 	return false
 }
+
+func TestModifierChaining(t *testing.T) {
+	// Test real modifiers in a chain
+	xorMod := NewXORModifier("xor", []byte{0xAA})
+	paddingMod, err := NewPaddingModifier("padding", 3, 3)
+	if err != nil {
+		t.Fatalf("NewPaddingModifier() error = %v", err)
+	}
+
+	chain := NewModifierChain("test-chain", xorMod, paddingMod)
+	originalData := []byte("Test message for chaining")
+
+	// Apply chain outbound (XOR then padding)
+	outbound, err := chain.ModifyOutbound(PhaseExchange, originalData)
+	if err != nil {
+		t.Errorf("Chain ModifyOutbound() error = %v", err)
+	}
+
+	// Data should be transformed
+	if string(outbound) == string(originalData) {
+		t.Error("Chain should transform data")
+	}
+
+	// Apply chain inbound (padding removal then XOR)
+	recovered, err := chain.ModifyInbound(PhaseExchange, outbound)
+	if err != nil {
+		t.Errorf("Chain ModifyInbound() error = %v", err)
+	}
+
+	// Should get back original data
+	if string(recovered) != string(originalData) {
+		t.Errorf("Chain round-trip failed: got %v, want %v", string(recovered), string(originalData))
+	}
+}

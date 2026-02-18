@@ -245,3 +245,11 @@ func TestHandshakeModifier_DataIntegrity(t *testing.T) {
 		t.Error("Original data was modified, should be immutable")
 	}
 }
+
+func TestModifierInterface(t *testing.T) {
+	// Test that our implementations satisfy the HandshakeModifier interface
+	var _ HandshakeModifier = NewXORModifier("test", []byte{0xFF})
+
+	padding, _ := NewPaddingModifier("test", 1, 1)
+	var _ HandshakeModifier = padding
+}
