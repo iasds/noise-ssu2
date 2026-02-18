@@ -26,17 +26,17 @@ func TestAllHandshakePatterns(t *testing.T) {
 		{"NN pattern", "NN", 2, false},
 		{"NK pattern", "NK", 2, false},
 		{"NX pattern", "NX", 2, false},
-		{"XN pattern", "XN", 2, true},
-		{"XK pattern", "XK", 2, true},
 		{"KN pattern", "KN", 2, true},
 		{"KK pattern", "KK", 2, true},
+		{"KX pattern", "KX", 2, true},
 		{"IN pattern", "IN", 2, true},
 		{"IK pattern", "IK", 2, true},
 		{"IX pattern", "IX", 2, true},
 
 		// Three-message patterns
+		{"XN pattern", "XN", 3, true},
+		{"XK pattern", "XK", 3, true},
 		{"XX pattern", "XX", 3, true},
-		{"KX pattern", "KX", 3, true},
 	}
 
 	for _, tc := range testCases {
@@ -83,7 +83,7 @@ func TestFullPatternNames(t *testing.T) {
 		{"Full XX", "Noise_XX_25519_AESGCM_SHA256", 3},
 		{"Full N", "Noise_N_25519_AESGCM_SHA256", 1},
 		{"Full NK", "Noise_NK_25519_AESGCM_SHA256", 2},
-		{"Full KX", "Noise_KX_25519_AESGCM_SHA256", 3},
+		{"Full KX", "Noise_KX_25519_AESGCM_SHA256", 2},
 	}
 
 	for _, tc := range fullPatternTests {
