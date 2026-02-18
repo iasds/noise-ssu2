@@ -284,8 +284,9 @@ func TestAudit_Quality_SilentRejection(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, config)
 
-	// Invalid static key (31 bytes) - should not be set
-	config.WithStaticKey(make([]byte, 31))
+	// Invalid static key (31 bytes) - should return error
+	_, err = config.WithStaticKey(make([]byte, 31))
+	assert.Error(t, err)
 	assert.Nil(t, config.StaticKey, "Invalid static key must not be set")
 
 	// Valid static key (32 bytes) - should be set
@@ -293,11 +294,13 @@ func TestAudit_Quality_SilentRejection(t *testing.T) {
 	for i := range validKey {
 		validKey[i] = byte(i)
 	}
-	config.WithStaticKey(validKey)
+	config, err = config.WithStaticKey(validKey)
+	require.NoError(t, err)
 	assert.Equal(t, validKey, config.StaticKey, "Valid static key must be set")
 
-	// Invalid router hash (31 bytes) - should not be set
-	config.WithRemoteRouterHash(make([]byte, 31))
+	// Invalid router hash (31 bytes) - should return error
+	_, err = config.WithRemoteRouterHash(make([]byte, 31))
+	assert.Error(t, err)
 	assert.Nil(t, config.RemoteRouterHash, "Invalid router hash must not be set")
 
 	// Valid router hash (32 bytes) - should be set
@@ -305,7 +308,8 @@ func TestAudit_Quality_SilentRejection(t *testing.T) {
 	for i := range validHash {
 		validHash[i] = byte(i + 100)
 	}
-	config.WithRemoteRouterHash(validHash)
+	config, err = config.WithRemoteRouterHash(validHash)
+	require.NoError(t, err)
 	assert.Equal(t, validHash, config.RemoteRouterHash, "Valid router hash must be set")
 }
 
@@ -460,8 +464,10 @@ func TestAudit_ConfigUsesXKPattern(t *testing.T) {
 
 	// ConnConfig should use "XK" pattern
 	validKey := make([]byte, 32)
-	config.WithStaticKey(validKey)
-	config.WithRemoteRouterHash(make([]byte, 32))
+	config, err = config.WithStaticKey(validKey)
+	require.NoError(t, err)
+	config, err = config.WithRemoteRouterHash(make([]byte, 32))
+	require.NoError(t, err)
 	// AES obfuscation requires an explicit IV (no fallback)
 	config.WithAESObfuscation(true, make([]byte, 16))
 	connConfig, err2 := config.ToConnConfig()

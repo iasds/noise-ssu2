@@ -53,8 +53,13 @@ type NoiseConn struct {
 	// config contains the Noise protocol configuration
 	config *ConnConfig
 
-	// cipherState handles encryption/decryption after handshake
-	cipherState *noise.CipherState
+	// sendCipherState handles encryption for outgoing data after handshake.
+	// For interactive patterns: initiator uses cs1, responder uses cs2.
+	sendCipherState *noise.CipherState
+
+	// recvCipherState handles decryption for incoming data after handshake.
+	// For interactive patterns: initiator uses cs2, responder uses cs1.
+	recvCipherState *noise.CipherState
 
 	// handshakeState handles the handshake process
 	handshakeState *noise.HandshakeState
@@ -229,11 +234,11 @@ func (nc *NoiseConn) validateWriteState() error {
 			Errorf("handshake not completed")
 	}
 
-	if nc.cipherState == nil {
+	if nc.sendCipherState == nil {
 		return oops.
 			Code("NO_CIPHER_STATE").
 			In("noise").
-			Errorf("cipher state not initialized")
+			Errorf("send cipher state not initialized")
 	}
 
 	return nil
@@ -253,10 +258,9 @@ func (nc *NoiseConn) configureWriteTimeout() error {
 	return nil
 }
 
-// encryptData encrypts the provided data using the cipher state.
+// encryptData encrypts the provided data using the send cipher state.
 func (nc *NoiseConn) encryptData(data []byte) ([]byte, error) {
-	encrypted, err := nc.cipherState.Encrypt(nil, nil, data)
-	// encrypted, err := nc.cipherState.Encrypt(nil, nil, data)
+	encrypted, err := nc.sendCipherState.Encrypt(nil, nil, data)
 	if err != nil {
 		return nil, oops.
 			Code("ENCRYPT_FAILED").
@@ -389,6 +393,46 @@ func (nc *NoiseConn) ChannelBinding() []byte {
 	return nc.handshakeState.ChannelBinding()
 }
 
+// SendCipherState returns the send-direction CipherState for direct access
+// by protocol layers (e.g., NTCP2 SipHash key derivation).
+// Returns nil before the handshake produces cipher states.
+func (nc *NoiseConn) SendCipherState() *noise.CipherState {
+	return nc.sendCipherState
+}
+
+// RecvCipherState returns the receive-direction CipherState for direct access
+// by protocol layers.
+// Returns nil before the handshake produces cipher states.
+func (nc *NoiseConn) RecvCipherState() *noise.CipherState {
+	return nc.recvCipherState
+}
+
+// ZeroKeys securely zeroes the send and receive cipher state key material.
+// This delegates to the upstream CipherState.ZeroKey() which overwrites the
+// key bytes with zeros and marks the cipher states as invalid.
+//
+// After calling ZeroKeys, the connection can no longer encrypt or decrypt data.
+// Any subsequent Read/Write calls will fail.
+func (nc *NoiseConn) ZeroKeys() {
+	if nc.sendCipherState != nil {
+		nc.sendCipherState.ZeroKey()
+	}
+	if nc.recvCipherState != nil {
+		nc.recvCipherState.ZeroKey()
+	}
+}
+
+// AdditionalSymmetricKeys returns the Additional Symmetric Key (ASK) values
+// derived during the handshake Split(), per Noise spec §10.3.
+// Returns nil if no labels were configured or the handshake hasn't completed.
+// The returned keys correspond 1:1 to the configured AdditionalSymmetricKeyLabels.
+func (nc *NoiseConn) AdditionalSymmetricKeys() [][]byte {
+	if nc.handshakeState == nil {
+		return nil
+	}
+	return nc.handshakeState.AdditionalSymmetricKeys()
+}
+
 // Rekey triggers a rekey operation on the underlying cipher state.
 // This advances the encryption key material per the Noise Protocol specification
 // (encrypts 32 zero bytes with nonce 2^64-1, takes first 32 bytes as new key).
@@ -403,13 +447,14 @@ func (nc *NoiseConn) Rekey() error {
 			With("state", nc.getState().String()).
 			Errorf("cannot rekey: connection is not in established state")
 	}
-	if nc.cipherState == nil {
+	if nc.sendCipherState == nil || nc.recvCipherState == nil {
 		return oops.
 			Code("REKEY_NO_CIPHER").
 			In("noise").
-			Errorf("no cipher state available for rekeying")
+			Errorf("cipher states not available for rekeying")
 	}
-	nc.cipherState.Rekey()
+	nc.sendCipherState.Rekey()
+	nc.recvCipherState.Rekey()
 	nc.logger.WithFields(logger.Fields{
 		"pattern":     nc.config.Pattern,
 		"local_addr":  nc.localAddr.String(),
@@ -509,6 +554,19 @@ func (nc *NoiseConn) Handshake(ctx context.Context) error {
 		// On failure, return to init state for potential retry
 		nc.setState(internal.StateInit)
 		return err
+	}
+
+	// Call post-handshake hook before marking established.
+	// This allows protocol layers to derive additional key material
+	// (e.g., SipHash keys from the handshake hash for NTCP2).
+	if nc.config.PostHandshakeHook != nil {
+		if err := nc.config.PostHandshakeHook(nc); err != nil {
+			nc.setState(internal.StateInit)
+			return oops.
+				Code("POST_HANDSHAKE_HOOK_FAILED").
+				In("noise").
+				Wrapf(err, "post-handshake hook failed")
+		}
 	}
 
 	nc.markHandshakeComplete()
@@ -820,29 +878,43 @@ func (nc *NoiseConn) receiveHandshakeMessage(ctx context.Context) error {
 	return nil
 }
 
-// updateCipherStates updates the cipher states when they become available
+// updateCipherStates updates the cipher states when they become available.
+// Per the Noise spec, Split() returns (cs1, cs2) where:
+//   - Initiator uses cs1 for sending and cs2 for receiving
+//   - Responder uses cs1 for receiving and cs2 for sending
+//
+// Both cipher states must be non-nil for the handshake to be considered complete.
+// During intermediate handshake messages, one or both may still be nil.
 func (nc *NoiseConn) updateCipherStates(cs1, cs2 *noise.CipherState) {
-	// Store the appropriate cipher state based on role
-	// For most patterns, initiator uses cs1 for sending, cs2 for receiving
-	// Responder uses cs2 for sending, cs1 for receiving
-	// We'll use cs1 as the primary cipher state for simplicity
-	if cs1 != nil {
-		nc.cipherState = cs1
-		nc.logger.WithFields(i2plogger.Fields{
-			"pattern":            nc.config.Pattern,
-			"role":               map[bool]string{true: "initiator", false: "responder"}[nc.config.Initiator],
-			"cipher_state":       "cs1",
-			"handshake_complete": nc.cipherState != nil,
-		}).Debug("cipher state updated during handshake")
-	} else if cs2 != nil {
-		nc.cipherState = cs2
-		nc.logger.WithFields(i2plogger.Fields{
-			"pattern":            nc.config.Pattern,
-			"role":               map[bool]string{true: "initiator", false: "responder"}[nc.config.Initiator],
-			"cipher_state":       "cs2",
-			"handshake_complete": nc.cipherState != nil,
-		}).Debug("cipher state updated during handshake")
+	if cs1 == nil && cs2 == nil {
+		return
 	}
+
+	if nc.config.Initiator {
+		// Initiator: cs1 = send, cs2 = receive
+		if cs1 != nil {
+			nc.sendCipherState = cs1
+		}
+		if cs2 != nil {
+			nc.recvCipherState = cs2
+		}
+	} else {
+		// Responder: cs1 = receive, cs2 = send
+		if cs1 != nil {
+			nc.recvCipherState = cs1
+		}
+		if cs2 != nil {
+			nc.sendCipherState = cs2
+		}
+	}
+
+	nc.logger.WithFields(i2plogger.Fields{
+		"pattern":         nc.config.Pattern,
+		"role":            map[bool]string{true: "initiator", false: "responder"}[nc.config.Initiator],
+		"has_send_cs":     nc.sendCipherState != nil,
+		"has_recv_cs":     nc.recvCipherState != nil,
+		"handshake_ready": nc.sendCipherState != nil && nc.recvCipherState != nil,
+	}).Debug("cipher states updated during handshake")
 }
 
 // performResponderHandshake handles the responder side of the handshake.
@@ -2130,12 +2202,12 @@ func (nc *NoiseConn) validateReadState() error {
 			Errorf("handshake not completed")
 	}
 
-	if nc.cipherState == nil {
+	if nc.recvCipherState == nil {
 		return oops.
 			Code("NO_CIPHER_STATE").
 			In("noise").
 			With("state", nc.getState().String()).
-			Errorf("cipher state not initialized")
+			Errorf("receive cipher state not initialized")
 	}
 
 	return nil
@@ -2172,7 +2244,7 @@ func (nc *NoiseConn) readEncryptedData(b []byte) ([]byte, int, error) {
 
 // decryptData decrypts the provided encrypted data.
 func (nc *NoiseConn) decryptData(encrypted []byte, encryptedLen int) ([]byte, error) {
-	decrypted, err := nc.cipherState.Decrypt(nil, nil, encrypted)
+	decrypted, err := nc.recvCipherState.Decrypt(nil, nil, encrypted)
 	if err != nil {
 		return nil, oops.
 			Code("DECRYPT_FAILED").
@@ -2242,11 +2314,12 @@ func createHandshakeState(config *ConnConfig) (*noise.HandshakeState, error) {
 	}
 
 	hs, err := noise.NewHandshakeState(noise.Config{
-		CipherSuite:  cs,
-		Random:       nil, // Use crypto/rand
-		Pattern:      pattern,
-		Initiator:    config.Initiator,
-		ProtocolName: config.ProtocolName,
+		CipherSuite:                  cs,
+		Random:                       nil, // Use crypto/rand
+		Pattern:                      pattern,
+		Initiator:                    config.Initiator,
+		ProtocolName:                 config.ProtocolName,
+		AdditionalSymmetricKeyLabels: config.AdditionalSymmetricKeyLabels,
 		StaticKeypair: noise.DHKey{
 			Private: config.StaticKey,
 			Public:  nil, // Will be computed

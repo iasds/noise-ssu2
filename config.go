@@ -62,6 +62,26 @@ type ConnConfig struct {
 	// (e.g., "Noise_XKaesobfse+hs2+hs3_25519_ChaChaPoly_SHA256").
 	// If nil/empty, the standard Noise protocol name is constructed as usual.
 	ProtocolName []byte
+
+	// AdditionalSymmetricKeyLabels specifies labels for Additional Symmetric
+	// Key (ASK) derivation at Split() time, per Noise spec §10.3. Each label
+	// produces a 32-byte key derived from the chaining key. The derived keys
+	// are available via NoiseConn.AdditionalSymmetricKeys() after the
+	// handshake completes.
+	//
+	// For NTCP2, this should be set to [][]byte{[]byte("ask")} to derive
+	// the ask_master used for SipHash key derivation.
+	AdditionalSymmetricKeyLabels [][]byte
+
+	// PostHandshakeHook is an optional callback invoked after the Noise
+	// handshake completes successfully but before the connection transitions
+	// to the Established state. This allows protocol layers (e.g., NTCP2)
+	// to derive additional key material from the handshake hash, set up
+	// data-phase obfuscators, or perform any post-handshake validation.
+	//
+	// If the hook returns an error, the handshake is considered failed and
+	// the connection reverts to the Init state.
+	PostHandshakeHook func(*NoiseConn) error
 }
 
 // NewConnConfig creates a new ConnConfig with sensible defaults.

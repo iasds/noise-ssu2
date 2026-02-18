@@ -64,8 +64,9 @@ func TestNTCP2ConfigBuilder(t *testing.T) {
 	config, err := NewNTCP2Config(routerHash, false)
 	require.NoError(t, err)
 
+	config, err = config.WithStaticKey(staticKey)
+	require.NoError(t, err)
 	config = config.
-		WithStaticKey(staticKey).
 		WithHandshakeTimeout(10 * time.Second).
 		WithReadTimeout(5 * time.Second).
 		WithWriteTimeout(5 * time.Second)
@@ -86,14 +87,16 @@ func TestNTCP2ConfigBuilderInvalidStaticKey(t *testing.T) {
 	config, err := NewNTCP2Config(routerHash, false)
 	require.NoError(t, err)
 
-	// Test with invalid key size - should not modify config
+	// Test with invalid key size - should return error
 	invalidKey := make([]byte, 16)
-	config = config.WithStaticKey(invalidKey)
+	_, err = config.WithStaticKey(invalidKey)
+	assert.Error(t, err)
 	assert.Nil(t, config.StaticKey) // Should remain nil
 
 	// Test with valid key size
 	validKey := make([]byte, 32)
-	config = config.WithStaticKey(validKey)
+	config, err = config.WithStaticKey(validKey)
+	require.NoError(t, err)
 	assert.Equal(t, validKey, config.StaticKey)
 }
 

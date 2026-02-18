@@ -61,10 +61,12 @@ func TestNTCP2ConfigBuilderMethods(t *testing.T) {
 	require.NoError(t, err)
 
 	// Test all builder methods
+	config, err = config.WithStaticKey(staticKey)
+	require.NoError(t, err)
+	config, err = config.WithRemoteRouterHash(remoteHash)
+	require.NoError(t, err)
 	config = config.
 		WithPattern("XK").
-		WithStaticKey(staticKey).
-		WithRemoteRouterHash(remoteHash).
 		WithHandshakeTimeout(45*time.Second).
 		WithReadTimeout(10*time.Second).
 		WithWriteTimeout(15*time.Second).
@@ -280,9 +282,11 @@ func TestNTCP2ConfigToConnConfig(t *testing.T) {
 	ntcp2Config, err := NewNTCP2Config(routerHash, true)
 	require.NoError(t, err)
 
+	ntcp2Config, err = ntcp2Config.WithStaticKey(staticKey)
+	require.NoError(t, err)
+	ntcp2Config, err = ntcp2Config.WithRemoteRouterHash(remoteHash)
+	require.NoError(t, err)
 	ntcp2Config = ntcp2Config.
-		WithStaticKey(staticKey).
-		WithRemoteRouterHash(remoteHash).
 		WithAESObfuscation(true, obfuscationIV).
 		WithHandshakeTimeout(45 * time.Second).
 		WithReadTimeout(10 * time.Second).
@@ -371,7 +375,8 @@ func TestNTCP2ConfigBuilderDefensiveCopying(t *testing.T) {
 	config, err := NewNTCP2Config(routerHash, false)
 	require.NoError(t, err)
 
-	config = config.WithStaticKey(staticKey)
+	config, err = config.WithStaticKey(staticKey)
+	require.NoError(t, err)
 
 	// Modify original slices
 	routerHash[0] = 0xFF

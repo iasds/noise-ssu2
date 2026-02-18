@@ -187,15 +187,18 @@ func (nl *NTCP2Listener) wrapInNTCP2Conn(noiseConn *noise.NoiseConn, remoteAddr 
 // The returned connection is wrapped in an NTCP2Conn configured as a responder
 // with the full NTCP2 cipher suite, protocol name, and modifiers.
 func (nl *NTCP2Listener) Accept() (net.Conn, error) {
+	// Only hold acceptMutex for the state check and raw TCP accept.
+	// Release it before the Noise handshake wrapping so that multiple
+	// connections can handshake concurrently.
 	nl.acceptMutex.Lock()
-	defer nl.acceptMutex.Unlock()
-
 	if err := nl.validateAcceptState(); err != nil {
+		nl.acceptMutex.Unlock()
 		return nil, err
 	}
 
 	// Accept raw TCP connection from the underlying listener.
 	underlying, err := nl.underlying.Accept()
+	nl.acceptMutex.Unlock() // Release before expensive handshake wrapping
 	if err != nil {
 		return nil, oops.
 			Code("ACCEPT_FAILED").

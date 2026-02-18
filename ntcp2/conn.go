@@ -497,8 +497,11 @@ func (nc *NTCP2Conn) zeroKeyMaterial() {
 		nc.lengthObfuscator.inboundIV = 0
 		nc.lengthObfuscator.mu.Unlock()
 	}
-	// TODO(ntcp2-spec): Zero the Noise cipher state (CipherState.k) in the
-	// underlying NoiseConn. This requires an API addition to go-i2p/noise.
+
+	// Zero the Noise cipher state key material (send and receive CipherStates).
+	if nc.noiseConn != nil {
+		nc.noiseConn.ZeroKeys()
+	}
 
 	// Wipe any buffered plaintext.
 	for i := range nc.readBuffer {

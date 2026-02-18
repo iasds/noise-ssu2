@@ -84,8 +84,11 @@ func runNTCP2ListenerDemo(args *ntcp2shared.NTCP2Args) {
 		log.Fatalf("Failed to create NTCP2 config: %v", err)
 	}
 
+	config, err = config.WithStaticKey(staticKey)
+	if err != nil {
+		log.Fatalf("Failed to set static key: %v", err)
+	}
 	config = config.
-		WithStaticKey(staticKey).
 		WithHandshakeTimeout(45 * time.Second).
 		WithReadTimeout(60 * time.Second).
 		WithWriteTimeout(60 * time.Second)
@@ -119,8 +122,11 @@ func runNTCP2Listener(args *ntcp2shared.NTCP2Args, routerHash, staticKey []byte)
 		log.Fatalf("Failed to create NTCP2 config: %v", err)
 	}
 
+	config, err = config.WithStaticKey(staticKey)
+	if err != nil {
+		log.Fatalf("Failed to set static key: %v", err)
+	}
 	config = config.
-		WithStaticKey(staticKey).
 		WithHandshakeTimeout(args.HandshakeTimeout).
 		WithReadTimeout(args.ReadTimeout).
 		WithWriteTimeout(args.WriteTimeout)

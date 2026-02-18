@@ -137,33 +137,36 @@ func (nc *NTCP2Config) WithPattern(pattern string) *NTCP2Config {
 }
 
 // WithStaticKey sets the static key for this connection.
-// key must be 32 bytes for Curve25519. Returns the config unchanged and logs a
-// warning if the key length is invalid.
-func (nc *NTCP2Config) WithStaticKey(key []byte) *NTCP2Config {
+// key must be 32 bytes for Curve25519. Returns an error if the key length is invalid.
+func (nc *NTCP2Config) WithStaticKey(key []byte) (*NTCP2Config, error) {
 	if len(key) != StaticKeySize {
-		log.Warn("WithStaticKey: invalid key size, expected 32 bytes",
-			"expected", StaticKeySize,
-			"got", len(key))
-		return nc
+		return nc, oops.
+			Code("INVALID_STATIC_KEY").
+			In("ntcp2").
+			With("expected", StaticKeySize).
+			With("got", len(key)).
+			Errorf("static key must be exactly %d bytes", StaticKeySize)
 	}
 	nc.StaticKey = make([]byte, StaticKeySize)
 	copy(nc.StaticKey, key)
-	return nc
+	return nc, nil
 }
 
 // WithRemoteRouterHash sets the remote peer's router identity.
 // hash must be 32 bytes. Required for outbound connections.
-// Returns the config unchanged and logs a warning if the hash length is invalid.
-func (nc *NTCP2Config) WithRemoteRouterHash(hash []byte) *NTCP2Config {
+// Returns an error if the hash length is invalid.
+func (nc *NTCP2Config) WithRemoteRouterHash(hash []byte) (*NTCP2Config, error) {
 	if len(hash) != RouterHashSize {
-		log.Warn("WithRemoteRouterHash: invalid hash size, expected 32 bytes",
-			"expected", RouterHashSize,
-			"got", len(hash))
-		return nc
+		return nc, oops.
+			Code("INVALID_REMOTE_ROUTER_HASH").
+			In("ntcp2").
+			With("expected", RouterHashSize).
+			With("got", len(hash)).
+			Errorf("remote router hash must be exactly %d bytes", RouterHashSize)
 	}
 	nc.RemoteRouterHash = make([]byte, RouterHashSize)
 	copy(nc.RemoteRouterHash, hash)
-	return nc
+	return nc, nil
 }
 
 // WithHandshakeTimeout sets the handshake timeout.
@@ -404,6 +407,8 @@ func (nc *NTCP2Config) validateFrameConfiguration() error {
 
 // ToConnConfig converts NTCP2Config to a standard ConnConfig for use with NoiseConn.
 // This includes setting up NTCP2-specific modifiers based on the configuration.
+// A PostHandshakeHook is automatically registered when SipHash length obfuscation
+// is enabled — the hook captures the handshake hash for future SipHash key derivation.
 func (nc *NTCP2Config) ToConnConfig() (*noise.ConnConfig, error) {
 	if err := nc.Validate(); err != nil {
 		return nil, oops.
@@ -421,7 +426,75 @@ func (nc *NTCP2Config) ToConnConfig() (*noise.ConnConfig, error) {
 	}
 
 	config.Modifiers = modifiers
+
+	// Wire PostHandshakeHook for SipHash key derivation.
+	// Configure the ASK label so the upstream noise library derives
+	// ask_master via SplitWithASK() during the handshake.
+	if nc.EnableSipHashLength {
+		config.AdditionalSymmetricKeyLabels = [][]byte{[]byte("ask")}
+		config.PostHandshakeHook = nc.createPostHandshakeHook()
+	}
+
 	return config, nil
+}
+
+// createPostHandshakeHook returns a PostHandshakeHook that derives
+// per-direction SipHash keys from the ASK master and handshake hash
+// after the Noise XK handshake completes.
+//
+// The upstream go-i2p/noise library's SplitWithASK() derives the
+// ask_master via Config.AdditionalSymmetricKeyLabels = {"ask"}.
+// This hook retrieves it via AdditionalSymmetricKeys()[0], then calls
+// DeriveSipHashKeys(askMaster, h) to produce directional SipHash keys
+// and stores them in the NTCP2Config for later use by NTCP2Conn.
+func (nc *NTCP2Config) createPostHandshakeHook() func(*noise.NoiseConn) error {
+	return func(conn *noise.NoiseConn) error {
+		h := conn.ChannelBinding()
+		if h == nil {
+			return oops.
+				Code("NO_HANDSHAKE_HASH").
+				In("ntcp2").
+				Errorf("handshake hash not available after handshake")
+		}
+
+		askKeys := conn.AdditionalSymmetricKeys()
+		if len(askKeys) == 0 || len(askKeys[0]) == 0 {
+			return oops.
+				Code("NO_ASK_MASTER").
+				In("ntcp2").
+				Errorf("ask_master not available after handshake (no ASK labels configured?)")
+		}
+		askMaster := askKeys[0]
+
+		sipKeysAB, sipIVAB, sipKeysBA, sipIVBA, err := DeriveSipHashKeys(askMaster, h)
+		if err != nil {
+			return oops.
+				Code("SIPHASH_DERIVATION_FAILED").
+				In("ntcp2").
+				Wrapf(err, "failed to derive SipHash keys from ask_master")
+		}
+
+		// Create a directional SipHash modifier with proper key assignment:
+		//   Initiator: outbound = AB, inbound = BA
+		//   Responder: outbound = BA, inbound = AB
+		var modifier *SipHashLengthModifier
+		if nc.Initiator {
+			modifier = NewSipHashLengthModifierDirectional("ntcp2-siphash",
+				sipKeysAB, sipKeysBA, sipIVAB, sipIVBA)
+		} else {
+			modifier = NewSipHashLengthModifierDirectional("ntcp2-siphash",
+				sipKeysBA, sipKeysAB, sipIVBA, sipIVAB)
+		}
+
+		// Store the directional modifier for NTCP2Conn to use.
+		nc.sipHashModifier = modifier
+
+		log.WithField("handshake_hash_len", len(h)).
+			WithField("ask_master_len", len(askMaster)).
+			Debug("PostHandshakeHook: derived per-direction SipHash keys")
+
+		return nil
+	}
 }
 
 // createBaseConnConfig creates a base ConnConfig with core NTCP2 settings.

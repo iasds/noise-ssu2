@@ -31,7 +31,9 @@ func TestNTCP2ListenerIntegration(t *testing.T) {
 	// Create NTCP2 config
 	config, err := NewNTCP2Config(routerHash, false)
 	require.NoError(t, err)
-	config = config.WithStaticKey(staticKey).
+	config, err = config.WithStaticKey(staticKey)
+	require.NoError(t, err)
+	config = config.
 		WithHandshakeTimeout(5 * time.Second)
 
 	// Create NTCP2 listener
@@ -76,7 +78,9 @@ func TestNTCP2ListenerWithModifiers(t *testing.T) {
 	// Create NTCP2 config with standard pattern (the NTCP2-specific patterns are for documentation)
 	config, err := NewNTCP2Config(routerHash, false)
 	require.NoError(t, err)
-	config = config.WithStaticKey(staticKey).
+	config, err = config.WithStaticKey(staticKey)
+	require.NoError(t, err)
+	config = config.
 		WithHandshakeTimeout(5 * time.Second).
 		WithReadTimeout(2 * time.Second).
 		WithWriteTimeout(2 * time.Second)
@@ -110,8 +114,9 @@ func TestNTCP2ConfigEdgeCases(t *testing.T) {
 		_, err = rand.Read(staticKey)
 		require.NoError(t, err)
 
+		config, err = config.WithStaticKey(staticKey)
+		require.NoError(t, err)
 		config = config.
-			WithStaticKey(staticKey).
 			WithHandshakeTimeout(10 * time.Second).
 			WithReadTimeout(5 * time.Second).
 			WithWriteTimeout(5 * time.Second)
@@ -131,9 +136,10 @@ func TestNTCP2ConfigEdgeCases(t *testing.T) {
 		config, err := NewNTCP2Config(routerHash, false)
 		require.NoError(t, err)
 
-		// Try to set invalid static key (wrong size)
+		// Try to set invalid static key (wrong size) - should return error
 		invalidKey := make([]byte, 16)
-		config = config.WithStaticKey(invalidKey)
+		_, err = config.WithStaticKey(invalidKey)
+		assert.Error(t, err)
 
 		// StaticKey should remain nil
 		assert.Nil(t, config.StaticKey)

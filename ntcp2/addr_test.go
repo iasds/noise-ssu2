@@ -181,7 +181,7 @@ func TestNTCP2Addr_AccessorMethods(t *testing.T) {
 	// Test UnderlyingAddr
 	assert.Equal(t, underlying, addr.UnderlyingAddr())
 
-	// Test IdentHash - returns a data.Hash from the router hash
+	// Test IdentHash - returns a [32]byte from the router hash
 	identHash := addr.IdentHash()
 	assert.Equal(t, byte(0xAA), identHash[0])
 }
@@ -217,7 +217,7 @@ func TestNTCP2Addr_StringHandlesNilUnderlying(t *testing.T) {
 }
 
 func TestNTCP2Addr_IdentHash(t *testing.T) {
-	// Test that IdentHash returns the correct data.Hash
+	// Test that IdentHash returns the correct [32]byte
 	underlying := &net.TCPAddr{IP: net.ParseIP("192.168.1.1"), Port: 8080}
 	routerHash := make([]byte, 32)
 	for i := range routerHash {

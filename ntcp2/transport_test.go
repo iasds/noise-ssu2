@@ -37,9 +37,11 @@ func TestDialNTCP2(t *testing.T) {
 				config, err := NewNTCP2Config(routerHash, true)
 				require.NoError(t, err)
 
+				config, err = config.WithStaticKey(staticKey)
+				require.NoError(t, err)
+				config, err = config.WithRemoteRouterHash(remoteHash)
+				require.NoError(t, err)
 				return config.
-					WithStaticKey(staticKey).
-					WithRemoteRouterHash(remoteHash).
 					WithHandshakeTimeout(5 * time.Second)
 			},
 			network:     "tcp",
@@ -134,8 +136,9 @@ func TestListenNTCP2(t *testing.T) {
 				config, err := NewNTCP2Config(routerHash, false) // responder
 				require.NoError(t, err)
 
+				config, err = config.WithStaticKey(staticKey)
+				require.NoError(t, err)
 				return config.
-					WithStaticKey(staticKey).
 					WithHandshakeTimeout(5 * time.Second)
 			},
 			network:     "tcp",
@@ -247,9 +250,11 @@ func TestWrapNTCP2Conn(t *testing.T) {
 				config, err := NewNTCP2Config(routerHash, true)
 				require.NoError(t, err)
 
+				config, err = config.WithStaticKey(staticKey)
+				require.NoError(t, err)
+				config, err = config.WithRemoteRouterHash(remoteHash)
+				require.NoError(t, err)
 				return config.
-					WithStaticKey(staticKey).
-					WithRemoteRouterHash(remoteHash).
 					WithAESObfuscation(true, obfuscationIV)
 			},
 			expectError: false,
@@ -320,7 +325,8 @@ func TestWrapNTCP2Listener(t *testing.T) {
 		config, err := NewNTCP2Config(routerHash, false) // responder
 		require.NoError(t, err)
 
-		config = config.WithStaticKey(staticKey)
+		config, err = config.WithStaticKey(staticKey)
+		require.NoError(t, err)
 
 		// Wrap the listener
 		ntcp2Listener, err := WrapNTCP2Listener(tcpListener, config)
@@ -341,7 +347,8 @@ func TestDialNTCP2WithHandshake(t *testing.T) {
 
 		listenerConfig, err := NewNTCP2Config(routerHash, false)
 		require.NoError(t, err)
-		listenerConfig = listenerConfig.WithStaticKey(staticKey)
+		listenerConfig, err = listenerConfig.WithStaticKey(staticKey)
+		require.NoError(t, err)
 
 		listener, err := ListenNTCP2("tcp", "127.0.0.1:0", listenerConfig)
 		require.NoError(t, err)
@@ -353,9 +360,11 @@ func TestDialNTCP2WithHandshake(t *testing.T) {
 
 		dialConfig, err := NewNTCP2Config(clientRouterHash, true)
 		require.NoError(t, err)
+		dialConfig, err = dialConfig.WithStaticKey(clientStaticKey)
+		require.NoError(t, err)
+		dialConfig, err = dialConfig.WithRemoteRouterHash(routerHash)
+		require.NoError(t, err)
 		dialConfig = dialConfig.
-			WithStaticKey(clientStaticKey).
-			WithRemoteRouterHash(routerHash).
 			WithAESObfuscation(true, generateRandomBytes(16)).
 			WithHandshakeTimeout(1 * time.Second)
 
@@ -395,7 +404,9 @@ func TestValidateDialParams(t *testing.T) {
 				remoteHash := generateRandomBytes(32)
 				staticKey := generateRandomBytes(32)
 				config, _ := NewNTCP2Config(routerHash, true)
-				return config.WithStaticKey(staticKey).WithRemoteRouterHash(remoteHash)
+				config, _ = config.WithStaticKey(staticKey)
+				config, _ = config.WithRemoteRouterHash(remoteHash)
+				return config
 			},
 			expectError: false,
 		},
@@ -479,7 +490,8 @@ func TestValidateListenParams(t *testing.T) {
 				routerHash := generateRandomBytes(32)
 				staticKey := generateRandomBytes(32)
 				config, _ := NewNTCP2Config(routerHash, false) // responder
-				return config.WithStaticKey(staticKey)
+				config, _ = config.WithStaticKey(staticKey)
+				return config
 			},
 			expectError: false,
 		},
@@ -559,7 +571,8 @@ func TestCreateDialAddresses(t *testing.T) {
 
 		config, err := NewNTCP2Config(routerHash, true)
 		require.NoError(t, err)
-		config = config.WithRemoteRouterHash(remoteHash)
+		config, err = config.WithRemoteRouterHash(remoteHash)
+		require.NoError(t, err)
 
 		// Create addresses
 		localAddr, remoteAddr, err := createDialAddresses(client, config)

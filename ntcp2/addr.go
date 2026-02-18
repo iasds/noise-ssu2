@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net"
 
-	"github.com/go-i2p/common/data"
 	"github.com/samber/oops"
 )
 
@@ -95,13 +94,13 @@ func (na *NTCP2Addr) RouterHash() []byte {
 	return hash
 }
 
-// IdentHash returns the router identity hash as a common/data.Hash.
-// This provides the router hash in the type used by go-i2p/common for
-// use by the router transport layer (github.com/go-i2p/go-i2p/lib/transport/ntcp).
-func (na *NTCP2Addr) IdentHash() data.Hash {
+// IdentHash returns the router identity hash as a fixed-size [32]byte array.
+// This provides the router hash in a standard type that callers (such as
+// go-i2p's transport layer) can convert to their own hash types as needed.
+func (na *NTCP2Addr) IdentHash() [32]byte {
 	var h [32]byte
 	copy(h[:], na.routerHash)
-	return data.NewHash(h)
+	return h
 }
 
 // Role returns the connection role ("initiator" or "responder").

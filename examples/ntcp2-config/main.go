@@ -173,8 +173,11 @@ func demonstrateResponderConfiguration(routerHash, staticKey []byte, args *ntcp2
 		log.Fatalf("Failed to create responder config: %v", err)
 	}
 
+	config, err = config.WithStaticKey(staticKey)
+	if err != nil {
+		log.Fatalf("Failed to set static key: %v", err)
+	}
 	config = config.
-		WithStaticKey(staticKey).
 		WithHandshakeTimeout(args.HandshakeTimeout).
 		WithReadTimeout(args.ReadTimeout).
 		WithWriteTimeout(args.WriteTimeout)
@@ -228,8 +231,11 @@ func createBaseInitiatorConfig(routerHash, staticKey []byte, args *ntcp2shared.N
 		log.Fatalf("Failed to create initiator config: %v", err)
 	}
 
+	config, err = config.WithStaticKey(staticKey)
+	if err != nil {
+		log.Fatalf("Failed to set static key: %v", err)
+	}
 	return config.
-		WithStaticKey(staticKey).
 		WithHandshakeTimeout(args.HandshakeTimeout).
 		WithReadTimeout(args.ReadTimeout).
 		WithWriteTimeout(args.WriteTimeout)
@@ -239,7 +245,11 @@ func createBaseInitiatorConfig(routerHash, staticKey []byte, args *ntcp2shared.N
 func applyNTCP2Features(configBuilder *ntcp2.NTCP2Config, remoteRouterHash []byte, args *ntcp2shared.NTCP2Args) *ntcp2.NTCP2Config {
 	// Add remote router hash if available
 	if remoteRouterHash != nil {
-		configBuilder = configBuilder.WithRemoteRouterHash(remoteRouterHash)
+		var err error
+		configBuilder, err = configBuilder.WithRemoteRouterHash(remoteRouterHash)
+		if err != nil {
+			log.Fatalf("Failed to set remote router hash: %v", err)
+		}
 	}
 
 	// Apply NTCP2-specific features
