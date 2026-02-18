@@ -70,10 +70,12 @@ func DeriveSipHashKeys(askMaster, handshakeHash []byte) (
 	sipKeysAB[1] = binary.LittleEndian.Uint64(fullAB[8:16])
 	sipIVAB = binary.LittleEndian.Uint64(fullAB[16:24])
 
-	// Step 5: sipkeys_ba = HMAC-SHA256(key=temp_key, data=sipkeys_ab || byte(0x02))[0:24]
-	step5Data := make([]byte, len(fullAB)+1)
-	copy(step5Data, fullAB)
-	step5Data[len(fullAB)] = 0x02
+	// Step 5: sipkeys_ba = HMAC-SHA256(key=temp_key, data=sipkeys_ab[0:24] || byte(0x02))[0:24]
+	// Per spec, the input is the truncated 24-byte sipkeys_ab, not the full 32-byte HMAC output.
+	const sipKeysLen = 24
+	step5Data := make([]byte, sipKeysLen+1)
+	copy(step5Data, fullAB[:sipKeysLen])
+	step5Data[sipKeysLen] = 0x02
 	fullBA := hmacSHA256(tempKey, step5Data)
 	sipKeysBA[0] = binary.LittleEndian.Uint64(fullBA[0:8])
 	sipKeysBA[1] = binary.LittleEndian.Uint64(fullBA[8:16])

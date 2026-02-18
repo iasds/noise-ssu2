@@ -48,6 +48,11 @@ type NTCP2Conn struct {
 	// decrypted frame is larger than the caller's Read buffer.
 	readBuffer []byte
 
+	// readMu serialises readFramed calls so that SipHash inbound mask
+	// generation and the subsequent TCP read are atomic with respect to
+	// each other. This mirrors writeMu for the write path.
+	readMu sync.Mutex
+
 	// writeMu serialises writeFramed calls so that SipHash mask generation
 	// and the subsequent TCP write are atomic with respect to each other.
 	writeMu sync.Mutex
@@ -125,6 +130,8 @@ func (nc *NTCP2Conn) Read(b []byte) (int, error) {
 	if nc.lengthObfuscator == nil {
 		return nc.readDirect(b)
 	}
+	nc.readMu.Lock()
+	defer nc.readMu.Unlock()
 	// Drain buffered plaintext from a previous oversized frame first.
 	if len(nc.readBuffer) > 0 {
 		n := copy(b, nc.readBuffer)
@@ -503,11 +510,13 @@ func (nc *NTCP2Conn) zeroKeyMaterial() {
 		nc.noiseConn.ZeroKeys()
 	}
 
-	// Wipe any buffered plaintext.
+	// Wipe any buffered plaintext (under readMu to avoid racing with Read).
+	nc.readMu.Lock()
 	for i := range nc.readBuffer {
 		nc.readBuffer[i] = 0
 	}
 	nc.readBuffer = nil
+	nc.readMu.Unlock()
 }
 
 // LocalAddr implements net.Conn.LocalAddr.

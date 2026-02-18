@@ -531,10 +531,11 @@ func TestAudit_KDF_UsesHMACNotHKDF(t *testing.T) {
 	expectedK2AB := binary.LittleEndian.Uint64(fullAB[8:16])
 	expectedIVAB := binary.LittleEndian.Uint64(fullAB[16:24])
 
-	// Step 5: sipkeys_ba = HMAC-SHA256(temp_key, sipkeys_ab || 0x02)
-	step5Data := make([]byte, 33)
-	copy(step5Data, fullAB)
-	step5Data[32] = 0x02
+	// Step 5: sipkeys_ba = HMAC-SHA256(temp_key, sipkeys_ab[0:24] || 0x02)
+	// Per spec, only the first 24 bytes of the HMAC output are used.
+	step5Data := make([]byte, 25)
+	copy(step5Data, fullAB[:24])
+	step5Data[24] = 0x02
 	fullBA := hmacSHA256Test(tempKey, step5Data)
 	expectedK1BA := binary.LittleEndian.Uint64(fullBA[0:8])
 	expectedK2BA := binary.LittleEndian.Uint64(fullBA[8:16])
