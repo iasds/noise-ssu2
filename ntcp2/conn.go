@@ -311,11 +311,12 @@ func (nc *NTCP2Conn) applyProbingResistanceDelay() {
 
 // handleAEADError implements probing-resistance behaviour on AEAD authentication
 // failure. Per the NTCP2 spec, the receiver should:
-//  1. Send a termination block with reason code 4 (AEAD failure).
-//  2. Read a random number of junk bytes for a random duration.
-//  3. Close the connection (caller responsibility).
+//  1. Read a random number of junk bytes for a random duration.
+//  2. Close the connection (caller responsibility).
+//
+// Termination blocks (reason code 4 = AEAD failure) are handled by the
+// router transport layer (go-i2p/go-i2p/lib/transport/ntcp).
 func (nc *NTCP2Conn) handleAEADError(underlying net.Conn) {
-	// Best-effort: send termination block (reason 4 = AEAD failure).
 
 	// Generate a random byte count (0–AEADErrorMaxJunkBytes) to read before returning.
 	var rndBuf [2]byte
@@ -332,28 +333,6 @@ func (nc *NTCP2Conn) handleAEADError(underlying net.Conn) {
 	underlying.SetReadDeadline(time.Now().Add(AEADErrorTimeout)) //nolint:errcheck
 	junk := make([]byte, junkLen)
 	underlying.Read(junk) //nolint:errcheck // best effort
-}
-
-// sendTerminationBlock writes an NTCP2 termination block to the underlying
-// connection on a best-effort basis. The block format is:
-//
-//	[type:1=0x04][size:2=0x0009][version:4][networkID:1][time:4][reason:1]
-//
-// This is used for AEAD failure notification (reason 4) and graceful close.
-func (nc *NTCP2Conn) sendTerminationBlock(conn net.Conn, reason byte) {
-	// Set a short write deadline to avoid blocking.
-	conn.SetWriteDeadline(time.Now().Add(1 * time.Second)) //nolint:errcheck
-
-	var block [TerminationBlockSize]byte
-	block[0] = TerminationBlockType                            // block type = 4
-	binary.BigEndian.PutUint16(block[1:3], TerminationDataLen) // data length = 9
-	// version (4 bytes): 0 (unknown version)
-	// networkID (1 byte): 2 (I2P mainnet)
-	block[7] = I2PMainnetNetworkID
-	// time (4 bytes): 0 (we don't have router timestamp)
-	block[11] = reason
-
-	conn.Write(block[:]) //nolint:errcheck // best effort
 }
 
 // Write implements net.Conn.Write.

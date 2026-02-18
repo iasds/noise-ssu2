@@ -88,27 +88,4 @@ const (
 	// the nonce counter, the correct response is to establish a new connection.
 	// Set to MaxNonce - 1000 to provide advance warning.
 	NonceRekeyThreshold = MaxNonce - 1000
-
-	// TerminationBlockType is the I2P NTCP2 termination block type identifier.
-	TerminationBlockType = 4
-
-	// TerminationDataLen is the data length inside a termination block:
-	// version(4) + networkID(1) + time(4) = 9 bytes, plus reason(1) is
-	// part of the data payload for a total of 10, but per spec the size
-	// field holds 9 (the reason byte is the 10th byte of the block data
-	// but included in the overall block). We use 9 as the size field value.
-	TerminationDataLen = 9
-
-	// TerminationBlockSize is the total wire size of a termination block:
-	// type(1) + size(2) + version(4) + networkID(1) + time(4) + reason(1) = 13 bytes.
-	// Note: this is a best-effort plaintext termination block for error cases;
-	// proper encrypted termination blocks are handled at the router transport layer.
-	TerminationBlockSize = 12
-
-	// TerminationReasonAEADFailure is the reason code for AEAD authentication failure.
-	// Per NTCP2 spec: reason code 4 = "AEAD frame error".
-	TerminationReasonAEADFailure = 4
-
-	// I2PMainnetNetworkID is the I2P mainnet network identifier.
-	I2PMainnetNetworkID = 2
 )
