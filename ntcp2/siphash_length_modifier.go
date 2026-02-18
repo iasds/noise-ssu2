@@ -14,23 +14,53 @@ import (
 //
 // Per the NTCP2 spec: IV[n] = SipHash-2-4(sipk1, sipk2, IV[n-1]).
 // The input to SipHash is the 8-byte little-endian encoding of the previous IV.
+//
+// NTCP2 uses per-direction keys: the initiator→responder direction (AB) uses
+// different SipHash keys and IV than the responder→initiator direction (BA).
+// Use NewSipHashLengthModifierDirectional with keys from DeriveSipHashKeys().
 type SipHashLengthModifier struct {
-	mu         sync.Mutex
-	name       string
-	sipKeys    [2]uint64 // SipHash k1, k2 keys
-	outboundIV uint64    // Current IV value for outbound
-	inboundIV  uint64    // Current IV value for inbound
+	mu           sync.Mutex
+	name         string
+	outboundKeys [2]uint64 // SipHash k1, k2 keys for outbound direction
+	inboundKeys  [2]uint64 // SipHash k1, k2 keys for inbound direction
+	outboundIV   uint64    // Current IV value for outbound
+	inboundIV    uint64    // Current IV value for inbound
 }
 
-// NewSipHashLengthModifier creates a new SipHash length obfuscation modifier.
+// NewSipHashLengthModifier creates a new SipHash length obfuscation modifier
+// with shared keys for both directions. This is suitable for testing or when
+// per-direction key derivation is handled externally.
 // sipKeys must contain exactly 2 uint64 values (k1, k2).
 // initialIV is the 8-byte IV from the data phase KDF.
 func NewSipHashLengthModifier(name string, sipKeys [2]uint64, initialIV uint64) *SipHashLengthModifier {
 	return &SipHashLengthModifier{
-		name:       name,
-		sipKeys:    sipKeys,
-		outboundIV: initialIV,
-		inboundIV:  initialIV,
+		name:         name,
+		outboundKeys: sipKeys,
+		inboundKeys:  sipKeys,
+		outboundIV:   initialIV,
+		inboundIV:    initialIV,
+	}
+}
+
+// NewSipHashLengthModifierDirectional creates a SipHash length obfuscation
+// modifier with per-direction keys as required by the NTCP2 spec.
+//
+// For the initiator (Alice):
+//
+//	outKeys, outIV = sipKeysAB, sipIVAB   (Alice→Bob)
+//	inKeys,  inIV  = sipKeysBA, sipIVBA   (Bob→Alice)
+//
+// For the responder (Bob):
+//
+//	outKeys, outIV = sipKeysBA, sipIVBA   (Bob→Alice)
+//	inKeys,  inIV  = sipKeysAB, sipIVAB   (Alice→Bob)
+func NewSipHashLengthModifierDirectional(name string, outKeys, inKeys [2]uint64, outIV, inIV uint64) *SipHashLengthModifier {
+	return &SipHashLengthModifier{
+		name:         name,
+		outboundKeys: outKeys,
+		inboundKeys:  inKeys,
+		outboundIV:   outIV,
+		inboundIV:    inIV,
 	}
 }
 
@@ -83,8 +113,8 @@ func (slm *SipHashLengthModifier) getNextOutboundMask() uint16 {
 	input := make([]byte, SipHashIVSize)
 	binary.LittleEndian.PutUint64(input, slm.outboundIV)
 
-	// Calculate SipHash with k1, k2 keys
-	hash := siphash.Hash(slm.sipKeys[0], slm.sipKeys[1], input)
+	// Calculate SipHash with outbound k1, k2 keys
+	hash := siphash.Hash(slm.outboundKeys[0], slm.outboundKeys[1], input)
 
 	// Update IV with the hash result for next iteration
 	slm.outboundIV = hash
@@ -100,8 +130,8 @@ func (slm *SipHashLengthModifier) getNextInboundMask() uint16 {
 	input := make([]byte, SipHashIVSize)
 	binary.LittleEndian.PutUint64(input, slm.inboundIV)
 
-	// Calculate SipHash with k1, k2 keys
-	hash := siphash.Hash(slm.sipKeys[0], slm.sipKeys[1], input)
+	// Calculate SipHash with inbound k1, k2 keys
+	hash := siphash.Hash(slm.inboundKeys[0], slm.inboundKeys[1], input)
 
 	// Update IV with the hash result for next iteration
 	slm.inboundIV = hash

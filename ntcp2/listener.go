@@ -11,11 +11,12 @@ import (
 )
 
 // NTCP2Listener implements net.Listener for accepting NTCP2 transport connections.
-// It wraps a NoiseListener and provides NTCP2-specific addressing and connection handling
-// with I2P router identity management and session establishment.
+// It accepts raw TCP connections from the underlying listener, wraps each in a
+// NoiseConn created via NTCP2Config.ToConnConfig() (which sets the correct
+// CipherSuite, ProtocolName, and Modifiers), and then wraps that in an NTCP2Conn.
 type NTCP2Listener struct {
-	// noiseListener is the underlying Noise protocol listener
-	noiseListener *noise.NoiseListener
+	// underlying is the raw TCP listener
+	underlying net.Listener
 
 	// config contains the NTCP2-specific configuration
 	config *NTCP2Config
@@ -44,18 +45,12 @@ func NewNTCP2Listener(underlying net.Listener, config *NTCP2Config) (*NTCP2Liste
 		return nil, err
 	}
 
-	noiseListener, err := createNoiseListener(underlying, config)
-	if err != nil {
-		return nil, err
-	}
-
 	ntcp2Addr, err := createNTCP2Address(underlying, config)
 	if err != nil {
-		noiseListener.Close() // Clean up noise listener
 		return nil, err
 	}
 
-	return initializeListener(noiseListener, config, ntcp2Addr, underlying), nil
+	return initializeListener(underlying, config, ntcp2Addr), nil
 }
 
 // validateListenerInput checks if the underlying listener and config parameters are valid
@@ -85,28 +80,6 @@ func validateListenerInput(underlying net.Listener, config *NTCP2Config) error {
 	return nil
 }
 
-// createNoiseListener constructs and configures the underlying Noise protocol listener
-func createNoiseListener(underlying net.Listener, config *NTCP2Config) (*noise.NoiseListener, error) {
-	// Create underlying Noise listener configuration
-	noiseConfig := noise.NewListenerConfig(config.Pattern).
-		WithStaticKey(config.StaticKey).
-		WithHandshakeTimeout(config.HandshakeTimeout).
-		WithReadTimeout(config.ReadTimeout).
-		WithWriteTimeout(config.WriteTimeout)
-
-	// Create underlying Noise listener
-	noiseListener, err := noise.NewNoiseListener(underlying, noiseConfig)
-	if err != nil {
-		return nil, oops.
-			Code("NOISE_LISTENER_FAILED").
-			In("ntcp2").
-			With("listener_addr", underlying.Addr().String()).
-			Wrapf(err, "failed to create underlying noise listener")
-	}
-
-	return noiseListener, nil
-}
-
 // createNTCP2Address creates the NTCP2 address for the listener from the underlying address and config
 func createNTCP2Address(underlying net.Listener, config *NTCP2Config) (*NTCP2Addr, error) {
 	ntcp2Addr, err := NewNTCP2Addr(underlying.Addr(), config.RouterHash, "responder")
@@ -122,13 +95,13 @@ func createNTCP2Address(underlying net.Listener, config *NTCP2Config) (*NTCP2Add
 }
 
 // initializeListener creates and configures the final NTCP2Listener with logging
-func initializeListener(noiseListener *noise.NoiseListener, config *NTCP2Config, ntcp2Addr *NTCP2Addr, underlying net.Listener) *NTCP2Listener {
+func initializeListener(underlying net.Listener, config *NTCP2Config, ntcp2Addr *NTCP2Addr) *NTCP2Listener {
 	nl := &NTCP2Listener{
-		noiseListener: noiseListener,
-		config:        config,
-		addr:          ntcp2Addr,
-		logger:        *log,
-		closed:        false,
+		underlying: underlying,
+		config:     config,
+		addr:       ntcp2Addr,
+		logger:     *log,
+		closed:     false,
 	}
 
 	nl.logger.Info("NTCP2 listener created",
@@ -139,31 +112,22 @@ func initializeListener(noiseListener *noise.NoiseListener, config *NTCP2Config,
 	return nl
 }
 
-// acceptFromNoiseListener accepts a connection from the underlying noise listener.
-func (nl *NTCP2Listener) acceptFromNoiseListener() (net.Conn, error) {
-	noiseConn, err := nl.noiseListener.Accept()
+// createResponderConnConfig creates a ConnConfig for an accepted (responder)
+// connection via the full NTCP2Config.ToConnConfig() path, ensuring the
+// CipherSuite, ProtocolName, and Modifiers are all correctly set.
+func (nl *NTCP2Listener) createResponderConnConfig() (*noise.ConnConfig, error) {
+	// Copy the config so we don't mutate the listener's config
+	responderCfg := *nl.config
+	responderCfg.Initiator = false
+	connConfig, err := responderCfg.ToConnConfig()
 	if err != nil {
 		return nil, oops.
-			Code("ACCEPT_FAILED").
+			Code("CONN_CONFIG_FAILED").
 			In("ntcp2").
 			With("listener_addr", nl.addr.String()).
-			Wrapf(err, "failed to accept from underlying noise listener")
+			Wrapf(err, "failed to create responder ConnConfig")
 	}
-	return noiseConn, nil
-}
-
-// validateAndCastNoiseConn validates the connection type and casts to NoiseConn.
-func (nl *NTCP2Listener) validateAndCastNoiseConn(conn net.Conn) (*noise.NoiseConn, error) {
-	actualNoiseConn, ok := conn.(*noise.NoiseConn)
-	if !ok {
-		conn.Close() // Clean up the connection
-		return nil, oops.
-			Code("INVALID_CONN_TYPE").
-			In("ntcp2").
-			With("listener_addr", nl.addr.String()).
-			Errorf("expected *noise.NoiseConn from noise listener")
-	}
-	return actualNoiseConn, nil
+	return connConfig, nil
 }
 
 // createRemoteNTCP2Addr creates the remote NTCP2 address for the accepted connection.
@@ -220,7 +184,8 @@ func (nl *NTCP2Listener) wrapInNTCP2Conn(noiseConn *noise.NoiseConn, remoteAddr 
 }
 
 // Accept waits for and returns the next connection to the listener.
-// The returned connection is wrapped in an NTCP2Conn configured as a responder.
+// The returned connection is wrapped in an NTCP2Conn configured as a responder
+// with the full NTCP2 cipher suite, protocol name, and modifiers.
 func (nl *NTCP2Listener) Accept() (net.Conn, error) {
 	nl.acceptMutex.Lock()
 	defer nl.acceptMutex.Unlock()
@@ -229,13 +194,44 @@ func (nl *NTCP2Listener) Accept() (net.Conn, error) {
 		return nil, err
 	}
 
-	noiseConn, err := nl.acceptFromNoiseListener()
+	// Accept raw TCP connection from the underlying listener.
+	underlying, err := nl.underlying.Accept()
 	if err != nil {
+		return nil, oops.
+			Code("ACCEPT_FAILED").
+			In("ntcp2").
+			With("listener_addr", nl.addr.String()).
+			Wrapf(err, "failed to accept connection")
+	}
+
+	// Create ConnConfig with full NTCP2 settings (CipherSuite, ProtocolName, Modifiers).
+	connConfig, err := nl.createResponderConnConfig()
+	if err != nil {
+		underlying.Close()
 		return nil, err
 	}
 
-	ntcp2Conn, err := nl.processAcceptedConnection(noiseConn)
+	// Wrap in NoiseConn using the properly configured ConnConfig.
+	noiseConn, err := noise.NewNoiseConn(underlying, connConfig)
 	if err != nil {
+		underlying.Close()
+		return nil, oops.
+			Code("NOISE_CONN_FAILED").
+			In("ntcp2").
+			With("listener_addr", nl.addr.String()).
+			With("remote_addr", underlying.RemoteAddr().String()).
+			Wrapf(err, "failed to create noise connection")
+	}
+
+	remoteAddr, err := nl.createRemoteNTCP2Addr(noiseConn)
+	if err != nil {
+		noiseConn.Close()
+		return nil, err
+	}
+
+	ntcp2Conn, err := nl.wrapInNTCP2Conn(noiseConn, remoteAddr)
+	if err != nil {
+		noiseConn.Close()
 		return nil, err
 	}
 
@@ -253,21 +249,6 @@ func (nl *NTCP2Listener) validateAcceptState() error {
 			Errorf("ntcp2 listener is closed")
 	}
 	return nil
-}
-
-// processAcceptedConnection converts the accepted connection to NTCP2Conn.
-func (nl *NTCP2Listener) processAcceptedConnection(noiseConn net.Conn) (*NTCP2Conn, error) {
-	actualNoiseConn, err := nl.validateAndCastNoiseConn(noiseConn)
-	if err != nil {
-		return nil, err
-	}
-
-	remoteAddr, err := nl.createRemoteNTCP2Addr(actualNoiseConn)
-	if err != nil {
-		return nil, err
-	}
-
-	return nl.wrapInNTCP2Conn(actualNoiseConn, remoteAddr)
 }
 
 // logAcceptedConnection logs details about the newly accepted connection.
@@ -289,9 +270,9 @@ func (nl *NTCP2Listener) Close() error {
 
 	nl.closed = true
 
-	err := nl.noiseListener.Close()
+	err := nl.underlying.Close()
 	if err != nil {
-		nl.logger.Error("error closing underlying noise listener",
+		nl.logger.Error("error closing underlying listener",
 			"listener_addr", nl.addr.String(),
 			"error", err.Error())
 
@@ -299,7 +280,7 @@ func (nl *NTCP2Listener) Close() error {
 			Code("CLOSE_FAILED").
 			In("ntcp2").
 			With("listener_addr", nl.addr.String()).
-			Wrapf(err, "failed to close underlying noise listener")
+			Wrapf(err, "failed to close underlying listener")
 	}
 
 	nl.logger.Info("NTCP2 listener closed",

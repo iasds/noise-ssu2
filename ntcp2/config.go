@@ -504,6 +504,12 @@ func (nc *NTCP2Config) createAESModifierIfEnabled() (handshake.HandshakeModifier
 
 // createSipHashModifierIfEnabled creates a new SipHash length modifier if enabled.
 // A fresh instance is created on every call to prevent shared state between connections.
+//
+// TODO(ntcp2-spec): After the Noise XK handshake completes, the router
+// transport layer must call DeriveSipHashKeys() to obtain per-direction keys
+// and then create a directional modifier via NewSipHashLengthModifierDirectional().
+// The placeholder modifier returned here uses shared zero keys and is only
+// suitable as a handshake-phase pass-through (SipHash is a no-op before PhaseFinal).
 func (nc *NTCP2Config) createSipHashModifierIfEnabled() *SipHashLengthModifier {
 	if !nc.EnableSipHashLength {
 		return nil

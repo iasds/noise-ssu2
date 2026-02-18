@@ -3,6 +3,8 @@ package ntcp2
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/binary"
 	"testing"
 
@@ -482,4 +484,178 @@ func masksEqual(a, b []uint16) bool {
 		}
 	}
 	return true
+}
+
+// ============================================================================
+// Tests validating C-1 / C-2 audit fixes: spec-compliant KDF and per-direction keys
+// ============================================================================
+
+// TestAudit_KDF_UsesHMACNotHKDF verifies that DeriveSipHashKeys uses the
+// 5-step HMAC-SHA256 chain from the NTCP2 spec, not golang.org/x/crypto/hkdf.
+func TestAudit_KDF_UsesHMACNotHKDF(t *testing.T) {
+	askMaster := make([]byte, 32)
+	for i := range askMaster {
+		askMaster[i] = byte(i)
+	}
+	handshakeHash := make([]byte, 32)
+	for i := range handshakeHash {
+		handshakeHash[i] = byte(i + 64)
+	}
+
+	// Derive via function under test
+	sipKeysAB, sipIVAB, sipKeysBA, sipIVBA, err := DeriveSipHashKeys(askMaster, handshakeHash)
+	require.NoError(t, err)
+
+	// Manually compute expected values via the 5-step HMAC chain
+	// Step 1: temp_key = HMAC-SHA256(ask_master, h || "siphash")
+	step1Data := make([]byte, 32+len("siphash"))
+	copy(step1Data, handshakeHash)
+	copy(step1Data[32:], "siphash")
+	tempKey := hmacSHA256Test(askMaster, step1Data)
+
+	// Step 2: sip_master = HMAC-SHA256(temp_key, 0x01)
+	sipMaster := hmacSHA256Test(tempKey, []byte{0x01})
+
+	// Step 3: temp_key = HMAC-SHA256(sip_master, zerolen)
+	tempKey = hmacSHA256Test(sipMaster, []byte{})
+
+	// Step 4: sipkeys_ab = HMAC-SHA256(temp_key, 0x01)
+	fullAB := hmacSHA256Test(tempKey, []byte{0x01})
+	expectedK1AB := binary.LittleEndian.Uint64(fullAB[0:8])
+	expectedK2AB := binary.LittleEndian.Uint64(fullAB[8:16])
+	expectedIVAB := binary.LittleEndian.Uint64(fullAB[16:24])
+
+	// Step 5: sipkeys_ba = HMAC-SHA256(temp_key, sipkeys_ab || 0x02)
+	step5Data := make([]byte, 33)
+	copy(step5Data, fullAB)
+	step5Data[32] = 0x02
+	fullBA := hmacSHA256Test(tempKey, step5Data)
+	expectedK1BA := binary.LittleEndian.Uint64(fullBA[0:8])
+	expectedK2BA := binary.LittleEndian.Uint64(fullBA[8:16])
+	expectedIVBA := binary.LittleEndian.Uint64(fullBA[16:24])
+
+	assert.Equal(t, expectedK1AB, sipKeysAB[0], "sipk1_AB mismatch")
+	assert.Equal(t, expectedK2AB, sipKeysAB[1], "sipk2_AB mismatch")
+	assert.Equal(t, expectedIVAB, sipIVAB, "sipIV_AB mismatch")
+
+	assert.Equal(t, expectedK1BA, sipKeysBA[0], "sipk1_BA mismatch")
+	assert.Equal(t, expectedK2BA, sipKeysBA[1], "sipk2_BA mismatch")
+	assert.Equal(t, expectedIVBA, sipIVBA, "sipIV_BA mismatch")
+}
+
+// TestAudit_KDF_PerDirectionKeysAreDifferent verifies that the AB and BA
+// key material from DeriveSipHashKeys is distinct.
+func TestAudit_KDF_PerDirectionKeysAreDifferent(t *testing.T) {
+	askMaster := make([]byte, 32)
+	handshakeHash := make([]byte, 32)
+	for i := range handshakeHash {
+		handshakeHash[i] = byte(i + 1)
+	}
+
+	sipKeysAB, sipIVAB, sipKeysBA, sipIVBA, err := DeriveSipHashKeys(askMaster, handshakeHash)
+	require.NoError(t, err)
+
+	// AB and BA must differ
+	assert.NotEqual(t, sipKeysAB, sipKeysBA, "AB and BA SipHash keys must differ")
+	assert.NotEqual(t, sipIVAB, sipIVBA, "AB and BA SipHash IVs must differ")
+}
+
+// TestAudit_KDF_InvalidInput validates error handling for bad input lengths.
+func TestAudit_KDF_InvalidInput(t *testing.T) {
+	validKey := make([]byte, 32)
+	validHash := make([]byte, 32)
+
+	_, _, _, _, err := DeriveSipHashKeys(make([]byte, 16), validHash)
+	assert.Error(t, err, "short ask_master must fail")
+	assert.Contains(t, err.Error(), "ask_master must be exactly")
+
+	_, _, _, _, err = DeriveSipHashKeys(validKey, make([]byte, 16))
+	assert.Error(t, err, "short handshake hash must fail")
+	assert.Contains(t, err.Error(), "handshake hash must be exactly")
+}
+
+// TestAudit_SipHashDirectional_RoundTrip validates that per-direction SipHash
+// modifiers produce matching masks when used as initiator/responder pairs.
+func TestAudit_SipHashDirectional_RoundTrip(t *testing.T) {
+	keysAB := [2]uint64{0xAAAABBBBCCCCDDDD, 0x1111222233334444}
+	keysBA := [2]uint64{0x5555666677778888, 0x9999AAAABBBBCCCC}
+	ivAB := uint64(0x1234567890ABCDEF)
+	ivBA := uint64(0xFEDCBA0987654321)
+
+	// Initiator: outbound=AB, inbound=BA
+	initiator := NewSipHashLengthModifierDirectional("alice", keysAB, keysBA, ivAB, ivBA)
+	// Responder: outbound=BA, inbound=AB
+	responder := NewSipHashLengthModifierDirectional("bob", keysBA, keysAB, ivBA, ivAB)
+
+	for i := 0; i < 50; i++ {
+		originalLen := uint16(100 + i*7)
+		data := make([]byte, 2)
+		binary.BigEndian.PutUint16(data, originalLen)
+
+		// Initiator obfuscates outbound
+		obfuscated, err := initiator.ModifyOutbound(handshake.PhaseFinal, data)
+		require.NoError(t, err)
+
+		// Responder deobfuscates inbound
+		recovered, err := responder.ModifyInbound(handshake.PhaseFinal, obfuscated)
+		require.NoError(t, err)
+
+		got := binary.BigEndian.Uint16(recovered)
+		assert.Equal(t, originalLen, got,
+			"Directional round-trip failed at frame %d: original=%d, got=%d", i, originalLen, got)
+	}
+
+	// Also verify reverse direction: responder→initiator
+	responder2 := NewSipHashLengthModifierDirectional("bob2", keysBA, keysAB, ivBA, ivAB)
+	initiator2 := NewSipHashLengthModifierDirectional("alice2", keysAB, keysBA, ivAB, ivBA)
+
+	for i := 0; i < 50; i++ {
+		originalLen := uint16(200 + i*3)
+		data := make([]byte, 2)
+		binary.BigEndian.PutUint16(data, originalLen)
+
+		// Responder sends outbound (BA direction)
+		obfuscated, err := responder2.ModifyOutbound(handshake.PhaseFinal, data)
+		require.NoError(t, err)
+
+		// Initiator reads inbound (BA direction)
+		recovered, err := initiator2.ModifyInbound(handshake.PhaseFinal, obfuscated)
+		require.NoError(t, err)
+
+		got := binary.BigEndian.Uint16(recovered)
+		assert.Equal(t, originalLen, got,
+			"Reverse round-trip failed at frame %d: original=%d, got=%d", i, originalLen, got)
+	}
+}
+
+// TestAudit_SipHashDirectional_KeysMatter verifies that using per-direction
+// keys actually produces different masks than shared keys.
+func TestAudit_SipHashDirectional_KeysMatter(t *testing.T) {
+	keysAB := [2]uint64{0x1111, 0x2222}
+	keysBA := [2]uint64{0x3333, 0x4444}
+	iv := uint64(0)
+
+	directional := NewSipHashLengthModifierDirectional("dir", keysAB, keysBA, iv, iv)
+	shared := NewSipHashLengthModifier("shared", keysAB, iv)
+
+	// Outbound masks should be the same (both use keysAB for outbound)
+	data := make([]byte, 2)
+	out1, _ := directional.ModifyOutbound(handshake.PhaseFinal, data)
+	out2, _ := shared.ModifyOutbound(handshake.PhaseFinal, data)
+	assert.Equal(t, out1, out2, "Outbound with same keys should match")
+
+	// But inbound masks should differ (directional uses keysBA, shared uses keysAB)
+	directional2 := NewSipHashLengthModifierDirectional("dir2", keysAB, keysBA, iv, iv)
+	shared2 := NewSipHashLengthModifier("shared2", keysAB, iv)
+
+	in1, _ := directional2.ModifyInbound(handshake.PhaseFinal, data)
+	in2, _ := shared2.ModifyInbound(handshake.PhaseFinal, data)
+	assert.NotEqual(t, in1, in2, "Inbound with different keys must differ")
+}
+
+// hmacSHA256Test is a test helper that computes HMAC-SHA256(key, data).
+func hmacSHA256Test(key, data []byte) []byte {
+	mac := hmac.New(sha256.New, key)
+	mac.Write(data) //nolint:errcheck
+	return mac.Sum(nil)
 }

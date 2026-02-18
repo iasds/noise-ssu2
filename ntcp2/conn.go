@@ -48,6 +48,10 @@ type NTCP2Conn struct {
 	// decrypted frame is larger than the caller's Read buffer.
 	readBuffer []byte
 
+	// writeMu serialises writeFramed calls so that SipHash mask generation
+	// and the subsequent TCP write are atomic with respect to each other.
+	writeMu sync.Mutex
+
 	// closeOnce ensures Close is idempotent and key material is zeroed exactly once.
 	closeOnce sync.Once
 
@@ -126,6 +130,13 @@ func (nc *NTCP2Conn) Read(b []byte) (int, error) {
 		n := copy(b, nc.readBuffer)
 		nc.readBuffer = nc.readBuffer[n:]
 		if len(nc.readBuffer) == 0 {
+			// Zero accessible backing memory to limit plaintext lingering.
+			if c := cap(nc.readBuffer); c > 0 {
+				tail := nc.readBuffer[:c]
+				for i := range tail {
+					tail[i] = 0
+				}
+			}
 			nc.readBuffer = nil
 		}
 		return n, nil
@@ -285,10 +296,11 @@ func (nc *NTCP2Conn) handleAEADError(underlying net.Conn) {
 		return
 	}
 	// Set a short deadline so we don't block forever if the peer stops sending.
+	// NOTE: we do NOT restore the previous deadline afterwards — the caller
+	// is expected to close the connection after an AEAD failure.
 	underlying.SetReadDeadline(time.Now().Add(2 * time.Second)) //nolint:errcheck
 	junk := make([]byte, junkLen)
-	underlying.Read(junk)                   //nolint:errcheck // best effort
-	underlying.SetReadDeadline(time.Time{}) //nolint:errcheck
+	underlying.Read(junk) //nolint:errcheck // best effort
 }
 
 // Write implements net.Conn.Write.
@@ -312,7 +324,7 @@ func (nc *NTCP2Conn) Write(b []byte) (int, error) {
 func (nc *NTCP2Conn) writeDirect(b []byte) (int, error) {
 	n, err := nc.noiseConn.Write(b)
 	if err != nil {
-		return 0, oops.
+		return n, oops.
 			Code("WRITE_FAILED").
 			In("ntcp2").
 			With("local_addr", nc.localAddr.String()).
@@ -333,6 +345,9 @@ func (nc *NTCP2Conn) writeDirect(b []byte) (int, error) {
 // Large payloads are transparently split into multiple frames of at most
 // MaxFrameSize - Poly1305Overhead bytes of plaintext each.
 func (nc *NTCP2Conn) writeFramed(b []byte) (int, error) {
+	nc.writeMu.Lock()
+	defer nc.writeMu.Unlock()
+
 	maxPlaintext := MaxFrameSize - Poly1305Overhead
 	totalWritten := 0
 
@@ -474,12 +489,17 @@ func (nc *NTCP2Conn) Close() error {
 func (nc *NTCP2Conn) zeroKeyMaterial() {
 	if nc.lengthObfuscator != nil {
 		nc.lengthObfuscator.mu.Lock()
-		nc.lengthObfuscator.sipKeys[0] = 0
-		nc.lengthObfuscator.sipKeys[1] = 0
+		nc.lengthObfuscator.outboundKeys[0] = 0
+		nc.lengthObfuscator.outboundKeys[1] = 0
+		nc.lengthObfuscator.inboundKeys[0] = 0
+		nc.lengthObfuscator.inboundKeys[1] = 0
 		nc.lengthObfuscator.outboundIV = 0
 		nc.lengthObfuscator.inboundIV = 0
 		nc.lengthObfuscator.mu.Unlock()
 	}
+	// TODO(ntcp2-spec): Zero the Noise cipher state (CipherState.k) in the
+	// underlying NoiseConn. This requires an API addition to go-i2p/noise.
+
 	// Wipe any buffered plaintext.
 	for i := range nc.readBuffer {
 		nc.readBuffer[i] = 0
@@ -589,7 +609,7 @@ func (nc *NTCP2Conn) PeerStaticKey() []byte {
 
 // HandshakeHash returns the Noise handshake hash (h) from the completed session.
 // This is needed by the router transport layer to derive data-phase keys via
-// HKDF(ask_master, h || "siphash") for SipHash frame length obfuscation.
+// DeriveSipHashKeys(ask_master, h) for SipHash frame length obfuscation.
 // Returns nil if the handshake has not been initiated.
 func (nc *NTCP2Conn) HandshakeHash() []byte {
 	return nc.noiseConn.ChannelBinding()
