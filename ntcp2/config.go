@@ -1,6 +1,7 @@
 package ntcp2
 
 import (
+	"sync/atomic"
 	"time"
 
 	noise "github.com/go-i2p/go-noise"
@@ -92,7 +93,9 @@ type NTCP2Config struct {
 
 	// sipHashModifier stores the SipHash modifier created during ToConnConfig()
 	// so it can be passed to NTCP2Conn for data-phase framing.
-	sipHashModifier *SipHashLengthModifier
+	// Access is via atomic.Pointer to avoid data races between the
+	// PostHandshakeHook goroutine and SipHashModifier() callers.
+	sipHashModifier atomic.Pointer[SipHashLengthModifier]
 }
 
 // NewNTCP2Config creates a new NTCP2Config with sensible defaults.
@@ -424,7 +427,6 @@ func (nc *NTCP2Config) ToConnConfig() (*noise.ConnConfig, error) {
 	}
 
 	config := nc.createBaseConnConfig()
-	nc.copyStaticKeyIfProvided(config)
 
 	modifiers, err := nc.setupNTCP2Modifiers()
 	if err != nil {
@@ -493,7 +495,7 @@ func (nc *NTCP2Config) createPostHandshakeHook() func(*noise.NoiseConn) error {
 		}
 
 		// Store the directional modifier for NTCP2Conn to use.
-		nc.sipHashModifier = modifier
+		nc.sipHashModifier.Store(modifier)
 
 		log.WithField("handshake_hash_len", len(h)).
 			WithField("ask_master_len", len(askMaster)).
@@ -505,10 +507,18 @@ func (nc *NTCP2Config) createPostHandshakeHook() func(*noise.NoiseConn) error {
 
 // createBaseConnConfig creates a base ConnConfig with core NTCP2 settings.
 func (nc *NTCP2Config) createBaseConnConfig() *noise.ConnConfig {
+	// When no static key is provided, use nil (not a zero-length slice)
+	// so the upstream library can distinguish "no key" from "empty key".
+	var staticKey []byte
+	if len(nc.StaticKey) > 0 {
+		staticKey = make([]byte, len(nc.StaticKey))
+		copy(staticKey, nc.StaticKey)
+	}
+
 	return &noise.ConnConfig{
 		Pattern:          nc.Pattern,
 		Initiator:        nc.Initiator,
-		StaticKey:        make([]byte, len(nc.StaticKey)),
+		StaticKey:        staticKey,
 		HandshakeTimeout: nc.HandshakeTimeout,
 		ReadTimeout:      nc.ReadTimeout,
 		WriteTimeout:     nc.WriteTimeout,
@@ -522,13 +532,6 @@ func (nc *NTCP2Config) createBaseConnConfig() *noise.ConnConfig {
 		),
 		// NTCP2 uses a non-standard protocol name for InitializeSymmetric()
 		ProtocolName: []byte(NTCP2ProtocolName),
-	}
-}
-
-// copyStaticKeyIfProvided copies the static key to the config if one is provided.
-func (nc *NTCP2Config) copyStaticKeyIfProvided(config *noise.ConnConfig) {
-	if len(nc.StaticKey) > 0 {
-		copy(config.StaticKey, nc.StaticKey)
 	}
 }
 
@@ -609,5 +612,5 @@ func (nc *NTCP2Config) createSipHashModifierIfEnabled() *SipHashLengthModifier {
 // Each call to ToConnConfig() creates a fresh modifier instance, so configs can be safely
 // reused for multiple connections without sharing IV state.
 func (nc *NTCP2Config) SipHashModifier() *SipHashLengthModifier {
-	return nc.sipHashModifier
+	return nc.sipHashModifier.Load()
 }

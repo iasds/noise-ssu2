@@ -21,9 +21,10 @@ import (
 type AESObfuscationModifier struct {
 	mu         sync.Mutex
 	name       string
-	routerHash []byte // 32-byte router hash (RH_B)
-	iv         []byte // 16-byte IV from network database
-	aesState   []byte // AES state for message 2 (last ciphertext block from message 1)
+	routerHash []byte       // 32-byte router hash (RH_B)
+	iv         []byte       // 16-byte IV from network database
+	aesState   []byte       // AES state for message 2 (last ciphertext block from message 1)
+	block      cipher.Block // cached AES cipher (key schedule computed once)
 }
 
 // NewAESObfuscationModifier creates a new AES obfuscation modifier for NTCP2.
@@ -52,10 +53,20 @@ func NewAESObfuscationModifier(name string, routerHash, iv []byte) (*AESObfuscat
 	initIV := make([]byte, IVSize)
 	copy(initIV, iv)
 
+	// Pre-compute AES key schedule once (avoids per-call aes.NewCipher).
+	block, err := aes.NewCipher(hash)
+	if err != nil {
+		return nil, oops.
+			Code("AES_CIPHER_CREATION_FAILED").
+			In("ntcp2").
+			Wrap(err)
+	}
+
 	return &AESObfuscationModifier{
 		name:       name,
 		routerHash: hash,
 		iv:         initIV,
+		block:      block,
 	}, nil
 }
 
@@ -71,20 +82,11 @@ func (aom *AESObfuscationModifier) ModifyOutbound(phase handshake.HandshakePhase
 		return data, nil
 	}
 
-	block, err := aes.NewCipher(aom.routerHash)
-	if err != nil {
-		return nil, oops.
-			Code("AES_CIPHER_CREATION_FAILED").
-			In("ntcp2").
-			With("modifier_name", aom.name).
-			Wrap(err)
-	}
-
 	var mode cipher.BlockMode
 	switch phase {
 	case handshake.PhaseInitial:
 		// Message 1: use published IV
-		mode = cipher.NewCBCEncrypter(block, aom.iv)
+		mode = cipher.NewCBCEncrypter(aom.block, aom.iv)
 	case handshake.PhaseExchange:
 		// Message 2: use AES state from message 1
 		if aom.aesState == nil {
@@ -94,7 +96,7 @@ func (aom *AESObfuscationModifier) ModifyOutbound(phase handshake.HandshakePhase
 				With("modifier_name", aom.name).
 				Errorf("AES state not available for message 2")
 		}
-		mode = cipher.NewCBCEncrypter(block, aom.aesState)
+		mode = cipher.NewCBCEncrypter(aom.block, aom.aesState)
 	default:
 		// Message 3 and beyond: no AES obfuscation
 		return data, nil
@@ -124,15 +126,6 @@ func (aom *AESObfuscationModifier) ModifyInbound(phase handshake.HandshakePhase,
 		return data, nil
 	}
 
-	block, err := aes.NewCipher(aom.routerHash)
-	if err != nil {
-		return nil, oops.
-			Code("AES_CIPHER_CREATION_FAILED").
-			In("ntcp2").
-			With("modifier_name", aom.name).
-			Wrap(err)
-	}
-
 	// Per NTCP2 spec: for inbound (decryption), save the last ciphertext block
 	// BEFORE decryption as the AES state for message 2.
 	// The state is data[16:32] (the last ciphertext block of the 32-byte input).
@@ -145,7 +138,7 @@ func (aom *AESObfuscationModifier) ModifyInbound(phase handshake.HandshakePhase,
 	switch phase {
 	case handshake.PhaseInitial:
 		// Message 1: use published IV
-		mode = cipher.NewCBCDecrypter(block, aom.iv)
+		mode = cipher.NewCBCDecrypter(aom.block, aom.iv)
 	case handshake.PhaseExchange:
 		// Message 2: use AES state from message 1
 		if aom.aesState == nil {
@@ -155,7 +148,7 @@ func (aom *AESObfuscationModifier) ModifyInbound(phase handshake.HandshakePhase,
 				With("modifier_name", aom.name).
 				Errorf("AES state not available for message 2")
 		}
-		mode = cipher.NewCBCDecrypter(block, aom.aesState)
+		mode = cipher.NewCBCDecrypter(aom.block, aom.aesState)
 	default:
 		// Message 3 and beyond: no AES obfuscation
 		return data, nil

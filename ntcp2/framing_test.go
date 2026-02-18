@@ -18,16 +18,16 @@ func TestSetLengthObfuscator(t *testing.T) {
 	conn := createTestNTCP2Conn(&mockNoiseConn{})
 
 	// Initially nil
-	assert.Nil(t, conn.lengthObfuscator)
+	assert.Nil(t, conn.lengthObfuscator.Load())
 
 	// Set it
 	slm := NewSipHashLengthModifier("test-siphash", [2]uint64{0x1234, 0x5678}, 0)
 	conn.SetLengthObfuscator(slm)
-	assert.Equal(t, slm, conn.lengthObfuscator)
+	assert.Equal(t, slm, conn.lengthObfuscator.Load())
 
 	// Can set to nil to disable
 	conn.SetLengthObfuscator(nil)
-	assert.Nil(t, conn.lengthObfuscator)
+	assert.Nil(t, conn.lengthObfuscator.Load())
 }
 
 // TestFramedWritePath_TakenWhenObfuscatorSet verifies that the framed write
@@ -133,9 +133,7 @@ func TestFrameLengthObfuscation_RoundTrip(t *testing.T) {
 
 	for _, originalLen := range testLengths {
 		// Sender: obfuscate
-		sender.mu.Lock()
-		outMask := sender.getNextOutboundMask()
-		sender.mu.Unlock()
+		outMask := sender.NextOutboundMask()
 		obfuscated := originalLen ^ outMask
 
 		// Put on "wire" as big-endian
@@ -143,9 +141,7 @@ func TestFrameLengthObfuscation_RoundTrip(t *testing.T) {
 		binary.BigEndian.PutUint16(wire, obfuscated)
 
 		// Receiver: deobfuscate
-		receiver.mu.Lock()
-		inMask := receiver.getNextInboundMask()
-		receiver.mu.Unlock()
+		inMask := receiver.NextInboundMask()
 		recovered := binary.BigEndian.Uint16(wire) ^ inMask
 
 		assert.Equal(t, originalLen, recovered, "round-trip failed for length %d", originalLen)
@@ -165,15 +161,11 @@ func TestFrameLengthObfuscation_MultipleFrames(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		originalLen := uint16(i*137 + 1) // Arbitrary non-trivial lengths
 
-		sender.mu.Lock()
-		outMask := sender.getNextOutboundMask()
-		sender.mu.Unlock()
+		outMask := sender.NextOutboundMask()
 
 		obfuscated := originalLen ^ outMask
 
-		receiver.mu.Lock()
-		inMask := receiver.getNextInboundMask()
-		receiver.mu.Unlock()
+		inMask := receiver.NextInboundMask()
 
 		recovered := obfuscated ^ inMask
 		assert.Equal(t, originalLen, recovered, "round-trip failed at frame %d", i)
@@ -202,9 +194,7 @@ func TestFramedRead_ZeroLengthFrame(t *testing.T) {
 
 	// Compute what mask the reader will use for the first frame
 	probe := NewSipHashLengthModifier("probe", keys, 0)
-	probe.mu.Lock()
-	mask := probe.getNextInboundMask()
-	probe.mu.Unlock()
+	mask := probe.NextInboundMask()
 
 	go func() {
 		// Write a 2-byte value that deobfuscates to zero
@@ -242,9 +232,7 @@ func TestFramedRead_FrameTooLarge(t *testing.T) {
 
 	// Compute what mask the reader will use
 	probe := NewSipHashLengthModifier("probe", keys, 0)
-	probe.mu.Lock()
-	mask := probe.getNextInboundMask()
-	probe.mu.Unlock()
+	mask := probe.NextInboundMask()
 
 	go func() {
 		// Construct a length that deobfuscates to MaxFrameSize + 1
@@ -356,9 +344,7 @@ func TestFramedRead_PartialFrameRead(t *testing.T) {
 
 	// Compute what mask the reader will use
 	probe := NewSipHashLengthModifier("probe", keys, 0)
-	probe.mu.Lock()
-	mask := probe.getNextInboundMask()
-	probe.mu.Unlock()
+	mask := probe.NextInboundMask()
 
 	go func() {
 		// Write a valid length (100) but only 10 bytes of frame data, then close
@@ -465,9 +451,7 @@ func TestFrameWireFormat(t *testing.T) {
 	expectedObfuscated := plainLen ^ expectedMask
 
 	// Simulate what writeFramed does for the length field
-	sender.mu.Lock()
-	mask := sender.getNextOutboundMask()
-	sender.mu.Unlock()
+	mask := sender.NextOutboundMask()
 	assert.Equal(t, expectedMask, mask)
 
 	obfuscated := plainLen ^ mask
@@ -493,14 +477,10 @@ func TestFrameIO_FullPipeRoundTrip(t *testing.T) {
 
 	// Compute the first mask
 	senderMod := NewSipHashLengthModifier("sender", keys, initialIV)
-	senderMod.mu.Lock()
-	outMask := senderMod.getNextOutboundMask()
-	senderMod.mu.Unlock()
+	outMask := senderMod.NextOutboundMask()
 
 	receiverMod := NewSipHashLengthModifier("receiver", keys, initialIV)
-	receiverMod.mu.Lock()
-	inMask := receiverMod.getNextInboundMask()
-	receiverMod.mu.Unlock()
+	inMask := receiverMod.NextInboundMask()
 
 	// Masks should match
 	assert.Equal(t, outMask, inMask, "sender and receiver masks should match")

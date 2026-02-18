@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"io"
-	"math/big"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -42,7 +41,9 @@ type NTCP2Conn struct {
 	//   Write: [2-byte SipHash-obfuscated length][ChaChaPoly ciphertext]
 	//   Read:  deobfuscate 2-byte length, read exact frame, decrypt
 	// When nil, Read/Write delegate directly to NoiseConn (no framing).
-	lengthObfuscator *SipHashLengthModifier
+	// Access is via atomic.Pointer to avoid data races between
+	// SetLengthObfuscator (PostHandshakeHook) and Read/Write.
+	lengthObfuscator atomic.Pointer[SipHashLengthModifier]
 
 	// readBuffer holds surplus plaintext from readFramed when the
 	// decrypted frame is larger than the caller's Read buffer.
@@ -62,11 +63,13 @@ type NTCP2Conn struct {
 
 	// writeNonce tracks the number of frames written (data-phase encrypt operations).
 	// The connection MUST be terminated before this reaches MaxNonce (2^64-2).
-	writeNonce atomic.Uint64
+	// Only accessed under writeMu.
+	writeNonce uint64
 
 	// readNonce tracks the number of frames read (data-phase decrypt operations).
 	// The connection MUST be terminated before this reaches MaxNonce (2^64-2).
-	readNonce atomic.Uint64
+	// Only accessed under readMu.
+	readNonce uint64
 
 	// logger for connection events
 	logger logger.Logger
@@ -111,9 +114,9 @@ func NewNTCP2Conn(noiseConn *noise.NoiseConn, localAddr, remoteAddr *NTCP2Addr) 
 
 // SetLengthObfuscator sets the SipHash length obfuscator for data-phase framing.
 // When set, Read/Write will use framed I/O with SipHash-obfuscated length prefixes.
-// This should be called before any data-phase Read/Write operations.
+// This is safe to call concurrently with Read/Write (uses atomic.Pointer).
 func (nc *NTCP2Conn) SetLengthObfuscator(slm *SipHashLengthModifier) {
-	nc.lengthObfuscator = slm
+	nc.lengthObfuscator.Store(slm)
 }
 
 // Read implements net.Conn.Read.
@@ -127,7 +130,7 @@ func (nc *NTCP2Conn) SetLengthObfuscator(slm *SipHashLengthModifier) {
 //
 // When no length obfuscator is set, delegates directly to NoiseConn.Read.
 func (nc *NTCP2Conn) Read(b []byte) (int, error) {
-	if nc.lengthObfuscator == nil {
+	if nc.lengthObfuscator.Load() == nil {
 		return nc.readDirect(b)
 	}
 	nc.readMu.Lock()
@@ -179,10 +182,11 @@ func (nc *NTCP2Conn) readDirect(b []byte) (int, error) {
 
 // readFramed reads an NTCP2 data-phase frame with SipHash length deobfuscation.
 func (nc *NTCP2Conn) readFramed(b []byte) (int, error) {
-	if err := nc.checkNonceLimit(&nc.readNonce, "inbound"); err != nil {
+	if err := nc.checkReadNonceLimit(); err != nil {
 		return 0, err
 	}
 
+	slm := nc.lengthObfuscator.Load()
 	underlying := nc.noiseConn.Underlying()
 
 	// Step 1: Read the 2-byte obfuscated length field
@@ -197,9 +201,7 @@ func (nc *NTCP2Conn) readFramed(b []byte) (int, error) {
 	}
 
 	// Step 2: Deobfuscate using SipHash inbound mask
-	nc.lengthObfuscator.mu.Lock()
-	mask := nc.lengthObfuscator.getNextInboundMask()
-	nc.lengthObfuscator.mu.Unlock()
+	mask := slm.NextInboundMask()
 
 	obfuscatedLen := binary.BigEndian.Uint16(lengthBuf)
 	frameLen := obfuscatedLen ^ mask
@@ -242,7 +244,7 @@ func (nc *NTCP2Conn) readFramed(b []byte) (int, error) {
 		copy(nc.readBuffer, plaintext[n:])
 	}
 
-	nc.readNonce.Add(1)
+	nc.readNonce++
 
 	nc.logger.Trace("NTCP2 data read (framed)",
 		"frame_length", frameLen,
@@ -255,8 +257,6 @@ func (nc *NTCP2Conn) readFramed(b []byte) (int, error) {
 	return n, nil
 }
 
-// validateFrameLength checks that the deobfuscated frame length is within the
-// NTCP2 spec range of MinDataPhaseFrameSize–MaxFrameSize.
 // validateFrameLength checks that the deobfuscated frame length is within the
 // NTCP2 spec range of MinDataPhaseFrameSize–MaxFrameSize.
 // Per the spec: "Take the same error action for an invalid length field value
@@ -309,17 +309,21 @@ func (nc *NTCP2Conn) applyProbingResistanceDelay() {
 	}
 }
 
-// handleAEADError implements a best-effort probing-resistance delay
-// before the connection is closed by the caller. Per the NTCP2 spec,
-// on an AEAD authentication failure the receiver should read random
-// bytes for a random duration before closing.
+// handleAEADError implements probing-resistance behaviour on AEAD authentication
+// failure. Per the NTCP2 spec, the receiver should:
+//  1. Send a termination block with reason code 4 (AEAD failure).
+//  2. Read a random number of junk bytes for a random duration.
+//  3. Close the connection (caller responsibility).
 func (nc *NTCP2Conn) handleAEADError(underlying net.Conn) {
+	// Best-effort: send termination block (reason 4 = AEAD failure).
+	nc.sendTerminationBlock(underlying, TerminationReasonAEADFailure)
+
 	// Generate a random byte count (0–AEADErrorMaxJunkBytes) to read before returning.
-	nBig, err := rand.Int(rand.Reader, big.NewInt(AEADErrorMaxJunkBytes))
-	if err != nil {
+	var rndBuf [2]byte
+	if _, err := rand.Read(rndBuf[:]); err != nil {
 		return // best effort
 	}
-	junkLen := int(nBig.Int64())
+	junkLen := int(binary.BigEndian.Uint16(rndBuf[:])) % AEADErrorMaxJunkBytes
 	if junkLen == 0 {
 		return
 	}
@@ -329,6 +333,28 @@ func (nc *NTCP2Conn) handleAEADError(underlying net.Conn) {
 	underlying.SetReadDeadline(time.Now().Add(AEADErrorTimeout)) //nolint:errcheck
 	junk := make([]byte, junkLen)
 	underlying.Read(junk) //nolint:errcheck // best effort
+}
+
+// sendTerminationBlock writes an NTCP2 termination block to the underlying
+// connection on a best-effort basis. The block format is:
+//
+//	[type:1=0x04][size:2=0x0009][version:4][networkID:1][time:4][reason:1]
+//
+// This is used for AEAD failure notification (reason 4) and graceful close.
+func (nc *NTCP2Conn) sendTerminationBlock(conn net.Conn, reason byte) {
+	// Set a short write deadline to avoid blocking.
+	conn.SetWriteDeadline(time.Now().Add(1 * time.Second)) //nolint:errcheck
+
+	var block [TerminationBlockSize]byte
+	block[0] = TerminationBlockType                            // block type = 4
+	binary.BigEndian.PutUint16(block[1:3], TerminationDataLen) // data length = 9
+	// version (4 bytes): 0 (unknown version)
+	// networkID (1 byte): 2 (I2P mainnet)
+	block[7] = I2PMainnetNetworkID
+	// time (4 bytes): 0 (we don't have router timestamp)
+	block[11] = reason
+
+	conn.Write(block[:]) //nolint:errcheck // best effort
 }
 
 // Write implements net.Conn.Write.
@@ -342,7 +368,7 @@ func (nc *NTCP2Conn) handleAEADError(underlying net.Conn) {
 // Large writes are transparently split into multiple frames of at most
 // MaxFrameSize minus Poly1305Overhead bytes of plaintext each.
 func (nc *NTCP2Conn) Write(b []byte) (int, error) {
-	if nc.lengthObfuscator == nil {
+	if nc.lengthObfuscator.Load() == nil {
 		return nc.writeDirect(b)
 	}
 	return nc.writeFramed(b)
@@ -396,13 +422,29 @@ func (nc *NTCP2Conn) writeFramed(b []byte) (int, error) {
 	return totalWritten, nil
 }
 
-// checkNonceLimit returns an error if the nonce counter has reached MaxNonce.
-func (nc *NTCP2Conn) checkNonceLimit(counter *atomic.Uint64, direction string) error {
-	if counter.Load() >= MaxNonce {
+// checkReadNonceLimit returns an error if the read nonce has reached MaxNonce.
+// Must be called under readMu.
+func (nc *NTCP2Conn) checkReadNonceLimit() error {
+	if nc.readNonce >= MaxNonce {
 		return oops.
 			Code("NONCE_LIMIT_REACHED").
 			In("ntcp2").
-			With("direction", direction).
+			With("direction", "inbound").
+			With("local_addr", nc.localAddr.String()).
+			With("remote_addr", nc.remoteAddr.String()).
+			Errorf("nonce limit reached (2^64-2); connection must be terminated")
+	}
+	return nil
+}
+
+// checkWriteNonceLimit returns an error if the write nonce has reached MaxNonce.
+// Must be called under writeMu.
+func (nc *NTCP2Conn) checkWriteNonceLimit() error {
+	if nc.writeNonce >= MaxNonce {
+		return oops.
+			Code("NONCE_LIMIT_REACHED").
+			In("ntcp2").
+			With("direction", "outbound").
 			With("local_addr", nc.localAddr.String()).
 			With("remote_addr", nc.remoteAddr.String()).
 			Errorf("nonce limit reached (2^64-2); connection must be terminated")
@@ -412,9 +454,11 @@ func (nc *NTCP2Conn) checkNonceLimit(counter *atomic.Uint64, direction string) e
 
 // writeSingleFrame encrypts one chunk and writes it as an NTCP2 wire frame.
 func (nc *NTCP2Conn) writeSingleFrame(b []byte) (int, error) {
-	if err := nc.checkNonceLimit(&nc.writeNonce, "outbound"); err != nil {
+	if err := nc.checkWriteNonceLimit(); err != nil {
 		return 0, err
 	}
+
+	slm := nc.lengthObfuscator.Load()
 
 	// Step 1: Encrypt the plaintext
 	encrypted, err := nc.noiseConn.Encrypt(b)
@@ -441,9 +485,7 @@ func (nc *NTCP2Conn) writeSingleFrame(b []byte) (int, error) {
 	// Step 3: Compute obfuscated length
 	frameLen := uint16(len(encrypted))
 
-	nc.lengthObfuscator.mu.Lock()
-	mask := nc.lengthObfuscator.getNextOutboundMask()
-	nc.lengthObfuscator.mu.Unlock()
+	mask := slm.NextOutboundMask()
 
 	obfuscatedLen := frameLen ^ mask
 
@@ -474,7 +516,7 @@ func (nc *NTCP2Conn) writeSingleFrame(b []byte) (int, error) {
 			Errorf("partial frame write: wrote %d of %d bytes", n, len(frame))
 	}
 
-	nc.writeNonce.Add(1)
+	nc.writeNonce++
 
 	nc.logger.Trace("NTCP2 data written (framed)",
 		"plaintext_length", len(b),
@@ -515,15 +557,8 @@ func (nc *NTCP2Conn) Close() error {
 // sensitive data from lingering in memory after connection close. Per the
 // NTCP2 spec: "routers should zero-out any in-memory ephemeral data".
 func (nc *NTCP2Conn) zeroKeyMaterial() {
-	if nc.lengthObfuscator != nil {
-		nc.lengthObfuscator.mu.Lock()
-		nc.lengthObfuscator.outboundKeys[0] = 0
-		nc.lengthObfuscator.outboundKeys[1] = 0
-		nc.lengthObfuscator.inboundKeys[0] = 0
-		nc.lengthObfuscator.inboundKeys[1] = 0
-		nc.lengthObfuscator.outboundIV = 0
-		nc.lengthObfuscator.inboundIV = 0
-		nc.lengthObfuscator.mu.Unlock()
+	if slm := nc.lengthObfuscator.Load(); slm != nil {
+		slm.ZeroKeys()
 	}
 
 	// Zero the Noise cipher state key material (send and receive CipherStates).
@@ -656,6 +691,13 @@ func (nc *NTCP2Conn) HandshakeHash() []byte {
 // so the correct response to imminent exhaustion is to establish a new
 // connection rather than attempt a rekey.
 func (nc *NTCP2Conn) NonceExhaustionImminent() bool {
-	return nc.writeNonce.Load() >= NonceRekeyThreshold ||
-		nc.readNonce.Load() >= NonceRekeyThreshold
+	nc.writeMu.Lock()
+	wn := nc.writeNonce
+	nc.writeMu.Unlock()
+
+	nc.readMu.Lock()
+	rn := nc.readNonce
+	nc.readMu.Unlock()
+
+	return wn >= NonceRekeyThreshold || rn >= NonceRekeyThreshold
 }

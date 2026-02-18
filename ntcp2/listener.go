@@ -114,9 +114,29 @@ func initializeListener(underlying net.Listener, config *NTCP2Config, ntcp2Addr 
 // connection via the full NTCP2Config.ToConnConfig() path, ensuring the
 // CipherSuite, ProtocolName, and Modifiers are all correctly set.
 func (nl *NTCP2Listener) createResponderConnConfig() (*noise.ConnConfig, error) {
-	// Copy the config so we don't mutate the listener's config
-	responderCfg := *nl.config
-	responderCfg.Initiator = false
+	// Build a fresh config rather than copying the listener's config by value,
+	// because NTCP2Config contains an atomic.Pointer which must not be copied.
+	responderCfg := &NTCP2Config{
+		Pattern:              nl.config.Pattern,
+		Initiator:            false,
+		RouterHash:           nl.config.RouterHash,
+		StaticKey:            nl.config.StaticKey,
+		RemoteRouterHash:     nl.config.RemoteRouterHash,
+		HandshakeTimeout:     nl.config.HandshakeTimeout,
+		ReadTimeout:          nl.config.ReadTimeout,
+		WriteTimeout:         nl.config.WriteTimeout,
+		HandshakeRetries:     nl.config.HandshakeRetries,
+		RetryBackoff:         nl.config.RetryBackoff,
+		EnableAESObfuscation: nl.config.EnableAESObfuscation,
+		ObfuscationIV:        nl.config.ObfuscationIV,
+		EnableSipHashLength:  nl.config.EnableSipHashLength,
+		SipHashKeys:          nl.config.SipHashKeys,
+		Modifiers:            nl.config.Modifiers,
+		MaxFrameSize:         nl.config.MaxFrameSize,
+		FramePaddingEnabled:  nl.config.FramePaddingEnabled,
+		MinPaddingSize:       nl.config.MinPaddingSize,
+		MaxPaddingSize:       nl.config.MaxPaddingSize,
+	}
 	connConfig, err := responderCfg.ToConnConfig()
 	if err != nil {
 		return nil, oops.

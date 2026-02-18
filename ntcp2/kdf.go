@@ -81,7 +81,26 @@ func DeriveSipHashKeys(askMaster, handshakeHash []byte) (
 	sipKeysBA[1] = binary.LittleEndian.Uint64(fullBA[8:16])
 	sipIVBA = binary.LittleEndian.Uint64(fullBA[16:24])
 
+	// Per NTCP2 spec: zero all intermediate key material after use.
+	// "overwrite ask_master in memory, no longer needed"
+	// "overwrite sip_master in memory, no longer needed"
+	// "overwrite the temp_key in memory, no longer needed"
+	zeroBytes(hData)
+	zeroBytes(tempKey)
+	zeroBytes(sipMaster)
+	zeroBytes(fullAB)
+	zeroBytes(step5Data)
+	zeroBytes(fullBA)
+
 	return sipKeysAB, sipIVAB, sipKeysBA, sipIVBA, nil
+}
+
+// zeroBytes zeroes all bytes in the slice to prevent sensitive data from
+// lingering in memory.
+func zeroBytes(b []byte) {
+	for i := range b {
+		b[i] = 0
+	}
 }
 
 // hmacSHA256 computes HMAC-SHA256(key, data) and returns the 32-byte result.

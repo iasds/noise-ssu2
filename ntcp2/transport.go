@@ -315,11 +315,17 @@ func createDialAddresses(conn net.Conn, config *NTCP2Config) (*NTCP2Addr, *NTCP2
 			Errorf("config.RemoteRouterHash must be exactly %d bytes", RouterHashSize)
 	}
 
-	// Create remote address from connection's remote address and config
+	// Create remote address from connection's remote address and config.
+	// For responder connections (e.g., WrapNTCP2Conn on accepted conns),
+	// the remote router hash may not be known until after the handshake
+	// completes and PeerStaticKey() is available. Use a placeholder zero
+	// hash in that case so NewNTCP2Addr does not reject the nil input.
 	var remoteRouterHash []byte
 	if config.RemoteRouterHash != nil {
 		remoteRouterHash = make([]byte, len(config.RemoteRouterHash))
 		copy(remoteRouterHash, config.RemoteRouterHash)
+	} else {
+		remoteRouterHash = make([]byte, RouterHashSize) // placeholder zero hash
 	}
 
 	remoteAddr, err := NewNTCP2Addr(

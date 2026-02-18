@@ -140,6 +140,38 @@ func (slm *SipHashLengthModifier) getNextInboundMask() uint16 {
 	return uint16(hash & 0xFFFF)
 }
 
+// NextInboundMask generates the next SipHash mask for inbound (read) direction.
+// This method is safe for concurrent use.
+func (slm *SipHashLengthModifier) NextInboundMask() uint16 {
+	slm.mu.Lock()
+	mask := slm.getNextInboundMask()
+	slm.mu.Unlock()
+	return mask
+}
+
+// NextOutboundMask generates the next SipHash mask for outbound (write) direction.
+// This method is safe for concurrent use.
+func (slm *SipHashLengthModifier) NextOutboundMask() uint16 {
+	slm.mu.Lock()
+	mask := slm.getNextOutboundMask()
+	slm.mu.Unlock()
+	return mask
+}
+
+// ZeroKeys zeroes all SipHash key material and IVs. This should be called
+// during connection close to prevent sensitive data from lingering in memory.
+// This method is safe for concurrent use.
+func (slm *SipHashLengthModifier) ZeroKeys() {
+	slm.mu.Lock()
+	slm.outboundKeys[0] = 0
+	slm.outboundKeys[1] = 0
+	slm.inboundKeys[0] = 0
+	slm.inboundKeys[1] = 0
+	slm.outboundIV = 0
+	slm.inboundIV = 0
+	slm.mu.Unlock()
+}
+
 // Name returns the modifier name for logging and debugging.
 func (slm *SipHashLengthModifier) Name() string {
 	return slm.name

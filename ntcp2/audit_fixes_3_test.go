@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"net"
-	"sync/atomic"
 	"testing"
 
 	noise "github.com/go-i2p/go-noise"
@@ -97,30 +96,38 @@ func TestNonceExhaustionImminent(t *testing.T) {
 	assert.False(t, conn.NonceExhaustionImminent())
 
 	// Set write nonce above threshold
-	conn.writeNonce.Store(NonceRekeyThreshold)
+	conn.writeMu.Lock()
+	conn.writeNonce = NonceRekeyThreshold
+	conn.writeMu.Unlock()
 	assert.True(t, conn.NonceExhaustionImminent())
 
 	// Reset write, set read nonce above threshold
-	conn.writeNonce.Store(0)
-	conn.readNonce.Store(NonceRekeyThreshold)
+	conn.writeMu.Lock()
+	conn.writeNonce = 0
+	conn.writeMu.Unlock()
+	conn.readMu.Lock()
+	conn.readNonce = NonceRekeyThreshold
+	conn.readMu.Unlock()
 	assert.True(t, conn.NonceExhaustionImminent())
 
 	// Reset both
-	conn.readNonce.Store(0)
+	conn.readMu.Lock()
+	conn.readNonce = 0
+	conn.readMu.Unlock()
 	assert.False(t, conn.NonceExhaustionImminent())
 }
 
 // --- checkNonceLimit nonce exhaustion path ---
 
-// TestCheckNonceLimit_AtMaxNonce verifies that checkNonceLimit returns
+// TestCheckNonceLimit_AtMaxNonce verifies that checkWriteNonceLimit returns
 // an error when the nonce has reached MaxNonce.
 func TestCheckNonceLimit_AtMaxNonce(t *testing.T) {
 	conn := createTestNTCP2Conn(&mockNoiseConn{})
 
-	var counter atomic.Uint64
-	counter.Store(MaxNonce)
-
-	err := conn.checkNonceLimit(&counter, "outbound")
+	conn.writeMu.Lock()
+	conn.writeNonce = MaxNonce
+	err := conn.checkWriteNonceLimit()
+	conn.writeMu.Unlock()
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "nonce limit reached")
 }
@@ -129,10 +136,10 @@ func TestCheckNonceLimit_AtMaxNonce(t *testing.T) {
 func TestCheckNonceLimit_BelowMaxNonce(t *testing.T) {
 	conn := createTestNTCP2Conn(&mockNoiseConn{})
 
-	var counter atomic.Uint64
-	counter.Store(0)
-
-	err := conn.checkNonceLimit(&counter, "outbound")
+	conn.writeMu.Lock()
+	conn.writeNonce = 0
+	err := conn.checkWriteNonceLimit()
+	conn.writeMu.Unlock()
 	assert.NoError(t, err)
 }
 
@@ -475,17 +482,13 @@ func TestFrameLengthObfuscation_DirectionalRoundTrip(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		originalLen := uint16(16 + i*100)
 
-		initiator.mu.Lock()
-		outMask := initiator.getNextOutboundMask()
-		initiator.mu.Unlock()
+		outMask := initiator.NextOutboundMask()
 		obfuscated := originalLen ^ outMask
 
 		wire := make([]byte, 2)
 		binary.BigEndian.PutUint16(wire, obfuscated)
 
-		responder.mu.Lock()
-		inMask := responder.getNextInboundMask()
-		responder.mu.Unlock()
+		inMask := responder.NextInboundMask()
 		recovered := binary.BigEndian.Uint16(wire) ^ inMask
 
 		assert.Equal(t, originalLen, recovered,
