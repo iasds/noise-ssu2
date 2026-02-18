@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/rand"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
+	upstreamnoise "github.com/go-i2p/noise"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -346,51 +348,83 @@ func TestWrapNTCP2Listener(t *testing.T) {
 
 func TestDialNTCP2WithHandshake(t *testing.T) {
 	t.Run("handshake with context timeout", func(t *testing.T) {
-		// Create a listener for the test
-		routerHash := generateRandomBytes(32)
-		staticKey := generateRandomBytes(32)
+		cs := upstreamnoise.NewCipherSuite(
+			upstreamnoise.DH25519,
+			upstreamnoise.CipherChaChaPoly,
+			upstreamnoise.HashSHA256,
+		)
 
+		// Generate real Curve25519 keypairs so the XK handshake works
+		responderKP, err := cs.GenerateKeypair(rand.Reader)
+		require.NoError(t, err)
+		initiatorKP, err := cs.GenerateKeypair(rand.Reader)
+		require.NoError(t, err)
+
+		// Create responder (listener) config
+		routerHash := generateRandomBytes(32)
 		listenerConfig, err := NewNTCP2Config(routerHash, false)
 		require.NoError(t, err)
-		listenerConfig, err = listenerConfig.WithStaticKey(staticKey)
+		listenerConfig, err = listenerConfig.WithStaticKey(responderKP.Private)
+		require.NoError(t, err)
+		listenerConfig, err = listenerConfig.WithAESObfuscation(false, nil)
 		require.NoError(t, err)
 
 		listener, err := ListenNTCP2("tcp", "127.0.0.1:0", listenerConfig)
 		require.NoError(t, err)
 		defer listener.Close()
 
-		// Create dial config
-		clientRouterHash := generateRandomBytes(32)
-		clientStaticKey := generateRandomBytes(32)
+		// Accept and handshake on the server side in a goroutine
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			// Perform the responder handshake
+			ntcp2Conn := conn.(*NTCP2Conn)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := ntcp2Conn.UnderlyingConn().Handshake(ctx); err != nil {
+				ntcp2Conn.Close()
+				return
+			}
+			ntcp2Conn.PropagateSipHash()
+			ntcp2Conn.Close()
+		}()
 
+		// Create initiator (dial) config
+		clientRouterHash := generateRandomBytes(32)
 		dialConfig, err := NewNTCP2Config(clientRouterHash, true)
 		require.NoError(t, err)
-		dialConfig, err = dialConfig.WithStaticKey(clientStaticKey)
+		dialConfig, err = dialConfig.WithStaticKey(initiatorKP.Private)
 		require.NoError(t, err)
 		dialConfig, err = dialConfig.WithRemoteRouterHash(routerHash)
 		require.NoError(t, err)
-		dialConfig, err = dialConfig.WithRemoteStaticKey(generateRandomBytes(32))
+		dialConfig, err = dialConfig.WithRemoteStaticKey(responderKP.Public)
 		require.NoError(t, err)
-		dialConfig, err = dialConfig.WithAESObfuscation(true, generateRandomBytes(16))
+		dialConfig, err = dialConfig.WithAESObfuscation(false, nil)
 		require.NoError(t, err)
 		dialConfig = dialConfig.
-			WithHandshakeTimeout(1 * time.Second)
+			WithHandshakeTimeout(5 * time.Second)
 
-		// Try to dial with handshake (will fail due to no handshake responder)
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		// Dial with handshake — should succeed now that a responder is running
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		// Get the underlying TCP address from the NTCP2 listener
 		ntcp2Addr := listener.Addr().(*NTCP2Addr)
 		underlyingAddr := ntcp2Addr.UnderlyingAddr().String()
 
 		conn, err := DialNTCP2WithHandshakeContext(ctx, "tcp", underlyingAddr, dialConfig)
 
-		// Expected to fail since there's no actual handshake responder set up
-		assert.Error(t, err)
-		assert.Nil(t, conn)
-		// The handshake will fail with a more specific error about bad point length or similar
-		assert.Contains(t, err.Error(), "handshake failed")
+		// Handshake should succeed with matching keys and a live responder
+		assert.NoError(t, err)
+		if conn != nil {
+			conn.Close()
+		}
+
+		wg.Wait()
 	})
 }
 
