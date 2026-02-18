@@ -24,9 +24,7 @@ func main() {
 	}
 
 	// Set default server address if none provided
-	if args.ServerAddr == "" && args.ClientAddr == "" && !args.Demo && !args.Generate {
-		args.ServerAddr = "localhost:8080" // Default shutdown test address
-	}
+	handleDefaultAddress(args, "localhost:8080")
 
 	// Validate arguments
 	if err := args.ValidateArgs(); err != nil {
@@ -36,18 +34,12 @@ func main() {
 	}
 
 	// Handle special modes
-	if args.Demo {
-		runShutdownDemo(args)
-		return
-	}
-
-	if args.Generate {
-		shared.RunGenerate()
+	if handleSpecialModes(args, runShutdownDemo) {
 		return
 	}
 
 	// Parse keys for the selected pattern
-	staticKey, _, err := parseShutdownKeys(args)
+	staticKey, _, err := shared.ParseKeys(args)
 	if err != nil {
 		log.Fatalf("❌ Key parsing failed: %v", err)
 	}
@@ -62,37 +54,24 @@ func main() {
 	}
 }
 
-// parseShutdownKeys handles key parsing for the shutdown example
-func parseShutdownKeys(args *shared.CommonArgs) ([]byte, []byte, error) {
-	// For patterns that require local static key
-	needsLocal, needsRemote := shared.GetPatternRequirements(args.Pattern)
-
-	var staticKey, remoteKey []byte
-	var err error
-
-	if needsLocal {
-		if args.StaticKey != "" {
-			staticKey, err = shared.ParseKeyFromHex(args.StaticKey)
-			if err != nil {
-				return nil, nil, fmt.Errorf("invalid static key: %w", err)
-			}
-		} else {
-			// Generate a key for the demo
-			staticKey, err = shared.GenerateRandomKey()
-			if err != nil {
-				return nil, nil, fmt.Errorf("failed to generate static key: %w", err)
-			}
-		}
+// handleDefaultAddress sets the default address when none provided
+func handleDefaultAddress(args *shared.CommonArgs, defaultAddr string) {
+	if args.ServerAddr == "" && args.ClientAddr == "" && !args.Demo && !args.Generate {
+		args.ServerAddr = defaultAddr
 	}
+}
 
-	if needsRemote && args.RemoteKey != "" {
-		remoteKey, err = shared.ParseKeyFromHex(args.RemoteKey)
-		if err != nil {
-			return nil, nil, fmt.Errorf("invalid remote key: %w", err)
-		}
+// handleSpecialModes handles demo and generate modes, returning true if handled
+func handleSpecialModes(args *shared.CommonArgs, demoFunc func(*shared.CommonArgs)) bool {
+	if args.Demo {
+		demoFunc(args)
+		return true
 	}
-
-	return staticKey, remoteKey, nil
+	if args.Generate {
+		shared.RunGenerate()
+		return true
+	}
+	return false
 }
 
 // runShutdownDemo demonstrates graceful shutdown with server and clients
@@ -100,7 +79,7 @@ func runShutdownDemo(args *shared.CommonArgs) {
 	fmt.Printf("🎭 Running shutdown demo with graceful termination\n")
 
 	// Parse keys for demo
-	staticKey, _, err := parseShutdownKeys(args)
+	staticKey, _, err := shared.ParseKeys(args)
 	if err != nil {
 		log.Fatalf("❌ Key parsing failed: %v", err)
 	}

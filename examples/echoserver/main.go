@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"strings"
+	"time"
 
 	"github.com/go-i2p/go-noise"
 	"github.com/go-i2p/go-noise/examples/shared"
@@ -33,13 +34,7 @@ func main() {
 	}
 
 	// Handle special modes
-	if args.Demo {
-		shared.RunDemo()
-		return
-	}
-
-	if args.Generate {
-		shared.RunGenerate()
+	if handleSpecialModes(args) {
 		return
 	}
 
@@ -56,6 +51,19 @@ func main() {
 		fmt.Println("❌ Echo server requires -server address")
 		shared.PrintUsage("echoserver", "Noise Protocol echo server supporting all patterns")
 	}
+}
+
+// handleSpecialModes handles demo and generate modes, returning true if handled
+func handleSpecialModes(args *shared.CommonArgs) bool {
+	if args.Demo {
+		shared.RunDemo()
+		return true
+	}
+	if args.Generate {
+		shared.RunGenerate()
+		return true
+	}
+	return false
 }
 
 // parseServerKeys handles key parsing for server configuration
@@ -118,31 +126,26 @@ func runEchoServer(args *shared.CommonArgs, staticKey []byte) {
 	}
 }
 
-// handleEchoConnection handles a single echo connection with handshake
-func handleEchoConnection(conn net.Conn, args *shared.CommonArgs) {
-	defer conn.Close()
-
-	clientAddr := conn.RemoteAddr().String()
-	fmt.Printf("📝 New client connected: %s\n", clientAddr)
-
-	// Perform the Noise handshake
+// performServerHandshake performs the Noise handshake for a server connection
+func performServerHandshake(conn net.Conn, clientAddr string, timeout time.Duration) bool {
 	if noiseConn, ok := conn.(*noise.NoiseConn); ok {
 		fmt.Printf("🔐 Starting handshake with %s...\n", clientAddr)
-		ctx, cancel := context.WithTimeout(context.Background(), args.HandshakeTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
-
 		err := noiseConn.Handshake(ctx)
 		if err != nil {
 			log.Printf("Handshake failed with %s: %v", clientAddr, err)
-			return
+			return false
 		}
 		fmt.Printf("✅ Handshake completed with %s\n", clientAddr)
 	}
+	return true
+}
 
-	// Echo loop - read messages and echo them back
+// runEchoLoop reads messages and echoes them back until disconnect
+func runEchoLoop(conn net.Conn, clientAddr string) {
 	buffer := make([]byte, 1024)
 	for {
-		// Read message from client
 		n, err := conn.Read(buffer)
 		if err != nil {
 			if err != io.EOF {
@@ -150,17 +153,12 @@ func handleEchoConnection(conn net.Conn, args *shared.CommonArgs) {
 			}
 			break
 		}
-
 		message := strings.TrimSpace(string(buffer[:n]))
 		fmt.Printf("📨 Received from %s: %q\n", clientAddr, message)
-
-		// Check for quit command
 		if message == "quit" {
 			fmt.Printf("👋 Client %s requested disconnect\n", clientAddr)
 			break
 		}
-
-		// Echo the message back
 		response := fmt.Sprintf("Echo: %s", message)
 		_, err = conn.Write([]byte(response))
 		if err != nil {
@@ -169,6 +167,20 @@ func handleEchoConnection(conn net.Conn, args *shared.CommonArgs) {
 		}
 		fmt.Printf("📤 Sent to %s: %q\n", clientAddr, response)
 	}
+}
+
+// handleEchoConnection handles a single echo connection with handshake
+func handleEchoConnection(conn net.Conn, args *shared.CommonArgs) {
+	defer conn.Close()
+
+	clientAddr := conn.RemoteAddr().String()
+	fmt.Printf("📝 New client connected: %s\n", clientAddr)
+
+	if !performServerHandshake(conn, clientAddr, args.HandshakeTimeout) {
+		return
+	}
+
+	runEchoLoop(conn, clientAddr)
 
 	fmt.Printf("🔌 Client %s disconnected\n", clientAddr)
 }

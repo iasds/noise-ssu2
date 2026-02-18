@@ -44,7 +44,7 @@ func main() {
 	}
 
 	// Parse keys for the selected pattern
-	staticKey, _, err := parsePoolKeys(args)
+	staticKey, _, err := shared.ParseKeys(args)
 	if err != nil {
 		log.Fatalf("❌ Key parsing failed: %v", err)
 	}
@@ -281,7 +281,7 @@ func runPoolDemo(args *shared.CommonArgs) {
 	fmt.Println("===================================")
 
 	// Parse keys for demo
-	staticKey, _, err := parsePoolKeys(args)
+	staticKey, _, err := shared.ParseKeys(args)
 	if err != nil {
 		log.Fatalf("Failed to parse keys for demo: %v", err)
 	}
@@ -294,37 +294,4 @@ func runPoolDemo(args *shared.CommonArgs) {
 
 	// Run the pool example
 	runPoolExample(&demoArgs, staticKey)
-}
-
-// parsePoolKeys handles key parsing for the pool example
-func parsePoolKeys(args *shared.CommonArgs) ([]byte, []byte, error) {
-	// For patterns that require local static key
-	needsLocal, needsRemote := shared.GetPatternRequirements(args.Pattern)
-
-	var staticKey, remoteKey []byte
-	var err error
-
-	if needsLocal {
-		if args.StaticKey != "" {
-			staticKey, err = shared.ParseKeyFromHex(args.StaticKey)
-			if err != nil {
-				return nil, nil, fmt.Errorf("invalid static key: %w", err)
-			}
-		} else {
-			// Generate a key for the demo
-			staticKey, err = shared.GenerateRandomKey()
-			if err != nil {
-				return nil, nil, fmt.Errorf("failed to generate static key: %w", err)
-			}
-		}
-	}
-
-	if needsRemote && args.RemoteKey != "" {
-		remoteKey, err = shared.ParseKeyFromHex(args.RemoteKey)
-		if err != nil {
-			return nil, nil, fmt.Errorf("invalid remote key: %w", err)
-		}
-	}
-
-	return staticKey, remoteKey, nil
 }

@@ -27,13 +27,7 @@ func main() {
 	}
 
 	// Handle special modes
-	if args.Demo {
-		shared.RunDemo()
-		return
-	}
-
-	if args.Generate {
-		shared.RunGenerate()
+	if handleSpecialModes(args) {
 		return
 	}
 
@@ -49,6 +43,19 @@ func main() {
 	} else if args.ClientAddr != "" {
 		runBasicClient(args, staticKey, remoteKey)
 	}
+}
+
+// handleSpecialModes handles demo and generate modes, returning true if handled
+func handleSpecialModes(args *shared.CommonArgs) bool {
+	if args.Demo {
+		shared.RunDemo()
+		return true
+	}
+	if args.Generate {
+		shared.RunGenerate()
+		return true
+	}
+	return false
 }
 
 // parseKeys handles key parsing and generation for the selected pattern
@@ -197,70 +204,69 @@ func runBasicServer(args *shared.CommonArgs, staticKey []byte) {
 	}
 }
 
-// runBasicClient connects to a basic Noise server with complete handshake
-func runBasicClient(args *shared.CommonArgs, staticKey, remoteKey []byte) {
-	fmt.Printf("🔌 Connecting to server at %s with pattern %s\n", args.ClientAddr, args.Pattern)
-
-	// Create client configuration (initiator)
+// configureBasicClient creates and configures the client connection settings
+func configureBasicClient(args *shared.CommonArgs, staticKey, remoteKey []byte) *noise.ConnConfig {
 	config := noise.NewConnConfig(args.Pattern, true).
 		WithHandshakeTimeout(args.HandshakeTimeout).
 		WithReadTimeout(args.ReadTimeout).
 		WithWriteTimeout(args.WriteTimeout)
-
-	// Add static key if required
 	if staticKey != nil {
 		config = config.WithStaticKey(staticKey)
 		if args.Verbose {
 			fmt.Printf("🔑 Client using static key: %s\n", shared.KeyToHex(staticKey))
 		}
 	}
-
-	// Add remote key if required
 	if remoteKey != nil {
 		config = config.WithRemoteKey(remoteKey)
 		if args.Verbose {
 			fmt.Printf("🔑 Client using remote key: %s\n", shared.KeyToHex(remoteKey))
 		}
 	}
+	return config
+}
 
-	// Connect to server
-	conn, err := noise.DialNoise("tcp", args.ClientAddr, config)
+// connectAndHandshake establishes a connection and performs the handshake
+func connectAndHandshake(addr string, config *noise.ConnConfig, timeout time.Duration) *noise.NoiseConn {
+	conn, err := noise.DialNoise("tcp", addr, config)
 	if err != nil {
 		log.Fatalf("Failed to connect: %v", err)
 	}
-	defer conn.Close()
-
 	fmt.Printf("✓ Connected to: %s\n", conn.RemoteAddr())
-
-	// Perform handshake
 	fmt.Println("🔐 Starting handshake...")
-	ctx, cancel := context.WithTimeout(context.Background(), args.HandshakeTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-
 	err = conn.Handshake(ctx)
 	if err != nil {
 		log.Fatalf("Handshake failed: %v", err)
 	}
 	fmt.Println("✅ Handshake completed - secure channel established!")
+	return conn
+}
 
-	// Send test message
-	message := "Hello from basic client!"
+// sendAndReceive sends a message and reads the response
+func sendAndReceive(conn *noise.NoiseConn, message string) {
 	fmt.Printf("📤 Sending: %s\n", message)
-	_, err = conn.Write([]byte(message))
+	_, err := conn.Write([]byte(message))
 	if err != nil {
 		log.Fatalf("Write failed: %v", err)
 	}
-
-	// Read response
 	buffer := make([]byte, 1024)
 	n, err := conn.Read(buffer)
 	if err != nil {
 		log.Fatalf("Read failed: %v", err)
 	}
-
 	response := string(buffer[:n])
 	fmt.Printf("📨 Received: %s\n", response)
 	fmt.Println("✓ Basic Noise communication completed successfully!")
+}
+
+// runBasicClient connects to a basic Noise server with complete handshake
+func runBasicClient(args *shared.CommonArgs, staticKey, remoteKey []byte) {
+	fmt.Printf("🔌 Connecting to server at %s with pattern %s\n", args.ClientAddr, args.Pattern)
+	config := configureBasicClient(args, staticKey, remoteKey)
+	conn := connectAndHandshake(args.ClientAddr, config, args.HandshakeTimeout)
+	defer conn.Close()
+	sendAndReceive(conn, "Hello from basic client!")
 }
 
 // handleBasicConnection handles a server connection with handshake
