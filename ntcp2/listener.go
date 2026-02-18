@@ -26,8 +26,8 @@ type NTCP2Listener struct {
 	// addr is the NTCP2 address for this listener
 	addr *NTCP2Addr
 
-	// logger for listener events
-	logger logger.Logger
+	// logger for listener events (pointer so runtime log-level changes are visible)
+	logger *logger.Logger
 
 	// closed indicates if the listener has been closed (atomic for lock-free reads)
 	closed atomic.Bool
@@ -99,7 +99,7 @@ func initializeListener(underlying net.Listener, config *NTCP2Config, ntcp2Addr 
 		underlying: underlying,
 		config:     config,
 		addr:       ntcp2Addr,
-		logger:     *log,
+		logger:     log,
 	}
 
 	nl.logger.Info("NTCP2 listener created",

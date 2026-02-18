@@ -312,12 +312,19 @@ func (npm *NTCP2PaddingModifier) removeAEADPadding(data []byte) ([]byte, error) 
 
 // removeTrailingPaddingBlock looks for a valid padding block at the end of the data
 // by iterating through possible padding sizes and verifying the block header matches.
-// This is safe because it requires an exact match: data[start] == PaddingBlockType
-// and the declared big-endian size equals the number of trailing bytes after the header.
+// The search is bounded by the modifier's maxPadding field to avoid O(n) scans on
+// large frames. This is safe because it requires an exact match: data[start] ==
+// PaddingBlockType and the declared big-endian size equals the number of trailing
+// bytes after the header.
 func (npm *NTCP2PaddingModifier) removeTrailingPaddingBlock(data []byte) ([]byte, error) {
 	maxPadding := len(data) - BlockHeaderSize
 	if maxPadding < 0 {
 		return data, nil
+	}
+	// Bound the scan by the modifier's configured maxPadding to avoid O(n)
+	// iteration on large frames. Also respect MaxBlockDataSize as an upper limit.
+	if npm.maxPadding > 0 && maxPadding > npm.maxPadding {
+		maxPadding = npm.maxPadding
 	}
 	if maxPadding > MaxBlockDataSize {
 		maxPadding = MaxBlockDataSize

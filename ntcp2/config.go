@@ -672,6 +672,15 @@ func (nc *NTCP2Config) SipHashModifier() *SipHashLengthModifier {
 // The atomic.Pointer[SipHashLengthModifier] field is NOT copied — the
 // returned config has a fresh zero-value atomic, which is correct
 // because the PostHandshakeHook will populate it after the handshake.
+//
+// WARNING: The Modifiers slice is shallow-copied — individual modifier
+// interface values (pointers to AESObfuscationModifier, SipHashLengthModifier,
+// etc.) are shared between the original and clone. Since modifiers have
+// mutable state (AES state, SipHash IVs), the clone is NOT safe for
+// concurrent use with the original if both are actively used for handshakes.
+// In practice, the listener path calls ToConnConfig() on each clone, which
+// creates fresh modifier instances, so this is safe for the listener use case.
+// Do NOT use Clone() alone if both configs will be used concurrently.
 func (nc *NTCP2Config) Clone() *NTCP2Config {
 	clone := &NTCP2Config{
 		Pattern:              nc.Pattern,

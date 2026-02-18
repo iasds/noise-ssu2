@@ -62,10 +62,16 @@ type NTCP2Conn struct {
 	// Retained so that after Handshake() fires the PostHandshakeHook (which
 	// stores derived SipHash keys on the config), the caller can call
 	// PropagateSipHash() to copy them to lengthObfuscator.
-	ntcp2Config *NTCP2Config
+	// Access is via atomic.Pointer for thread safety.
+	ntcp2Config atomic.Pointer[NTCP2Config]
 
 	// closeOnce ensures Close is idempotent and key material is zeroed exactly once.
 	closeOnce sync.Once
+
+	// broken is set when a framing I/O error occurs after the SipHash mask has
+	// been consumed. Once set, the connection's SipHash state is irrecoverably
+	// desynchronized and all future Read/Write calls will fail immediately.
+	broken atomic.Bool
 
 	// writeNonce tracks the number of frames written (data-phase encrypt operations).
 	// The connection MUST be terminated before this reaches MaxNonce (2^64-2).
@@ -77,8 +83,8 @@ type NTCP2Conn struct {
 	// Only accessed under readMu.
 	readNonce uint64
 
-	// logger for connection events
-	logger logger.Logger
+	// logger for connection events (pointer so runtime log-level changes are visible)
+	logger *logger.Logger
 }
 
 // NewNTCP2Conn creates a new NTCP2Conn wrapping the provided NoiseConn.
@@ -108,7 +114,7 @@ func NewNTCP2Conn(noiseConn *noise.NoiseConn, localAddr, remoteAddr *NTCP2Addr) 
 		noiseConn:  noiseConn,
 		localAddr:  localAddr,
 		remoteAddr: remoteAddr,
-		logger:     *log,
+		logger:     log,
 	}
 
 	conn.logger.Debug("NTCP2 connection created",
@@ -127,18 +133,20 @@ func (nc *NTCP2Conn) SetLengthObfuscator(slm *SipHashLengthModifier) {
 
 // SetNTCP2Config stores a reference to the originating NTCP2Config so that
 // PropagateSipHash can copy PostHandshakeHook-derived keys after handshake.
+// This is safe to call concurrently with PropagateSipHash (uses atomic.Pointer).
 func (nc *NTCP2Conn) SetNTCP2Config(cfg *NTCP2Config) {
-	nc.ntcp2Config = cfg
+	nc.ntcp2Config.Store(cfg)
 }
 
 // PropagateSipHash copies the SipHash modifier from the stored NTCP2Config
 // (populated by the PostHandshakeHook during Handshake) into this connection's
 // lengthObfuscator. Call this immediately after a successful Handshake().
 func (nc *NTCP2Conn) PropagateSipHash() {
-	if nc.ntcp2Config == nil {
+	cfg := nc.ntcp2Config.Load()
+	if cfg == nil {
 		return
 	}
-	if slm := nc.ntcp2Config.SipHashModifier(); slm != nil {
+	if slm := cfg.SipHashModifier(); slm != nil {
 		nc.lengthObfuscator.Store(slm)
 	}
 }
@@ -154,6 +162,12 @@ func (nc *NTCP2Conn) PropagateSipHash() {
 //
 // When no length obfuscator is set, delegates directly to NoiseConn.Read.
 func (nc *NTCP2Conn) Read(b []byte) (int, error) {
+	if nc.broken.Load() {
+		return 0, oops.
+			Code("CONNECTION_BROKEN").
+			In("ntcp2").
+			Errorf("connection is broken due to previous framing error (SipHash state desynchronized)")
+	}
 	if nc.lengthObfuscator.Load() == nil {
 		return nc.readDirect(b)
 	}
@@ -184,16 +198,12 @@ func (nc *NTCP2Conn) Read(b []byte) (int, error) {
 
 // readDirect delegates directly to the underlying NoiseConn for unframed reads.
 // Per the io.Reader contract, returns both the bytes read and any error.
+// Errors from NoiseConn are returned directly without re-wrapping, since
+// NoiseConn already wraps errors with appropriate context.
 func (nc *NTCP2Conn) readDirect(b []byte) (int, error) {
 	n, err := nc.noiseConn.Read(b)
 	if err != nil {
-		return n, oops.
-			Code("READ_FAILED").
-			In("ntcp2").
-			With("local_addr", nc.localAddr.String()).
-			With("remote_addr", nc.remoteAddr.String()).
-			With("bytes_requested", len(b)).
-			Wrapf(err, "ntcp2 read failed")
+		return n, err
 	}
 
 	nc.logger.Trace("NTCP2 data read (direct)",
@@ -206,6 +216,18 @@ func (nc *NTCP2Conn) readDirect(b []byte) (int, error) {
 
 // readFramed reads an NTCP2 data-phase frame with SipHash length deobfuscation.
 func (nc *NTCP2Conn) readFramed(b []byte) (int, error) {
+	// Guard: reject operations when the nonce counter has reached MaxNonce.
+	// Per the spec: "Connection must be dropped and restarted after it reaches
+	// that value. The value 2^64−1 must never be sent."
+	if nc.readNonce >= MaxNonce {
+		return 0, oops.
+			Code("NONCE_EXHAUSTED").
+			In("ntcp2").
+			With("read_nonce", nc.readNonce).
+			With("max_nonce", MaxNonce).
+			Errorf("read nonce exhausted (reached %d), connection must be terminated", nc.readNonce)
+	}
+
 	slm := nc.lengthObfuscator.Load()
 	underlying := nc.noiseConn.Underlying()
 
@@ -222,17 +244,21 @@ func (nc *NTCP2Conn) readFramed(b []byte) (int, error) {
 
 	// Step 2: Deobfuscate using SipHash inbound mask
 	mask := slm.NextInboundMask()
+	// NOTE: After this point, the SipHash inbound state has advanced.
+	// Any error from here on means the connection is irrecoverably desynchronized.
 
 	obfuscatedLen := binary.BigEndian.Uint16(lengthBuf)
 	frameLen := obfuscatedLen ^ mask
 
 	if err := nc.validateFrameLength(frameLen); err != nil {
+		nc.broken.Store(true)
 		return 0, err
 	}
 
 	// Step 3: Read exactly frameLen bytes of ciphertext
 	ciphertext := make([]byte, frameLen)
 	if _, err := io.ReadFull(underlying, ciphertext); err != nil {
+		nc.broken.Store(true)
 		return 0, oops.
 			Code("READ_FRAME_FAILED").
 			In("ntcp2").
@@ -245,6 +271,7 @@ func (nc *NTCP2Conn) readFramed(b []byte) (int, error) {
 	// Step 4: Decrypt using the Noise cipher state
 	plaintext, err := nc.noiseConn.Decrypt(ciphertext)
 	if err != nil {
+		nc.broken.Store(true)
 		// Probing resistance: read random junk before returning the error,
 		// so the connection is not trivially distinguishable from random data.
 		nc.handleAEADError(underlying)
@@ -332,27 +359,43 @@ func (nc *NTCP2Conn) applyProbingResistanceDelay() {
 // handleAEADError implements probing-resistance behaviour on AEAD authentication
 // failure. Per the NTCP2 spec, the receiver should:
 //  1. Read a random number of junk bytes for a random duration.
-//  2. Close the connection (caller responsibility).
+//  2. Send a TCP RST (abnormal close) rather than a graceful FIN.
+//  3. Mark the connection as broken.
 //
 // Termination blocks (reason code 4 = AEAD failure) are handled by the
 // router transport layer (go-i2p/go-i2p/lib/transport/ntcp).
 func (nc *NTCP2Conn) handleAEADError(underlying net.Conn) {
+	nc.broken.Store(true)
 
 	// Generate a random byte count (0–AEADErrorMaxJunkBytes) to read before returning.
 	var rndBuf [2]byte
 	if _, err := rand.Read(rndBuf[:]); err != nil {
+		nc.sendTCPRST(underlying)
 		return // best effort
 	}
 	junkLen := int(binary.BigEndian.Uint16(rndBuf[:])) % AEADErrorMaxJunkBytes
-	if junkLen == 0 {
-		return
+	if junkLen > 0 {
+		// Set a short deadline so we don't block forever if the peer stops sending.
+		underlying.SetReadDeadline(time.Now().Add(AEADErrorTimeout)) //nolint:errcheck
+		junk := make([]byte, junkLen)
+		underlying.Read(junk) //nolint:errcheck // best effort
 	}
-	// Set a short deadline so we don't block forever if the peer stops sending.
-	// NOTE: we do NOT restore the previous deadline afterwards — the caller
-	// is expected to close the connection after an AEAD failure.
-	underlying.SetReadDeadline(time.Now().Add(AEADErrorTimeout)) //nolint:errcheck
-	junk := make([]byte, junkLen)
-	underlying.Read(junk) //nolint:errcheck // best effort
+
+	// Per the spec: "This should be an abnormal close (TCP RST)"
+	nc.sendTCPRST(underlying)
+}
+
+// sendTCPRST sends a TCP RST by setting SO_LINGER to 0 (immediate close without
+// FIN handshake) and then closing the connection. Per the NTCP2 spec, AEAD failures
+// should result in an abnormal close. If the underlying connection is not a
+// *net.TCPConn, falls back to a normal Close().
+func (nc *NTCP2Conn) sendTCPRST(conn net.Conn) {
+	if tcpConn, ok := conn.(*net.TCPConn); ok {
+		tcpConn.SetLinger(0) //nolint:errcheck
+		tcpConn.Close()      //nolint:errcheck
+	} else {
+		conn.Close() //nolint:errcheck
+	}
 }
 
 // Write implements net.Conn.Write.
@@ -366,6 +409,12 @@ func (nc *NTCP2Conn) handleAEADError(underlying net.Conn) {
 // Large writes are transparently split into multiple frames of at most
 // MaxFrameSize minus Poly1305Overhead bytes of plaintext each.
 func (nc *NTCP2Conn) Write(b []byte) (int, error) {
+	if nc.broken.Load() {
+		return 0, oops.
+			Code("CONNECTION_BROKEN").
+			In("ntcp2").
+			Errorf("connection is broken due to previous framing error (SipHash state desynchronized)")
+	}
 	if nc.lengthObfuscator.Load() == nil {
 		return nc.writeDirect(b)
 	}
@@ -373,16 +422,12 @@ func (nc *NTCP2Conn) Write(b []byte) (int, error) {
 }
 
 // writeDirect delegates directly to the underlying NoiseConn for unframed writes.
+// Errors from NoiseConn are returned directly without re-wrapping, since
+// NoiseConn already wraps errors with appropriate context.
 func (nc *NTCP2Conn) writeDirect(b []byte) (int, error) {
 	n, err := nc.noiseConn.Write(b)
 	if err != nil {
-		return n, oops.
-			Code("WRITE_FAILED").
-			In("ntcp2").
-			With("local_addr", nc.localAddr.String()).
-			With("remote_addr", nc.remoteAddr.String()).
-			With("bytes_to_write", len(b)).
-			Wrapf(err, "ntcp2 write failed")
+		return n, err
 	}
 
 	nc.logger.Trace("NTCP2 data written (direct)",
@@ -395,12 +440,15 @@ func (nc *NTCP2Conn) writeDirect(b []byte) (int, error) {
 
 // writeFramed writes NTCP2 data-phase frame(s) with SipHash length obfuscation.
 // Large payloads are transparently split into multiple frames of at most
-// MaxFrameSize - Poly1305Overhead bytes of plaintext each.
+// getMaxFrameSize() - Poly1305Overhead bytes of plaintext each.
+// The frame size is determined by the NTCP2Config if set, otherwise
+// falls back to the constant MaxFrameSize. Per the spec, senders should
+// "limit frames to a few KB rather than maximizing the frame size."
 func (nc *NTCP2Conn) writeFramed(b []byte) (int, error) {
 	nc.writeMu.Lock()
 	defer nc.writeMu.Unlock()
 
-	maxPlaintext := MaxFrameSize - Poly1305Overhead
+	maxPlaintext := nc.getMaxFrameSize() - Poly1305Overhead
 	totalWritten := 0
 
 	for len(b) > 0 {
@@ -422,6 +470,18 @@ func (nc *NTCP2Conn) writeFramed(b []byte) (int, error) {
 
 // writeSingleFrame encrypts one chunk and writes it as an NTCP2 wire frame.
 func (nc *NTCP2Conn) writeSingleFrame(b []byte) (int, error) {
+	// Guard: reject operations when the nonce counter has reached MaxNonce.
+	// Per the spec: "Connection must be dropped and restarted after it reaches
+	// that value. The value 2^64−1 must never be sent."
+	if nc.writeNonce >= MaxNonce {
+		return 0, oops.
+			Code("NONCE_EXHAUSTED").
+			In("ntcp2").
+			With("write_nonce", nc.writeNonce).
+			With("max_nonce", MaxNonce).
+			Errorf("write nonce exhausted (reached %d), connection must be terminated", nc.writeNonce)
+	}
+
 	slm := nc.lengthObfuscator.Load()
 
 	// Step 1: Encrypt the plaintext
@@ -450,6 +510,8 @@ func (nc *NTCP2Conn) writeSingleFrame(b []byte) (int, error) {
 	frameLen := uint16(len(encrypted))
 
 	mask := slm.NextOutboundMask()
+	// NOTE: After this point, the SipHash outbound state has advanced.
+	// Any error from here on means the connection is irrecoverably desynchronized.
 
 	obfuscatedLen := frameLen ^ mask
 
@@ -462,6 +524,7 @@ func (nc *NTCP2Conn) writeSingleFrame(b []byte) (int, error) {
 	underlying := nc.noiseConn.Underlying()
 	n, err := underlying.Write(frame)
 	if err != nil {
+		nc.broken.Store(true)
 		return 0, oops.
 			Code("WRITE_FRAME_FAILED").
 			In("ntcp2").
@@ -472,6 +535,7 @@ func (nc *NTCP2Conn) writeSingleFrame(b []byte) (int, error) {
 	}
 
 	if n != len(frame) {
+		nc.broken.Store(true)
 		return 0, oops.
 			Code("PARTIAL_WRITE").
 			In("ntcp2").
@@ -490,6 +554,18 @@ func (nc *NTCP2Conn) writeSingleFrame(b []byte) (int, error) {
 		"remote_addr", nc.remoteAddr.String())
 
 	return len(b), nil
+}
+
+// getMaxFrameSize returns the configured maximum frame size for frame splitting.
+// If an NTCP2Config is set and has a valid MaxFrameSize, that value is used.
+// Otherwise falls back to the constant MaxFrameSize (65535).
+// Per the spec, senders should prefer smaller frame sizes (a few KB).
+func (nc *NTCP2Conn) getMaxFrameSize() int {
+	cfg := nc.ntcp2Config.Load()
+	if cfg != nil && cfg.MaxFrameSize > 0 && cfg.MaxFrameSize <= MaxFrameSize {
+		return cfg.MaxFrameSize
+	}
+	return MaxFrameSize
 }
 
 // Close implements net.Conn.Close.
