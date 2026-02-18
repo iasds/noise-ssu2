@@ -21,7 +21,7 @@ func TestNewNTCP2Config(t *testing.T) {
 
 	assert.Equal(t, "XK", config.Pattern)
 	assert.Equal(t, false, config.Initiator)
-	assert.Equal(t, routerHash, config.RouterHash)
+	assert.Equal(t, routerHash, config.BobRouterHash)
 	assert.Equal(t, 30*time.Second, config.HandshakeTimeout)
 	assert.Equal(t, time.Duration(0), config.ReadTimeout)
 	assert.Equal(t, time.Duration(0), config.WriteTimeout)
@@ -72,7 +72,7 @@ func TestNTCP2ConfigBuilder(t *testing.T) {
 		WithWriteTimeout(5 * time.Second)
 
 	assert.Equal(t, "XK", config.Pattern)
-	assert.Equal(t, routerHash, config.RouterHash)
+	assert.Equal(t, routerHash, config.BobRouterHash)
 	assert.Equal(t, staticKey, config.StaticKey)
 	assert.Equal(t, 10*time.Second, config.HandshakeTimeout)
 	assert.Equal(t, 5*time.Second, config.ReadTimeout)
@@ -124,7 +124,7 @@ func TestNTCP2ConfigValidation(t *testing.T) {
 			name: "invalid router hash",
 			setupConfig: func() *NTCP2Config {
 				config, _ := NewNTCP2Config(routerHash, false)
-				config.RouterHash = make([]byte, 16) // Wrong size
+				config.BobRouterHash = make([]byte, 16) // Wrong size
 				return config
 			},
 			expectError: true,
@@ -237,7 +237,7 @@ func TestNewNTCP2ListenerErrors(t *testing.T) {
 			}(),
 			config: func() *NTCP2Config {
 				c, _ := NewNTCP2Config(routerHash, false)
-				c.RouterHash = make([]byte, 16) // Invalid router hash size
+				c.BobRouterHash = make([]byte, 16) // Invalid router hash size
 				return c
 			}(),
 			expectedError: "invalid ntcp2 listener configuration",

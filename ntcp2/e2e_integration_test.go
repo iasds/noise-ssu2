@@ -490,7 +490,7 @@ func TestE2E_ListenerConfig_PerConnectionClone(t *testing.T) {
 
 	// Verify Clone produces independent copies
 	clone := config.Clone()
-	assert.Equal(t, config.RouterHash, clone.RouterHash)
+	assert.Equal(t, config.BobRouterHash, clone.BobRouterHash)
 	assert.Equal(t, config.StaticKey, clone.StaticKey)
 	assert.Equal(t, config.Initiator, clone.Initiator)
 

@@ -55,8 +55,8 @@ func TestDirectWritePath_TakenWhenNoObfuscator(t *testing.T) {
 	_, err := conn.Write([]byte("test data"))
 	assert.Error(t, err)
 	// The direct path calls noiseConn.Write → validates state → fails
-	// The error wraps through NTCP2Conn's "WRITE_FAILED" code
-	assert.Contains(t, err.Error(), "ntcp2 write failed")
+	// NoiseConn returns "handshake not completed" before the write can proceed
+	assert.Contains(t, err.Error(), "handshake not completed")
 }
 
 // TestFramedReadPath_TakenWhenObfuscatorSet verifies that the framed read
@@ -115,8 +115,8 @@ func TestDirectReadPath_TakenWhenNoObfuscator(t *testing.T) {
 	buf := make([]byte, 64)
 	_, err := conn.Read(buf)
 	assert.Error(t, err)
-	// Direct path wraps with "READ_FAILED" code
-	assert.Contains(t, err.Error(), "ntcp2 read failed")
+	// Direct path delegates to NoiseConn.Read which returns "handshake not completed"
+	assert.Contains(t, err.Error(), "handshake not completed")
 }
 
 // TestFrameLengthObfuscation_RoundTrip verifies that the SipHash length
@@ -207,7 +207,7 @@ func TestFramedRead_ZeroLengthFrame(t *testing.T) {
 	readBuf := make([]byte, 64)
 	_, err = ntcp2Conn.Read(readBuf)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "zero-length frame")
+	assert.Contains(t, err.Error(), "below minimum")
 }
 
 // TestFramedRead_FrameTooLarge verifies that frames exceeding MaxFrameSize are rejected.

@@ -309,19 +309,19 @@ func TestAuditFix_NonceExhaustionImminent_Advisory(t *testing.T) {
 
 func TestAuditFix_Clone_IndependentConfig(t *testing.T) {
 	original := &NTCP2Config{
-		Pattern:      "XK",
-		MaxFrameSize: 16384,
-		RouterHash:   []byte("original-hash-32-bytes-long!!!!!"),
+		Pattern:       "XK",
+		MaxFrameSize:  16384,
+		BobRouterHash: []byte("original-hash-32-bytes-long!!!!!"),
 	}
 
 	clone := original.Clone()
 
 	// Modify clone should not affect original
 	clone.MaxFrameSize = 8192
-	clone.RouterHash[0] = 0xFF
+	clone.BobRouterHash[0] = 0xFF
 
 	assert.Equal(t, 16384, original.MaxFrameSize, "clone modification should not affect original")
-	assert.NotEqual(t, byte(0xFF), original.RouterHash[0], "clone byte slice modification should not affect original")
+	assert.NotEqual(t, byte(0xFF), original.BobRouterHash[0], "clone byte slice modification should not affect original")
 }
 
 // ============================================================================

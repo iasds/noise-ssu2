@@ -202,16 +202,13 @@ func (nc *NTCP2Conn) Read(b []byte) (int, error) {
 // NoiseConn already wraps errors with appropriate context.
 func (nc *NTCP2Conn) readDirect(b []byte) (int, error) {
 	n, err := nc.noiseConn.Read(b)
-	if err != nil {
-		return n, err
+	if n > 0 {
+		nc.logger.Trace("NTCP2 data read (direct)",
+			"bytes_read", n,
+			"local_addr", nc.localAddr.String(),
+			"remote_addr", nc.remoteAddr.String())
 	}
-
-	nc.logger.Trace("NTCP2 data read (direct)",
-		"bytes_read", n,
-		"local_addr", nc.localAddr.String(),
-		"remote_addr", nc.remoteAddr.String())
-
-	return n, nil
+	return n, err
 }
 
 // readFramed reads an NTCP2 data-phase frame with SipHash length deobfuscation.
@@ -220,6 +217,7 @@ func (nc *NTCP2Conn) readFramed(b []byte) (int, error) {
 	// Per the spec: "Connection must be dropped and restarted after it reaches
 	// that value. The value 2^64−1 must never be sent."
 	if nc.readNonce >= MaxNonce {
+		nc.broken.Store(true)
 		return 0, oops.
 			Code("NONCE_EXHAUSTED").
 			In("ntcp2").
@@ -305,21 +303,11 @@ func (nc *NTCP2Conn) readFramed(b []byte) (int, error) {
 }
 
 // validateFrameLength checks that the deobfuscated frame length is within the
-// NTCP2 spec range of MinDataPhaseFrameSize–MaxFrameSize.
+// NTCP2 spec range of MinDataPhaseFrameSize–SpecMaxFrameSize (16–65535).
 // Per the spec: "Take the same error action for an invalid length field value
 // in the data phase" — i.e., the probing-resistance delay from handleAEADError
 // is applied before returning the error.
 func (nc *NTCP2Conn) validateFrameLength(frameLen uint16) error {
-	if frameLen == 0 {
-		nc.applyProbingResistanceDelay()
-		return oops.
-			Code("ZERO_FRAME_LENGTH").
-			In("ntcp2").
-			With("local_addr", nc.localAddr.String()).
-			With("remote_addr", nc.remoteAddr.String()).
-			Errorf("received zero-length frame")
-	}
-
 	if frameLen < MinDataPhaseFrameSize {
 		nc.applyProbingResistanceDelay()
 		return oops.
@@ -332,16 +320,16 @@ func (nc *NTCP2Conn) validateFrameLength(frameLen uint16) error {
 			Errorf("frame length %d below minimum %d", frameLen, MinDataPhaseFrameSize)
 	}
 
-	if int(frameLen) > MaxFrameSize {
+	if int(frameLen) > SpecMaxFrameSize {
 		nc.applyProbingResistanceDelay()
 		return oops.
 			Code("FRAME_TOO_LARGE").
 			In("ntcp2").
 			With("frame_length", frameLen).
-			With("max_frame_size", MaxFrameSize).
+			With("max_frame_size", SpecMaxFrameSize).
 			With("local_addr", nc.localAddr.String()).
 			With("remote_addr", nc.remoteAddr.String()).
-			Errorf("frame length %d exceeds maximum %d", frameLen, MaxFrameSize)
+			Errorf("frame length %d exceeds maximum %d", frameLen, SpecMaxFrameSize)
 	}
 
 	return nil
@@ -368,12 +356,13 @@ func (nc *NTCP2Conn) handleAEADError(underlying net.Conn) {
 	nc.broken.Store(true)
 
 	// Generate a random byte count (0–AEADErrorMaxJunkBytes) to read before returning.
+	// Use crypto/rand with rejection sampling to avoid modulo bias.
 	var rndBuf [2]byte
 	if _, err := rand.Read(rndBuf[:]); err != nil {
 		nc.sendTCPRST(underlying)
 		return // best effort
 	}
-	junkLen := int(binary.BigEndian.Uint16(rndBuf[:])) % AEADErrorMaxJunkBytes
+	junkLen := int(binary.BigEndian.Uint16(rndBuf[:]) & (AEADErrorMaxJunkBytes - 1))
 	if junkLen > 0 {
 		// Set a short deadline so we don't block forever if the peer stops sending.
 		underlying.SetReadDeadline(time.Now().Add(AEADErrorTimeout)) //nolint:errcheck
@@ -474,6 +463,7 @@ func (nc *NTCP2Conn) writeSingleFrame(b []byte) (int, error) {
 	// Per the spec: "Connection must be dropped and restarted after it reaches
 	// that value. The value 2^64−1 must never be sent."
 	if nc.writeNonce >= MaxNonce {
+		nc.broken.Store(true)
 		return 0, oops.
 			Code("NONCE_EXHAUSTED").
 			In("ntcp2").
@@ -497,13 +487,13 @@ func (nc *NTCP2Conn) writeSingleFrame(b []byte) (int, error) {
 	}
 
 	// Step 2: Validate frame size (should never fire after splitting)
-	if len(encrypted) > MaxFrameSize {
+	if len(encrypted) > SpecMaxFrameSize {
 		return 0, oops.
 			Code("FRAME_TOO_LARGE").
 			In("ntcp2").
 			With("encrypted_len", len(encrypted)).
-			With("max_frame_size", MaxFrameSize).
-			Errorf("encrypted frame (%d bytes) exceeds maximum frame size (%d)", len(encrypted), MaxFrameSize)
+			With("max_frame_size", SpecMaxFrameSize).
+			Errorf("encrypted frame (%d bytes) exceeds maximum frame size (%d)", len(encrypted), SpecMaxFrameSize)
 	}
 
 	// Step 3: Compute obfuscated length
@@ -562,10 +552,10 @@ func (nc *NTCP2Conn) writeSingleFrame(b []byte) (int, error) {
 // Per the spec, senders should prefer smaller frame sizes (a few KB).
 func (nc *NTCP2Conn) getMaxFrameSize() int {
 	cfg := nc.ntcp2Config.Load()
-	if cfg != nil && cfg.MaxFrameSize > 0 && cfg.MaxFrameSize <= MaxFrameSize {
+	if cfg != nil && cfg.MaxFrameSize > 0 && cfg.MaxFrameSize <= SpecMaxFrameSize {
 		return cfg.MaxFrameSize
 	}
-	return MaxFrameSize
+	return SpecMaxFrameSize
 }
 
 // Close implements net.Conn.Close.
@@ -580,14 +570,22 @@ func (nc *NTCP2Conn) Close() error {
 
 		nc.zeroKeyMaterial()
 
-		closeErr = nc.noiseConn.Close()
-		if closeErr != nil {
+		err := nc.noiseConn.Close()
+		if err != nil {
+			// If the connection was already RST'd (broken due to AEAD error
+			// or nonce exhaustion), suppress "use of closed network connection"
+			// errors since the socket was intentionally closed by sendTCPRST.
+			if nc.broken.Load() {
+				nc.logger.Debug("suppressing close error on broken connection",
+					"error", err.Error())
+				return
+			}
 			closeErr = oops.
 				Code("CLOSE_FAILED").
 				In("ntcp2").
 				With("local_addr", nc.localAddr.String()).
 				With("remote_addr", nc.remoteAddr.String()).
-				Wrapf(closeErr, "ntcp2 close failed")
+				Wrapf(err, "ntcp2 close failed")
 		}
 	})
 	return closeErr

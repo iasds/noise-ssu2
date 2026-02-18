@@ -312,7 +312,7 @@ func createDialAddresses(conn net.Conn, config *NTCP2Config) (*NTCP2Addr, *NTCP2
 	// Create local address from connection's local address
 	localAddr, err := NewNTCP2Addr(
 		conn.LocalAddr(),
-		config.RouterHash,
+		config.BobRouterHash,
 		localRole,
 	)
 	if err != nil {

@@ -37,7 +37,7 @@ func TestValidateFrameLength_ZeroAppliesProbingDelay(t *testing.T) {
 	// validateFrameLength with 0 should return an error (and not panic)
 	err = ntcp2Conn.validateFrameLength(0)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "zero-length frame")
+	assert.Contains(t, err.Error(), "frame length 0 below minimum 16")
 }
 
 // TestValidateFrameLength_TooSmallAppliesProbingDelay verifies probing delay

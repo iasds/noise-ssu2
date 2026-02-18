@@ -129,7 +129,7 @@ func TestNTCP2ConfigEdgeCases(t *testing.T) {
 		copy(originalHash, routerHash)
 		routerHash[0] = 0xFF // Modify original
 
-		assert.Equal(t, originalHash, config.RouterHash) // Should be unchanged
+		assert.Equal(t, originalHash, config.BobRouterHash) // Should be unchanged
 	})
 
 	t.Run("invalid static key in WithStaticKey", func(t *testing.T) {

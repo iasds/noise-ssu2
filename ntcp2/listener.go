@@ -81,7 +81,7 @@ func validateListenerInput(underlying net.Listener, config *NTCP2Config) error {
 
 // createNTCP2Address creates the NTCP2 address for the listener from the underlying address and config
 func createNTCP2Address(underlying net.Listener, config *NTCP2Config) (*NTCP2Addr, error) {
-	ntcp2Addr, err := NewNTCP2Addr(underlying.Addr(), config.RouterHash, "responder")
+	ntcp2Addr, err := NewNTCP2Addr(underlying.Addr(), config.BobRouterHash, "responder")
 	if err != nil {
 		return nil, oops.
 			Code("ADDR_CREATION_FAILED").
@@ -105,7 +105,7 @@ func initializeListener(underlying net.Listener, config *NTCP2Config, ntcp2Addr 
 	nl.logger.Info("NTCP2 listener created",
 		"pattern", config.Pattern,
 		"listener_address", underlying.Addr().String(),
-		"router_hash", formatRouterHash(config.RouterHash))
+		"router_hash", formatRouterHash(config.BobRouterHash))
 
 	return nl
 }

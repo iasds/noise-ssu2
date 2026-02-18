@@ -21,7 +21,7 @@ func TestNewNTCP2ConfigWithInitiator(t *testing.T) {
 
 	assert.Equal(t, "XK", config.Pattern)
 	assert.Equal(t, true, config.Initiator)
-	assert.Equal(t, routerHash, config.RouterHash)
+	assert.Equal(t, routerHash, config.BobRouterHash)
 	assert.Equal(t, 30*time.Second, config.HandshakeTimeout)
 	assert.Equal(t, time.Duration(0), config.ReadTimeout)
 	assert.Equal(t, time.Duration(0), config.WriteTimeout)
@@ -140,7 +140,7 @@ func TestNTCP2ConfigComprehensiveValidation(t *testing.T) {
 			name: "invalid router hash",
 			setupConfig: func() *NTCP2Config {
 				config, _ := NewNTCP2Config(routerHash, false)
-				config.RouterHash = make([]byte, 16) // Invalid length
+				config.BobRouterHash = make([]byte, 16) // Invalid length
 				return config
 			},
 			expectError: true,
@@ -390,7 +390,7 @@ func TestNTCP2ConfigBuilderDefensiveCopying(t *testing.T) {
 	staticKey[0] = 0xFF
 
 	// Config should be unaffected
-	assert.NotEqual(t, byte(0xFF), config.RouterHash[0])
+	assert.NotEqual(t, byte(0xFF), config.BobRouterHash[0])
 	assert.NotEqual(t, byte(0xFF), config.StaticKey[0])
 }
 

@@ -22,9 +22,13 @@ type NTCP2Config struct {
 	// For listeners, this is always false
 	Initiator bool
 
-	// RouterHash is the local router identity (32 bytes)
-	// Required for NTCP2 addressing and session establishment
-	RouterHash []byte
+	// BobRouterHash is Bob's (the responder's) router hash (32 bytes).
+	// Per the I2P NTCP2 spec, both Alice (initiator) and Bob (responder)
+	// use RH_B as the AES-256-CBC key for ephemeral key obfuscation.
+	// For the responder, this is their own router hash.
+	// For the initiator, this is the remote peer's router hash.
+	// Required for NTCP2 addressing and AES obfuscation.
+	BobRouterHash []byte
 
 	// StaticKey is the long-term static key for this peer (32 bytes for Curve25519)
 	StaticKey []byte
@@ -104,25 +108,28 @@ type NTCP2Config struct {
 }
 
 // NewNTCP2Config creates a new NTCP2Config with sensible defaults.
-// routerHash must be exactly 32 bytes representing the local router identity.
+// bobRouterHash must be exactly 32 bytes representing Bob's (the responder's)
+// router hash (RH_B). Per the NTCP2 spec, both initiator and responder use
+// RH_B for AES ephemeral key obfuscation. For a responder, pass your own
+// router hash; for an initiator, pass the remote peer's router hash.
 // initiator indicates whether this connection will initiate the handshake.
-func NewNTCP2Config(routerHash []byte, initiator bool) (*NTCP2Config, error) {
-	if len(routerHash) != RouterHashSize {
+func NewNTCP2Config(bobRouterHash []byte, initiator bool) (*NTCP2Config, error) {
+	if len(bobRouterHash) != RouterHashSize {
 		return nil, oops.
 			Code("INVALID_ROUTER_HASH").
 			In("ntcp2").
-			With("hash_length", len(routerHash)).
-			Errorf("router hash must be exactly %d bytes", RouterHashSize)
+			With("hash_length", len(bobRouterHash)).
+			Errorf("bob router hash must be exactly %d bytes", RouterHashSize)
 	}
 
 	// Make defensive copy of router hash
 	hash := make([]byte, RouterHashSize)
-	copy(hash, routerHash)
+	copy(hash, bobRouterHash)
 
 	return &NTCP2Config{
 		Pattern:              NTCP2Pattern,
 		Initiator:            initiator,
-		RouterHash:           hash,
+		BobRouterHash:        hash,
 		HandshakeTimeout:     DefaultHandshakeTimeoutSeconds * time.Second,
 		ReadTimeout:          0,
 		WriteTimeout:         0,
@@ -317,13 +324,13 @@ func (nc *NTCP2Config) validateBasicConfiguration() error {
 			Errorf("noise pattern is required")
 	}
 
-	// Validate router hash
-	if len(nc.RouterHash) != RouterHashSize {
+	// Validate Bob's router hash
+	if len(nc.BobRouterHash) != RouterHashSize {
 		return oops.
 			Code("INVALID_ROUTER_HASH").
 			In("ntcp2").
-			With("hash_length", len(nc.RouterHash)).
-			Errorf("router hash must be exactly %d bytes", RouterHashSize)
+			With("hash_length", len(nc.BobRouterHash)).
+			Errorf("bob router hash must be exactly %d bytes", RouterHashSize)
 	}
 
 	return nil
@@ -629,7 +636,7 @@ func (nc *NTCP2Config) createAESModifierIfEnabled() (handshake.HandshakeModifier
 			Errorf("AES obfuscation IV is required (published in peer's network database entry)")
 	}
 
-	aesModifier, err := NewAESObfuscationModifier("ntcp2-aes", nc.RouterHash, iv)
+	aesModifier, err := NewAESObfuscationModifier("ntcp2-aes", nc.BobRouterHash, iv)
 	if err != nil {
 		return nil, oops.
 			Code("AES_MODIFIER_FAILED").
@@ -673,14 +680,15 @@ func (nc *NTCP2Config) SipHashModifier() *SipHashLengthModifier {
 // returned config has a fresh zero-value atomic, which is correct
 // because the PostHandshakeHook will populate it after the handshake.
 //
-// WARNING: The Modifiers slice is shallow-copied — individual modifier
+// IMPORTANT: The Modifiers slice is shallow-copied — individual modifier
 // interface values (pointers to AESObfuscationModifier, SipHashLengthModifier,
-// etc.) are shared between the original and clone. Since modifiers have
-// mutable state (AES state, SipHash IVs), the clone is NOT safe for
-// concurrent use with the original if both are actively used for handshakes.
-// In practice, the listener path calls ToConnConfig() on each clone, which
-// creates fresh modifier instances, so this is safe for the listener use case.
-// Do NOT use Clone() alone if both configs will be used concurrently.
+// etc.) are shared between the original and clone. Since modifiers carry
+// mutable state (AES cipher state, SipHash IVs), the clone MUST NOT be
+// used concurrently with the original for handshakes. Callers MUST call
+// ToConnConfig() on the clone before use, which creates fresh modifier
+// instances with independent state. The listener path does this correctly.
+// Direct use of Clone() without ToConnConfig() will cause data races
+// and corrupt handshake state if both configs are active concurrently.
 func (nc *NTCP2Config) Clone() *NTCP2Config {
 	clone := &NTCP2Config{
 		Pattern:              nc.Pattern,
@@ -698,9 +706,9 @@ func (nc *NTCP2Config) Clone() *NTCP2Config {
 		MinPaddingSize:       nc.MinPaddingSize,
 		MaxPaddingSize:       nc.MaxPaddingSize,
 	}
-	if nc.RouterHash != nil {
-		clone.RouterHash = make([]byte, len(nc.RouterHash))
-		copy(clone.RouterHash, nc.RouterHash)
+	if nc.BobRouterHash != nil {
+		clone.BobRouterHash = make([]byte, len(nc.BobRouterHash))
+		copy(clone.BobRouterHash, nc.BobRouterHash)
 	}
 	if nc.StaticKey != nil {
 		clone.StaticKey = make([]byte, len(nc.StaticKey))

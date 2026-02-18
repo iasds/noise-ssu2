@@ -165,7 +165,7 @@ All modifiers are safe for concurrent use:
 
 ### Production Considerations
 
-1. **Router Hash**: Must be the actual 32-byte I2P router hash (RH_B)
+1. **Router Hash**: Must be Bob's (the responder's) 32-byte I2P router hash (RH_B). Both initiator and responder pass RH_B to `NewNTCP2Config()`.
 2. **IV Sources**: Use network database published IV for reproducible handshakes
 3. **SipHash Keys**: Derive from session keys using proper KDF
 4. **Padding**: Uses cryptographically secure random padding by default for security
