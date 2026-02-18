@@ -2,6 +2,7 @@ package noise
 
 import (
 	"context"
+	"crypto/ecdh"
 	"net"
 	"strings"
 	"sync"
@@ -770,7 +771,7 @@ func (nc *NoiseConn) getPatternMessageCount() (int, error) {
 		}).Debug("detected one-way handshake pattern")
 		return 1, nil
 	// Two-message interactive patterns
-	case "NN", "NK", "NX", "XN", "XK", "KN", "KK", "IN", "IK", "IX":
+	case "NN", "NK", "NX", "KN", "KK", "KX", "IN", "IK", "IX":
 		nc.logger.WithFields(i2plogger.Fields{
 			"pattern":           pattern,
 			"expected_messages": 2,
@@ -778,7 +779,7 @@ func (nc *NoiseConn) getPatternMessageCount() (int, error) {
 		}).Debug("detected two-message interactive handshake pattern")
 		return 2, nil
 	// Three-message patterns
-	case "XX", "KX":
+	case "XN", "XK", "XX":
 		nc.logger.WithFields(i2plogger.Fields{
 			"pattern":           pattern,
 			"expected_messages": 3,
@@ -797,10 +798,11 @@ func (nc *NoiseConn) getPatternMessageCount() (int, error) {
 			}).Debug("detected full-form one-way handshake pattern")
 			return 1, nil
 		} else if strings.Contains(pattern, "_NN_") || strings.Contains(pattern, "_NK_") ||
-			strings.Contains(pattern, "_NX_") || strings.Contains(pattern, "_XN_") ||
-			strings.Contains(pattern, "_XK_") || strings.Contains(pattern, "_KN_") ||
-			strings.Contains(pattern, "_KK_") || strings.Contains(pattern, "_IN_") ||
-			strings.Contains(pattern, "_IK_") || strings.Contains(pattern, "_IX_") {
+			strings.Contains(pattern, "_NX_") ||
+			strings.Contains(pattern, "_KN_") || strings.Contains(pattern, "_KK_") ||
+			strings.Contains(pattern, "_KX_") ||
+			strings.Contains(pattern, "_IN_") || strings.Contains(pattern, "_IK_") ||
+			strings.Contains(pattern, "_IX_") {
 			// Two-message patterns
 			nc.logger.WithFields(i2plogger.Fields{
 				"pattern":           pattern,
@@ -809,7 +811,8 @@ func (nc *NoiseConn) getPatternMessageCount() (int, error) {
 				"pattern_format":    "full",
 			}).Debug("detected full-form two-message handshake pattern")
 			return 2, nil
-		} else if strings.Contains(pattern, "_XX_") || strings.Contains(pattern, "_KX_") {
+		} else if strings.Contains(pattern, "_XN_") || strings.Contains(pattern, "_XK_") ||
+			strings.Contains(pattern, "_XX_") {
 			// Three-message patterns
 			nc.logger.WithFields(i2plogger.Fields{
 				"pattern":           pattern,
@@ -1260,9 +1263,13 @@ func (nc *NoiseConn) performNXInitiator(ctx context.Context) error {
 	return nil
 }
 
-// performXNInitiator handles XN pattern as initiator: → e, s, ← e, ee, se
+// performXNInitiator handles XN pattern as initiator (3 messages):
+//
+//	→ e
+//	← e, ee
+//	→ s, se
 func (nc *NoiseConn) performXNInitiator(ctx context.Context) error {
-	// Message 1: → e, s (send ephemeral and static)
+	// Message 1: → e (send ephemeral)
 	msg, cs1, cs2, err := nc.handshakeState.WriteMessage(nil, nil)
 	if err != nil {
 		return oops.
@@ -1280,7 +1287,7 @@ func (nc *NoiseConn) performXNInitiator(ctx context.Context) error {
 
 	nc.updateCipherStates(cs1, cs2)
 
-	// Message 2: ← e, ee, se (receive ephemeral, compute DH)
+	// Message 2: ← e, ee (receive responder ephemeral, DH ee)
 	buffer := make([]byte, 2048)
 	n, err := nc.underlying.Read(buffer)
 	if err != nil {
@@ -1299,12 +1306,35 @@ func (nc *NoiseConn) performXNInitiator(ctx context.Context) error {
 	}
 
 	nc.updateCipherStates(cs1, cs2)
+
+	// Message 3: → s, se (send encrypted static, DH se — final message)
+	msg, cs1, cs2, err = nc.handshakeState.WriteMessage(nil, nil)
+	if err != nil {
+		return oops.
+			Code("WRITE_MESSAGE_FAILED").
+			In("noise").
+			Wrapf(err, "failed to create third XN handshake message")
+	}
+
+	if _, err := nc.underlying.Write(msg); err != nil {
+		return oops.
+			Code("SEND_MESSAGE_FAILED").
+			In("noise").
+			Wrapf(err, "failed to send third XN handshake message")
+	}
+
+	nc.updateCipherStates(cs1, cs2)
 	return nil
 }
 
-// performXKInitiator handles XK pattern as initiator: → e, es, s, ss, ← e, ee, se
+// performXKInitiator handles XK pattern as initiator (3 messages):
+//
+//	pre-message: ← s
+//	→ e, es
+//	← e, ee
+//	→ s, se
 func (nc *NoiseConn) performXKInitiator(ctx context.Context) error {
-	// Message 1: → e, es, s, ss (send ephemeral and static, encrypt with responder's static)
+	// Message 1: → e, es (send ephemeral, DH with responder's static)
 	msg, cs1, cs2, err := nc.handshakeState.WriteMessage(nil, nil)
 	if err != nil {
 		return oops.
@@ -1322,7 +1352,7 @@ func (nc *NoiseConn) performXKInitiator(ctx context.Context) error {
 
 	nc.updateCipherStates(cs1, cs2)
 
-	// Message 2: ← e, ee, se (receive ephemeral, compute DH)
+	// Message 2: ← e, ee (receive responder ephemeral, DH ee)
 	buffer := make([]byte, 2048)
 	n, err := nc.underlying.Read(buffer)
 	if err != nil {
@@ -1338,6 +1368,24 @@ func (nc *NoiseConn) performXKInitiator(ctx context.Context) error {
 			Code("PROCESS_MESSAGE_FAILED").
 			In("noise").
 			Wrapf(err, "failed to process second XK handshake message")
+	}
+
+	nc.updateCipherStates(cs1, cs2)
+
+	// Message 3: → s, se (send encrypted static, DH se — final message)
+	msg, cs1, cs2, err = nc.handshakeState.WriteMessage(nil, nil)
+	if err != nil {
+		return oops.
+			Code("WRITE_MESSAGE_FAILED").
+			In("noise").
+			Wrapf(err, "failed to create third XK handshake message")
+	}
+
+	if _, err := nc.underlying.Write(msg); err != nil {
+		return oops.
+			Code("SEND_MESSAGE_FAILED").
+			In("noise").
+			Wrapf(err, "failed to send third XK handshake message")
 	}
 
 	nc.updateCipherStates(cs1, cs2)
@@ -1558,7 +1606,11 @@ func (nc *NoiseConn) performIXInitiator(ctx context.Context) error {
 // THREE-MESSAGE PATTERNS
 // ============================================================================
 
-// performKXInitiator handles KX pattern as initiator: → e, ← e, ee, se, s, es, → s, se
+// performKXInitiator handles KX pattern as initiator (2 messages):
+//
+//	pre-message: → s
+//	→ e
+//	← e, ee, se, s, es
 func (nc *NoiseConn) performKXInitiator(ctx context.Context) error {
 	// Message 1: → e (send ephemeral)
 	msg, cs1, cs2, err := nc.handshakeState.WriteMessage(nil, nil)
@@ -1578,7 +1630,7 @@ func (nc *NoiseConn) performKXInitiator(ctx context.Context) error {
 
 	nc.updateCipherStates(cs1, cs2)
 
-	// Message 2: ← e, ee, se, s, es (receive ephemeral and static, compute DH)
+	// Message 2: ← e, ee, se, s, es (receive responder ephemeral + static, compute DH — final message)
 	buffer := make([]byte, 2048)
 	n, err := nc.underlying.Read(buffer)
 	if err != nil {
@@ -1594,24 +1646,6 @@ func (nc *NoiseConn) performKXInitiator(ctx context.Context) error {
 			Code("PROCESS_MESSAGE_FAILED").
 			In("noise").
 			Wrapf(err, "failed to process second KX handshake message")
-	}
-
-	nc.updateCipherStates(cs1, cs2)
-
-	// Message 3: → s, se (send static, compute final DH)
-	msg, cs1, cs2, err = nc.handshakeState.WriteMessage(nil, nil)
-	if err != nil {
-		return oops.
-			Code("WRITE_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to create third KX handshake message")
-	}
-
-	if _, err := nc.underlying.Write(msg); err != nil {
-		return oops.
-			Code("SEND_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to send third KX handshake message")
 	}
 
 	nc.updateCipherStates(cs1, cs2)
@@ -1782,9 +1816,13 @@ func (nc *NoiseConn) performNXResponder(ctx context.Context) error {
 	return nil
 }
 
-// performXNResponder handles XN pattern as responder: → e, s, ← e, ee, se
+// performXNResponder handles XN pattern as responder (3 messages):
+//
+//	→ e
+//	← e, ee
+//	→ s, se
 func (nc *NoiseConn) performXNResponder(ctx context.Context) error {
-	// Message 1: → e, s (receive ephemeral and static)
+	// Message 1: → e (receive initiator ephemeral)
 	buffer := make([]byte, 2048)
 	n, err := nc.underlying.Read(buffer)
 	if err != nil {
@@ -1804,7 +1842,7 @@ func (nc *NoiseConn) performXNResponder(ctx context.Context) error {
 
 	nc.updateCipherStates(cs1, cs2)
 
-	// Message 2: ← e, ee, se (send ephemeral, compute DH)
+	// Message 2: ← e, ee (send our ephemeral, DH ee)
 	msg, cs1, cs2, err := nc.handshakeState.WriteMessage(nil, nil)
 	if err != nil {
 		return oops.
@@ -1821,12 +1859,36 @@ func (nc *NoiseConn) performXNResponder(ctx context.Context) error {
 	}
 
 	nc.updateCipherStates(cs1, cs2)
+
+	// Message 3: → s, se (receive initiator's encrypted static, DH se — final message)
+	n, err = nc.underlying.Read(buffer)
+	if err != nil {
+		return oops.
+			Code("READ_MESSAGE_FAILED").
+			In("noise").
+			Wrapf(err, "failed to read third XN handshake message")
+	}
+
+	_, cs1, cs2, err = nc.handshakeState.ReadMessage(nil, buffer[:n])
+	if err != nil {
+		return oops.
+			Code("PROCESS_MESSAGE_FAILED").
+			In("noise").
+			Wrapf(err, "failed to process third XN handshake message")
+	}
+
+	nc.updateCipherStates(cs1, cs2)
 	return nil
 }
 
-// performXKResponder handles XK pattern as responder: → e, es, s, ss, ← e, ee, se
+// performXKResponder handles XK pattern as responder (3 messages):
+//
+//	pre-message: ← s
+//	→ e, es
+//	← e, ee
+//	→ s, se
 func (nc *NoiseConn) performXKResponder(ctx context.Context) error {
-	// Message 1: → e, es, s, ss (receive ephemeral and static encrypted with our static)
+	// Message 1: → e, es (receive initiator ephemeral, DH es with our static)
 	buffer := make([]byte, 2048)
 	n, err := nc.underlying.Read(buffer)
 	if err != nil {
@@ -1846,7 +1908,7 @@ func (nc *NoiseConn) performXKResponder(ctx context.Context) error {
 
 	nc.updateCipherStates(cs1, cs2)
 
-	// Message 2: ← e, ee, se (send ephemeral, compute DH)
+	// Message 2: ← e, ee (send our ephemeral, DH ee)
 	msg, cs1, cs2, err := nc.handshakeState.WriteMessage(nil, nil)
 	if err != nil {
 		return oops.
@@ -1860,6 +1922,25 @@ func (nc *NoiseConn) performXKResponder(ctx context.Context) error {
 			Code("SEND_MESSAGE_FAILED").
 			In("noise").
 			Wrapf(err, "failed to send second XK handshake message")
+	}
+
+	nc.updateCipherStates(cs1, cs2)
+
+	// Message 3: → s, se (receive initiator's encrypted static, DH se — final message)
+	n, err = nc.underlying.Read(buffer)
+	if err != nil {
+		return oops.
+			Code("READ_MESSAGE_FAILED").
+			In("noise").
+			Wrapf(err, "failed to read third XK handshake message")
+	}
+
+	_, cs1, cs2, err = nc.handshakeState.ReadMessage(nil, buffer[:n])
+	if err != nil {
+		return oops.
+			Code("PROCESS_MESSAGE_FAILED").
+			In("noise").
+			Wrapf(err, "failed to process third XK handshake message")
 	}
 
 	nc.updateCipherStates(cs1, cs2)
@@ -2080,9 +2161,13 @@ func (nc *NoiseConn) performIXResponder(ctx context.Context) error {
 // THREE-MESSAGE PATTERN RESPONDERS
 // ============================================================================
 
-// performKXResponder handles KX pattern as responder: → e, ← e, ee, se, s, es, → s, se
+// performKXResponder handles KX pattern as responder (2 messages):
+//
+//	pre-message: → s
+//	→ e
+//	← e, ee, se, s, es
 func (nc *NoiseConn) performKXResponder(ctx context.Context) error {
-	// Message 1: → e (receive ephemeral)
+	// Message 1: → e (receive initiator ephemeral)
 	buffer := make([]byte, 2048)
 	n, err := nc.underlying.Read(buffer)
 	if err != nil {
@@ -2102,7 +2187,7 @@ func (nc *NoiseConn) performKXResponder(ctx context.Context) error {
 
 	nc.updateCipherStates(cs1, cs2)
 
-	// Message 2: ← e, ee, se, s, es (send ephemeral and static, compute DH)
+	// Message 2: ← e, ee, se, s, es (send our ephemeral + static, compute DH — final message)
 	msg, cs1, cs2, err := nc.handshakeState.WriteMessage(nil, nil)
 	if err != nil {
 		return oops.
@@ -2116,25 +2201,6 @@ func (nc *NoiseConn) performKXResponder(ctx context.Context) error {
 			Code("SEND_MESSAGE_FAILED").
 			In("noise").
 			Wrapf(err, "failed to send second KX handshake message")
-	}
-
-	nc.updateCipherStates(cs1, cs2)
-
-	// Message 3: → s, se (receive static and final DH)
-	n, err = nc.underlying.Read(buffer)
-	if err != nil {
-		return oops.
-			Code("READ_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to read third KX handshake message")
-	}
-
-	_, cs1, cs2, err = nc.handshakeState.ReadMessage(nil, buffer[:n])
-	if err != nil {
-		return oops.
-			Code("PROCESS_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to process third KX handshake message")
 	}
 
 	nc.updateCipherStates(cs1, cs2)
@@ -2313,6 +2379,25 @@ func createHandshakeState(config *ConnConfig) (*noise.HandshakeState, error) {
 			Wrapf(err, "invalid handshake pattern")
 	}
 
+	// Derive the public key from the private key so the upstream library
+	// can use it in pre-messages and static key transmission patterns.
+	// The StaticKeypair requires both Private and Public to be set;
+	// the upstream library does NOT compute the public key automatically.
+	var staticKeypair noise.DHKey
+	if len(config.StaticKey) > 0 {
+		privKey, err := ecdh.X25519().NewPrivateKey(config.StaticKey)
+		if err != nil {
+			return nil, oops.
+				Code("INVALID_STATIC_KEY").
+				In("noise").
+				Wrapf(err, "failed to derive public key from static private key")
+		}
+		staticKeypair = noise.DHKey{
+			Private: config.StaticKey,
+			Public:  privKey.PublicKey().Bytes(),
+		}
+	}
+
 	hs, err := noise.NewHandshakeState(noise.Config{
 		CipherSuite:                  cs,
 		Random:                       nil, // Use crypto/rand
@@ -2320,11 +2405,8 @@ func createHandshakeState(config *ConnConfig) (*noise.HandshakeState, error) {
 		Initiator:                    config.Initiator,
 		ProtocolName:                 config.ProtocolName,
 		AdditionalSymmetricKeyLabels: config.AdditionalSymmetricKeyLabels,
-		StaticKeypair: noise.DHKey{
-			Private: config.StaticKey,
-			Public:  nil, // Will be computed
-		},
-		PeerStatic: config.RemoteKey,
+		StaticKeypair:                staticKeypair,
+		PeerStatic:                   config.RemoteKey,
 	})
 	if err != nil {
 		return nil, oops.
