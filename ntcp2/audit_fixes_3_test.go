@@ -225,7 +225,7 @@ func TestWithAESObfuscation_WrongIVLengthReturnsError(t *testing.T) {
 	wrongIV := make([]byte, 10) // not 16
 	_, err = config.WithAESObfuscation(true, wrongIV)
 	assert.Error(t, err, "Wrong-length IV must return an error")
-	assert.Contains(t, err.Error(), "INVALID_IV_LENGTH")
+	assert.Contains(t, err.Error(), "custom IV must be exactly")
 
 	// Correct length IV
 	correctIV := make([]byte, 16)
