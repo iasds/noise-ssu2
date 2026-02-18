@@ -19,8 +19,7 @@ type AESObfuscationModifier struct {
 
 AESObfuscationModifier implements NTCP2's AES-based ephemeral key obfuscation.
 This modifier encrypts/decrypts the X and Y ephemeral keys in messages 1 and 2
-using AES-256-CBC with the router hash as key and published IV. Moved from:
-ntcp2/modifier.go
+using AES-256-CBC with the router hash as key and published IV.
 
 #### func  NewAESObfuscationModifier
 
@@ -62,7 +61,7 @@ type NTCP2Addr struct {
 
 NTCP2Addr implements net.Addr for NTCP2 transport connections. It provides
 I2P-specific addressing information including router identity, destination hash,
-and session parameters for the NTCP2 protocol. Moved from: ntcp2/addr.go
+and session parameters for the NTCP2 protocol.
 
 #### func  NewNTCP2Addr
 
@@ -73,30 +72,14 @@ NewNTCP2Addr creates a new NTCP2Addr with the specified TCP address and router
 hash. routerHash must be exactly 32 bytes representing the I2P router identity.
 role should be either "initiator" or "responder".
 
-#### func (*NTCP2Addr) DestinationHash
+#### func (*NTCP2Addr) IdentHash
 
 ```go
-func (na *NTCP2Addr) DestinationHash() []byte
+func (na *NTCP2Addr) IdentHash() data.Hash
 ```
-DestinationHash returns a copy of the destination hash, or nil for
-router-to-router connections. The returned slice is a defensive copy to prevent
-external modification.
-
-#### func (*NTCP2Addr) IsRouterToRouter
-
-```go
-func (na *NTCP2Addr) IsRouterToRouter() bool
-```
-IsRouterToRouter returns true if this is a router-to-router connection (no
-destination hash).
-
-#### func (*NTCP2Addr) IsTunnelConnection
-
-```go
-func (na *NTCP2Addr) IsTunnelConnection() bool
-```
-IsTunnelConnection returns true if this is a tunnel connection (has destination
-hash).
+IdentHash returns the router identity hash as a common/data.Hash.
+This provides the router hash in the type used by go-i2p/common for
+use by the router transport layer (github.com/go-i2p/go-i2p/lib/transport/ntcp).
 
 #### func (*NTCP2Addr) Network
 
@@ -127,8 +110,8 @@ defensive copy to prevent external modification.
 func (na *NTCP2Addr) String() string
 ```
 String returns a string representation of the NTCP2 address. Format:
-"ntcp2://[router_hash]/[role]/[tcp_address][?dest=dest_hash]"
-Router hash and optional parameters are base64 encoded for readability.
+"ntcp2://[router_hash]/[role]/[tcp_address]"
+Router hash is base64 encoded for readability.
 
 #### func (*NTCP2Addr) UnderlyingAddr
 
@@ -136,14 +119,6 @@ Router hash and optional parameters are base64 encoded for readability.
 func (na *NTCP2Addr) UnderlyingAddr() net.Addr
 ```
 UnderlyingAddr returns the underlying TCP network address.
-
-#### func (*NTCP2Addr) WithDestinationHash
-
-```go
-func (na *NTCP2Addr) WithDestinationHash(destHash []byte) (*NTCP2Addr, error)
-```
-WithDestinationHash sets the destination hash for tunnel connections. destHash
-must be exactly 32 bytes or nil for router-to-router connections.
 
 #### type NTCP2Config
 
@@ -230,8 +205,7 @@ type NTCP2Config struct {
 
 NTCP2Config contains configuration for creating NTCP2 connections and listeners.
 It follows the builder pattern for optional configuration and validation,
-similar to the main ConnConfig but with NTCP2-specific parameters. Moved from:
-ntcp2/config.go
+similar to the main ConnConfig but with NTCP2-specific parameters.
 
 #### func  NewNTCP2Config
 
@@ -360,8 +334,7 @@ type NTCP2Conn struct {
 ```
 
 NTCP2Conn implements net.Conn for NTCP2 transport connections. It wraps a
-NoiseConn with NTCP2-specific addressing and protocol handling. Moved from:
-ntcp2/conn.go
+NoiseConn with NTCP2-specific addressing and protocol handling.
 
 #### func  DialNTCP2
 
@@ -415,13 +388,15 @@ func (nc *NTCP2Conn) Close() error
 Close implements net.Conn.Close. Closes the underlying Noise connection and
 cleans up resources.
 
-#### func (*NTCP2Conn) DestinationHash
+#### func (*NTCP2Conn) PeerStaticKey
 
 ```go
-func (nc *NTCP2Conn) DestinationHash() []byte
+func (nc *NTCP2Conn) PeerStaticKey() []byte
 ```
-DestinationHash returns the destination hash from the remote address. Returns
-nil for router-to-router connections.
+PeerStaticKey returns the remote peer's static public key from the completed
+handshake. This is the raw X25519 public key, not the router hash. The router
+transport layer (github.com/go-i2p/go-i2p/lib/transport/ntcp) can use this
+along with the known RouterIdentity to verify the peer's identity.
 
 #### func (*NTCP2Conn) LocalAddr
 
@@ -710,7 +685,7 @@ type SipHashLengthModifier struct {
 
 SipHashLengthModifier implements NTCP2's SipHash-2-4 length obfuscation for data
 phase frame lengths. This prevents identification of frame lengths in the data
-stream. Moved from: ntcp2/modifier.go
+stream.
 
 #### func  NewSipHashLengthModifier
 

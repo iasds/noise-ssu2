@@ -508,10 +508,11 @@ func (nc *NTCP2Config) createSipHashModifierIfEnabled() *SipHashLengthModifier {
 	if !nc.EnableSipHashLength {
 		return nil
 	}
-	// TODO(ntcp2-spec): SipHash keys (sipk1, sipk2) and initial IV must be derived
-	// from the data-phase KDF (HKDF(ask_master, h || "siphash")) after the handshake
-	// completes. Currently the caller must inject derived keys via WithSipHashLength().
-	// Using default zero keys provides no obfuscation and breaks interoperability.
+	// SipHash keys (sipk1, sipk2) and initial IV should be derived from the
+	// data-phase KDF after the Noise XK handshake completes. Use DeriveSipHashKeys()
+	// with the ask_master secret and the handshake hash (from NTCP2Conn.HandshakeHash())
+	// to obtain proper keys. The router transport layer should call DeriveSipHashKeys()
+	// and then inject the result via SetLengthObfuscator() on the NTCP2Conn.
 	return NewSipHashLengthModifier("ntcp2-siphash", nc.SipHashKeys, 0)
 }
 

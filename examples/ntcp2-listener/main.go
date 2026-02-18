@@ -175,12 +175,7 @@ func handleNTCP2Connection(conn net.Conn, connID int) {
 	if ntcp2Conn, ok := conn.(*ntcp2.NTCP2Conn); ok {
 		fmt.Printf("🔗 [Conn %d] Router hash: %x...\n", connID, ntcp2Conn.RouterHash()[:8])
 		fmt.Printf("🔗 [Conn %d] Role: %s\n", connID, ntcp2Conn.Role())
-
-		if destHash := ntcp2Conn.DestinationHash(); destHash != nil {
-			fmt.Printf("🔗 [Conn %d] Destination: %x...\n", connID, destHash[:8])
-		} else {
-			fmt.Printf("🔗 [Conn %d] Type: Router-to-router connection\n", connID)
-		}
+		fmt.Printf("🔗 [Conn %d] IdentHash: %x\n", connID, ntcp2Conn.RemoteAddr().(*ntcp2.NTCP2Addr).IdentHash())
 	}
 
 	// Read data from the connection

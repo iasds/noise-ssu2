@@ -62,4 +62,12 @@ const (
 
 	// MaxPaddingRatio is the maximum padding ratio per I2P NTCP2 spec (4.4 fixed-point).
 	MaxPaddingRatio = 15.9375
+
+	// Poly1305Overhead is the ChaChaPoly AEAD authentication tag size in bytes.
+	Poly1305Overhead = 16
+
+	// MaxNonce is the nonce limit per the Noise Protocol spec and I2P NTCP2 spec.
+	// Connections MUST be terminated before the nonce reaches 2^64 - 2.
+	// Using 2^64 - 2 = 18446744073709551614.
+	MaxNonce uint64 = 18446744073709551614
 )

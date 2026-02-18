@@ -87,76 +87,6 @@ func TestNewNTCP2Addr(t *testing.T) {
 				assert.Equal(t, tt.underlying, addr.underlying)
 				assert.Equal(t, tt.role, addr.role)
 				assert.Equal(t, 32, len(addr.routerHash))
-				assert.Nil(t, addr.destHash)
-			}
-		})
-	}
-}
-
-func TestNTCP2Addr_WithDestinationHash(t *testing.T) {
-	// Create base address
-	underlying := &net.TCPAddr{IP: net.ParseIP("192.168.1.1"), Port: 8080}
-	routerHash := make([]byte, 32)
-	baseAddr, err := NewNTCP2Addr(underlying, routerHash, "initiator")
-	require.NoError(t, err)
-
-	tests := []struct {
-		name         string
-		destHash     []byte
-		expectError  bool
-		errorMessage string
-	}{
-		{
-			name:        "valid_dest_hash",
-			destHash:    make([]byte, 32),
-			expectError: false,
-		},
-		{
-			name:        "nil_dest_hash",
-			destHash:    nil,
-			expectError: false,
-		},
-		{
-			name:         "invalid_dest_hash_too_short",
-			destHash:     make([]byte, 16),
-			expectError:  true,
-			errorMessage: "destination hash must be exactly 32 bytes or nil",
-		},
-		{
-			name:         "invalid_dest_hash_too_long",
-			destHash:     make([]byte, 64),
-			expectError:  true,
-			errorMessage: "destination hash must be exactly 32 bytes or nil",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			newAddr, err := baseAddr.WithDestinationHash(tt.destHash)
-
-			if tt.expectError {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), tt.errorMessage)
-				assert.Nil(t, newAddr)
-			} else {
-				require.NoError(t, err)
-				require.NotNil(t, newAddr)
-
-				// Verify immutability - original should be unchanged
-				assert.Nil(t, baseAddr.destHash)
-
-				if tt.destHash != nil {
-					assert.Equal(t, 32, len(newAddr.destHash))
-					// Test defensive copy by modifying original and verifying it doesn't affect the copy
-					if len(tt.destHash) > 0 {
-						originalByte := tt.destHash[0]
-						tt.destHash[0] = 0xFF
-						assert.NotEqual(t, byte(0xFF), newAddr.destHash[0])
-						tt.destHash[0] = originalByte // Restore
-					}
-				} else {
-					assert.Nil(t, newAddr.destHash)
-				}
 			}
 		})
 	}
@@ -206,22 +136,6 @@ func TestNTCP2Addr_String(t *testing.T) {
 				"/initiator/",
 				"192.168.1.1:8080",
 			},
-			notContains: []string{"?dest="},
-		},
-		{
-			name: "with_destination_hash",
-			setupAddr: func(addr *NTCP2Addr) *NTCP2Addr {
-				destHash := make([]byte, 32)
-				destHash[0] = 0xCC
-				newAddr, _ := addr.WithDestinationHash(destHash)
-				return newAddr
-			},
-			contains: []string{
-				"ntcp2://",
-				"/initiator/",
-				"192.168.1.1:8080",
-				"?dest=",
-			},
 			notContains: []string{},
 		},
 	}
@@ -267,25 +181,9 @@ func TestNTCP2Addr_AccessorMethods(t *testing.T) {
 	// Test UnderlyingAddr
 	assert.Equal(t, underlying, addr.UnderlyingAddr())
 
-	// Test IsRouterToRouter / IsTunnelConnection
-	assert.True(t, addr.IsRouterToRouter())
-	assert.False(t, addr.IsTunnelConnection())
-
-	// Add destination hash and test again
-	destHash := make([]byte, 32)
-	destHash[0] = 0xBB
-	addrWithDest, err := addr.WithDestinationHash(destHash)
-	require.NoError(t, err)
-
-	returnedDest := addrWithDest.DestinationHash()
-	assert.Equal(t, 32, len(returnedDest))
-	assert.Equal(t, byte(0xBB), returnedDest[0])
-	// Test defensive copy by modifying returned slice
-	returnedDest[0] = 0xFF
-	assert.Equal(t, byte(0xBB), addrWithDest.DestinationHash()[0]) // Original should be unchanged
-
-	assert.False(t, addrWithDest.IsRouterToRouter())
-	assert.True(t, addrWithDest.IsTunnelConnection())
+	// Test IdentHash - returns a data.Hash from the router hash
+	identHash := addr.IdentHash()
+	assert.Equal(t, byte(0xAA), identHash[0])
 }
 
 func TestNTCP2Addr_DefensiveCopying(t *testing.T) {
@@ -318,32 +216,22 @@ func TestNTCP2Addr_StringHandlesNilUnderlying(t *testing.T) {
 	assert.Equal(t, "ntcp2://invalid", str)
 }
 
-func TestNTCP2Addr_BuilderPattern(t *testing.T) {
-	// Test builder pattern with method chaining
+func TestNTCP2Addr_IdentHash(t *testing.T) {
+	// Test that IdentHash returns the correct data.Hash
 	underlying := &net.TCPAddr{IP: net.ParseIP("192.168.1.1"), Port: 8080}
 	routerHash := make([]byte, 32)
-	destHash := make([]byte, 32)
+	for i := range routerHash {
+		routerHash[i] = byte(i)
+	}
 
-	// Set recognizable bytes
-	routerHash[0] = 0xAA
-	destHash[0] = 0xBB
-
-	// Create base address
-	baseAddr, err := NewNTCP2Addr(underlying, routerHash, "initiator")
+	addr, err := NewNTCP2Addr(underlying, routerHash, "initiator")
 	require.NoError(t, err)
 
-	// Chain builder methods
-	finalAddr, err := baseAddr.WithDestinationHash(destHash)
-	require.NoError(t, err)
-
-	// Verify final address has all components
-	assert.Equal(t, byte(0xAA), finalAddr.RouterHash()[0])
-	assert.Equal(t, byte(0xBB), finalAddr.DestinationHash()[0])
-	assert.True(t, finalAddr.IsTunnelConnection())
-
-	// Verify original is unchanged (immutability)
-	assert.Nil(t, baseAddr.DestinationHash())
-	assert.True(t, baseAddr.IsRouterToRouter())
+	identHash := addr.IdentHash()
+	// Verify each byte matches
+	for i := 0; i < 32; i++ {
+		assert.Equal(t, byte(i), identHash[i], "byte %d mismatch", i)
+	}
 }
 
 // Benchmark tests to ensure performance is adequate

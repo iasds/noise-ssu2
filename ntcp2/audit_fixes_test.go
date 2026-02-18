@@ -50,6 +50,8 @@ func TestAudit_AESStatePropagation_CrossMessage(t *testing.T) {
 	for i := range keyY {
 		keyY[i] = byte(i + 0xC0)
 	}
+	// Ensure keyY is a valid Curve25519 public key (high bit of byte 31 must be 0)
+	keyY[31] &= 0x7F
 
 	// --- Message 1: Sender encrypts X ---
 	cipherX, err := sender.ModifyOutbound(handshake.PhaseInitial, keyX)

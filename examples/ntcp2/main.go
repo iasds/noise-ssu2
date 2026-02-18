@@ -78,26 +78,11 @@ func demonstrateNTCP2Addressing() {
 	fmt.Printf("  Network: %s\n", ntcpAddr.Network())
 	fmt.Printf("  String:  %s\n", ntcpAddr.String())
 	fmt.Printf("  Role:    %s\n", ntcpAddr.Role())
-	fmt.Printf("  Router-to-Router: %v\n", ntcpAddr.IsRouterToRouter())
-	fmt.Println()
-
-	// Add a destination hash for tunnel connections
-	destHash := make([]byte, 32)
-	copy(destHash, []byte("example_destination_hash_32_byte."))
-
-	tunnelAddr, err := ntcpAddr.WithDestinationHash(destHash)
-	if err != nil {
-		log.Fatalf("Failed to add destination hash: %v", err)
-	}
-
-	fmt.Printf("Tunnel NTCP2 Address:\n")
-	fmt.Printf("  String: %s\n", tunnelAddr.String())
-	fmt.Printf("  Is Tunnel Connection: %v\n", tunnelAddr.IsTunnelConnection())
-	fmt.Printf("  Router-to-Router: %v\n", tunnelAddr.IsRouterToRouter())
+	fmt.Printf("  IdentHash: %x\n", ntcpAddr.IdentHash())
 	fmt.Println()
 
 	// Demonstrate net.Addr interface compliance
-	var netAddr net.Addr = tunnelAddr
+	var netAddr net.Addr = ntcpAddr
 	fmt.Printf("net.Addr Interface Compliance:\n")
 	fmt.Printf("  Network(): %s\n", netAddr.Network())
 	fmt.Printf("  String():  %s\n", netAddr.String())
@@ -150,15 +135,7 @@ func demonstrateNTCP2AddressingWithKeys(routerHash, remoteRouterHash, destHash, 
 
 	// Add destination hash for tunnel connections if provided
 	if destHash != nil {
-		tunnelAddr, err := ntcpAddr.WithDestinationHash(destHash)
-		if err != nil {
-			log.Printf("Failed to add destination hash: %v", err)
-			return
-		}
-
-		fmt.Printf("Tunnel NTCP2 Address:\n")
-		fmt.Printf("  String: %s\n", tunnelAddr.String())
-		fmt.Printf("  Is Tunnel Connection: %v\n", tunnelAddr.IsTunnelConnection())
+		fmt.Printf("Destination Hash:\n")
 		fmt.Printf("  Destination Hash: %x...\n", destHash[:8])
 		fmt.Println()
 	}

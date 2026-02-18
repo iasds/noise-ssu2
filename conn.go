@@ -373,6 +373,22 @@ func (nc *NoiseConn) PeerStatic() []byte {
 	return nc.handshakeState.PeerStatic()
 }
 
+// ChannelBinding returns the handshake hash (h) from the completed Noise session.
+// This is the hash of all handshake transcript data and can be used for:
+//   - Channel binding (tying an application-layer credential to the Noise session)
+//   - Deriving additional key material via HKDF (e.g., NTCP2's SipHash keys)
+//
+// Returns nil if the handshake has not been initiated.
+//
+// Thread Safety: This method is safe for concurrent use. The underlying
+// HandshakeState.ChannelBinding() is mutex-protected.
+func (nc *NoiseConn) ChannelBinding() []byte {
+	if nc.handshakeState == nil {
+		return nil
+	}
+	return nc.handshakeState.ChannelBinding()
+}
+
 // Rekey triggers a rekey operation on the underlying cipher state.
 // This advances the encryption key material per the Noise Protocol specification
 // (encrypts 32 zero bytes with nonce 2^64-1, takes first 32 bytes as new key).

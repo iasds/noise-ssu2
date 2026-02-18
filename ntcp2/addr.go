@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 
+	"github.com/go-i2p/common/data"
 	"github.com/samber/oops"
 )
 
@@ -18,8 +19,6 @@ type NTCP2Addr struct {
 	underlying net.Addr
 	// routerHash is the 32-byte I2P router identity hash
 	routerHash []byte
-	// destHash is the 32-byte destination hash (optional, nil for router-to-router)
-	destHash []byte
 	// role indicates if this is an initiator or responder address
 	role string
 }
@@ -62,33 +61,6 @@ func NewNTCP2Addr(underlying net.Addr, routerHash []byte, role string) (*NTCP2Ad
 	}, nil
 }
 
-// WithDestinationHash sets the destination hash for tunnel connections.
-// destHash must be exactly 32 bytes or nil for router-to-router connections.
-func (na *NTCP2Addr) WithDestinationHash(destHash []byte) (*NTCP2Addr, error) {
-	if destHash != nil && len(destHash) != RouterHashSize {
-		return nil, oops.
-			Code("INVALID_DEST_HASH").
-			In("ntcp2").
-			With("hash_length", len(destHash)).
-			Errorf("destination hash must be exactly %d bytes or nil", RouterHashSize)
-	}
-
-	// Create new instance with defensive copy
-	newAddr := &NTCP2Addr{
-		underlying: na.underlying,
-		routerHash: make([]byte, RouterHashSize),
-		role:       na.role,
-	}
-	copy(newAddr.routerHash, na.routerHash)
-
-	if destHash != nil {
-		newAddr.destHash = make([]byte, RouterHashSize)
-		copy(newAddr.destHash, destHash)
-	}
-
-	return newAddr, nil
-}
-
 // Network returns "ntcp2" to identify this as an NTCP2 transport address.
 // This implements the net.Addr interface requirement.
 func (na *NTCP2Addr) Network() string {
@@ -109,12 +81,6 @@ func (na *NTCP2Addr) String() string {
 	// Build base address
 	addr := fmt.Sprintf("ntcp2://%s/%s/%s", routerB64, na.role, na.underlying.String())
 
-	// Add optional destination hash
-	if na.destHash != nil {
-		destB64 := base64.URLEncoding.EncodeToString(na.destHash)
-		addr += "?dest=" + destB64
-	}
-
 	return addr
 }
 
@@ -129,15 +95,13 @@ func (na *NTCP2Addr) RouterHash() []byte {
 	return hash
 }
 
-// DestinationHash returns a copy of the destination hash, or nil for router-to-router connections.
-// The returned slice is a defensive copy to prevent external modification.
-func (na *NTCP2Addr) DestinationHash() []byte {
-	if na.destHash == nil {
-		return nil
-	}
-	hash := make([]byte, RouterHashSize)
-	copy(hash, na.destHash)
-	return hash
+// IdentHash returns the router identity hash as a common/data.Hash.
+// This provides the router hash in the type used by go-i2p/common for
+// use by the router transport layer (github.com/go-i2p/go-i2p/lib/transport/ntcp).
+func (na *NTCP2Addr) IdentHash() data.Hash {
+	var h [32]byte
+	copy(h[:], na.routerHash)
+	return data.NewHash(h)
 }
 
 // Role returns the connection role ("initiator" or "responder").
@@ -148,14 +112,4 @@ func (na *NTCP2Addr) Role() string {
 // UnderlyingAddr returns the underlying TCP network address.
 func (na *NTCP2Addr) UnderlyingAddr() net.Addr {
 	return na.underlying
-}
-
-// IsRouterToRouter returns true if this is a router-to-router connection (no destination hash).
-func (na *NTCP2Addr) IsRouterToRouter() bool {
-	return na.destHash == nil
-}
-
-// IsTunnelConnection returns true if this is a tunnel connection (has destination hash).
-func (na *NTCP2Addr) IsTunnelConnection() bool {
-	return na.destHash != nil
 }

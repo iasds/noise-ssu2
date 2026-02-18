@@ -6,6 +6,7 @@ toolchain go1.24.12
 
 require (
 	github.com/dchest/siphash v1.2.3
+	github.com/go-i2p/common v0.1.3
 	github.com/go-i2p/logger v0.1.2
 	github.com/go-i2p/noise v1.1.1-0.20260217213158-a1b329eee439
 	github.com/samber/oops v1.21.0
@@ -26,3 +27,5 @@ require (
 	golang.org/x/text v0.34.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+replace github.com/go-i2p/common => ../common

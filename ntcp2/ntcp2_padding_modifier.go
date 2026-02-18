@@ -288,38 +288,55 @@ func (npm *NTCP2PaddingModifier) addAEADPadding(data []byte, paddingSize int) ([
 	return result, nil
 }
 
-// removeAEADPadding removes AEAD padding blocks (type 254) with robust parsing.
-// Handles both simple concatenated data+padding and proper I2P block format.
+// removeAEADPadding removes AEAD padding blocks (type 254) using forward block parsing.
+// Parses data as I2P block structure [type:1][size:2][data...] from the beginning,
+// tracking the end of the last non-padding block. Falls back to trailing padding
+// block detection when the data is not fully in I2P block format (e.g., raw payload
+// followed by an appended padding block).
 func (npm *NTCP2PaddingModifier) removeAEADPadding(data []byte) ([]byte, error) {
-	if len(data) < 3 {
+	if len(data) < BlockHeaderSize {
 		return data, nil // No room for block header
 	}
 
-	// Try simple reverse scan strategy first
-	if result := npm.removePaddingFromEnd(data); result != nil {
-		return result, nil
+	// Try forward block parsing first (proper I2P block format)
+	result := npm.parseBlockStructure(data)
+	if result.foundValidBlocks && result.lastDataEnd > 0 && result.lastDataEnd <= len(data) {
+		return data[:result.lastDataEnd], nil
 	}
 
-	// Fallback to structured block parsing
-	return npm.removePaddingFromBlocks(data)
+	// Fallback: check for a trailing padding block appended to raw data.
+	// Scan for [254][size:2][padding:size] at the end of the data where the
+	// declared size exactly matches the remaining bytes after the header.
+	return npm.removeTrailingPaddingBlock(data)
 }
 
-// removePaddingFromEnd scans from the end looking for a trailing padding block (type 254).
-// This works for simple cases where we have data + single padding block.
-func (npm *NTCP2PaddingModifier) removePaddingFromEnd(data []byte) []byte {
-	for i := len(data) - 1; i >= 2; i-- {
-		if data[i-2] == PaddingBlockType { // Found potential padding block type
-			if i-1 < len(data) {
-				paddingSize := binary.BigEndian.Uint16(data[i-1 : i+1])
-				expectedEnd := i + 1 + int(paddingSize)
-				// Check if this looks like a valid trailing padding block
-				if expectedEnd == len(data) && i-2 >= 0 {
-					return data[:i-2]
-				}
+// removeTrailingPaddingBlock looks for a valid padding block at the end of the data
+// by iterating through possible padding sizes and verifying the block header matches.
+// This is safe because it requires an exact match: data[start] == PaddingBlockType
+// and the declared big-endian size equals the number of trailing bytes after the header.
+func (npm *NTCP2PaddingModifier) removeTrailingPaddingBlock(data []byte) ([]byte, error) {
+	maxPadding := len(data) - BlockHeaderSize
+	if maxPadding < 0 {
+		return data, nil
+	}
+	if maxPadding > MaxBlockDataSize {
+		maxPadding = MaxBlockDataSize
+	}
+
+	for paddingSize := 0; paddingSize <= maxPadding; paddingSize++ {
+		start := len(data) - BlockHeaderSize - paddingSize
+		if start < 0 {
+			break
+		}
+		if data[start] == PaddingBlockType {
+			declaredSize := int(binary.BigEndian.Uint16(data[start+1 : start+3]))
+			if declaredSize == paddingSize {
+				return data[:start], nil
 			}
 		}
 	}
-	return nil
+
+	return data, nil
 }
 
 // removePaddingFromBlocks parses data as proper I2P block structure to locate padding blocks.

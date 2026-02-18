@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	noise "github.com/go-i2p/go-noise"
@@ -26,9 +27,6 @@ import (
 // termination blocks, options negotiation, timestamp validation, replay
 // caches, and version detection — belong in the router transport layer
 // (github.com/go-i2p/go-i2p/lib/transport/ntcp).
-//
-// TODO(ntcp2-spec): Nonce limit enforcement — spec requires dropping the connection when the
-// nonce reaches 2^64-2. Currently no nonce tracking at this layer.
 type NTCP2Conn struct {
 	// noiseConn is the underlying encrypted connection
 	noiseConn *noise.NoiseConn
@@ -52,6 +50,14 @@ type NTCP2Conn struct {
 
 	// closeOnce ensures Close is idempotent and key material is zeroed exactly once.
 	closeOnce sync.Once
+
+	// writeNonce tracks the number of frames written (data-phase encrypt operations).
+	// The connection MUST be terminated before this reaches MaxNonce (2^64-2).
+	writeNonce atomic.Uint64
+
+	// readNonce tracks the number of frames read (data-phase decrypt operations).
+	// The connection MUST be terminated before this reaches MaxNonce (2^64-2).
+	readNonce atomic.Uint64
 
 	// logger for connection events
 	logger logger.Logger
@@ -151,6 +157,10 @@ func (nc *NTCP2Conn) readDirect(b []byte) (int, error) {
 
 // readFramed reads an NTCP2 data-phase frame with SipHash length deobfuscation.
 func (nc *NTCP2Conn) readFramed(b []byte) (int, error) {
+	if err := nc.checkNonceLimit(&nc.readNonce, "inbound"); err != nil {
+		return 0, err
+	}
+
 	underlying := nc.noiseConn.Underlying()
 
 	// Step 1: Read the 2-byte obfuscated length field
@@ -209,6 +219,8 @@ func (nc *NTCP2Conn) readFramed(b []byte) (int, error) {
 		nc.readBuffer = make([]byte, len(plaintext)-n)
 		copy(nc.readBuffer, plaintext[n:])
 	}
+
+	nc.readNonce.Add(1)
 
 	nc.logger.Trace("NTCP2 data read (framed)",
 		"frame_length", frameLen,
@@ -287,9 +299,8 @@ func (nc *NTCP2Conn) handleAEADError(underlying net.Conn) {
 //  4. Write [2-byte obfuscated length][ciphertext] to the underlying TCP connection
 //
 // When no length obfuscator is set, delegates directly to NoiseConn.Write.
-//
-// TODO(ntcp2-spec): Transparently split writes larger than MaxFrameSize minus
-// Poly1305 overhead into multiple NTCP2 frames instead of returning an error.
+// Large writes are transparently split into multiple frames of at most
+// MaxFrameSize minus Poly1305Overhead bytes of plaintext each.
 func (nc *NTCP2Conn) Write(b []byte) (int, error) {
 	if nc.lengthObfuscator == nil {
 		return nc.writeDirect(b)
@@ -318,8 +329,50 @@ func (nc *NTCP2Conn) writeDirect(b []byte) (int, error) {
 	return n, nil
 }
 
-// writeFramed writes an NTCP2 data-phase frame with SipHash length obfuscation.
+// writeFramed writes NTCP2 data-phase frame(s) with SipHash length obfuscation.
+// Large payloads are transparently split into multiple frames of at most
+// MaxFrameSize - Poly1305Overhead bytes of plaintext each.
 func (nc *NTCP2Conn) writeFramed(b []byte) (int, error) {
+	maxPlaintext := MaxFrameSize - Poly1305Overhead
+	totalWritten := 0
+
+	for len(b) > 0 {
+		chunk := b
+		if len(chunk) > maxPlaintext {
+			chunk = b[:maxPlaintext]
+		}
+		b = b[len(chunk):]
+
+		n, err := nc.writeSingleFrame(chunk)
+		totalWritten += n
+		if err != nil {
+			return totalWritten, err
+		}
+	}
+
+	return totalWritten, nil
+}
+
+// checkNonceLimit returns an error if the nonce counter has reached MaxNonce.
+func (nc *NTCP2Conn) checkNonceLimit(counter *atomic.Uint64, direction string) error {
+	if counter.Load() >= MaxNonce {
+		return oops.
+			Code("NONCE_LIMIT_REACHED").
+			In("ntcp2").
+			With("direction", direction).
+			With("local_addr", nc.localAddr.String()).
+			With("remote_addr", nc.remoteAddr.String()).
+			Errorf("nonce limit reached (2^64-2); connection must be terminated")
+	}
+	return nil
+}
+
+// writeSingleFrame encrypts one chunk and writes it as an NTCP2 wire frame.
+func (nc *NTCP2Conn) writeSingleFrame(b []byte) (int, error) {
+	if err := nc.checkNonceLimit(&nc.writeNonce, "outbound"); err != nil {
+		return 0, err
+	}
+
 	// Step 1: Encrypt the plaintext
 	encrypted, err := nc.noiseConn.Encrypt(b)
 	if err != nil {
@@ -332,7 +385,7 @@ func (nc *NTCP2Conn) writeFramed(b []byte) (int, error) {
 			Wrapf(err, "failed to encrypt frame")
 	}
 
-	// Step 2: Validate frame size
+	// Step 2: Validate frame size (should never fire after splitting)
 	if len(encrypted) > MaxFrameSize {
 		return 0, oops.
 			Code("FRAME_TOO_LARGE").
@@ -377,6 +430,8 @@ func (nc *NTCP2Conn) writeFramed(b []byte) (int, error) {
 			With("written", n).
 			Errorf("partial frame write: wrote %d of %d bytes", n, len(frame))
 	}
+
+	nc.writeNonce.Add(1)
 
 	nc.logger.Trace("NTCP2 data written (framed)",
 		"plaintext_length", len(b),
@@ -501,12 +556,6 @@ func (nc *NTCP2Conn) RouterHash() []byte {
 	return nc.remoteAddr.RouterHash()
 }
 
-// DestinationHash returns the destination hash from the remote address.
-// Returns nil for router-to-router connections.
-func (nc *NTCP2Conn) DestinationHash() []byte {
-	return nc.remoteAddr.DestinationHash()
-}
-
 // Role returns the connection role (initiator or responder).
 func (nc *NTCP2Conn) Role() string {
 	return nc.localAddr.Role()
@@ -527,4 +576,21 @@ func (nc *NTCP2Conn) UnderlyingConn() *noise.NoiseConn {
 //	type Rekeyer interface { Rekey() error }
 func (nc *NTCP2Conn) Rekey() error {
 	return nc.noiseConn.Rekey()
+}
+
+// PeerStaticKey returns the remote peer's Noise static public key (32 bytes).
+// This is available after the handshake completes and can be used by the
+// router transport layer (github.com/go-i2p/go-i2p/lib/transport/ntcp) to
+// compute the full router hash via SHA-256(RouterIdentity) using
+// github.com/go-i2p/common/router_identity.
+func (nc *NTCP2Conn) PeerStaticKey() []byte {
+	return nc.noiseConn.PeerStatic()
+}
+
+// HandshakeHash returns the Noise handshake hash (h) from the completed session.
+// This is needed by the router transport layer to derive data-phase keys via
+// HKDF(ask_master, h || "siphash") for SipHash frame length obfuscation.
+// Returns nil if the handshake has not been initiated.
+func (nc *NTCP2Conn) HandshakeHash() []byte {
+	return nc.noiseConn.ChannelBinding()
 }

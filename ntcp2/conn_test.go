@@ -369,27 +369,16 @@ func TestNTCP2Conn_I2PSpecificMethods(t *testing.T) {
 	routerHash := make([]byte, 32)
 	copy(routerHash, "test-router-hash-32-bytes-long!")
 
-	destHash := make([]byte, 32)
-	copy(destHash, "test-dest-hash-32-bytes-long!!")
-
 	tcpAddr := &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 8080}
 
 	localAddr, err := NewNTCP2Addr(tcpAddr, routerHash, "initiator")
 	if err != nil {
 		t.Fatalf("Failed to create local address: %v", err)
 	}
-	localAddr, err = localAddr.WithDestinationHash(destHash)
-	if err != nil {
-		t.Fatalf("Failed to set destination hash: %v", err)
-	}
 
 	remoteAddr, err := NewNTCP2Addr(tcpAddr, routerHash, "responder")
 	if err != nil {
 		t.Fatalf("Failed to create remote address: %v", err)
-	}
-	remoteAddr, err = remoteAddr.WithDestinationHash(destHash)
-	if err != nil {
-		t.Fatalf("Failed to set destination hash: %v", err)
 	}
 
 	conn := createTestNTCP2ConnWithAddrs(&mockNoiseConn{}, localAddr, remoteAddr)
@@ -397,8 +386,9 @@ func TestNTCP2Conn_I2PSpecificMethods(t *testing.T) {
 	// Test RouterHash
 	assert.Equal(t, routerHash, conn.RouterHash())
 
-	// Test DestinationHash
-	assert.Equal(t, destHash, conn.DestinationHash())
+	// Test PeerStaticKey - nil for mock connection without real handshake
+	// In a real connection, this would return the 32-byte X25519 public key
+	_ = conn.PeerStaticKey()
 
 	// Test Role
 	assert.Equal(t, "initiator", conn.Role())

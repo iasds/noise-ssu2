@@ -167,11 +167,15 @@ func (nl *NTCP2Listener) validateAndCastNoiseConn(conn net.Conn) (*noise.NoiseCo
 }
 
 // createRemoteNTCP2Addr creates the remote NTCP2 address for the accepted connection.
+// Note: PeerStatic() returns the remote peer's Noise static public key (32 bytes),
+// which is used here as a placeholder router hash. The NTCP2 spec defines the
+// router hash as SHA-256(RouterIdentity), where the static key is only part of
+// the full RouterIdentity. The router transport layer
+// (github.com/go-i2p/go-i2p/lib/transport/ntcp) should use PeerStaticKey() and
+// HandshakeHash() from NTCP2Conn, parse the full RouterIdentity from message 3
+// part 2 via github.com/go-i2p/common/router_identity, and compute the proper
+// hash via github.com/go-i2p/common/data.HashData().
 func (nl *NTCP2Listener) createRemoteNTCP2Addr(noiseConn *noise.NoiseConn) (*NTCP2Addr, error) {
-	// TODO(ntcp2-spec): PeerStatic() returns the remote peer's Noise static public key,
-	// but the NTCP2 spec defines router hash as SHA-256(RouterIdentity). The static key
-	// is only part of the RouterIdentity. A correct implementation should receive the
-	// full RouterIdentity in message 3 part 2 and compute its SHA-256 hash here.
 	remoteRouterHash := noiseConn.PeerStatic()
 	if len(remoteRouterHash) == 0 {
 		// Fall back to config if handshake didn't provide the peer's static key

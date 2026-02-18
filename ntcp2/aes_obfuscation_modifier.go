@@ -16,9 +16,8 @@ import (
 // Per the NTCP2 spec, the AES state (last ciphertext block) from message 1
 // encryption is carried forward as the IV for message 2 encryption.
 //
-// TODO(ntcp2-spec): Validate that received ephemeral and static keys are valid
-// Curve25519 points before/after AES decryption (spec requires X[31]&0x80==0
-// fast check plus full validation).
+// After AES decryption, received keys are validated per the NTCP2 spec:
+// X[31]&0x80 must be 0 (Curve25519 requirement). Invalid keys cause message rejection.
 type AESObfuscationModifier struct {
 	mu         sync.Mutex
 	name       string
@@ -165,6 +164,17 @@ func (aom *AESObfuscationModifier) ModifyInbound(phase handshake.HandshakePhase,
 	result := make([]byte, StaticKeySize)
 	copy(result, data)
 	mode.CryptBlocks(result, result)
+
+	// Per NTCP2 spec: validate that the decrypted key is a valid Curve25519 point.
+	// The high bit of byte 31 must be 0. Reject the message if this check fails.
+	if result[StaticKeySize-1]&0x80 != 0 {
+		return nil, oops.
+			Code("INVALID_CURVE25519_KEY").
+			In("ntcp2").
+			With("modifier_name", aom.name).
+			With("phase", phase).
+			Errorf("decrypted key has high bit set (X[31]&0x80 != 0); invalid Curve25519 point")
+	}
 
 	return result, nil
 }
