@@ -399,12 +399,25 @@ func TestConfigSipHashModifier(t *testing.T) {
 	assert.Nil(t, config.SipHashModifier())
 
 	// Call ToConnConfig
-	_, err = config.ToConnConfig()
+	connConfig, err := config.ToConnConfig()
 	require.NoError(t, err)
 
-	// After ToConnConfig, modifier should be set (SipHash is enabled by default)
-	assert.NotNil(t, config.SipHashModifier())
-	assert.Equal(t, "ntcp2-siphash", config.SipHashModifier().Name())
+	// After ToConnConfig (before handshake), SipHashModifier() should be nil
+	// because the placeholder zero-key modifier is no longer exposed.
+	// The proper directional modifier is set by the post-handshake hook.
+	assert.Nil(t, config.SipHashModifier(),
+		"Placeholder zero-key modifier must not be exposed pre-handshake")
+
+	// But the SipHash modifier is still in the modifier list for the handshake
+	hasSipHashMod := false
+	for _, mod := range connConfig.Modifiers {
+		if mod.Name() == "ntcp2-siphash" {
+			hasSipHashMod = true
+			break
+		}
+	}
+	assert.True(t, hasSipHashMod,
+		"SipHash modifier should be in the handshake modifier list")
 }
 
 // TestConfigSipHashModifier_Disabled verifies that the modifier is nil
