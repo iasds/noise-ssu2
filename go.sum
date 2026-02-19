@@ -4,6 +4,10 @@ github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc h1:U9qPSI2PIWSS1
 github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/dchest/siphash v1.2.3 h1:QXwFc8cFOR2dSa/gE6o/HokBMWtLUaNDVd+22aKHeEA=
 github.com/dchest/siphash v1.2.3/go.mod h1:0NvQU092bT0ipiFN++/rXm69QG9tVxLAlQHIXMPAkHc=
+github.com/go-i2p/crypto v0.1.3 h1:FITp4zSgFwA0Bg8HUMU0H5UFdqzil2JUQk85WLVXru0=
+github.com/go-i2p/crypto v0.1.3/go.mod h1:3rewwMcN1yVyO3twFu/2c9eKMa4llahP+GZuHA4fVsU=
+github.com/go-i2p/crypto v0.1.4-0.20260219234435-41c70b0435dd h1:sOS4nYXZpqWtl9zsNTfVFCfyoLDVfREot+9ypJQfWi0=
+github.com/go-i2p/crypto v0.1.4-0.20260219234435-41c70b0435dd/go.mod h1:e1RjAvxhWWK40UmzTlBvGiNrH4XDji0mBqZU8vQxvMs=
 github.com/go-i2p/logger v0.1.2 h1:fU6+3Ys3pCDmXUQbzwrAYXOvc8APnKVBupSNHPgiiVY=
 github.com/go-i2p/logger v0.1.2/go.mod h1:fEh2nRZ6HwLJNaWJuE25mCzDa6VpCI4O37u5OfGNvus=
 github.com/go-i2p/noise v1.1.1-0.20260218013035-4a9b0d93ea92 h1:mrNBoaLq8iYQdQMTBuq7eMwE0yku27XG6elCjj34FKc=

@@ -6,6 +6,7 @@ toolchain go1.24.12
 
 require (
 	github.com/dchest/siphash v1.2.3
+	github.com/go-i2p/crypto v0.1.4-0.20260219234435-41c70b0435dd
 	github.com/go-i2p/logger v0.1.2
 	github.com/go-i2p/noise v1.1.1-0.20260218013035-4a9b0d93ea92
 	github.com/samber/oops v1.21.0

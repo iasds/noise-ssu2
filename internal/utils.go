@@ -1,8 +1,9 @@
 package internal
 
 import (
-	"crypto/rand"
 	"io"
+
+	"github.com/go-i2p/crypto/rand"
 )
 
 // SecureZero securely zeroes out the given byte slice

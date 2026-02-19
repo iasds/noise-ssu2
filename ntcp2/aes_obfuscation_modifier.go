@@ -1,10 +1,10 @@
 package ntcp2
 
 import (
-	"crypto/aes"
 	"crypto/cipher"
 	"sync"
 
+	"github.com/go-i2p/crypto/aes"
 	"github.com/go-i2p/go-noise/handshake"
 	"github.com/samber/oops"
 )

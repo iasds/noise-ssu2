@@ -1,13 +1,14 @@
 package ntcp2
 
 import (
-	"crypto/rand"
 	"encoding/binary"
 	"io"
 	"net"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/go-i2p/crypto/rand"
 
 	noise "github.com/go-i2p/go-noise"
 	"github.com/stretchr/testify/assert"

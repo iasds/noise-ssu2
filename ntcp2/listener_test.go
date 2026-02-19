@@ -1,11 +1,12 @@
 package ntcp2
 
 import (
-	"crypto/rand"
 	"net"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/go-i2p/crypto/rand"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

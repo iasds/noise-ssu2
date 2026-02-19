@@ -2,9 +2,10 @@
 package shared
 
 import (
-	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+
+	"github.com/go-i2p/crypto/rand"
 
 	"github.com/samber/oops"
 )

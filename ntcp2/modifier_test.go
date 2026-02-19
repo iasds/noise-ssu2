@@ -2,10 +2,11 @@ package ntcp2
 
 import (
 	"bytes"
-	"crypto/aes"
 	"crypto/cipher"
 	"encoding/binary"
 	"testing"
+
+	"github.com/go-i2p/crypto/aes"
 
 	"github.com/dchest/siphash"
 	"github.com/go-i2p/go-noise/handshake"
