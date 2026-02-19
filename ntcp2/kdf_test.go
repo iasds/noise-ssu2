@@ -1,11 +1,11 @@
 package ntcp2
 
 import (
-	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/binary"
 	"testing"
 
+	"github.com/go-i2p/crypto/hmac"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

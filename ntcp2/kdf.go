@@ -1,10 +1,10 @@
 package ntcp2
 
 import (
-	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/binary"
 
+	"github.com/go-i2p/crypto/hmac"
 	"github.com/samber/oops"
 )
 
