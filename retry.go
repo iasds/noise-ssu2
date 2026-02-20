@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/go-i2p/go-noise/internal"
-	"github.com/samber/oops"
 	i2plogger "github.com/go-i2p/logger"
+	"github.com/samber/oops"
 )
 
 // HandshakeWithRetry performs a handshake with retry logic based on configuration.

@@ -347,7 +347,7 @@ func TestXKHandshake_NTCP2_CloseAfterHandshake(t *testing.T) {
 // Test helper: creates a fully handshaked initiator↔responder NTCP2 pair
 // ============================================================================
 
-func setupHandshakedPair(t *testing.T) (initiator *NTCP2Conn, responder *NTCP2Conn) {
+func setupHandshakedPair(t *testing.T) (initiator, responder *NTCP2Conn) {
 	t.Helper()
 
 	cs := upstreamnoise.NewCipherSuite(

@@ -318,7 +318,7 @@ func (nc *NTCP2Conn) readAndDecryptFrame(underlying net.Conn, frameLen uint16) (
 
 // bufferPlaintext copies decrypted plaintext into the caller's buffer and stores
 // any remainder in readBuffer for subsequent Read calls.
-func (nc *NTCP2Conn) bufferPlaintext(b []byte, plaintext []byte) int {
+func (nc *NTCP2Conn) bufferPlaintext(b, plaintext []byte) int {
 	n := copy(b, plaintext)
 	if n < len(plaintext) {
 		nc.readBuffer = make([]byte, len(plaintext)-n)
