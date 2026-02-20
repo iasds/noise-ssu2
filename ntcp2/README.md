@@ -73,6 +73,7 @@ The NTCP2 protocol implementation is split between this package (`go-i2p/go-nois
 | Data-phase AEAD error handling (probing resistance) | `handleAEADError()` |
 | Frame padding (type 254 padding blocks) | `NTCP2PaddingModifier` |
 | Nonce management and exhaustion detection | `NonceExhaustionImminent()` advisory (upstream `CipherState` enforces hard limit) |
+| Replay cache | Per-router ephemeral key (X value) cache with TTL eviction |
 | KDF intermediate material zeroing | `zeroBytes()` in `kdf.go` |
 | Connection configuration and validation | `NTCP2Config` |
 
@@ -85,7 +86,6 @@ The NTCP2 protocol implementation is split between this package (`go-i2p/go-nois
 | I2NP block framing | Block types 0–4, 254: demuxing, parsing, serialization |
 | Options negotiation | Type 1 block: padding limits, dummy traffic, delay |
 | Clock skew validation | ±60s tolerance on messages 1 & 2 timestamps |
-| Replay cache | Per-router ephemeral key (X value) cache with TTL eviction |
 | `RemoteStaticKey` lookup | Network database → `RouterInfo` → `s=` static key |
 | RouterIdentity parsing | Full `RouterIdentity` from message 3 part 2 |
 | Router hash computation | `SHA-256(RouterIdentity)` via `common/data.HashData()` |
