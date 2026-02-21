@@ -507,6 +507,11 @@ func (sm *SessionManager) GetSessionCount() int {
 	return len(sm.sessions)
 }
 
+// GetPublicKey returns this session manager's X25519 public key.
+func (sm *SessionManager) GetPublicKey() [32]byte {
+	return sm.ourPublicKey
+}
+
 // StartCleanupLoop starts periodic cleanup of expired sessions.
 func (sm *SessionManager) StartCleanupLoop(ctx context.Context) {
 	go func() {
