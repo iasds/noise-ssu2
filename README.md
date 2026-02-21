@@ -138,6 +138,29 @@ The library tracks:
 
 Core Noise and NTCP2 implementations completed. SSU2 implementation planned.
 
+## Packages
+
+### Core: Noise Protocol Transport
+
+The root package provides `net.Conn`, `net.Listener`, and `net.Addr` wrappers
+for the Noise Protocol Framework, used by I2P's NTCP2 transport.
+
+### `ratchet/` — ECIES-X25519-AEAD-Ratchet
+
+The [`ratchet`](ratchet/) package provides the ECIES-X25519-AEAD-Ratchet
+cryptographic engine for I2P's end-to-end garlic encryption:
+
+- **Garlic sessions**: Double-ratchet encrypt/decrypt with DH ratchet rotation
+- **Build record crypto**: ChaCha20-Poly1305 and ECIES for tunnel build records
+- **Interface-based**: All APIs defined via interfaces for testability
+
+See [`ratchet/README.md`](ratchet/README.md) for detailed API documentation.
+
+### `ntcp2/` — NTCP2 Transport Helpers
+
+The `ntcp2` package provides NTCP2-specific connection handling, replay
+detection (`ReplayCache`), and KDF utilities.
+
 ## Architecture
 
 ```
