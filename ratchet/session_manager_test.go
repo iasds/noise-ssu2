@@ -32,11 +32,11 @@ func createTestSessionManager(t testing.TB) *SessionManager {
 }
 
 // createLinkedManagers creates two session managers that can communicate.
-func createLinkedManagers(t testing.TB) (sender *SessionManager, receiver *SessionManager) {
+func createLinkedManagers(t testing.TB) (sender, receiver *SessionManager) {
 	t.Helper()
 	sender = createTestSessionManager(t)
 	receiver = createTestSessionManager(t)
-	return
+	return sender, receiver
 }
 
 // ============================================================================

@@ -144,3 +144,76 @@ func TestReplayCache_MaxSizeEviction(t *testing.T) {
 	// Size should be less than or equal to max
 	assert.LessOrEqual(t, rc.Size(), replayCacheMaxSize)
 }
+
+// =============================================================================
+// BENCHMARKS
+// =============================================================================
+
+// BenchmarkCheckAndAdd_NewKey benchmarks inserting unique keys.
+func BenchmarkCheckAndAdd_NewKey(b *testing.B) {
+	rc := NewReplayCache()
+	defer rc.Close()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		var key [32]byte
+		key[0] = byte(i >> 24)
+		key[1] = byte(i >> 16)
+		key[2] = byte(i >> 8)
+		key[3] = byte(i)
+		rc.CheckAndAdd(key)
+	}
+}
+
+// BenchmarkCheckAndAdd_DuplicateKey benchmarks repeated checks of the same key (replay detection).
+func BenchmarkCheckAndAdd_DuplicateKey(b *testing.B) {
+	rc := NewReplayCache()
+	defer rc.Close()
+
+	var key [32]byte
+	key[0] = 0x42
+	rc.CheckAndAdd(key) // Pre-insert
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		rc.CheckAndAdd(key)
+	}
+}
+
+// BenchmarkCheckAndAdd_Concurrent benchmarks concurrent replay detection.
+func BenchmarkCheckAndAdd_Concurrent(b *testing.B) {
+	rc := NewReplayCache()
+	defer rc.Close()
+
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			var key [32]byte
+			key[0] = byte(i >> 24)
+			key[1] = byte(i >> 16)
+			key[2] = byte(i >> 8)
+			key[3] = byte(i)
+			rc.CheckAndAdd(key)
+			i++
+		}
+	})
+}
+
+// BenchmarkSize benchmarks the Size() call under load.
+func BenchmarkSize(b *testing.B) {
+	rc := NewReplayCache()
+	defer rc.Close()
+
+	// Pre-populate with 1000 entries
+	for i := 0; i < 1000; i++ {
+		var key [32]byte
+		key[0] = byte(i >> 8)
+		key[1] = byte(i)
+		rc.CheckAndAdd(key)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		rc.Size()
+	}
+}
