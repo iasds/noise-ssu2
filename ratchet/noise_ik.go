@@ -266,67 +266,184 @@ func writeNoiseIKMessage1(
 	return msg, keys, hs, nil
 }
 
+// writeNoiseIKMessage1Unbound constructs an unbound New Session message using
+// the Noise N pattern (§1c of the I2P ECIES-X25519-AEAD-Ratchet spec). The
+// initiator's static key is NOT included; instead a 32-byte zero flags section
+// is encrypted in its place. The receiver detects the unbound variant by
+// decrypting the flags section and testing whether all 32 bytes are zero.
+//
+// Use cases: raw-datagram and one-time-send traffic where sender anonymity
+// requires not advertising the static key. Unbound sessions are non-repliable.
+//
+// Wire format: [Elligator2(e)(32)] + [EncryptAndHash(zeros32)(48)] + [EncryptAndHash(payload)(N+16)]
+//
+// KDF differences from the bound (IK) variant:
+//   - No Token s: flags section (zeros) is encrypted with n=0 (same k as es token)
+//   - No Token ss: no second DH, no new MixKey — the nonce counter is NOT reset
+//   - Payload is encrypted with n=1 (one above the flags section)
+//
+// Spec ref: ratchet.md §1c, §1f "KDF for Payload Section (without Alice static key)"
+func writeNoiseIKMessage1Unbound(
+	responderStaticPub [32]byte,
+	payload []byte,
+) ([]byte, *sessionKeys, error) {
+	// Same IK initializer as the bound variant: identical protocol name, null
+	// prologue MixHash, and Hash(rs) pre-message. Spec §1f: "we use the same
+	// initializer for both the IK pattern (bound sessions) and for N pattern
+	// (unbound sessions)."
+	ns := initNoiseIK(responderStaticPub)
+
+	// Token e: Generate Elligator2-representable ephemeral key pair.
+	ephPub, ephPrivBytes, err := elligator2.GenerateKeyPair()
+	if err != nil {
+		return nil, nil, oops.Wrapf(err, "failed to generate Elligator2 ephemeral key pair")
+	}
+
+	ephEncoded, err := elligator2.Encode(ephPub)
+	if err != nil {
+		return nil, nil, oops.Wrapf(err, "failed to Elligator2-encode ephemeral public key")
+	}
+
+	// MixHash the wire (Elligator2-encoded) representation.
+	ns.mixHash(ephEncoded)
+
+	// Token es: DH(ephemeral_private, responder_static). Sets k, resets n=0.
+	ephPriv := x25519.PrivateKey(ephPrivBytes)
+	sharedES, err := ephPriv.SharedKey(x25519.PublicKey(responderStaticPub[:]))
+	if err != nil {
+		return nil, nil, oops.Wrapf(err, "failed to compute DH(e, rs)")
+	}
+	ns.mixKey(sharedES) // n=0 after this
+
+	// Flags section (unbound marker): EncryptAndHash(zeros32) using n=0.
+	// Plaintext is 32 zero bytes — the receiver tests the decrypted plaintext
+	// for all-zeros to identify the unbound variant. Spec §1c.
+	// After encryption ns.n advances to 1.
+	encryptedFlags, err := ns.encryptAndHash(make([]byte, 32))
+	if err != nil {
+		return nil, nil, oops.Wrapf(err, "failed to encrypt unbound flags section")
+	}
+
+	// Encrypt payload with n=1 (no ss token, no MixKey reset).
+	// Spec §1f "KDF for Payload Section (without Alice static key)": n=1.
+	encryptedPayload, err := ns.encryptAndHash(payload)
+	if err != nil {
+		return nil, nil, oops.Wrapf(err, "failed to encrypt payload")
+	}
+
+	// Wire: [Elligator2(e)(32)] + [encryptedFlags(48)] + [encryptedPayload(N+16)]
+	msg := make([]byte, 0, 32+len(encryptedFlags)+len(encryptedPayload))
+	msg = append(msg, ephEncoded...)
+	msg = append(msg, encryptedFlags...)
+	msg = append(msg, encryptedPayload...)
+
+	// Derive session keys from the final chaining key.
+	keys, err := deriveSessionKeysFromSecret(ns.ck[:])
+	if err != nil {
+		return nil, nil, oops.Wrapf(err, "failed to derive session keys from unbound handshake")
+	}
+
+	return msg, keys, nil
+}
+
+// isAllZeros reports whether all bytes in b are 0x00.
+func isAllZeros(b []byte) bool {
+	for _, v := range b {
+		if v != 0 {
+			return false
+		}
+	}
+	return true
+}
+
 // readNoiseIKMessage1 processes a received New Session message using the Noise
-// IK pattern. The responder calls this to decrypt the initiator's payload and
-// recover the initiator's static public key.
+// IK pattern. The responder calls this to decrypt the initiator's payload.
+// It handles both the bound (IK, with initiator static key) and unbound (N,
+// flags section all-zeros) variants; isUnbound signals which was detected.
+//
+// For bound messages: returns initiator's static public key and handshake state.
+// For unbound messages: initiatorStaticPub is [32]byte{} (zero), hs is nil.
 //
 // Returns the decrypted payload, initiator's static public key, session keys,
-// and the handshake state retained for constructing the New Session Reply.
+// handshake state for the New Session Reply (nil for unbound), isUnbound, and error.
 func readNoiseIKMessage1(
 	ourStaticPriv, ourStaticPub [32]byte,
 	message []byte,
-) ([]byte, [32]byte, *sessionKeys, *noiseHandshakeState, error) {
+) ([]byte, [32]byte, *sessionKeys, *noiseHandshakeState, bool, error) {
 	if len(message) < noiseIKMinMessageSize {
-		return nil, [32]byte{}, nil, nil, oops.Errorf(
+		return nil, [32]byte{}, nil, nil, false, oops.Errorf(
 			"new session message too short: %d bytes (minimum %d)", len(message), noiseIKMinMessageSize)
 	}
 
 	ns := initNoiseIK(ourStaticPub)
 
-	// Token e: Read Elligator2-encoded ephemeral key
+	// Token e: Read Elligator2-encoded ephemeral key.
 	ephEncoded := message[0:32]
 	ns.mixHash(ephEncoded)
 
-	// Decode Elligator2 representation to get the actual X25519 public key
+	// Decode Elligator2 representation to get the actual X25519 public key.
 	ephPubBytes, err := elligator2.Decode(ephEncoded)
 	if err != nil {
-		return nil, [32]byte{}, nil, nil, oops.Wrapf(err, "failed to decode Elligator2 ephemeral key")
+		return nil, [32]byte{}, nil, nil, false, oops.Wrapf(err, "failed to decode Elligator2 ephemeral key")
 	}
 	var initiatorEphPub [32]byte
 	copy(initiatorEphPub[:], ephPubBytes)
 
-	// Token es: DH(our_static_private, ephemeral)
+	// Token es: DH(our_static_private, ephemeral). Sets k, resets n=0.
 	ourPriv := x25519.PrivateKey(ourStaticPriv[:])
 	sharedES, err := ourPriv.SharedKey(x25519.PublicKey(ephPubBytes))
 	if err != nil {
-		return nil, [32]byte{}, nil, nil, oops.Wrapf(err, "failed to compute DH(s, re)")
+		return nil, [32]byte{}, nil, nil, false, oops.Wrapf(err, "failed to compute DH(s, re)")
 	}
-	ns.mixKey(sharedES)
+	ns.mixKey(sharedES) // n=0 after this
 
-	// Token s: Decrypt the initiator's static public key
+	// Token s / Flags section: decrypt the 48-byte section that is either the
+	// initiator's static key (bound) or 32 zero bytes (unbound).
+	// Uses n=0; after decryption ns.n=1.
 	encryptedStatic := message[32 : 32+noiseEncryptedStaticSize]
 	initiatorStaticBytes, err := ns.decryptAndHash(encryptedStatic)
 	if err != nil {
-		return nil, [32]byte{}, nil, nil, oops.Wrapf(err, "failed to decrypt initiator static key")
+		return nil, [32]byte{}, nil, nil, false, oops.Wrapf(err, "failed to decrypt initiator static key / flags section")
 	}
+
+	// Detect unbound variant: spec §1c — "Bob determines whether it's a static
+	// key or a flags section by testing if the 32 bytes are all zeros."
+	if isAllZeros(initiatorStaticBytes) {
+		// Unbound (N-pattern): no ss token, no new MixKey.
+		// Payload is encrypted with n=1 (current nonce after flags section).
+		encryptedPayload := message[32+noiseEncryptedStaticSize:]
+		payload, payErr := ns.decryptAndHash(encryptedPayload)
+		if payErr != nil {
+			return nil, [32]byte{}, nil, nil, true, oops.Wrapf(payErr, "failed to decrypt unbound payload")
+		}
+
+		// No handshake state — unbound sessions are non-repliable (no NSR).
+		keys, kErr := deriveSessionKeysFromSecret(ns.ck[:])
+		if kErr != nil {
+			return nil, [32]byte{}, nil, nil, true, oops.Wrapf(kErr, "failed to derive session keys from unbound handshake")
+		}
+		return payload, [32]byte{}, keys, nil, true, nil
+	}
+
+	// Bound path: initiatorStaticBytes is the initiator's static public key.
 	var initiatorStaticPub [32]byte
 	copy(initiatorStaticPub[:], initiatorStaticBytes)
 
-	// Token ss: DH(our_static_private, initiator_static)
+	// Token ss: DH(our_static_private, initiator_static). Resets n=0.
 	sharedSS, err := ourPriv.SharedKey(x25519.PublicKey(initiatorStaticPub[:]))
 	if err != nil {
-		return nil, [32]byte{}, nil, nil, oops.Wrapf(err, "failed to compute DH(s, rs)")
+		return nil, [32]byte{}, nil, nil, false, oops.Wrapf(err, "failed to compute DH(s, rs)")
 	}
-	ns.mixKey(sharedSS)
+	ns.mixKey(sharedSS) // n=0 after this
 
-	// Decrypt the garlic payload
+	// Decrypt the garlic payload (n=0 after ss MixKey).
 	encryptedPayload := message[32+noiseEncryptedStaticSize:]
 	payload, err := ns.decryptAndHash(encryptedPayload)
 	if err != nil {
-		return nil, [32]byte{}, nil, nil, oops.Wrapf(err, "failed to decrypt payload")
+		return nil, [32]byte{}, nil, nil, false, oops.Wrapf(err, "failed to decrypt payload")
 	}
 
-	// Retain handshake state for New Session Reply (message 2)
+	// Retain handshake state for New Session Reply (message 2).
 	hs := &noiseHandshakeState{
 		h:               ns.h,
 		ck:              ns.ck,
@@ -334,11 +451,11 @@ func readNoiseIKMessage1(
 		remoteStaticPub: initiatorStaticPub,
 	}
 
-	// Derive session keys from the final chaining key
+	// Derive session keys from the final chaining key.
 	keys, err := deriveSessionKeysFromSecret(ns.ck[:])
 	if err != nil {
-		return nil, [32]byte{}, nil, nil, oops.Wrapf(err, "failed to derive session keys from handshake")
+		return nil, [32]byte{}, nil, nil, false, oops.Wrapf(err, "failed to derive session keys from handshake")
 	}
 
-	return payload, initiatorStaticPub, keys, hs, nil
+	return payload, initiatorStaticPub, keys, hs, false, nil
 }

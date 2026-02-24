@@ -1403,3 +1403,125 @@ func TestGenerateTagWindow_NilRecvTagRatchet_ReturnsError(t *testing.T) {
 			"no tags for the broken session should appear in the index")
 	}
 }
+
+// ============================================================================
+// Unbound (N-pattern) New Session — EncryptUnboundGarlicMessage
+// ============================================================================
+
+// TestEncryptUnboundGarlicMessage_Roundtrip encrypts a garlic message as an
+// unbound (N-pattern) New Session and verifies the receiver can decrypt it.
+// Crucially, no session state is created on the receiver side and the returned
+// sessionHash is nil — the sender's static key was not transmitted.
+func TestEncryptUnboundGarlicMessage_Roundtrip(t *testing.T) {
+	sender := createTestSessionManager(t)
+	receiver := createTestSessionManager(t)
+
+	plaintext := []byte("unbound one-way garlic message")
+
+	// Sender encrypts an unbound message (no static key on the wire).
+	ciphertext, err := sender.EncryptUnboundGarlicMessage(receiver.ourPublicKey, plaintext)
+	require.NoError(t, err)
+	require.NotEmpty(t, ciphertext)
+
+	// The receiver decrypts it. sessionHash must be nil (no initiator static key).
+	decrypted, sessionTag, sessionHash, err := receiver.DecryptGarlicMessage(ciphertext)
+	require.NoError(t, err)
+	assert.Equal(t, plaintext, decrypted, "Decrypted payload should match original")
+	assert.Equal(t, [8]byte{}, sessionTag, "Unbound NS messages carry no session tag")
+	assert.Nil(t, sessionHash, "sessionHash must be nil for unbound messages — no static key")
+}
+
+// TestEncryptUnboundGarlicMessage_EmptyPayloadRejected ensures an empty payload
+// is rejected with an error, matching the EncryptGarlicMessage contract.
+func TestEncryptUnboundGarlicMessage_EmptyPayloadRejected(t *testing.T) {
+	sm := createTestSessionManager(t)
+	var destPub [32]byte
+	_, _ = rand.Read(destPub[:])
+
+	_, err := sm.EncryptUnboundGarlicMessage(destPub, nil)
+	assert.Error(t, err, "nil payload should be rejected")
+
+	_, err = sm.EncryptUnboundGarlicMessage(destPub, []byte{})
+	assert.Error(t, err, "empty payload should be rejected")
+}
+
+// TestEncryptUnboundGarlicMessage_NoSessionStateStored verifies that after a
+// receiver processes an unbound New Session message, no inbound session is
+// registered for the sender (non-repliable: no return path exists).
+func TestEncryptUnboundGarlicMessage_NoSessionStateStored(t *testing.T) {
+	sender := createTestSessionManager(t)
+	receiver := createTestSessionManager(t)
+
+	initialSessions := receiver.GetSessionCount()
+
+	ciphertext, err := sender.EncryptUnboundGarlicMessage(receiver.ourPublicKey, []byte("datagram"))
+	require.NoError(t, err)
+
+	_, _, _, err = receiver.DecryptGarlicMessage(ciphertext)
+	require.NoError(t, err)
+
+	// Receiver must NOT have created a session for the (anonymous) sender.
+	assert.Equal(t, initialSessions, receiver.GetSessionCount(),
+		"unbound session must not register any inbound session state")
+}
+
+// TestEncryptUnboundGarlicMessage_MultipleUnboundMessages verifies that
+// multiple unbound messages from the same sender can each be decrypted
+// independently, since every unbound message is a fresh one-shot frame.
+func TestEncryptUnboundGarlicMessage_MultipleUnboundMessages(t *testing.T) {
+	sender := createTestSessionManager(t)
+	receiver := createTestSessionManager(t)
+
+	payloads := [][]byte{
+		[]byte("first unbound"),
+		[]byte("second unbound"),
+		[]byte("third unbound"),
+	}
+
+	for i, payload := range payloads {
+		ct, err := sender.EncryptUnboundGarlicMessage(receiver.ourPublicKey, payload)
+		require.NoError(t, err, "message %d encrypt", i)
+
+		pt, _, sessionHash, err := receiver.DecryptGarlicMessage(ct)
+		require.NoError(t, err, "message %d decrypt", i)
+		assert.Equal(t, payload, pt, "message %d payload mismatch", i)
+		assert.Nil(t, sessionHash, "message %d: sessionHash must be nil for unbound", i)
+	}
+
+	// Receiver still has no persistent session for the anonymous sender.
+	assert.Equal(t, 0, receiver.GetSessionCount(),
+		"receiver must not accumulate sessions from unbound messages")
+}
+
+// TestEncryptUnboundGarlicMessage_WrongRecipientFails verifies that an unbound
+// message cannot be decrypted by a recipient with a different key pair.
+func TestEncryptUnboundGarlicMessage_WrongRecipientFails(t *testing.T) {
+	sender := createTestSessionManager(t)
+	receiver := createTestSessionManager(t)
+	wrongReceiver := createTestSessionManager(t)
+
+	ct, err := sender.EncryptUnboundGarlicMessage(receiver.ourPublicKey, []byte("secret"))
+	require.NoError(t, err)
+
+	_, _, _, err = wrongReceiver.DecryptGarlicMessage(ct)
+	assert.Error(t, err, "Wrong recipient must not decrypt an unbound message")
+}
+
+// TestEncryptUnboundGarlicMessage_IsNonRepliable verifies that receiving an
+// unbound message does NOT cause the receiver to register an NSR tag — there
+// is no reply path for unbound sessions.
+func TestEncryptUnboundGarlicMessage_IsNonRepliable(t *testing.T) {
+	sender := createTestSessionManager(t)
+	receiver := createTestSessionManager(t)
+
+	ct, err := sender.EncryptUnboundGarlicMessage(receiver.ourPublicKey, []byte("one-way"))
+	require.NoError(t, err)
+
+	_, _, _, err = receiver.DecryptGarlicMessage(ct)
+	require.NoError(t, err)
+
+	receiver.mu.RLock()
+	nsrCount := len(receiver.nsrTagIndex)
+	receiver.mu.RUnlock()
+	assert.Equal(t, 0, nsrCount, "No NSR tag should be registered for an unbound session")
+}

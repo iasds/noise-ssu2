@@ -207,7 +207,7 @@ func TestWriteReadNoiseIKMessage1_Roundtrip(t *testing.T) {
 	expectedSize := 32 + 48 + len(plaintext) + 16
 	assert.Equal(t, expectedSize, len(msg), "Wire message size should match Noise IK format")
 
-	decrypted, initiatorPub, rKeys, rHS, err := readNoiseIKMessage1(
+	decrypted, initiatorPub, rKeys, rHS, _, err := readNoiseIKMessage1(
 		responder.ourPrivateKey, responder.ourPublicKey, msg,
 	)
 	require.NotNil(t, rHS, "Responder handshake state should be retained")
@@ -235,7 +235,7 @@ func TestWriteReadNoiseIKMessage1_EmptyPayload(t *testing.T) {
 	// Minimum size: 32 + 48 + 16 = 96 bytes
 	assert.Equal(t, noiseIKMinMessageSize, len(msg))
 
-	decrypted, _, _, _, err := readNoiseIKMessage1(
+	decrypted, _, _, _, _, err := readNoiseIKMessage1(
 		responder.ourPrivateKey, responder.ourPublicKey, msg,
 	)
 	require.NoError(t, err)
@@ -256,7 +256,7 @@ func TestWriteReadNoiseIKMessage1_LargePayload(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	decrypted, _, _, _, err := readNoiseIKMessage1(
+	decrypted, _, _, _, _, err := readNoiseIKMessage1(
 		responder.ourPrivateKey, responder.ourPublicKey, msg,
 	)
 	require.NoError(t, err)
@@ -270,7 +270,7 @@ func TestReadNoiseIKMessage1_TooShort(t *testing.T) {
 	_, err = rand.Read(pub[:])
 	require.NoError(t, err)
 
-	_, _, _, _, err = readNoiseIKMessage1(priv, pub, make([]byte, 50))
+	_, _, _, _, _, err = readNoiseIKMessage1(priv, pub, make([]byte, 50))
 	assert.Error(t, err, "Should reject messages shorter than minimum size")
 }
 
@@ -287,7 +287,7 @@ func TestReadNoiseIKMessage1_WrongKey(t *testing.T) {
 	require.NoError(t, err)
 
 	// Wrong recipient should fail to decrypt
-	_, _, _, _, err = readNoiseIKMessage1(
+	_, _, _, _, _, err = readNoiseIKMessage1(
 		wrongRecipient.ourPrivateKey, wrongRecipient.ourPublicKey, msg,
 	)
 	assert.Error(t, err, "Wrong recipient should fail to decrypt")
@@ -306,7 +306,7 @@ func TestReadNoiseIKMessage1_TamperedMessage(t *testing.T) {
 	// Tamper with the encrypted static section
 	msg[40] ^= 0xFF
 
-	_, _, _, _, err = readNoiseIKMessage1(
+	_, _, _, _, _, err = readNoiseIKMessage1(
 		responder.ourPrivateKey, responder.ourPublicKey, msg,
 	)
 	assert.Error(t, err, "Tampered message should fail authentication")
@@ -335,8 +335,147 @@ func TestWriteNoiseIKMessage1_NonDeterministic(t *testing.T) {
 }
 
 // ============================================================================
-// HKDF and HMAC Helpers
+// Unbound (N-pattern) New Session — writeNoiseIKMessage1Unbound
 // ============================================================================
+
+// TestWriteReadNoiseIKMessage1Unbound_Roundtrip verifies that an unbound NS
+// message written by the sender can be decrypted by the receiver, that the
+// receiver correctly identifies the message as unbound (isUnbound=true), and
+// that the decrypted payload matches the original.
+func TestWriteReadNoiseIKMessage1Unbound_Roundtrip(t *testing.T) {
+	responder := createTestSessionManager(t)
+
+	plaintext := []byte("unbound one-way message")
+
+	msg, wKeys, err := writeNoiseIKMessage1Unbound(responder.ourPublicKey, plaintext)
+	require.NoError(t, err)
+	require.NotNil(t, wKeys, "Session keys should be derived even for unbound messages")
+
+	// Minimum wire size: 32 (ephemeral) + 48 (flags section) + 16 (empty payload tag) = 96
+	// With non-empty payload: 32 + 48 + len(plaintext) + 16
+	expectedSize := 32 + 48 + len(plaintext) + 16
+	assert.Equal(t, expectedSize, len(msg), "Unbound NS wire format should match §1c spec")
+
+	decrypted, initiatorStaticPub, rKeys, hs, isUnbound, err := readNoiseIKMessage1(
+		responder.ourPrivateKey, responder.ourPublicKey, msg,
+	)
+	require.NoError(t, err)
+	assert.True(t, isUnbound, "Receiver should detect unbound (N-pattern) message")
+	assert.Equal(t, plaintext, decrypted, "Decrypted payload should match original")
+	assert.Equal(t, [32]byte{}, initiatorStaticPub, "No initiator static key for unbound messages")
+	assert.Nil(t, hs, "No handshake state retained for unbound (non-repliable) sessions")
+	assert.NotNil(t, rKeys, "Receiver should derive session keys from unbound handshake")
+
+	// Both sides derive session keys from the same chaining key; verify they match.
+	assert.Equal(t, wKeys.rootKey, rKeys.rootKey, "Root keys should match across unbound session")
+	assert.Equal(t, wKeys.symKey, rKeys.symKey, "Symmetric keys should match")
+	assert.Equal(t, wKeys.tagKey, rKeys.tagKey, "Tag keys should match")
+}
+
+// TestWriteReadNoiseIKMessage1Unbound_EmptyPayload verifies behaviour with an
+// empty payload: minimum wire size (96 bytes) and successful decryption.
+func TestWriteReadNoiseIKMessage1Unbound_EmptyPayload(t *testing.T) {
+	responder := createTestSessionManager(t)
+
+	msg, _, err := writeNoiseIKMessage1Unbound(responder.ourPublicKey, []byte{})
+	require.NoError(t, err)
+	// Minimum: 32 + 48 + 16 = 96 bytes (same as bound minimum).
+	assert.Equal(t, noiseIKMinMessageSize, len(msg))
+
+	decrypted, _, _, _, isUnbound, err := readNoiseIKMessage1(
+		responder.ourPrivateKey, responder.ourPublicKey, msg,
+	)
+	require.NoError(t, err)
+	assert.True(t, isUnbound)
+	assert.Empty(t, decrypted)
+}
+
+// TestReadNoiseIKMessage1_Bound_IsNotUnbound verifies that a normal (bound, IK)
+// New Session message returns isUnbound=false.
+func TestReadNoiseIKMessage1_Bound_IsNotUnbound(t *testing.T) {
+	initiator := createTestSessionManager(t)
+	responder := createTestSessionManager(t)
+
+	msg, _, _, err := writeNoiseIKMessage1(
+		initiator.ourPrivateKey, initiator.ourPublicKey,
+		responder.ourPublicKey, []byte("bound message"),
+	)
+	require.NoError(t, err)
+
+	_, initiatorPub, _, hs, isUnbound, err := readNoiseIKMessage1(
+		responder.ourPrivateKey, responder.ourPublicKey, msg,
+	)
+	require.NoError(t, err)
+	assert.False(t, isUnbound, "Bound IK message should not be flagged as unbound")
+	assert.Equal(t, initiator.ourPublicKey, initiatorPub, "Bound: initiator static key recovered")
+	assert.NotNil(t, hs, "Bound: handshake state retained for NSR")
+}
+
+// TestWriteNoiseIKMessage1Unbound_NonDeterministic verifies that each unbound
+// message uses a fresh Elligator2 ephemeral key, producing unique ciphertexts
+// even for the same payload.
+func TestWriteNoiseIKMessage1Unbound_NonDeterministic(t *testing.T) {
+	responder := createTestSessionManager(t)
+
+	payload := []byte("same unbound payload")
+
+	msg1, _, err := writeNoiseIKMessage1Unbound(responder.ourPublicKey, payload)
+	require.NoError(t, err)
+	msg2, _, err := writeNoiseIKMessage1Unbound(responder.ourPublicKey, payload)
+	require.NoError(t, err)
+
+	assert.NotEqual(t, msg1, msg2,
+		"Each unbound message should use a fresh ephemeral key (non-deterministic)")
+}
+
+// TestWriteNoiseIKMessage1Unbound_WrongRecipient verifies that an unbound message
+// encrypted for one recipient cannot be decrypted by another.
+func TestWriteNoiseIKMessage1Unbound_WrongRecipient(t *testing.T) {
+	responder := createTestSessionManager(t)
+	wrongRecipient := createTestSessionManager(t)
+
+	msg, _, err := writeNoiseIKMessage1Unbound(responder.ourPublicKey, []byte("secret"))
+	require.NoError(t, err)
+
+	_, _, _, _, _, err = readNoiseIKMessage1(
+		wrongRecipient.ourPrivateKey, wrongRecipient.ourPublicKey, msg,
+	)
+	assert.Error(t, err, "Wrong recipient should fail to decrypt unbound message")
+}
+
+// TestWriteNoiseIKMessage1Unbound_TamperedFlagsSection verifies that tampering
+// with the encrypted flags section causes authentication failure.
+func TestWriteNoiseIKMessage1Unbound_TamperedFlagsSection(t *testing.T) {
+	responder := createTestSessionManager(t)
+
+	msg, _, err := writeNoiseIKMessage1Unbound(responder.ourPublicKey, []byte("payload"))
+	require.NoError(t, err)
+
+	// Tamper with the encrypted flags section (bytes 32..79).
+	msg[40] ^= 0xFF
+
+	_, _, _, _, _, err = readNoiseIKMessage1(
+		responder.ourPrivateKey, responder.ourPublicKey, msg,
+	)
+	assert.Error(t, err, "Tampered flags section should fail authentication")
+}
+
+// TestIsAllZeros verifies the isAllZeros helper.
+func TestIsAllZeros(t *testing.T) {
+	assert.True(t, isAllZeros(make([]byte, 32)), "All-zero slice should return true")
+	assert.True(t, isAllZeros(nil), "Nil slice (empty) should return true")
+	assert.True(t, isAllZeros([]byte{}), "Empty slice should return true")
+
+	nonzero := make([]byte, 32)
+	nonzero[16] = 1
+	assert.False(t, isAllZeros(nonzero), "Slice with non-zero byte should return false")
+
+	allFF := make([]byte, 32)
+	for i := range allFF {
+		allFF[i] = 0xFF
+	}
+	assert.False(t, isAllZeros(allFF), "All-0xFF slice should return false")
+}
 
 func TestNoiseHKDF2_Deterministic(t *testing.T) {
 	ck := make([]byte, 32)
@@ -488,7 +627,7 @@ func TestWriteReadNoiseIKMessage2_Roundtrip(t *testing.T) {
 
 	// Step 2: Responder reads New Session and retains handshake state
 
-	_, _, _, rHS, err := readNoiseIKMessage1(
+	_, _, _, rHS, _, err := readNoiseIKMessage1(
 		responder.ourPrivateKey, responder.ourPublicKey, msg1,
 	)
 	require.NoError(t, err)
@@ -526,7 +665,7 @@ func TestWriteReadNoiseIKMessage2_EmptyPayload(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	_, _, _, rHS, err := readNoiseIKMessage1(
+	_, _, _, rHS, _, err := readNoiseIKMessage1(
 		responder.ourPrivateKey, responder.ourPublicKey, msg1,
 	)
 	require.NoError(t, err)
@@ -562,7 +701,7 @@ func TestReadNoiseIKMessage2_TamperedMessage(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	_, _, _, rHS, err := readNoiseIKMessage1(
+	_, _, _, rHS, _, err := readNoiseIKMessage1(
 		responder.ourPrivateKey, responder.ourPublicKey, msg1,
 	)
 	require.NoError(t, err)
@@ -587,7 +726,7 @@ func TestWriteNoiseIKMessage2_NonDeterministic(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	_, _, _, rHS, err := readNoiseIKMessage1(
+	_, _, _, rHS, _, err := readNoiseIKMessage1(
 		responder.ourPrivateKey, responder.ourPublicKey, msg1,
 	)
 	require.NoError(t, err)

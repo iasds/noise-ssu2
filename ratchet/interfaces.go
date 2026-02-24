@@ -17,6 +17,14 @@ type GarlicEncryptor interface {
 	// plaintext: serialized garlic message bytes (from GarlicBuilder.BuildAndSerialize).
 	// Returns encrypted bytes (New Session or Existing Session format).
 	EncryptGarlicMessage(destinationHash, destinationPubKey [32]byte, plaintext []byte) ([]byte, error)
+
+	// EncryptUnboundGarlicMessage encrypts plaintext as a one-shot unbound (N-pattern)
+	// New Session message without advertising the sender's static key.
+	// destinationPubKey: X25519 public key of the recipient.
+	// plaintext: serialized garlic message bytes.
+	// Returns encrypted bytes (§1c unbound New Session format).
+	// No session state is created; replies are not possible.
+	EncryptUnboundGarlicMessage(destinationPubKey [32]byte, plaintext []byte) ([]byte, error)
 }
 
 // GarlicDecryptor provides ECIES-X25519-AEAD-Ratchet decryption for garlic messages.

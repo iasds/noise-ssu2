@@ -264,14 +264,28 @@ func (sm *SessionManager) DecryptGarlicMessage(encryptedGarlic []byte) ([]byte, 
 }
 
 // decryptNewSession decrypts a New Session message using the Noise IK handshake.
-// Returns the plaintext and the session hash (SHA-256 of the initiator's static pub key).
-// The session hash can be passed to EncryptNewSessionReply by the responder.
+// Handles both the bound (IK, with initiator static key) and unbound (N-pattern,
+// flags section = all-zeros) variants.
+//
+// For bound messages: stores inbound ratchet state and returns
+// SHA-256(initiatorStaticPub) so the caller can dispatch a New Session Reply.
+// For unbound messages: no session state is stored (non-repliable) and
+// sessionHash is nil.
 func (sm *SessionManager) decryptNewSession(msg []byte) ([]byte, *[32]byte, error) {
-	plaintext, initiatorStaticPub, keys, hs, err := readNoiseIKMessage1(
+	plaintext, initiatorStaticPub, keys, hs, isUnbound, err := readNoiseIKMessage1(
 		sm.ourPrivateKey, sm.ourPublicKey, msg,
 	)
 	if err != nil {
 		return nil, nil, oops.Wrapf(err, "failed to process Noise IK New Session message")
+	}
+
+	// Unbound sessions are non-repliable: the initiator sent no static key,
+	// so there is no identity to key the session on and no NSR can be sent.
+	// Spec §1c: "Bob ratchets once when creating an unbound inbound session,
+	// and does not create a corresponding outbound session."
+	if isUnbound {
+		log.Debug("Received unbound (N-pattern) New Session message — no session state stored")
+		return plaintext, nil, nil
 	}
 
 	if err := sm.initializeInboundRatchetState(initiatorStaticPub, keys, hs); err != nil {
@@ -280,6 +294,34 @@ func (sm *SessionManager) decryptNewSession(msg []byte) ([]byte, *[32]byte, erro
 
 	sessionHash := types.SHA256(initiatorStaticPub[:])
 	return plaintext, &sessionHash, nil
+}
+
+// EncryptUnboundGarlicMessage encrypts a plaintext garlic message as an
+// unbound (N-pattern, §1c) New Session without advertising the sender's static
+// key. Use this for raw-datagram or one-time-send traffic where sender anonymity
+// is required.
+//
+// Unlike EncryptGarlicMessage, no session state is created: the message is
+// always a fresh one-shot IK/N-pattern frame and no reply is possible. The
+// caller must supply the recipient's raw X25519 public key.
+func (sm *SessionManager) EncryptUnboundGarlicMessage(
+	destinationPubKey [32]byte,
+	plaintextGarlic []byte,
+) ([]byte, error) {
+	if len(plaintextGarlic) == 0 {
+		return nil, oops.Errorf("plaintext must be non-empty: garlic messages require at least one payload block")
+	}
+
+	log.WithFields(map[string]interface{}{
+		"at":             "EncryptUnboundGarlicMessage",
+		"plaintext_size": len(plaintextGarlic),
+	}).Debug("Encrypting unbound garlic message")
+
+	msg, _, err := writeNoiseIKMessage1Unbound(destinationPubKey, plaintextGarlic)
+	if err != nil {
+		return nil, oops.Wrapf(err, "failed to construct unbound New Session message")
+	}
+	return msg, nil
 }
 
 // initializeInboundRatchetState creates and stores ratchet state for incoming sessions.
