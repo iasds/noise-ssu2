@@ -226,6 +226,7 @@ func deriveTagAndSymKeysFromChainKey(chainKey [32]byte) (tagKey, symKey [32]byte
 // After obtaining the new chain key from the DH ratchet, it derives the session tag
 // and symmetric key chain keys using HKDF(ck, ZEROLEN, "TagAndKeyGenKeys", 64)
 // per the spec's DH INITIALIZATION KDF.
+// On success, a NextKey block is queued for inclusion in the next outgoing message.
 func performDHRatchetStep(session *Session) error {
 	newPubKey, err := session.DHRatchet.GenerateNewKeyPair()
 	if err != nil {
@@ -247,11 +248,21 @@ func performDHRatchetStep(session *Session) error {
 
 	session.newEphemeralPub = &newPubKey
 
+	// Queue a NextKey block for the next outgoing message.
+	// Even-numbered tag sets: sender sends new key, requests reverse.
+	// Odd-numbered tag sets: sender reuses key, requests reverse.
+	// For the first rotation (sendKeyID == 0): always send the key and request reverse.
+	requestReverse := true
+	nextKeyBlock := NewNextKeyBlock(session.sendKeyID, &newPubKey, false, requestReverse)
+	session.pendingNextKeys = append(session.pendingNextKeys, nextKeyBlock)
+	session.awaitingReverseKey = true
+
 	log.WithFields(map[string]interface{}{
 		"at":              "performDHRatchetStep",
 		"message_counter": session.MessageCounter,
+		"send_key_id":     session.sendKeyID,
 		"new_pub_key":     fmt.Sprintf("%x", newPubKey[:8]),
-	}).Debug("DH ratchet rotation completed")
+	}).Debug("DH ratchet rotation completed, NextKey block queued")
 
 	return nil
 }

@@ -42,6 +42,20 @@ type Session struct {
 	handshakeState *noiseHandshakeState
 	// isInitiator tracks whether we initiated the session (sent NS).
 	isInitiator bool
+
+	// sendKeyID is the current send-direction DH ratchet key ID.
+	// Incremented each time we generate a new forward key.
+	// Spec ref: ratchet.md §"Key and Tag Set IDs".
+	sendKeyID uint16
+	// recvKeyID is the current receive-direction DH ratchet key ID.
+	// Updated when we receive a NextKey block from the peer.
+	recvKeyID uint16
+	// pendingNextKeys holds NextKey blocks to include in the next outgoing message.
+	// These are generated when the DH ratchet rotates and consumed when sent.
+	pendingNextKeys []PayloadBlock
+	// awaitingReverseKey tracks whether we sent a forward NextKey with
+	// request-reverse set and are waiting for the peer's reverse key.
+	awaitingReverseKey bool
 }
 
 // createSession initializes a new Session with ratchet state from derived keys.
@@ -75,5 +89,6 @@ func createSession(remotePubKey [32]byte, keys *sessionKeys, ourPrivateKey [32]b
 		MessageCounter:       1,
 		recvCounter:          1, // starts at 1 because message 0 is the New Session (ECIES, not ratchet)
 		pendingTags:          make([][8]byte, 0, 10),
+		pendingNextKeys:      nil,
 	}, nil
 }
