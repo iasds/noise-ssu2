@@ -1,16 +1,15 @@
 // Package ratchet provides ECIES-X25519-AEAD-Ratchet cryptographic primitives.
 //
 // This file implements tunnel build record encryption/decryption using
-// ChaCha20-Poly1305 (I2P 0.9.44+) and AES-256-CBC (legacy). All function
-// signatures use primitive types ([32]byte, [16]byte, []byte) rather than
-// I2P-specific types. The go-i2p consumer converts session_key.SessionKey
-// and BuildResponseRecord/BuildRequestRecord before calling these APIs.
+// ChaCha20-Poly1305 (I2P 0.9.44+). All function signatures use primitive
+// types ([32]byte, [16]byte, []byte) rather than I2P-specific types.
+// The go-i2p consumer converts session_key.SessionKey and
+// BuildResponseRecord/BuildRequestRecord before calling these APIs.
 package ratchet
 
 import (
 	"fmt"
 
-	"github.com/go-i2p/crypto/aes"
 	"github.com/go-i2p/crypto/chacha20poly1305"
 	"github.com/go-i2p/crypto/types"
 	"github.com/go-i2p/logger"
@@ -198,40 +197,6 @@ func (c *BuildRecordCrypto) decryptChaCha20Poly1305(
 
 	if len(plaintext) != 528 {
 		return nil, fmt.Errorf("unexpected plaintext length: %d", len(plaintext))
-	}
-
-	return plaintext, nil
-}
-
-// DecryptAES256CBC decrypts data using AES-256-CBC (legacy mode).
-//
-// Parameters:
-//   - ciphertext: 528 bytes of encrypted data
-//   - key: 32-byte session key
-//   - iv: 16-byte initialization vector
-//
-// Returns 528 bytes of decrypted plaintext (no PKCS padding; I2P records are fixed-size).
-func (c *BuildRecordCrypto) DecryptAES256CBC(
-	ciphertext []byte,
-	key [32]byte,
-	iv [16]byte,
-) ([]byte, error) {
-	if len(ciphertext) != 528 {
-		return nil, fmt.Errorf("ciphertext must be 528 bytes, got %d", len(ciphertext))
-	}
-
-	if len(ciphertext)%16 != 0 {
-		return nil, fmt.Errorf("ciphertext length %d is not a multiple of AES block size %d", len(ciphertext), 16)
-	}
-
-	decrypter := &aes.AESSymmetricDecrypter{
-		Key: key[:],
-		IV:  iv[:16],
-	}
-
-	plaintext, err := decrypter.DecryptNoPadding(ciphertext)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decrypt AES-256-CBC: %w", err)
 	}
 
 	return plaintext, nil
