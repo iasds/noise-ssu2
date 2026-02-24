@@ -438,3 +438,54 @@ func TestModifierChaining(t *testing.T) {
 		t.Errorf("Chain round-trip failed: got %v, want %v", string(recovered), string(originalData))
 	}
 }
+
+func TestNewModifierChain_NilFiltering(t *testing.T) {
+	t.Run("All nil modifiers produces empty chain", func(t *testing.T) {
+		chain := NewModifierChain("all-nil", nil, nil, nil)
+
+		if chain.Count() != 0 {
+			t.Errorf("Count() = %v, want 0 after nil filtering", chain.Count())
+		}
+
+		if !chain.IsEmpty() {
+			t.Error("IsEmpty() should be true when all modifiers are nil")
+		}
+	})
+
+	t.Run("Mixed nil and valid modifiers", func(t *testing.T) {
+		mod1 := &testModifier{name: "valid-1"}
+		mod2 := &testModifier{name: "valid-2"}
+
+		chain := NewModifierChain("mixed", nil, mod1, nil, mod2, nil)
+
+		if chain.Count() != 2 {
+			t.Errorf("Count() = %v, want 2 after nil filtering", chain.Count())
+		}
+
+		names := chain.ModifierNames()
+		if names[0] != "valid-1" || names[1] != "valid-2" {
+			t.Errorf("ModifierNames() = %v, want [valid-1, valid-2]", names)
+		}
+	})
+
+	t.Run("Nil-filtered chain still processes data correctly", func(t *testing.T) {
+		xorMod := NewXORModifier("xor", []byte{0x42})
+		chain := NewModifierChain("nil-mixed", nil, xorMod, nil)
+
+		testData := []byte("test data")
+
+		outbound, err := chain.ModifyOutbound(PhaseInitial, testData)
+		if err != nil {
+			t.Fatalf("ModifyOutbound() error = %v", err)
+		}
+
+		recovered, err := chain.ModifyInbound(PhaseInitial, outbound)
+		if err != nil {
+			t.Fatalf("ModifyInbound() error = %v", err)
+		}
+
+		if string(recovered) != string(testData) {
+			t.Errorf("Round-trip failed: got %q, want %q", string(recovered), string(testData))
+		}
+	})
+}

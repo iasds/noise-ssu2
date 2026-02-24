@@ -3,6 +3,7 @@ package handshake
 import (
 	"crypto/rand"
 	"encoding/binary"
+	"math"
 	"math/big"
 
 	"github.com/samber/oops"
@@ -46,9 +47,20 @@ func NewPaddingModifier(name string, minPadding, maxPadding int) (*PaddingModifi
 
 // ModifyOutbound adds padding to outbound handshake data.
 // Padding format: [original_length:4][original_data][padding_data]
+// Returns an error if data exceeds the 4-byte length prefix capacity (math.MaxUint32).
 func (pm *PaddingModifier) ModifyOutbound(phase HandshakePhase, data []byte) ([]byte, error) {
 	if pm.minPadding == 0 && pm.maxPadding == 0 {
 		return data, nil // No padding configured
+	}
+
+	if len(data) > math.MaxUint32 {
+		return nil, oops.
+			Code("DATA_TOO_LARGE").
+			In("handshake").
+			With("data_length", len(data)).
+			With("max_length", math.MaxUint32).
+			With("modifier_name", pm.name).
+			Errorf("data exceeds 4-byte length prefix capacity")
 	}
 
 	// Calculate padding size using crypto/rand for traffic analysis resistance

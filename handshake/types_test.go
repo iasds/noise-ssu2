@@ -52,6 +52,11 @@ func TestHandshakePhase_String(t *testing.T) {
 			want:  "final",
 		},
 		{
+			name:  "PhaseData",
+			phase: PhaseData,
+			want:  "data",
+		},
+		{
 			name:  "Unknown phase",
 			phase: HandshakePhase(99),
 			want:  "unknown",

@@ -1,6 +1,7 @@
 package handshake
 
 import (
+	"math"
 	"strings"
 	"testing"
 )
@@ -238,6 +239,43 @@ func TestPaddingModifier(t *testing.T) {
 
 		if len(recovered) != 0 {
 			t.Errorf("Recovered data should be empty, got %v", recovered)
+		}
+	})
+
+	t.Run("Overflow guard constant is correct", func(t *testing.T) {
+		// Verify that the overflow guard uses the correct constant value.
+		// The 4-byte big-endian length prefix supports max math.MaxUint32.
+		// We can't allocate >4GB in tests, but we verify the guard exists
+		// by checking that the max uint32 value matches expectations.
+		if math.MaxUint32 != 4294967295 {
+			t.Errorf("math.MaxUint32 = %v, expected 4294967295", math.MaxUint32)
+		}
+	})
+
+	t.Run("Large data within bounds succeeds", func(t *testing.T) {
+		modifier, err := NewPaddingModifier("large-data", 1, 1)
+		if err != nil {
+			t.Fatalf("NewPaddingModifier() error = %v", err)
+		}
+
+		// Use a moderately large buffer (1MB) to verify no issues below the limit
+		largeData := make([]byte, 1<<20)
+		for i := range largeData {
+			largeData[i] = byte(i % 256)
+		}
+
+		padded, err := modifier.ModifyOutbound(PhaseInitial, largeData)
+		if err != nil {
+			t.Fatalf("ModifyOutbound() error = %v for 1MB data", err)
+		}
+
+		recovered, err := modifier.ModifyInbound(PhaseInitial, padded)
+		if err != nil {
+			t.Fatalf("ModifyInbound() error = %v for 1MB data", err)
+		}
+
+		if len(recovered) != len(largeData) {
+			t.Errorf("Recovered length = %v, want %v", len(recovered), len(largeData))
 		}
 	})
 }

@@ -18,10 +18,15 @@ type ModifierChain struct {
 
 // NewModifierChain creates a new modifier chain with the given modifiers.
 // Modifiers are applied in the order they are provided.
+// Nil modifiers are silently filtered out to prevent runtime panics.
 func NewModifierChain(name string, modifiers ...HandshakeModifier) *ModifierChain {
-	// Make a copy to prevent external modification
-	chain := make([]HandshakeModifier, len(modifiers))
-	copy(chain, modifiers)
+	// Filter nil entries and copy to prevent external modification
+	chain := make([]HandshakeModifier, 0, len(modifiers))
+	for _, m := range modifiers {
+		if m != nil {
+			chain = append(chain, m)
+		}
+	}
 
 	return &ModifierChain{
 		modifiers: chain,
