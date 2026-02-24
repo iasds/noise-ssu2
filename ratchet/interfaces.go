@@ -48,6 +48,9 @@ type GarlicSessionManager interface {
 
 	// StartCleanupLoop starts periodic cleanup. Stops when ctx is cancelled.
 	StartCleanupLoop(ctx context.Context)
+
+	// Close stops the cleanup loop, removes all sessions, and zeroes key material.
+	Close() error
 }
 
 // BuildRecordEncryptor encrypts tunnel build request records using ECIES-X25519.

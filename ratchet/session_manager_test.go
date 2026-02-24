@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-i2p/crypto/ecies"
 	"github.com/go-i2p/crypto/rand"
+	"github.com/go-i2p/crypto/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -391,6 +392,59 @@ func TestCleanupLoop(t *testing.T) {
 	// Should not panic
 	time.Sleep(10 * time.Millisecond)
 	cancel()
+	time.Sleep(10 * time.Millisecond)
+}
+
+// TestClose verifies Close() stops cleanup, clears sessions, and zeroes the key.
+func TestClose(t *testing.T) {
+	sender := createTestSessionManager(t)
+	receiver := createTestSessionManager(t)
+
+	// Establish a session
+	destHash := types.SHA256(receiver.ourPublicKey[:])
+	_, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("hello"))
+	require.NoError(t, err)
+	assert.Equal(t, 1, sender.GetSessionCount())
+
+	// Close should succeed
+	err = sender.Close()
+	require.NoError(t, err)
+
+	// Sessions and tags should be cleared
+	assert.Equal(t, 0, sender.GetSessionCount())
+
+	// Private key should be zeroed
+	var zeroKey [32]byte
+	assert.Equal(t, zeroKey, sender.ourPrivateKey, "Private key should be zeroed after Close")
+}
+
+// TestCloseIdempotent verifies Close() can be called multiple times safely.
+func TestCloseIdempotent(t *testing.T) {
+	sm := createTestSessionManager(t)
+
+	err := sm.Close()
+	require.NoError(t, err)
+
+	// Second call should not panic or error
+	err = sm.Close()
+	require.NoError(t, err)
+}
+
+// TestCloseStopsCleanupLoop verifies Close() terminates the cleanup goroutine.
+func TestCloseStopsCleanupLoop(t *testing.T) {
+	sm := createTestSessionManager(t)
+
+	ctx := context.Background()
+	sm.StartCleanupLoop(ctx)
+
+	time.Sleep(10 * time.Millisecond)
+
+	// Close should stop the cleanup loop (context.Background() never cancels,
+	// but the internal context does)
+	err := sm.Close()
+	require.NoError(t, err)
+
+	// Allow goroutine to exit
 	time.Sleep(10 * time.Millisecond)
 }
 

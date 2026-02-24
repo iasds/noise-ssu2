@@ -17,8 +17,7 @@ The package implements three main areas:
    DH ratchet rotation, session tag generation, and LRU eviction.
 
 2. **Tunnel Build Record Crypto** — ChaCha20-Poly1305 encryption/decryption of
-   tunnel build reply records (I2P 0.9.44+), and AES-256-CBC decryption for legacy
-   records.
+   tunnel build reply records (I2P 0.9.44+).
 
 3. **ECIES Build Request Crypto** — ECIES-X25519-AEAD encryption/decryption of
    tunnel build request records, identity hash verification.

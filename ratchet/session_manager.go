@@ -37,6 +37,8 @@ type SessionManager struct {
 	ourPrivateKey  [32]byte
 	ourPublicKey   [32]byte
 	sessionTimeout time.Duration
+	ctx            context.Context
+	cancel         context.CancelFunc
 }
 
 // NewSessionManager creates a new session manager with the given private key.
@@ -54,12 +56,16 @@ func NewSessionManager(privateKey [32]byte) (*SessionManager, error) {
 	}
 	copy(publicKey[:], pubKeyIface.Bytes())
 
+	ctx, cancel := context.WithCancel(context.Background())
+
 	return &SessionManager{
 		sessions:       make(map[[32]byte]*Session),
 		tagIndex:       make(map[[8]byte]*Session),
 		ourPrivateKey:  privateKey,
 		ourPublicKey:   publicKey,
 		sessionTimeout: 10 * time.Minute,
+		ctx:            ctx,
+		cancel:         cancel,
 	}, nil
 }
 
@@ -538,7 +544,33 @@ func (sm *SessionManager) GetPublicKey() [32]byte {
 	return sm.ourPublicKey
 }
 
+// Close stops the cleanup loop, removes all sessions, and zeroes the private key.
+// It is safe to call Close multiple times.
+func (sm *SessionManager) Close() error {
+	sm.cancel()
+
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	// Clear all session state
+	for k := range sm.sessions {
+		delete(sm.sessions, k)
+	}
+	for k := range sm.tagIndex {
+		delete(sm.tagIndex, k)
+	}
+
+	// Zero the private key material
+	for i := range sm.ourPrivateKey {
+		sm.ourPrivateKey[i] = 0
+	}
+
+	log.Debug("SessionManager closed")
+	return nil
+}
+
 // StartCleanupLoop starts periodic cleanup of expired sessions.
+// The loop stops when the provided ctx is cancelled or when Close() is called.
 func (sm *SessionManager) StartCleanupLoop(ctx context.Context) {
 	go func() {
 		ticker := time.NewTicker(2 * time.Minute)
@@ -549,6 +581,8 @@ func (sm *SessionManager) StartCleanupLoop(ctx context.Context) {
 			case <-ticker.C:
 				sm.CleanupExpiredSessions()
 			case <-ctx.Done():
+				return
+			case <-sm.ctx.Done():
 				return
 			}
 		}
