@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/go-i2p/crypto/ratchet"
+	"github.com/samber/oops"
 )
 
 // Session represents an active encrypted session with a remote destination.
@@ -42,9 +43,15 @@ type Session struct {
 // The isInitiator flag determines key direction: the initiator's send ratchets
 // use "initiator" direction keys and its receive ratchets use "responder" direction
 // keys (and vice versa for the responder).
-func createSession(remotePubKey [32]byte, keys *sessionKeys, ourPrivateKey [32]byte, isInitiator bool) *Session {
-	sendRootKey, recvRootKey := deriveDirectionalKeys(keys.rootKey, isInitiator)
-	sendTagKey, recvTagKey := deriveDirectionalKeys(keys.tagKey, isInitiator)
+func createSession(remotePubKey [32]byte, keys *sessionKeys, ourPrivateKey [32]byte, isInitiator bool) (*Session, error) {
+	sendRootKey, recvRootKey, err := deriveDirectionalKeys(keys.rootKey, isInitiator)
+	if err != nil {
+		return nil, oops.Wrapf(err, "failed to derive directional root keys")
+	}
+	sendTagKey, recvTagKey, err := deriveDirectionalKeys(keys.tagKey, isInitiator)
+	if err != nil {
+		return nil, oops.Wrapf(err, "failed to derive directional tag keys")
+	}
 
 	dhRatchet := ratchet.NewDHRatchet(keys.rootKey, ourPrivateKey, remotePubKey)
 	symRatchet := ratchet.NewSymmetricRatchet(sendRootKey)
@@ -63,5 +70,5 @@ func createSession(remotePubKey [32]byte, keys *sessionKeys, ourPrivateKey [32]b
 		MessageCounter:       1,
 		recvCounter:          1, // starts at 1 because message 0 is the New Session (ECIES, not ratchet)
 		pendingTags:          make([][8]byte, 0, 10),
-	}
+	}, nil
 }

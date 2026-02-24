@@ -9,7 +9,6 @@ import (
 	"github.com/go-i2p/crypto/ratchet"
 	"github.com/go-i2p/crypto/types"
 	"github.com/samber/oops"
-	"go.step.sm/crypto/x25519"
 )
 
 // sessionKeys holds the cryptographic keys derived from ECIES key exchange.
@@ -35,36 +34,25 @@ const (
 )
 
 // deriveDirectionalKeys derives distinct send and receive keys from a base key
-// using HKDF with role-specific info strings.
-func deriveDirectionalKeys(baseKey [32]byte, isInitiator bool) (sendKey, recvKey [32]byte) {
+// using HKDF with role-specific info strings. Returns an error if key derivation
+// fails instead of silently falling back to the base key.
+func deriveDirectionalKeys(baseKey [32]byte, isInitiator bool) (sendKey, recvKey [32]byte, err error) {
 	kd := kdf.NewKeyDerivation(baseKey)
 
 	initiatorKey, err := kd.DeriveWithInfo(hkdfInfoInitiator)
 	if err != nil {
-		log.WithError(err).Error("Failed to derive initiator directional key, using base key")
-		initiatorKey = baseKey
+		return [32]byte{}, [32]byte{}, oops.Wrapf(err, "failed to derive initiator directional key")
 	}
 
 	responderKey, err := kd.DeriveWithInfo(hkdfInfoResponder)
 	if err != nil {
-		log.WithError(err).Error("Failed to derive responder directional key, using base key")
-		responderKey = baseKey
+		return [32]byte{}, [32]byte{}, oops.Wrapf(err, "failed to derive responder directional key")
 	}
 
 	if isInitiator {
-		return initiatorKey, responderKey
+		return initiatorKey, responderKey, nil
 	}
-	return responderKey, initiatorKey
-}
-
-// deriveECIESSharedSecret performs X25519 key agreement.
-func deriveECIESSharedSecret(ephemeralPriv x25519.PrivateKey, destPubKey [32]byte) ([]byte, error) {
-	recipientKey := x25519.PublicKey(destPubKey[:])
-	sharedSecret, err := ephemeralPriv.SharedKey(recipientKey)
-	if err != nil {
-		return nil, oops.Wrapf(err, "failed to derive ECIES shared secret")
-	}
-	return sharedSecret, nil
+	return responderKey, initiatorKey, nil
 }
 
 // deriveSessionKeysFromSecret derives root, symmetric, and tag keys from a shared secret.
@@ -77,79 +65,6 @@ func deriveSessionKeysFromSecret(sharedSecret []byte) (*sessionKeys, error) {
 		return nil, oops.Wrapf(err, "failed to derive session keys")
 	}
 	return &sessionKeys{rootKey: rootKey, symKey: symKey, tagKey: tagKey}, nil
-}
-
-// encryptedPayload contains the encrypted message components.
-type encryptedPayload struct {
-	nonce      []byte
-	ciphertext []byte
-	tag        [16]byte
-}
-
-// encryptPayload encrypts plaintext using ChaCha20-Poly1305 with a symmetric key.
-func encryptPayload(symKey [32]byte, plaintext []byte) (*encryptedPayload, error) {
-	aead, err := chacha20poly1305.NewAEAD(symKey)
-	if err != nil {
-		return nil, oops.Wrapf(err, "failed to create AEAD")
-	}
-
-	nonce := make([]byte, chacha20poly1305.NonceSize)
-	if _, err := rand.Read(nonce); err != nil {
-		return nil, oops.Wrapf(err, "failed to generate nonce")
-	}
-
-	ct, tag, err := aead.Encrypt(plaintext, nil, nonce)
-	if err != nil {
-		return nil, oops.Wrapf(err, "failed to encrypt garlic message")
-	}
-
-	return &encryptedPayload{nonce: nonce, ciphertext: ct, tag: tag}, nil
-}
-
-// constructNewSessionMessage builds the wire format for a New Session message.
-// Format: [ephemeralPubKey(32)] + [nonce(12)] + [ciphertext(N)] + [tag(16)]
-func constructNewSessionMessage(ephemeralPub []byte, payload *encryptedPayload) []byte {
-	msg := make([]byte, 32+12+len(payload.ciphertext)+16)
-	copy(msg[0:32], ephemeralPub)
-	copy(msg[32:44], payload.nonce)
-	copy(msg[44:44+len(payload.ciphertext)], payload.ciphertext)
-	copy(msg[44+len(payload.ciphertext):], payload.tag[:])
-	return msg
-}
-
-// newSessionMessageComponents holds parsed components of a New Session message.
-type newSessionMessageComponents struct {
-	ephemeralPubKey [32]byte
-	nonce           []byte
-	ciphertext      []byte
-	tag             [16]byte
-}
-
-// parseNewSessionMessage extracts components from a New Session message.
-func parseNewSessionMessage(msg []byte) (*newSessionMessageComponents, error) {
-	if len(msg) < 32+12+16 {
-		return nil, oops.Errorf("new session message too short: %d bytes", len(msg))
-	}
-
-	var ephPub [32]byte
-	copy(ephPub[:], msg[0:32])
-	nonce := msg[32:44]
-	ctWithTag := msg[44:]
-
-	if len(ctWithTag) < 16 {
-		return nil, oops.Errorf("ciphertext too short for auth tag")
-	}
-
-	ct := ctWithTag[:len(ctWithTag)-16]
-	var tag [16]byte
-	copy(tag[:], ctWithTag[len(ctWithTag)-16:])
-
-	return &newSessionMessageComponents{
-		ephemeralPubKey: ephPub,
-		nonce:           nonce,
-		ciphertext:      ct,
-		tag:             tag,
-	}, nil
 }
 
 // parseExistingSessionMessage parses an Existing Session message (without session tag prefix).
@@ -170,21 +85,6 @@ func parseExistingSessionMessage(msg []byte) (nonce, ciphertext []byte, tag [16]
 	copy(tag[:], ctWithTag[len(ctWithTag)-16:])
 
 	return nonce, ciphertext, tag, nil
-}
-
-// decryptWithSessionKeys decrypts ciphertext using ChaCha20-Poly1305.
-func decryptWithSessionKeys(parsed *newSessionMessageComponents, symKey [32]byte) ([]byte, error) {
-	aead, err := chacha20poly1305.NewAEAD(symKey)
-	if err != nil {
-		return nil, oops.Wrapf(err, "failed to create AEAD")
-	}
-
-	plaintext, err := aead.Decrypt(parsed.ciphertext, parsed.tag[:], nil, parsed.nonce)
-	if err != nil {
-		return nil, oops.Wrapf(err, "decryption failed (authentication error)")
-	}
-
-	return plaintext, nil
 }
 
 // encryptWithSessionKey encrypts plaintext using ChaCha20-Poly1305 with session tag as AAD.

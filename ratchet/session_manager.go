@@ -8,11 +8,9 @@ import (
 
 	i2pcurve25519 "github.com/go-i2p/crypto/curve25519"
 	"github.com/go-i2p/crypto/ecies"
-	"github.com/go-i2p/crypto/rand"
 	"github.com/go-i2p/crypto/ratchet"
 	"github.com/go-i2p/crypto/types"
 	"github.com/samber/oops"
-	"go.step.sm/crypto/x25519"
 )
 
 // Compile-time interface check.
@@ -105,22 +103,17 @@ func (sm *SessionManager) EncryptGarlicMessage(
 	return sm.encryptExistingSession(session, plaintextGarlic)
 }
 
-// encryptNewSession creates a new session and encrypts using ECIES.
+// encryptNewSession creates a new session and encrypts using the Noise IK handshake.
 func (sm *SessionManager) encryptNewSession(
 	destinationHash, destinationPubKey [32]byte,
 	plaintextGarlic []byte,
 ) ([]byte, error) {
-	ephemeralPub, keys, err := sm.performECIESKeyExchange(destinationPubKey)
+	msg, keys, err := writeNoiseIKMessage1(
+		sm.ourPrivateKey, sm.ourPublicKey, destinationPubKey, plaintextGarlic,
+	)
 	if err != nil {
-		return nil, err
+		return nil, oops.Wrapf(err, "failed to construct Noise IK New Session message")
 	}
-
-	payload, err := encryptPayload(keys.symKey, plaintextGarlic)
-	if err != nil {
-		return nil, err
-	}
-
-	msg := constructNewSessionMessage(ephemeralPub, payload)
 
 	if err := sm.storeNewSessionState(destinationHash, destinationPubKey, keys); err != nil {
 		return nil, err
@@ -129,32 +122,15 @@ func (sm *SessionManager) encryptNewSession(
 	return msg, nil
 }
 
-// performECIESKeyExchange executes ephemeral-static key exchange.
-func (sm *SessionManager) performECIESKeyExchange(destPubKey [32]byte) ([]byte, *sessionKeys, error) {
-	ephemeralPub, ephemeralPriv, err := x25519.GenerateKey(rand.Reader)
-	if err != nil {
-		return nil, nil, oops.Wrapf(err, "failed to generate ephemeral key pair")
-	}
-
-	sharedSecret, err := deriveECIESSharedSecret(ephemeralPriv, destPubKey)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	keys, err := deriveSessionKeysFromSecret(sharedSecret)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return ephemeralPub, keys, nil
-}
-
 // storeNewSessionState initializes and stores ratchet state for future messages.
 func (sm *SessionManager) storeNewSessionState(
 	destinationHash, destinationPubKey [32]byte,
 	keys *sessionKeys,
 ) error {
-	session := createSession(destinationPubKey, keys, sm.ourPrivateKey, true)
+	session, err := createSession(destinationPubKey, keys, sm.ourPrivateKey, true)
+	if err != nil {
+		return oops.Wrapf(err, "failed to create outbound session")
+	}
 
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -229,53 +205,30 @@ func (sm *SessionManager) DecryptGarlicMessage(encryptedGarlic []byte) ([]byte, 
 	return plaintext, [8]byte{}, nil
 }
 
-// decryptNewSession decrypts a New Session message using our static private key.
+// decryptNewSession decrypts a New Session message using the Noise IK handshake.
 func (sm *SessionManager) decryptNewSession(msg []byte) ([]byte, error) {
-	parsed, err := parseNewSessionMessage(msg)
+	plaintext, initiatorStaticPub, keys, err := readNoiseIKMessage1(
+		sm.ourPrivateKey, sm.ourPublicKey, msg,
+	)
 	if err != nil {
-		return nil, err
+		return nil, oops.Wrapf(err, "failed to process Noise IK New Session message")
 	}
 
-	sharedSecret, err := sm.deriveSharedSecretFromEphemeral(parsed.ephemeralPubKey)
-	if err != nil {
-		return nil, err
-	}
-
-	keys, err := deriveSessionKeysFromSecret(sharedSecret)
-	if err != nil {
-		return nil, err
-	}
-
-	plaintext, err := decryptWithSessionKeys(parsed, keys.symKey)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := sm.initializeInboundRatchetState(parsed.ephemeralPubKey, keys); err != nil {
+	if err := sm.initializeInboundRatchetState(initiatorStaticPub, keys); err != nil {
 		return nil, err
 	}
 
 	return plaintext, nil
 }
 
-// deriveSharedSecretFromEphemeral performs X25519 key agreement with ephemeral public key.
-func (sm *SessionManager) deriveSharedSecretFromEphemeral(ephemeralPubKey [32]byte) ([]byte, error) {
-	privKey := x25519.PrivateKey(sm.ourPrivateKey[:])
-	ephemeralKey := x25519.PublicKey(ephemeralPubKey[:])
-
-	sharedSecret, err := privKey.SharedKey(ephemeralKey)
+// initializeInboundRatchetState creates and stores ratchet state for incoming sessions.
+func (sm *SessionManager) initializeInboundRatchetState(remotePubKey [32]byte, keys *sessionKeys) error {
+	session, err := createSession(remotePubKey, keys, sm.ourPrivateKey, false)
 	if err != nil {
-		return nil, oops.Wrapf(err, "failed to derive shared secret")
+		return oops.Wrapf(err, "failed to create inbound session")
 	}
 
-	return sharedSecret, nil
-}
-
-// initializeInboundRatchetState creates and stores ratchet state for incoming sessions.
-func (sm *SessionManager) initializeInboundRatchetState(ephemeralPubKey [32]byte, keys *sessionKeys) error {
-	session := createSession(ephemeralPubKey, keys, sm.ourPrivateKey, false)
-
-	sessionHash := types.SHA256(ephemeralPubKey[:])
+	sessionHash := types.SHA256(remotePubKey[:])
 
 	sm.mu.Lock()
 	defer sm.mu.Unlock()

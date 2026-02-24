@@ -74,8 +74,8 @@ func TestNewSessionEncryptDecrypt(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEmpty(t, encrypted)
 
-	// New Session message: [ephemeralPubKey(32)] + [nonce(12)] + [ciphertext(N)] + [tag(16)]
-	assert.GreaterOrEqual(t, len(encrypted), 32+12+16)
+	// New Session message (Noise IK): [Elligator2(e)(32)] + [encrypted_s(48)] + [encrypted_payload(N+16)]
+	assert.GreaterOrEqual(t, len(encrypted), noiseIKMinMessageSize)
 
 	// Decrypt
 	decrypted, sessionTag, err := receiver.DecryptGarlicMessage(encrypted)
@@ -137,7 +137,8 @@ func TestDeriveDirectionalKeys_Distinct(t *testing.T) {
 	_, err := rand.Read(baseKey[:])
 	require.NoError(t, err)
 
-	sendKey, recvKey := deriveDirectionalKeys(baseKey, true)
+	sendKey, recvKey, err := deriveDirectionalKeys(baseKey, true)
+	require.NoError(t, err)
 	assert.NotEqual(t, sendKey, recvKey, "Send and receive keys must differ")
 }
 
@@ -146,8 +147,10 @@ func TestDeriveDirectionalKeys_Symmetry(t *testing.T) {
 	_, err := rand.Read(baseKey[:])
 	require.NoError(t, err)
 
-	initSend, initRecv := deriveDirectionalKeys(baseKey, true)
-	respSend, respRecv := deriveDirectionalKeys(baseKey, false)
+	initSend, initRecv, err := deriveDirectionalKeys(baseKey, true)
+	require.NoError(t, err)
+	respSend, respRecv, err := deriveDirectionalKeys(baseKey, false)
+	require.NoError(t, err)
 
 	assert.Equal(t, initSend, respRecv, "Initiator send == Responder receive")
 	assert.Equal(t, initRecv, respSend, "Initiator receive == Responder send")
@@ -158,8 +161,10 @@ func TestDeriveDirectionalKeys_Deterministic(t *testing.T) {
 	_, err := rand.Read(baseKey[:])
 	require.NoError(t, err)
 
-	s1, r1 := deriveDirectionalKeys(baseKey, true)
-	s2, r2 := deriveDirectionalKeys(baseKey, true)
+	s1, r1, err := deriveDirectionalKeys(baseKey, true)
+	require.NoError(t, err)
+	s2, r2, err := deriveDirectionalKeys(baseKey, true)
+	require.NoError(t, err)
 	assert.Equal(t, s1, s2, "Same key should produce same send key")
 	assert.Equal(t, r1, r2, "Same key should produce same recv key")
 }
@@ -171,8 +176,10 @@ func TestDeriveDirectionalKeys_DifferentBaseKeys(t *testing.T) {
 	_, err = rand.Read(key2[:])
 	require.NoError(t, err)
 
-	s1, _ := deriveDirectionalKeys(key1, true)
-	s2, _ := deriveDirectionalKeys(key2, true)
+	s1, _, err := deriveDirectionalKeys(key1, true)
+	require.NoError(t, err)
+	s2, _, err := deriveDirectionalKeys(key2, true)
+	require.NoError(t, err)
 	assert.NotEqual(t, s1, s2, "Different base keys should produce different results")
 }
 
@@ -299,7 +306,8 @@ func TestCreateSessionInitializesRatchets(t *testing.T) {
 	_, err = rand.Read(keys.tagKey[:])
 	require.NoError(t, err)
 
-	session := createSession(pubKey, keys, privKey, true)
+	session, err := createSession(pubKey, keys, privKey, true)
+	require.NoError(t, err)
 
 	assert.NotNil(t, session.DHRatchet, "DHRatchet should be initialized")
 	assert.NotNil(t, session.SymmetricRatchet, "SymmetricRatchet should be initialized")
@@ -324,8 +332,10 @@ func TestCreateSession_DirectionalKeyIsolation(t *testing.T) {
 	_, err = rand.Read(keys.tagKey[:])
 	require.NoError(t, err)
 
-	initiator := createSession(pubKey, keys, privKey, true)
-	responder := createSession(pubKey, keys, privKey, false)
+	initiator, err := createSession(pubKey, keys, privKey, true)
+	require.NoError(t, err)
+	responder, err := createSession(pubKey, keys, privKey, false)
+	require.NoError(t, err)
 
 	// Initiator's sending keys should differ from responder's sending keys
 	initSendKey, _, _ := initiator.SymmetricRatchet.DeriveMessageKeyAndAdvance(0)
@@ -357,7 +367,8 @@ func TestCleanupExpiredSessions(t *testing.T) {
 	_, err = rand.Read(pubKey[:])
 	require.NoError(t, err)
 
-	session := createSession(pubKey, keys, sm.ourPrivateKey, true)
+	session, err := createSession(pubKey, keys, sm.ourPrivateKey, true)
+	require.NoError(t, err)
 	session.LastUsed = time.Now().Add(-time.Second) // Already expired
 
 	sm.mu.Lock()
@@ -507,10 +518,10 @@ func TestNewSessionMessageFormat(t *testing.T) {
 	encrypted, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, plaintext)
 	require.NoError(t, err)
 
-	// New Session: [ephemeralPubKey(32)] + [nonce(12)] + [ciphertext(N)] + [tag(16)]
-	assert.GreaterOrEqual(t, len(encrypted), 32+12+16)
+	// New Session (Noise IK): [Elligator2(e)(32)] + [encrypted_s(48)] + [encrypted_payload(N+16)]
+	assert.GreaterOrEqual(t, len(encrypted), noiseIKMinMessageSize)
 
-	// First 32 bytes are ephemeral public key
+	// First 32 bytes are Elligator2-encoded ephemeral public key
 	ephPub := encrypted[0:32]
 	allZero := true
 	for _, b := range ephPub {
