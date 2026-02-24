@@ -1115,3 +1115,245 @@ func BenchmarkDecryptGarlicMessage(b *testing.B) {
 		_, _, _, _ = receiver.DecryptGarlicMessage(enc)
 	}
 }
+
+// ============================================================================
+// NSR Flow — end-to-end tests (Recommendations 2, 3, 4 from ratchet/AUDIT.md)
+// ============================================================================
+
+// TestDecryptGarlicMessage_ReturnsSessionHashForNewSession verifies that
+// DecryptGarlicMessage returns a non-nil session hash (SHA-256 of the
+// initiator's static public key) only for New Session messages, and nil
+// for Existing Session messages. This enables the responder to call
+// EncryptNewSessionReply with the correct key.
+func TestDecryptGarlicMessage_ReturnsSessionHashForNewSession(t *testing.T) {
+	initiator, responder := createLinkedManagers(t)
+
+	destHash := types.SHA256(responder.ourPublicKey[:])
+	nsPayload := []byte("new session payload")
+
+	// Encrypt NS
+	encrypted, err := initiator.EncryptGarlicMessage(destHash, responder.ourPublicKey, nsPayload)
+	require.NoError(t, err)
+
+	// Decrypt NS — sessionHash must be non-nil and equal SHA256(initiator pub)
+	plaintext, _, sessionHash, err := responder.DecryptGarlicMessage(encrypted)
+	require.NoError(t, err)
+	assert.Equal(t, nsPayload, plaintext)
+	require.NotNil(t, sessionHash, "New Session decryption must return a non-nil session hash")
+
+	expectedHash := types.SHA256(initiator.ourPublicKey[:])
+	assert.Equal(t, expectedHash, *sessionHash,
+		"Session hash should be SHA-256 of the initiator's static public key")
+}
+
+// TestDecryptGarlicMessage_NilSessionHashForExistingSession verifies that
+// Existing Session messages produce a nil session hash — callers must not
+// try to send an NSR in response to an ES message.
+func TestDecryptGarlicMessage_NilSessionHashForExistingSession(t *testing.T) {
+	initiator, responder := createLinkedManagers(t)
+
+	destHash := types.SHA256(responder.ourPublicKey[:])
+
+	// Establish session via first NS
+	enc1, err := initiator.EncryptGarlicMessage(destHash, responder.ourPublicKey, []byte("ns"))
+	require.NoError(t, err)
+	_, _, _, err = responder.DecryptGarlicMessage(enc1)
+	require.NoError(t, err)
+
+	// Second message is ES — session hash must be nil
+	enc2, err := initiator.EncryptGarlicMessage(destHash, responder.ourPublicKey, []byte("es"))
+	require.NoError(t, err)
+
+	_, _, sessionHash, err := responder.DecryptGarlicMessage(enc2)
+	require.NoError(t, err)
+	assert.Nil(t, sessionHash, "Existing Session decryption should return nil session hash")
+}
+
+// TestNSNSRESFlow_EndToEnd exercises the full NS→NSR→ES round-trip:
+//
+//  1. Alice sends a New Session (NS) to Bob.
+//  2. Bob decrypts NS, gets the session hash, and replies with a New Session Reply (NSR).
+//  3. Alice receives the NSR via DecryptGarlicMessage — which dispatches to the NSR path,
+//     applies the post-handshake keys (ee DH), and re-initializes both ratchets.
+//  4. Both sides exchange Existing Session (ES) messages encrypted with NSR-derived keys.
+//
+// This validates items 2 (NSR dispatch), 3 (apply NSR keys), and 4 (session hash) from
+// the ratchet/AUDIT.md Recommendations.
+func TestNSNSRESFlow_EndToEnd(t *testing.T) {
+	alice, err := GenerateSessionManager()
+	require.NoError(t, err)
+	bob, err := GenerateSessionManager()
+	require.NoError(t, err)
+
+	// ── Step 1: Alice → Bob: New Session ──────────────────────────────────
+	aliceToBobHash := types.SHA256(bob.ourPublicKey[:])
+	nsPayload := []byte("Hello Bob, session request")
+
+	nsMsg, err := alice.EncryptGarlicMessage(aliceToBobHash, bob.ourPublicKey, nsPayload)
+	require.NoError(t, err)
+
+	// ── Step 2: Bob decrypts NS and sends NSR ─────────────────────────────
+	decNS, _, sessionHash, err := bob.DecryptGarlicMessage(nsMsg)
+	require.NoError(t, err)
+	assert.Equal(t, nsPayload, decNS, "Bob should recover Alice's NS payload")
+	require.NotNil(t, sessionHash, "Bob must receive session hash to send NSR")
+
+	nsrPayload := []byte("Hello Alice, session accepted")
+	nsrMsg, err := bob.EncryptNewSessionReply(*sessionHash, nsrPayload)
+	require.NoError(t, err)
+	require.NotNil(t, nsrMsg)
+
+	// ── Step 3: Alice receives NSR via DecryptGarlicMessage ───────────────
+	decNSR, nsrTag, nsrHash, err := alice.DecryptGarlicMessage(nsrMsg)
+	require.NoError(t, err, "Alice must successfully decrypt Bob's NSR")
+	assert.Equal(t, nsrPayload, decNSR, "Alice should recover Bob's NSR payload")
+	assert.Equal(t, [8]byte{}, nsrTag, "NSR messages use zero session tag (tag is in wire prefix)")
+	assert.Nil(t, nsrHash, "NSR messages should return nil session hash")
+
+	// ── Step 4: ES exchange using NSR-derived keys ────────────────────────
+	// Alice sends ES to Bob
+	esPayload1 := []byte("ES from Alice after NSR")
+	esMsg1, err := alice.EncryptGarlicMessage(aliceToBobHash, bob.ourPublicKey, esPayload1)
+	require.NoError(t, err)
+
+	decES1, esTag1, _, err := bob.DecryptGarlicMessage(esMsg1)
+	require.NoError(t, err, "Bob must decrypt Alice's post-NSR ES message")
+	assert.Equal(t, esPayload1, decES1)
+	assert.NotEqual(t, [8]byte{}, esTag1, "ES messages must have non-zero tag")
+
+	// Bob sends ES to Alice
+	bobToAliceHash := types.SHA256(alice.ourPublicKey[:])
+	esPayload2 := []byte("ES from Bob after NSR")
+	esMsg2, err := bob.EncryptGarlicMessage(bobToAliceHash, alice.ourPublicKey, esPayload2)
+	require.NoError(t, err)
+
+	decES2, esTag2, _, err := alice.DecryptGarlicMessage(esMsg2)
+	require.NoError(t, err, "Alice must decrypt Bob's post-NSR ES message")
+	assert.Equal(t, esPayload2, decES2)
+	assert.NotEqual(t, [8]byte{}, esTag2, "ES messages must have non-zero tag")
+}
+
+// TestEncryptNewSessionReply_UsesReturnedSessionHash verifies that the session
+// hash returned by DecryptGarlicMessage is directly usable with EncryptNewSessionReply,
+// without requiring the responder to independently recompute SHA-256(initiatorPub).
+func TestEncryptNewSessionReply_UsesReturnedSessionHash(t *testing.T) {
+	initiator, responder := createLinkedManagers(t)
+
+	destHash := types.SHA256(responder.ourPublicKey[:])
+
+	encrypted, err := initiator.EncryptGarlicMessage(destHash, responder.ourPublicKey, []byte("ns"))
+	require.NoError(t, err)
+
+	_, _, sessionHash, err := responder.DecryptGarlicMessage(encrypted)
+	require.NoError(t, err)
+	require.NotNil(t, sessionHash)
+
+	// Use the returned hash directly — no manual SHA-256 computation
+	nsrMsg, err := responder.EncryptNewSessionReply(*sessionHash, []byte("nsr"))
+	require.NoError(t, err)
+	assert.NotEmpty(t, nsrMsg)
+}
+
+// TestNSRTag_RegisteredAndConsumedOnReceipt verifies that:
+//   - After sending a New Session, the initiator's nsrTagIndex has one entry.
+//   - After receiving the NSR, the nsrTagIndex entry is consumed.
+//   - The initiator's nsrTag field on the session is cleared.
+func TestNSRTag_RegisteredAndConsumedOnReceipt(t *testing.T) {
+	initiator, responder := createLinkedManagers(t)
+
+	destHash := types.SHA256(responder.ourPublicKey[:])
+
+	// Step 1: Alice sends NS — should register an NSR tag
+	nsMsg, err := initiator.EncryptGarlicMessage(destHash, responder.ourPublicKey, []byte("ns"))
+	require.NoError(t, err)
+
+	initiator.mu.RLock()
+	nsrTagCount := len(initiator.nsrTagIndex)
+	initiator.mu.RUnlock()
+	assert.Equal(t, 1, nsrTagCount, "After sending NS, initiator should have one NSR tag registered")
+
+	// Step 2: Bob processes NS and sends NSR
+	_, _, sessionHash, err := responder.DecryptGarlicMessage(nsMsg)
+	require.NoError(t, err)
+	require.NotNil(t, sessionHash)
+
+	nsrMsg, err := responder.EncryptNewSessionReply(*sessionHash, []byte("nsr"))
+	require.NoError(t, err)
+
+	// Step 3: Alice receives NSR — NSR tag should be consumed
+	_, _, _, err = initiator.DecryptGarlicMessage(nsrMsg)
+	require.NoError(t, err)
+
+	initiator.mu.RLock()
+	nsrTagCountAfter := len(initiator.nsrTagIndex)
+	initiator.mu.RUnlock()
+	assert.Equal(t, 0, nsrTagCountAfter, "After receiving NSR, nsrTagIndex should be empty")
+
+	// Initiator session should also have nsrTag cleared
+	initiator.mu.RLock()
+	session := initiator.sessions[destHash]
+	initiator.mu.RUnlock()
+	require.NotNil(t, session)
+
+	session.mu.Lock()
+	nsrTagPtr := session.nsrTag
+	session.mu.Unlock()
+	assert.Nil(t, nsrTagPtr, "Session nsrTag should be nil after NSR receipt")
+}
+
+// TestNSRKeys_RatchetsUpdatedAfterNSR verifies that the session's ratchet keys
+// change when the NSR is processed (both initiator and responder).
+// This ensures the post-handshake ee DH provides forward secrecy beyond the NS.
+func TestNSRKeys_RatchetsUpdatedAfterNSR(t *testing.T) {
+	initiator, responder := createLinkedManagers(t)
+
+	destHash := types.SHA256(responder.ourPublicKey[:])
+
+	// Send NS
+	nsMsg, err := initiator.EncryptGarlicMessage(destHash, responder.ourPublicKey, []byte("ns"))
+	require.NoError(t, err)
+
+	_, _, sessionHash, err := responder.DecryptGarlicMessage(nsMsg)
+	require.NoError(t, err)
+	require.NotNil(t, sessionHash)
+
+	// Capture responder's pre-NSR send tag for comparison
+	responder.mu.RLock()
+	respSession := responder.sessions[*sessionHash]
+	responder.mu.RUnlock()
+	require.NotNil(t, respSession)
+
+	respSession.mu.Lock()
+	preNSRTagRatchetAddr := respSession.TagRatchet
+	respSession.mu.Unlock()
+
+	// Send NSR
+	nsrMsg, err := responder.EncryptNewSessionReply(*sessionHash, []byte("nsr"))
+	require.NoError(t, err)
+
+	// After NSR, responder's TagRatchet should be a new object (replaced)
+	respSession.mu.Lock()
+	postNSRTagRatchetAddr := respSession.TagRatchet
+	respSession.mu.Unlock()
+	assert.NotSame(t, preNSRTagRatchetAddr, postNSRTagRatchetAddr,
+		"Responder's TagRatchet must be replaced after sending NSR")
+
+	// Initiator receives NSR — its ratchets must also be replaced
+	initiator.mu.RLock()
+	initSession := initiator.sessions[destHash]
+	initiator.mu.RUnlock()
+	require.NotNil(t, initSession)
+
+	initSession.mu.Lock()
+	preNSRInitTagRatchet := initSession.TagRatchet
+	initSession.mu.Unlock()
+
+	_, _, _, err = initiator.DecryptGarlicMessage(nsrMsg)
+	require.NoError(t, err)
+
+	initSession.mu.Lock()
+	postNSRInitTagRatchet := initSession.TagRatchet
+	initSession.mu.Unlock()
+	assert.NotSame(t, preNSRInitTagRatchet, postNSRInitTagRatchet,
+		"Initiator's TagRatchet must be replaced after receiving NSR")
+}
