@@ -37,6 +37,11 @@ type Session struct {
 	consecutiveDHFailures uint32
 	// newEphemeralPub holds the new ephemeral public key for the peer.
 	newEphemeralPub *[32]byte
+	// handshakeState retains intermediate Noise IK state for NSR.
+	// Non-nil when NSR has not yet been sent (responder) or received (initiator).
+	handshakeState *noiseHandshakeState
+	// isInitiator tracks whether we initiated the session (sent NS).
+	isInitiator bool
 }
 
 // createSession initializes a new Session with ratchet state from derived keys.

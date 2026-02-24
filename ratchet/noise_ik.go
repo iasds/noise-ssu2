@@ -178,23 +178,24 @@ func hmacSHA256(key, data []byte) [32]byte {
 // with Elligator2-encoded ephemeral keys (elg2) and hashed static pre-message (hs2).
 //
 // The initiator calls this to encrypt a payload for a known responder. Returns
-// the wire-format message and session keys derived from the handshake chaining key.
+// the wire-format message, session keys derived from the handshake chaining key,
+// and the handshake state retained for processing the New Session Reply (message 2).
 func writeNoiseIKMessage1(
 	ourStaticPriv, ourStaticPub, responderStaticPub [32]byte,
 	payload []byte,
-) ([]byte, *sessionKeys, error) {
+) ([]byte, *sessionKeys, *noiseHandshakeState, error) {
 	ns := initNoiseIK(responderStaticPub)
 
 	// Token e: Generate Elligator2-representable ephemeral key pair
 	ephPub, ephPrivBytes, err := elligator2.GenerateKeyPair()
 	if err != nil {
-		return nil, nil, oops.Wrapf(err, "failed to generate Elligator2 ephemeral key pair")
+		return nil, nil, nil, oops.Wrapf(err, "failed to generate Elligator2 ephemeral key pair")
 	}
 
 	// Elligator2-encode the ephemeral public key for the wire
 	ephEncoded, err := elligator2.Encode(ephPub)
 	if err != nil {
-		return nil, nil, oops.Wrapf(err, "failed to Elligator2-encode ephemeral public key")
+		return nil, nil, nil, oops.Wrapf(err, "failed to Elligator2-encode ephemeral public key")
 	}
 
 	// MixHash the encoded (wire) representation, not the raw key
@@ -204,28 +205,28 @@ func writeNoiseIKMessage1(
 	ephPriv := x25519.PrivateKey(ephPrivBytes)
 	sharedES, err := ephPriv.SharedKey(x25519.PublicKey(responderStaticPub[:]))
 	if err != nil {
-		return nil, nil, oops.Wrapf(err, "failed to compute DH(e, rs)")
+		return nil, nil, nil, oops.Wrapf(err, "failed to compute DH(e, rs)")
 	}
 	ns.mixKey(sharedES)
 
 	// Token s: Encrypt our static public key under the current key
 	encryptedStatic, err := ns.encryptAndHash(ourStaticPub[:])
 	if err != nil {
-		return nil, nil, oops.Wrapf(err, "failed to encrypt static public key")
+		return nil, nil, nil, oops.Wrapf(err, "failed to encrypt static public key")
 	}
 
 	// Token ss: DH(our_static_private, responder_static)
 	ourPriv := x25519.PrivateKey(ourStaticPriv[:])
 	sharedSS, err := ourPriv.SharedKey(x25519.PublicKey(responderStaticPub[:]))
 	if err != nil {
-		return nil, nil, oops.Wrapf(err, "failed to compute DH(s, rs)")
+		return nil, nil, nil, oops.Wrapf(err, "failed to compute DH(s, rs)")
 	}
 	ns.mixKey(sharedSS)
 
 	// Encrypt the garlic payload
 	encryptedPayload, err := ns.encryptAndHash(payload)
 	if err != nil {
-		return nil, nil, oops.Wrapf(err, "failed to encrypt payload")
+		return nil, nil, nil, oops.Wrapf(err, "failed to encrypt payload")
 	}
 
 	// Construct wire message: [elligator2(e)(32)] + [encrypted_s(48)] + [encrypted_payload(N+16)]
@@ -234,26 +235,34 @@ func writeNoiseIKMessage1(
 	msg = append(msg, encryptedStatic...)
 	msg = append(msg, encryptedPayload...)
 
+	// Retain handshake state for New Session Reply (message 2)
+	hs := &noiseHandshakeState{
+		h:            ns.h,
+		ck:           ns.ck,
+		localEphPriv: ephPrivBytes,
+	}
+
 	// Derive session keys from the final chaining key
 	keys, err := deriveSessionKeysFromSecret(ns.ck[:])
 	if err != nil {
-		return nil, nil, oops.Wrapf(err, "failed to derive session keys from handshake")
+		return nil, nil, nil, oops.Wrapf(err, "failed to derive session keys from handshake")
 	}
 
-	return msg, keys, nil
+	return msg, keys, hs, nil
 }
 
 // readNoiseIKMessage1 processes a received New Session message using the Noise
 // IK pattern. The responder calls this to decrypt the initiator's payload and
 // recover the initiator's static public key.
 //
-// Returns the decrypted payload, initiator's static public key, and session keys.
+// Returns the decrypted payload, initiator's static public key, session keys,
+// and the handshake state retained for constructing the New Session Reply.
 func readNoiseIKMessage1(
 	ourStaticPriv, ourStaticPub [32]byte,
 	message []byte,
-) ([]byte, [32]byte, *sessionKeys, error) {
+) ([]byte, [32]byte, *sessionKeys, *noiseHandshakeState, error) {
 	if len(message) < noiseIKMinMessageSize {
-		return nil, [32]byte{}, nil, oops.Errorf(
+		return nil, [32]byte{}, nil, nil, oops.Errorf(
 			"new session message too short: %d bytes (minimum %d)", len(message), noiseIKMinMessageSize)
 	}
 
@@ -266,14 +275,16 @@ func readNoiseIKMessage1(
 	// Decode Elligator2 representation to get the actual X25519 public key
 	ephPubBytes, err := elligator2.Decode(ephEncoded)
 	if err != nil {
-		return nil, [32]byte{}, nil, oops.Wrapf(err, "failed to decode Elligator2 ephemeral key")
+		return nil, [32]byte{}, nil, nil, oops.Wrapf(err, "failed to decode Elligator2 ephemeral key")
 	}
+	var initiatorEphPub [32]byte
+	copy(initiatorEphPub[:], ephPubBytes)
 
 	// Token es: DH(our_static_private, ephemeral)
 	ourPriv := x25519.PrivateKey(ourStaticPriv[:])
 	sharedES, err := ourPriv.SharedKey(x25519.PublicKey(ephPubBytes))
 	if err != nil {
-		return nil, [32]byte{}, nil, oops.Wrapf(err, "failed to compute DH(s, re)")
+		return nil, [32]byte{}, nil, nil, oops.Wrapf(err, "failed to compute DH(s, re)")
 	}
 	ns.mixKey(sharedES)
 
@@ -281,7 +292,7 @@ func readNoiseIKMessage1(
 	encryptedStatic := message[32 : 32+noiseEncryptedStaticSize]
 	initiatorStaticBytes, err := ns.decryptAndHash(encryptedStatic)
 	if err != nil {
-		return nil, [32]byte{}, nil, oops.Wrapf(err, "failed to decrypt initiator static key")
+		return nil, [32]byte{}, nil, nil, oops.Wrapf(err, "failed to decrypt initiator static key")
 	}
 	var initiatorStaticPub [32]byte
 	copy(initiatorStaticPub[:], initiatorStaticBytes)
@@ -289,7 +300,7 @@ func readNoiseIKMessage1(
 	// Token ss: DH(our_static_private, initiator_static)
 	sharedSS, err := ourPriv.SharedKey(x25519.PublicKey(initiatorStaticPub[:]))
 	if err != nil {
-		return nil, [32]byte{}, nil, oops.Wrapf(err, "failed to compute DH(s, rs)")
+		return nil, [32]byte{}, nil, nil, oops.Wrapf(err, "failed to compute DH(s, rs)")
 	}
 	ns.mixKey(sharedSS)
 
@@ -297,14 +308,22 @@ func readNoiseIKMessage1(
 	encryptedPayload := message[32+noiseEncryptedStaticSize:]
 	payload, err := ns.decryptAndHash(encryptedPayload)
 	if err != nil {
-		return nil, [32]byte{}, nil, oops.Wrapf(err, "failed to decrypt payload")
+		return nil, [32]byte{}, nil, nil, oops.Wrapf(err, "failed to decrypt payload")
+	}
+
+	// Retain handshake state for New Session Reply (message 2)
+	hs := &noiseHandshakeState{
+		h:               ns.h,
+		ck:              ns.ck,
+		remoteEphPub:    initiatorEphPub,
+		remoteStaticPub: initiatorStaticPub,
 	}
 
 	// Derive session keys from the final chaining key
 	keys, err := deriveSessionKeysFromSecret(ns.ck[:])
 	if err != nil {
-		return nil, [32]byte{}, nil, oops.Wrapf(err, "failed to derive session keys from handshake")
+		return nil, [32]byte{}, nil, nil, oops.Wrapf(err, "failed to derive session keys from handshake")
 	}
 
-	return payload, initiatorStaticPub, keys, nil
+	return payload, initiatorStaticPub, keys, hs, nil
 }

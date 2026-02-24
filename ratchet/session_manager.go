@@ -13,8 +13,9 @@ import (
 	"github.com/samber/oops"
 )
 
-// Compile-time interface check.
+// Compile-time interface checks.
 var _ GarlicSessionManager = (*SessionManager)(nil)
+var _ TagResolver = (*SessionManager)(nil)
 
 const (
 	// MaxGarlicSessions is the upper bound on active garlic sessions.
@@ -108,14 +109,14 @@ func (sm *SessionManager) encryptNewSession(
 	destinationHash, destinationPubKey [32]byte,
 	plaintextGarlic []byte,
 ) ([]byte, error) {
-	msg, keys, err := writeNoiseIKMessage1(
+	msg, keys, hs, err := writeNoiseIKMessage1(
 		sm.ourPrivateKey, sm.ourPublicKey, destinationPubKey, plaintextGarlic,
 	)
 	if err != nil {
 		return nil, oops.Wrapf(err, "failed to construct Noise IK New Session message")
 	}
 
-	if err := sm.storeNewSessionState(destinationHash, destinationPubKey, keys); err != nil {
+	if err := sm.storeNewSessionState(destinationHash, destinationPubKey, keys, hs, true); err != nil {
 		return nil, err
 	}
 
@@ -126,11 +127,16 @@ func (sm *SessionManager) encryptNewSession(
 func (sm *SessionManager) storeNewSessionState(
 	destinationHash, destinationPubKey [32]byte,
 	keys *sessionKeys,
+	hs *noiseHandshakeState,
+	isInitiator bool,
 ) error {
-	session, err := createSession(destinationPubKey, keys, sm.ourPrivateKey, true)
+	session, err := createSession(destinationPubKey, keys, sm.ourPrivateKey, isInitiator)
 	if err != nil {
 		return oops.Wrapf(err, "failed to create outbound session")
 	}
+
+	session.handshakeState = hs
+	session.isInitiator = isInitiator
 
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -190,7 +196,7 @@ func (sm *SessionManager) DecryptGarlicMessage(encryptedGarlic []byte) ([]byte, 
 	copy(sessionTag[:], encryptedGarlic[0:8])
 
 	sm.mu.Lock()
-	session := sm.findSessionByTag(sessionTag)
+	session := sm.lookupSessionByTag(sessionTag)
 	sm.mu.Unlock()
 
 	if session != nil {
@@ -207,14 +213,14 @@ func (sm *SessionManager) DecryptGarlicMessage(encryptedGarlic []byte) ([]byte, 
 
 // decryptNewSession decrypts a New Session message using the Noise IK handshake.
 func (sm *SessionManager) decryptNewSession(msg []byte) ([]byte, error) {
-	plaintext, initiatorStaticPub, keys, err := readNoiseIKMessage1(
+	plaintext, initiatorStaticPub, keys, hs, err := readNoiseIKMessage1(
 		sm.ourPrivateKey, sm.ourPublicKey, msg,
 	)
 	if err != nil {
 		return nil, oops.Wrapf(err, "failed to process Noise IK New Session message")
 	}
 
-	if err := sm.initializeInboundRatchetState(initiatorStaticPub, keys); err != nil {
+	if err := sm.initializeInboundRatchetState(initiatorStaticPub, keys, hs); err != nil {
 		return nil, err
 	}
 
@@ -222,16 +228,25 @@ func (sm *SessionManager) decryptNewSession(msg []byte) ([]byte, error) {
 }
 
 // initializeInboundRatchetState creates and stores ratchet state for incoming sessions.
-func (sm *SessionManager) initializeInboundRatchetState(remotePubKey [32]byte, keys *sessionKeys) error {
+func (sm *SessionManager) initializeInboundRatchetState(remotePubKey [32]byte, keys *sessionKeys, hs *noiseHandshakeState) error {
 	session, err := createSession(remotePubKey, keys, sm.ourPrivateKey, false)
 	if err != nil {
 		return oops.Wrapf(err, "failed to create inbound session")
 	}
 
+	session.handshakeState = hs
+	session.isInitiator = false
+
 	sessionHash := types.SHA256(remotePubKey[:])
 
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
+
+	// Enforce MaxGarlicSessions to prevent memory exhaustion from malicious peers
+	// sending many New Session messages with different ephemeral keys.
+	if len(sm.sessions) >= MaxGarlicSessions {
+		sm.evictLRUSessionLocked()
+	}
 
 	sm.sessions[sessionHash] = session
 
@@ -246,6 +261,52 @@ func (sm *SessionManager) initializeInboundRatchetState(remotePubKey [32]byte, k
 	}).Debug("Inbound ratchet session stored")
 
 	return nil
+}
+
+// EncryptNewSessionReply constructs a New Session Reply (NSR) for a session
+// that was created by receiving a New Session message. The responder calls this
+// to send a reply back to the initiator, completing the Noise IK handshake.
+//
+// sessionHash identifies the session (typically Hash(remotePubKey)).
+// payload is the reply plaintext (e.g., garlic clove response).
+// Returns the full NSR wire message.
+func (sm *SessionManager) EncryptNewSessionReply(
+	sessionHash [32]byte,
+	payload []byte,
+) ([]byte, error) {
+	sm.mu.RLock()
+	session, exists := sm.sessions[sessionHash]
+	sm.mu.RUnlock()
+
+	if !exists {
+		return nil, oops.Errorf("no session found for hash %x", sessionHash[:8])
+	}
+
+	session.mu.Lock()
+	defer session.mu.Unlock()
+
+	if session.handshakeState == nil {
+		return nil, oops.Errorf("session has no pending handshake state for NSR")
+	}
+	if session.isInitiator {
+		return nil, oops.Errorf("only the responder can send a New Session Reply")
+	}
+
+	_, wireMsg, _, err := writeNoiseIKMessage2(session.handshakeState, payload)
+	if err != nil {
+		return nil, oops.Wrapf(err, "failed to construct New Session Reply")
+	}
+
+	// Clear handshake state after sending NSR
+	session.handshakeState = nil
+	session.LastUsed = time.Now()
+
+	log.WithFields(map[string]interface{}{
+		"at":           "EncryptNewSessionReply",
+		"payload_size": len(payload),
+	}).Debug("New Session Reply sent")
+
+	return wireMsg, nil
 }
 
 // decryptExistingSession decrypts an Existing Session message using ratchet state.
@@ -319,9 +380,18 @@ func (sm *SessionManager) ProcessIncomingDHRatchet(sessionTag [8]byte, newRemote
 	return nil
 }
 
-// findSessionByTag searches for a session that expects the given tag.
+// FindSessionByTag checks if a session tag matches a known session.
+// Returns true if the tag was found (and consumed), false otherwise.
+// This implements the TagResolver interface for independent tag-only resolution.
+func (sm *SessionManager) FindSessionByTag(tag [8]byte) bool {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	return sm.lookupSessionByTag(tag) != nil
+}
+
+// lookupSessionByTag searches for a session that expects the given tag.
 // Must be called with sm.mu held for writing.
-func (sm *SessionManager) findSessionByTag(tag [8]byte) *Session {
+func (sm *SessionManager) lookupSessionByTag(tag [8]byte) *Session {
 	session, exists := sm.tagIndex[tag]
 	if !exists {
 		return nil

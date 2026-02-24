@@ -429,13 +429,56 @@ func TestLRUEviction(t *testing.T) {
 	_, _ = rand.Read(dh[:])
 	_, _ = rand.Read(dp[:])
 
-	err := sm.storeNewSessionState(dh, dp, keys)
+	err := sm.storeNewSessionState(dh, dp, keys, nil, true)
 	require.NoError(t, err)
 
 	sm.mu.RLock()
 	count = len(sm.sessions)
 	sm.mu.RUnlock()
 	assert.LessOrEqual(t, count, MaxGarlicSessions+1)
+}
+
+func TestInboundSessionEnforcesMaxGarlicSessions(t *testing.T) {
+	sm := createTestSessionManager(t)
+
+	// Fill sessions to exactly MaxGarlicSessions with stale timestamps
+	// so the eviction picks the oldest.
+	sm.mu.Lock()
+	for i := 0; i < MaxGarlicSessions; i++ {
+		var hash [32]byte
+		hash[0] = byte(i)
+		hash[1] = byte(i >> 8)
+		hash[2] = byte(i >> 16)
+
+		sm.sessions[hash] = &Session{
+			LastUsed: time.Now().Add(time.Duration(-i) * time.Second),
+		}
+	}
+	sm.mu.Unlock()
+
+	sm.mu.RLock()
+	countBefore := len(sm.sessions)
+	sm.mu.RUnlock()
+	assert.Equal(t, MaxGarlicSessions, countBefore)
+
+	// Simulate an inbound session being created via initializeInboundRatchetState.
+	// This should evict one session before storing the new one.
+	keys := &sessionKeys{}
+	_, _ = rand.Read(keys.rootKey[:])
+	_, _ = rand.Read(keys.tagKey[:])
+	var remotePub [32]byte
+	_, _ = rand.Read(remotePub[:])
+
+	err := sm.initializeInboundRatchetState(remotePub, keys, nil)
+	require.NoError(t, err)
+
+	sm.mu.RLock()
+	countAfter := len(sm.sessions)
+	sm.mu.RUnlock()
+
+	// After eviction + adding the new inbound session, count should stay at MaxGarlicSessions.
+	assert.Equal(t, MaxGarlicSessions, countAfter,
+		"inbound path should enforce MaxGarlicSessions by evicting before storing")
 }
 
 // ============================================================================
@@ -740,6 +783,92 @@ func TestSessionManager_ImplementsGarlicSessionManager(t *testing.T) {
 	// is in session_manager.go. This test verifies at runtime.
 	var iface GarlicSessionManager = createTestSessionManager(t)
 	assert.NotNil(t, iface)
+}
+
+// ============================================================================
+// TagResolver Interface
+// ============================================================================
+
+func TestFindSessionByTagReturnsTrue(t *testing.T) {
+	sender, receiver := createLinkedManagers(t)
+
+	var destHash [32]byte
+	copy(destHash[:], receiver.ourPublicKey[:])
+
+	// Establish a session so the receiver has tags in its index.
+	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("setup"))
+	require.NoError(t, err)
+	_, _, err = receiver.DecryptGarlicMessage(enc)
+	require.NoError(t, err)
+
+	// Grab a pending tag from the receiver's tag index.
+	receiver.mu.RLock()
+	var knownTag [8]byte
+	found := false
+	for tag := range receiver.tagIndex {
+		knownTag = tag
+		found = true
+		break
+	}
+	receiver.mu.RUnlock()
+	require.True(t, found, "receiver should have tags in its index after session setup")
+
+	// FindSessionByTag should return true and consume the tag.
+	result := receiver.FindSessionByTag(knownTag)
+	assert.True(t, result, "FindSessionByTag should return true for a known tag")
+
+	// Tag should be consumed — looking it up again returns false.
+	result = receiver.FindSessionByTag(knownTag)
+	assert.False(t, result, "FindSessionByTag should return false for a consumed tag")
+}
+
+func TestFindSessionByTagReturnsFalseForUnknown(t *testing.T) {
+	sm := createTestSessionManager(t)
+
+	var unknownTag [8]byte
+	unknownTag[0] = 0xFF
+	unknownTag[7] = 0xAB
+
+	result := sm.FindSessionByTag(unknownTag)
+	assert.False(t, result, "FindSessionByTag should return false for unknown tags")
+}
+
+func TestFindSessionByTagReturnsFalseForExpiredSession(t *testing.T) {
+	sender, receiver := createLinkedManagers(t)
+	receiver.sessionTimeout = 1 * time.Millisecond // very short timeout
+
+	var destHash [32]byte
+	copy(destHash[:], receiver.ourPublicKey[:])
+
+	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("expire me"))
+	require.NoError(t, err)
+	_, _, err = receiver.DecryptGarlicMessage(enc)
+	require.NoError(t, err)
+
+	// Grab a pending tag.
+	receiver.mu.RLock()
+	var tag [8]byte
+	found := false
+	for t := range receiver.tagIndex {
+		tag = t
+		found = true
+		break
+	}
+	receiver.mu.RUnlock()
+	require.True(t, found)
+
+	// Wait for the session to expire.
+	time.Sleep(5 * time.Millisecond)
+
+	result := receiver.FindSessionByTag(tag)
+	assert.False(t, result, "FindSessionByTag should return false for expired session tags")
+}
+
+func TestTagResolverInterfaceSatisfied(t *testing.T) {
+	sm := createTestSessionManager(t)
+	// Verify SessionManager satisfies TagResolver at runtime too.
+	var resolver TagResolver = sm
+	assert.NotNil(t, resolver)
 }
 
 // ============================================================================

@@ -13,6 +13,12 @@ import (
 // Noise IK Handshake State
 // ============================================================================
 
+// hashPubKey computes SHA-256(pubKey) to create a session hash, matching
+// how session_manager.go uses types.SHA256 for session lookup keys.
+func hashPubKey(pub [32]byte) [32]byte {
+	return sha256.Sum256(pub[:])
+}
+
 func TestNoiseIKState_MixHash(t *testing.T) {
 	var respPub [32]byte
 	_, err := rand.Read(respPub[:])
@@ -150,20 +156,22 @@ func TestWriteReadNoiseIKMessage1_Roundtrip(t *testing.T) {
 
 	plaintext := []byte("hello through Noise IK!")
 
-	msg, iKeys, err := writeNoiseIKMessage1(
+	msg, iKeys, iHS, err := writeNoiseIKMessage1(
 		initiator.ourPrivateKey, initiator.ourPublicKey,
 		responder.ourPublicKey, plaintext,
 	)
 	require.NoError(t, err)
 	require.NotNil(t, iKeys)
+	require.NotNil(t, iHS, "Initiator handshake state should be retained")
 
 	// Verify wire format size: 32 (e) + 48 (s) + len(plaintext) + 16 (payload tag)
 	expectedSize := 32 + 48 + len(plaintext) + 16
 	assert.Equal(t, expectedSize, len(msg), "Wire message size should match Noise IK format")
 
-	decrypted, initiatorPub, rKeys, err := readNoiseIKMessage1(
+	decrypted, initiatorPub, rKeys, rHS, err := readNoiseIKMessage1(
 		responder.ourPrivateKey, responder.ourPublicKey, msg,
 	)
+	require.NotNil(t, rHS, "Responder handshake state should be retained")
 	require.NoError(t, err)
 	assert.Equal(t, plaintext, decrypted)
 	assert.Equal(t, initiator.ourPublicKey, initiatorPub,
@@ -179,7 +187,7 @@ func TestWriteReadNoiseIKMessage1_EmptyPayload(t *testing.T) {
 	initiator := createTestSessionManager(t)
 	responder := createTestSessionManager(t)
 
-	msg, _, err := writeNoiseIKMessage1(
+	msg, _, _, err := writeNoiseIKMessage1(
 		initiator.ourPrivateKey, initiator.ourPublicKey,
 		responder.ourPublicKey, []byte{},
 	)
@@ -188,7 +196,7 @@ func TestWriteReadNoiseIKMessage1_EmptyPayload(t *testing.T) {
 	// Minimum size: 32 + 48 + 16 = 96 bytes
 	assert.Equal(t, noiseIKMinMessageSize, len(msg))
 
-	decrypted, _, _, err := readNoiseIKMessage1(
+	decrypted, _, _, _, err := readNoiseIKMessage1(
 		responder.ourPrivateKey, responder.ourPublicKey, msg,
 	)
 	require.NoError(t, err)
@@ -203,13 +211,13 @@ func TestWriteReadNoiseIKMessage1_LargePayload(t *testing.T) {
 	_, err := rand.Read(plaintext)
 	require.NoError(t, err)
 
-	msg, _, err := writeNoiseIKMessage1(
+	msg, _, _, err := writeNoiseIKMessage1(
 		initiator.ourPrivateKey, initiator.ourPublicKey,
 		responder.ourPublicKey, plaintext,
 	)
 	require.NoError(t, err)
 
-	decrypted, _, _, err := readNoiseIKMessage1(
+	decrypted, _, _, _, err := readNoiseIKMessage1(
 		responder.ourPrivateKey, responder.ourPublicKey, msg,
 	)
 	require.NoError(t, err)
@@ -223,7 +231,7 @@ func TestReadNoiseIKMessage1_TooShort(t *testing.T) {
 	_, err = rand.Read(pub[:])
 	require.NoError(t, err)
 
-	_, _, _, err = readNoiseIKMessage1(priv, pub, make([]byte, 50))
+	_, _, _, _, err = readNoiseIKMessage1(priv, pub, make([]byte, 50))
 	assert.Error(t, err, "Should reject messages shorter than minimum size")
 }
 
@@ -233,14 +241,14 @@ func TestReadNoiseIKMessage1_WrongKey(t *testing.T) {
 	wrongRecipient := createTestSessionManager(t)
 
 	plaintext := []byte("not for you")
-	msg, _, err := writeNoiseIKMessage1(
+	msg, _, _, err := writeNoiseIKMessage1(
 		initiator.ourPrivateKey, initiator.ourPublicKey,
 		responder.ourPublicKey, plaintext,
 	)
 	require.NoError(t, err)
 
 	// Wrong recipient should fail to decrypt
-	_, _, _, err = readNoiseIKMessage1(
+	_, _, _, _, err = readNoiseIKMessage1(
 		wrongRecipient.ourPrivateKey, wrongRecipient.ourPublicKey, msg,
 	)
 	assert.Error(t, err, "Wrong recipient should fail to decrypt")
@@ -250,7 +258,7 @@ func TestReadNoiseIKMessage1_TamperedMessage(t *testing.T) {
 	initiator := createTestSessionManager(t)
 	responder := createTestSessionManager(t)
 
-	msg, _, err := writeNoiseIKMessage1(
+	msg, _, _, err := writeNoiseIKMessage1(
 		initiator.ourPrivateKey, initiator.ourPublicKey,
 		responder.ourPublicKey, []byte("secret"),
 	)
@@ -259,7 +267,7 @@ func TestReadNoiseIKMessage1_TamperedMessage(t *testing.T) {
 	// Tamper with the encrypted static section
 	msg[40] ^= 0xFF
 
-	_, _, _, err = readNoiseIKMessage1(
+	_, _, _, _, err = readNoiseIKMessage1(
 		responder.ourPrivateKey, responder.ourPublicKey, msg,
 	)
 	assert.Error(t, err, "Tampered message should fail authentication")
@@ -271,13 +279,13 @@ func TestWriteNoiseIKMessage1_NonDeterministic(t *testing.T) {
 
 	payload := []byte("same payload")
 
-	msg1, _, err := writeNoiseIKMessage1(
+	msg1, _, _, err := writeNoiseIKMessage1(
 		initiator.ourPrivateKey, initiator.ourPublicKey,
 		responder.ourPublicKey, payload,
 	)
 	require.NoError(t, err)
 
-	msg2, _, err := writeNoiseIKMessage1(
+	msg2, _, _, err := writeNoiseIKMessage1(
 		initiator.ourPrivateKey, initiator.ourPublicKey,
 		responder.ourPublicKey, payload,
 	)
@@ -327,4 +335,338 @@ func TestHmacSHA256_KnownOutput(t *testing.T) {
 
 	result3 := hmacSHA256(key, []byte("different data"))
 	assert.NotEqual(t, result1, result3, "Different data should produce different HMAC")
+}
+
+// ============================================================================
+// standardHKDF
+// ============================================================================
+
+func TestStandardHKDF_Deterministic(t *testing.T) {
+	salt := make([]byte, 32)
+	ikm := make([]byte, 32)
+	_, err := rand.Read(salt)
+	require.NoError(t, err)
+	_, err = rand.Read(ikm)
+	require.NoError(t, err)
+
+	out1 := standardHKDF(salt, ikm, []byte("test_info"), 64)
+	out2 := standardHKDF(salt, ikm, []byte("test_info"), 64)
+	assert.Equal(t, out1, out2, "Same inputs should produce identical HKDF output")
+	assert.Equal(t, 64, len(out1))
+}
+
+func TestStandardHKDF_DifferentInputs(t *testing.T) {
+	salt := make([]byte, 32)
+	ikm := make([]byte, 32)
+	_, err := rand.Read(salt)
+	require.NoError(t, err)
+	_, err = rand.Read(ikm)
+	require.NoError(t, err)
+
+	out1 := standardHKDF(salt, ikm, []byte("info_a"), 32)
+	out2 := standardHKDF(salt, ikm, []byte("info_b"), 32)
+	assert.NotEqual(t, out1, out2, "Different info strings should produce different output")
+
+	out3 := standardHKDF(salt, nil, []byte("info_a"), 32)
+	assert.NotEqual(t, out1, out3, "Different IKM should produce different output")
+}
+
+func TestStandardHKDF_VariableLengths(t *testing.T) {
+	salt := make([]byte, 32)
+	_, err := rand.Read(salt)
+	require.NoError(t, err)
+
+	out32 := standardHKDF(salt, nil, []byte("test"), 32)
+	out64 := standardHKDF(salt, nil, []byte("test"), 64)
+	assert.Equal(t, 32, len(out32))
+	assert.Equal(t, 64, len(out64))
+	// First 32 bytes of 64-byte output should match the 32-byte output
+	assert.Equal(t, out32, out64[:32], "HKDF expand should produce consistent prefix")
+}
+
+// ============================================================================
+// NSR Tag Ratchet Derivation
+// ============================================================================
+
+func TestDeriveNSRTagRatchet_BothSidesMatch(t *testing.T) {
+	// Both initiator and responder should derive the same NSR tag ratchet
+	// from the same chain key.
+	var chainKey [32]byte
+	_, err := rand.Read(chainKey[:])
+	require.NoError(t, err)
+
+	tr1, err := deriveNSRTagRatchet(chainKey)
+	require.NoError(t, err)
+	require.NotNil(t, tr1)
+
+	tr2, err := deriveNSRTagRatchet(chainKey)
+	require.NoError(t, err)
+	require.NotNil(t, tr2)
+
+	// Both should generate the same first tag
+	tag1, err := tr1.GenerateNextTag()
+	require.NoError(t, err)
+	tag2, err := tr2.GenerateNextTag()
+	require.NoError(t, err)
+	assert.Equal(t, tag1, tag2, "Same chain key should produce same NSR tags")
+}
+
+func TestDeriveNSRTagRatchet_DifferentChainKeys(t *testing.T) {
+	var ck1, ck2 [32]byte
+	_, err := rand.Read(ck1[:])
+	require.NoError(t, err)
+	_, err = rand.Read(ck2[:])
+	require.NoError(t, err)
+
+	tr1, err := deriveNSRTagRatchet(ck1)
+	require.NoError(t, err)
+	tr2, err := deriveNSRTagRatchet(ck2)
+	require.NoError(t, err)
+
+	tag1, err := tr1.GenerateNextTag()
+	require.NoError(t, err)
+	tag2, err := tr2.GenerateNextTag()
+	require.NoError(t, err)
+	assert.NotEqual(t, tag1, tag2, "Different chain keys should produce different tags")
+}
+
+// ============================================================================
+// NSR Message Round-trip (writeNoiseIKMessage2 / readNoiseIKMessage2)
+// ============================================================================
+
+func TestWriteReadNoiseIKMessage2_Roundtrip(t *testing.T) {
+	initiator := createTestSessionManager(t)
+	responder := createTestSessionManager(t)
+
+	// Step 1: Initiator sends New Session (message 1)
+	nsPayload := []byte("hello from Alice")
+	msg1, _, iHS, err := writeNoiseIKMessage1(
+		initiator.ourPrivateKey, initiator.ourPublicKey,
+		responder.ourPublicKey, nsPayload,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, iHS, "Initiator handshake state should be retained")
+
+	// Step 2: Responder reads New Session and retains handshake state
+
+	_, _, _, rHS, err := readNoiseIKMessage1(
+		responder.ourPrivateKey, responder.ourPublicKey, msg1,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, rHS, "Responder handshake state should be retained")
+
+	// Step 3: Responder writes New Session Reply (message 2)
+	nsrPayload := []byte("hello from Bob")
+	nsrTag, nsrWire, respKeys, err := writeNoiseIKMessage2(rHS, nsrPayload)
+	require.NoError(t, err)
+	require.NotNil(t, respKeys)
+	assert.NotEqual(t, [8]byte{}, nsrTag, "NSR tag should not be zero")
+
+	// Verify wire format: [tag(8)] + [eph(32)] + [mac(16)] + [payload+mac(N+16)]
+	expectedSize := 8 + 32 + 16 + len(nsrPayload) + 16
+	assert.Equal(t, expectedSize, len(nsrWire), "NSR wire message size should match format")
+
+	// Step 4: Initiator reads New Session Reply
+	decrypted, initKeys, err := readNoiseIKMessage2(iHS, initiator.ourPrivateKey, nsrWire)
+	require.NoError(t, err)
+	assert.Equal(t, nsrPayload, decrypted, "Initiator should recover NSR payload")
+
+	// Both sides should derive matching directional keys
+	assert.Equal(t, respKeys.keyAB, initKeys.keyAB, "keyAB should match")
+	assert.Equal(t, respKeys.keyBA, initKeys.keyBA, "keyBA should match")
+	assert.Equal(t, respKeys.chainKey, initKeys.chainKey, "chainKey should match")
+}
+
+func TestWriteReadNoiseIKMessage2_EmptyPayload(t *testing.T) {
+	initiator := createTestSessionManager(t)
+	responder := createTestSessionManager(t)
+
+	msg1, _, iHS, err := writeNoiseIKMessage1(
+		initiator.ourPrivateKey, initiator.ourPublicKey,
+		responder.ourPublicKey, []byte("ns"),
+	)
+	require.NoError(t, err)
+
+	_, _, _, rHS, err := readNoiseIKMessage1(
+		responder.ourPrivateKey, responder.ourPublicKey, msg1,
+	)
+	require.NoError(t, err)
+
+	_, nsrWire, _, err := writeNoiseIKMessage2(rHS, []byte{})
+	require.NoError(t, err)
+
+	// Minimum NSR size: 8 + 32 + 16 + 16 = 72
+	assert.Equal(t, nsrMinMessageSize, len(nsrWire))
+
+	decrypted, _, err := readNoiseIKMessage2(iHS, initiator.ourPrivateKey, nsrWire)
+	require.NoError(t, err)
+	assert.Empty(t, decrypted)
+}
+
+func TestReadNoiseIKMessage2_TooShort(t *testing.T) {
+	var priv [32]byte
+	_, err := rand.Read(priv[:])
+	require.NoError(t, err)
+
+	hs := &noiseHandshakeState{}
+	_, _, err = readNoiseIKMessage2(hs, priv, make([]byte, 50))
+	assert.Error(t, err, "Should reject NSR messages shorter than minimum size")
+}
+
+func TestReadNoiseIKMessage2_TamperedMessage(t *testing.T) {
+	initiator := createTestSessionManager(t)
+	responder := createTestSessionManager(t)
+
+	msg1, _, iHS, err := writeNoiseIKMessage1(
+		initiator.ourPrivateKey, initiator.ourPublicKey,
+		responder.ourPublicKey, []byte("ns"),
+	)
+	require.NoError(t, err)
+
+	_, _, _, rHS, err := readNoiseIKMessage1(
+		responder.ourPrivateKey, responder.ourPublicKey, msg1,
+	)
+	require.NoError(t, err)
+
+	_, nsrWire, _, err := writeNoiseIKMessage2(rHS, []byte("nsr payload"))
+	require.NoError(t, err)
+
+	// Tamper with the key section MAC
+	nsrWire[42] ^= 0xFF
+
+	_, _, err = readNoiseIKMessage2(iHS, initiator.ourPrivateKey, nsrWire)
+	assert.Error(t, err, "Tampered NSR should fail authentication")
+}
+
+func TestWriteNoiseIKMessage2_NonDeterministic(t *testing.T) {
+	initiator := createTestSessionManager(t)
+	responder := createTestSessionManager(t)
+
+	msg1, _, _, err := writeNoiseIKMessage1(
+		initiator.ourPrivateKey, initiator.ourPublicKey,
+		responder.ourPublicKey, []byte("ns"),
+	)
+	require.NoError(t, err)
+
+	_, _, _, rHS, err := readNoiseIKMessage1(
+		responder.ourPrivateKey, responder.ourPublicKey, msg1,
+	)
+	require.NoError(t, err)
+
+	// Write two NSR messages from same state — different ephemeral keys each time
+	_, wire1, _, err := writeNoiseIKMessage2(rHS, []byte("nsr"))
+	require.NoError(t, err)
+	_, wire2, _, err := writeNoiseIKMessage2(rHS, []byte("nsr"))
+	require.NoError(t, err)
+
+	assert.NotEqual(t, wire1, wire2,
+		"Each NSR should use a fresh ephemeral key, producing unique ciphertext")
+}
+
+// ============================================================================
+// NSR Payload Encryption/Decryption
+// ============================================================================
+
+func TestEncryptDecryptNSRPayload_Roundtrip(t *testing.T) {
+	// Create matched states (same h, ck)
+	var h, ck [32]byte
+	_, err := rand.Read(h[:])
+	require.NoError(t, err)
+	_, err = rand.Read(ck[:])
+	require.NoError(t, err)
+
+	// Encryption state
+	encNS := &noiseIKState{h: h, ck: ck}
+	payload := []byte("garlic clove response data")
+	encrypted, eKeys, err := encryptNSRPayload(encNS, payload)
+	require.NoError(t, err)
+	require.NotNil(t, eKeys)
+	assert.Equal(t, len(payload)+16, len(encrypted), "Encrypted output includes 16-byte tag")
+
+	// Decryption state (same h, ck)
+	decNS := &noiseIKState{h: h, ck: ck}
+	decrypted, dKeys, err := decryptNSRPayload(decNS, encrypted)
+	require.NoError(t, err)
+	assert.Equal(t, payload, decrypted)
+
+	assert.Equal(t, eKeys.keyAB, dKeys.keyAB, "AB keys should match")
+	assert.Equal(t, eKeys.keyBA, dKeys.keyBA, "BA keys should match")
+}
+
+// ============================================================================
+// SessionManager NSR Integration
+// ============================================================================
+
+func TestSessionManager_EncryptNewSessionReply(t *testing.T) {
+	initiator := createTestSessionManager(t)
+	responder := createTestSessionManager(t)
+
+	// Send NS from initiator → responder
+	nsPayload := []byte("initial garlic clove")
+	encrypted, err := initiator.EncryptGarlicMessage(
+		hashPubKey(responder.ourPublicKey), responder.ourPublicKey, nsPayload,
+	)
+	require.NoError(t, err)
+
+	// Responder decrypts NS
+	decrypted, _, err := responder.DecryptGarlicMessage(encrypted)
+	require.NoError(t, err)
+	assert.Equal(t, nsPayload, decrypted)
+
+	// Responder sends NSR
+	sessionHash := hashPubKey(initiator.ourPublicKey)
+	nsrPayload := []byte("reply garlic clove")
+	nsrMsg, err := responder.EncryptNewSessionReply(sessionHash, nsrPayload)
+	require.NoError(t, err)
+	require.NotNil(t, nsrMsg)
+	assert.GreaterOrEqual(t, len(nsrMsg), nsrMinMessageSize)
+}
+
+func TestSessionManager_EncryptNewSessionReply_NoSession(t *testing.T) {
+	sm := createTestSessionManager(t)
+	var fakeHash [32]byte
+	_, err := rand.Read(fakeHash[:])
+	require.NoError(t, err)
+
+	_, err = sm.EncryptNewSessionReply(fakeHash, []byte("payload"))
+	assert.Error(t, err, "Should fail when no session exists")
+}
+
+func TestSessionManager_EncryptNewSessionReply_InitiatorCantSendNSR(t *testing.T) {
+	initiator := createTestSessionManager(t)
+	responder := createTestSessionManager(t)
+
+	// Create a session as initiator
+	_, err := initiator.EncryptGarlicMessage(
+		hashPubKey(responder.ourPublicKey), responder.ourPublicKey, []byte("hello"),
+	)
+	require.NoError(t, err)
+
+	// Initiator should NOT be able to send NSR
+	_, err = initiator.EncryptNewSessionReply(hashPubKey(responder.ourPublicKey), []byte("nsr"))
+	assert.Error(t, err, "Initiator should not be able to send NSR")
+}
+
+func TestSessionManager_EncryptNewSessionReply_ClearsHandshakeState(t *testing.T) {
+	initiator := createTestSessionManager(t)
+	responder := createTestSessionManager(t)
+
+	// Send NS from initiator → responder
+	encrypted, err := initiator.EncryptGarlicMessage(
+		hashPubKey(responder.ourPublicKey), responder.ourPublicKey, []byte("ns"),
+	)
+	require.NoError(t, err)
+
+	_, _, err = responder.DecryptGarlicMessage(encrypted)
+	require.NoError(t, err)
+
+	sessionHash := hashPubKey(initiator.ourPublicKey)
+
+	// First NSR should succeed
+	_, err = responder.EncryptNewSessionReply(sessionHash, []byte("nsr1"))
+	require.NoError(t, err)
+
+	// Second NSR should fail (handshake state cleared)
+	_, err = responder.EncryptNewSessionReply(sessionHash, []byte("nsr2"))
+	assert.Error(t, err, "Second NSR should fail after handshake state is cleared")
 }
