@@ -4,6 +4,9 @@ import (
 	"github.com/samber/oops"
 )
 
+// Compile-time interface check: ModifierChain must implement HandshakeModifier.
+var _ HandshakeModifier = (*ModifierChain)(nil)
+
 // ModifierChain represents a chain of HandshakeModifier instances that are
 // applied in sequence. The chain ensures that modifiers are applied in the
 // correct order and provides error handling for the entire chain.

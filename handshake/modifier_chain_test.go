@@ -2,6 +2,7 @@ package handshake
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -183,7 +184,7 @@ func TestModifierChain_ModifyOutbound(t *testing.T) {
 			t.Errorf("ModifyOutbound() result = %v, want nil", result)
 		} // Check error message contains basic context
 		errStr := err.Error()
-		if !contains(errStr, "modifier chain outbound processing failed") {
+		if !strings.Contains(errStr, "modifier chain outbound processing failed") {
 			t.Errorf("Error missing expected message: %v", errStr)
 		}
 	})
@@ -225,7 +226,7 @@ func TestModifierChain_ModifyOutbound(t *testing.T) {
 
 		// Check error message contains basic context
 		errStr := err.Error()
-		if !contains(errStr, "modifier chain outbound processing failed") {
+		if !strings.Contains(errStr, "modifier chain outbound processing failed") {
 			t.Errorf("Error missing expected message: %v", errStr)
 		}
 	})
@@ -330,7 +331,7 @@ func TestModifierChain_ModifyInbound(t *testing.T) {
 
 		// Check error message contains basic context
 		errStr := err.Error()
-		if !contains(errStr, "modifier chain inbound processing failed") {
+		if !strings.Contains(errStr, "modifier chain inbound processing failed") {
 			t.Errorf("Error missing expected message: %v", errStr)
 		}
 	})
@@ -402,16 +403,6 @@ func TestModifierChain_RoundTrip(t *testing.T) {
 	if string(recovered) != string(originalData) {
 		t.Errorf("Round-trip failed: got %v, want %v", string(recovered), string(originalData))
 	}
-}
-
-// Helper function to check if a string contains a substring
-func contains(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }
 
 func TestModifierChaining(t *testing.T) {

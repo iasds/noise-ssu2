@@ -1,6 +1,7 @@
 package handshake
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -30,7 +31,7 @@ func TestPaddingModifier(t *testing.T) {
 			t.Error("NewPaddingModifier() expected error for negative minimum")
 		}
 
-		if !contains(err.Error(), "minimum padding cannot be negative") {
+		if !strings.Contains(err.Error(), "minimum padding cannot be negative") {
 			t.Errorf("Error message = %v, want minimum padding error", err.Error())
 		}
 	})
@@ -41,7 +42,7 @@ func TestPaddingModifier(t *testing.T) {
 			t.Error("NewPaddingModifier() expected error for max < min")
 		}
 
-		if !contains(err.Error(), "maximum padding cannot be less than minimum padding") {
+		if !strings.Contains(err.Error(), "maximum padding cannot be less than minimum padding") {
 			t.Errorf("Error message = %v, want max < min error", err.Error())
 		}
 	})
@@ -95,6 +96,80 @@ func TestPaddingModifier(t *testing.T) {
 		if string(result) != string(testData) {
 			t.Errorf("No padding should leave data unchanged")
 		}
+
+		// Also test ModifyInbound returns data unchanged (regression: asymmetry bug)
+		inbound, err := modifier.ModifyInbound(PhaseExchange, testData)
+		if err != nil {
+			t.Errorf("ModifyInbound() error = %v", err)
+		}
+
+		if string(inbound) != string(testData) {
+			t.Errorf("No padding inbound should leave data unchanged, got %v", string(inbound))
+		}
+	})
+
+	t.Run("No padding configuration round-trip", func(t *testing.T) {
+		modifier, err := NewPaddingModifier("no-padding-roundtrip", 0, 0)
+		if err != nil {
+			t.Errorf("NewPaddingModifier() error = %v", err)
+		}
+
+		testData := []byte("round trip with zero padding")
+
+		outbound, err := modifier.ModifyOutbound(PhaseInitial, testData)
+		if err != nil {
+			t.Errorf("ModifyOutbound() error = %v", err)
+		}
+
+		recovered, err := modifier.ModifyInbound(PhaseInitial, outbound)
+		if err != nil {
+			t.Errorf("ModifyInbound() error = %v", err)
+		}
+
+		if string(recovered) != string(testData) {
+			t.Errorf("Zero-padding round-trip failed: got %q, want %q", string(recovered), string(testData))
+		}
+	})
+
+	t.Run("Random padding size varies within range", func(t *testing.T) {
+		modifier, err := NewPaddingModifier("random-range", 5, 20)
+		if err != nil {
+			t.Fatalf("NewPaddingModifier() error = %v", err)
+		}
+
+		testData := []byte("fixed input data")
+		sizes := make(map[int]bool)
+
+		// Run multiple times to verify randomness (probabilistic test)
+		for i := 0; i < 100; i++ {
+			padded, err := modifier.ModifyOutbound(PhaseInitial, testData)
+			if err != nil {
+				t.Fatalf("ModifyOutbound() error = %v", err)
+			}
+
+			paddedLen := len(padded) - 4 - len(testData) // subtract length prefix and data
+			sizes[paddedLen] = true
+
+			// Verify padding is within bounds
+			if paddedLen < 5 || paddedLen > 20 {
+				t.Errorf("Padding size %d outside range [5, 20]", paddedLen)
+			}
+
+			// Verify round-trip still works
+			recovered, err := modifier.ModifyInbound(PhaseInitial, padded)
+			if err != nil {
+				t.Fatalf("ModifyInbound() error = %v", err)
+			}
+			if string(recovered) != string(testData) {
+				t.Errorf("Round-trip failed with random padding")
+			}
+		}
+
+		// With 100 iterations over a range of 16 possible sizes,
+		// we should see at least 2 distinct sizes
+		if len(sizes) < 2 {
+			t.Errorf("Expected multiple distinct padding sizes over 100 iterations, got %d", len(sizes))
+		}
 	})
 
 	t.Run("Invalid padded data - too short", func(t *testing.T) {
@@ -111,7 +186,7 @@ func TestPaddingModifier(t *testing.T) {
 			t.Error("ModifyInbound() expected error for short data")
 		}
 
-		if !contains(err.Error(), "padded data too short") {
+		if !strings.Contains(err.Error(), "padded data too short") {
 			t.Errorf("Error message = %v, want short data error", err.Error())
 		}
 	})
@@ -130,7 +205,7 @@ func TestPaddingModifier(t *testing.T) {
 			t.Error("ModifyInbound() expected error for invalid length")
 		}
 
-		if !contains(err.Error(), "invalid original length") {
+		if !strings.Contains(err.Error(), "invalid original length") {
 			t.Errorf("Error message = %v, want invalid length error", err.Error())
 		}
 	})

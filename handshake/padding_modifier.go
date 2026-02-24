@@ -1,6 +1,10 @@
 package handshake
 
 import (
+	"crypto/rand"
+	"encoding/binary"
+	"math/big"
+
 	"github.com/samber/oops"
 )
 
@@ -47,29 +51,39 @@ func (pm *PaddingModifier) ModifyOutbound(phase HandshakePhase, data []byte) ([]
 		return data, nil // No padding configured
 	}
 
-	// Calculate padding size (simplified to use minPadding for deterministic testing)
+	// Calculate padding size using crypto/rand for traffic analysis resistance
 	paddingSize := pm.minPadding
 	if pm.maxPadding > pm.minPadding {
-		// In real implementation, this would be random between min and max
-		paddingSize = pm.minPadding + ((len(data) * 7) % (pm.maxPadding - pm.minPadding + 1))
+		paddingRange := pm.maxPadding - pm.minPadding + 1
+		n, err := rand.Int(rand.Reader, big.NewInt(int64(paddingRange)))
+		if err != nil {
+			return nil, oops.
+				Code("PADDING_RANDOM_ERROR").
+				In("handshake").
+				With("modifier_name", pm.name).
+				Wrapf(err, "failed to generate random padding size")
+		}
+		paddingSize = pm.minPadding + int(n.Int64())
 	}
 
 	// Create result with length prefix, original data, and padding
 	result := make([]byte, 4+len(data)+paddingSize)
 
 	// Write original length as 4-byte big-endian
-	originalLen := len(data)
-	result[0] = byte(originalLen >> 24)
-	result[1] = byte(originalLen >> 16)
-	result[2] = byte(originalLen >> 8)
-	result[3] = byte(originalLen)
+	binary.BigEndian.PutUint32(result[:4], uint32(len(data)))
 
 	// Copy original data
 	copy(result[4:4+len(data)], data)
 
-	// Add deterministic padding (in real implementation, this would be random)
-	for i := 0; i < paddingSize; i++ {
-		result[4+len(data)+i] = byte((i + len(data)) % 256)
+	// Fill padding with cryptographically random bytes
+	if paddingSize > 0 {
+		if _, err := rand.Read(result[4+len(data):]); err != nil {
+			return nil, oops.
+				Code("PADDING_RANDOM_ERROR").
+				In("handshake").
+				With("modifier_name", pm.name).
+				Wrapf(err, "failed to generate random padding content")
+		}
 	}
 
 	return result, nil
@@ -77,6 +91,10 @@ func (pm *PaddingModifier) ModifyOutbound(phase HandshakePhase, data []byte) ([]
 
 // ModifyInbound removes padding from inbound handshake data.
 func (pm *PaddingModifier) ModifyInbound(phase HandshakePhase, data []byte) ([]byte, error) {
+	if pm.minPadding == 0 && pm.maxPadding == 0 {
+		return data, nil // No padding configured, return data unchanged
+	}
+
 	if len(data) < 4 {
 		return nil, oops.
 			Code("INVALID_PADDED_DATA").
