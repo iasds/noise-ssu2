@@ -127,9 +127,48 @@ func TestNoiseIKState_ProtocolName(t *testing.T) {
 	ns := initNoiseIK(respPub)
 
 	expectedH := sha256.Sum256([]byte(noiseProtocolName))
-	// After MixHash(Hash(respPub)), h should differ from initial
+	// After MixHash(null prologue) + MixHash(Hash(respPub)), h should differ from initial
 	assert.NotEqual(t, expectedH, ns.h,
 		"After pre-message processing, h should differ from initial hash")
+}
+
+// TestInitNoiseIK_NullPrologue verifies the exact handshake transcript for
+// initNoiseIK, pinning the spec-required null-prologue step.
+//
+// The I2P ECIES-X25519-AEAD-Ratchet spec mandates this three-step sequence:
+//
+//	h0 = SHA-256(protocolName)           InitializeSymmetric
+//	h1 = SHA-256(h0 || "")               MixHash(null prologue)
+//	h2 = SHA-256(h1 || SHA-256(respPub)) MixHash(Hash(rs)) — hs2
+//
+// If any step is reordered or omitted, the test will fail with a mismatch,
+// signaling an interoperability break with conformant I2P routers.
+func TestInitNoiseIK_NullPrologue(t *testing.T) {
+	var respPub [32]byte
+	_, err := rand.Read(respPub[:])
+	require.NoError(t, err)
+
+	ns := initNoiseIK(respPub)
+
+	// Step 1: InitializeSymmetric — h0 = SHA-256(protocolName)
+	h0 := sha256.Sum256([]byte(noiseProtocolName))
+
+	// Step 2: MixHash(null prologue) — h1 = SHA-256(h0 || "")
+	h1 := sha256.Sum256(h0[:])
+
+	// Step 3: MixHash(Hash(rs)) per hs2 — h2 = SHA-256(h1 || SHA-256(respPub))
+	rsHash := sha256.Sum256(respPub[:])
+	hasher := sha256.New()
+	hasher.Write(h1[:])
+	hasher.Write(rsHash[:])
+	var expectedH [32]byte
+	copy(expectedH[:], hasher.Sum(nil))
+
+	assert.Equal(t, expectedH, ns.h,
+		"initNoiseIK transcript must include MixHash(null prologue) before hs2 pre-message; "+
+			"omitting this breaks interoperability with conformant I2P routers")
+	assert.Equal(t, h0, ns.ck,
+		"chaining key must equal SHA-256(protocolName) and must not change during pre-message phase")
 }
 
 func TestNoiseIKState_Hs2Modification(t *testing.T) {

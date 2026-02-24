@@ -55,12 +55,27 @@ type noiseIKState struct {
 }
 
 // initNoiseIK initializes the Noise symmetric state for the IKelg2+hs2 handshake.
-// The protocol name is hashed (since it exceeds 32 bytes) and the responder's
-// static public key hash is mixed in as required by the hs2 modification.
+// The protocol name is hashed (since it exceeds 32 bytes), then the null prologue
+// is mixed in (as required by the Noise spec §5.6 and the I2P ECIES-X25519-AEAD-Ratchet
+// spec KDF section), and finally the responder's static key hash is mixed in per hs2.
+//
+// Initialization transcript:
+//
+//	h = SHA-256(protocol_name)           InitializeSymmetric
+//	ck = h
+//	h = SHA-256(h || "")                 MixHash(null prologue)  — required by spec
+//	h = SHA-256(h || SHA-256(rs))        MixHash(Hash(rs))       — hs2 pre-message
 func initNoiseIK(responderStaticPub [32]byte) *noiseIKState {
 	// InitializeSymmetric: protocol name is 50 chars > HASHLEN (32), so h = SHA-256(name)
 	h := sha256.Sum256([]byte(noiseProtocolName))
 	ns := &noiseIKState{h: h, ck: h}
+
+	// MixHash(null prologue): h = SHA-256(h || "")
+	// The I2P ECIES-X25519-AEAD-Ratchet spec requires an explicit MixHash of the
+	// empty prologue before any pre-message processing. Omitting this step diverges
+	// from the spec transcript and breaks interoperability with conformant routers
+	// (Java I2P, i2pd) which apply this step correctly.
+	ns.mixHash([]byte{})
 
 	// Pre-message (← s) with hs2: MixHash(Hash(rs)) instead of MixHash(rs)
 	rsHash := sha256.Sum256(responderStaticPub[:])
