@@ -146,7 +146,7 @@ func TestProcessReceivedNextKey_ForwardKey(t *testing.T) {
 	// Establish a session.
 	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("init"))
 	require.NoError(t, err)
-	_, _, err = receiver.DecryptGarlicMessage(enc)
+	_, _, _, err = receiver.DecryptGarlicMessage(enc)
 	require.NoError(t, err)
 
 	// Get a valid session tag from the receiver's tag index.
@@ -176,7 +176,7 @@ func TestProcessReceivedNextKey_ForwardKeyRequestsReverse(t *testing.T) {
 
 	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("init"))
 	require.NoError(t, err)
-	_, _, err = receiver.DecryptGarlicMessage(enc)
+	_, _, _, err = receiver.DecryptGarlicMessage(enc)
 	require.NoError(t, err)
 
 	sessionTag := getAnyTag(t, receiver)
@@ -218,7 +218,7 @@ func TestProcessReceivedNextKey_ReverseKey(t *testing.T) {
 
 	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("init"))
 	require.NoError(t, err)
-	_, _, err = receiver.DecryptGarlicMessage(enc)
+	_, _, _, err = receiver.DecryptGarlicMessage(enc)
 	require.NoError(t, err)
 
 	sessionTag := getAnyTag(t, receiver)
@@ -262,7 +262,7 @@ func TestProcessReceivedNextKey_AckNoKey(t *testing.T) {
 
 	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("init"))
 	require.NoError(t, err)
-	_, _, err = receiver.DecryptGarlicMessage(enc)
+	_, _, _, err = receiver.DecryptGarlicMessage(enc)
 	require.NoError(t, err)
 
 	sessionTag := getAnyTag(t, receiver)
@@ -312,7 +312,7 @@ func TestProcessIncomingDHRatchet_Success(t *testing.T) {
 	// Establish a session.
 	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("init"))
 	require.NoError(t, err)
-	_, _, err = receiver.DecryptGarlicMessage(enc)
+	_, _, _, err = receiver.DecryptGarlicMessage(enc)
 	require.NoError(t, err)
 
 	// Get a valid session tag.
@@ -348,7 +348,7 @@ func TestProcessIncomingDHRatchet_UpdatesReceivingChain(t *testing.T) {
 
 	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("init"))
 	require.NoError(t, err)
-	_, _, err = receiver.DecryptGarlicMessage(enc)
+	_, _, _, err = receiver.DecryptGarlicMessage(enc)
 	require.NoError(t, err)
 
 	sessionTag := getAnyTag(t, receiver)
@@ -387,7 +387,7 @@ func TestProcessIncomingDHRatchet_MultipleRotations(t *testing.T) {
 
 	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("init"))
 	require.NoError(t, err)
-	_, _, err = receiver.DecryptGarlicMessage(enc)
+	_, _, _, err = receiver.DecryptGarlicMessage(enc)
 	require.NoError(t, err)
 
 	// Process multiple DH ratchets with different keys.
@@ -416,7 +416,7 @@ func TestNextKeyExchange_FullFlow(t *testing.T) {
 	// 1. Establish initial session.
 	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("init"))
 	require.NoError(t, err)
-	_, _, err = receiver.DecryptGarlicMessage(enc)
+	_, _, _, err = receiver.DecryptGarlicMessage(enc)
 	require.NoError(t, err)
 
 	// 2. Trigger DH ratchet on sender (artificially advance counter).
@@ -488,7 +488,7 @@ func TestGenerateReverseNextKey_MaxKeyID(t *testing.T) {
 
 	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("init"))
 	require.NoError(t, err)
-	_, _, err = receiver.DecryptGarlicMessage(enc)
+	_, _, _, err = receiver.DecryptGarlicMessage(enc)
 	require.NoError(t, err)
 
 	sessionTag := getAnyTag(t, receiver)

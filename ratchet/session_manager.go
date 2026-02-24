@@ -31,9 +31,14 @@ const (
 //  2. Existing Session: Subsequent messages use ratchet for forward secrecy
 //  3. Session Expiry: Sessions expire after inactivity timeout
 type SessionManager struct {
-	mu             sync.RWMutex
-	sessions       map[[32]byte]*Session
-	tagIndex       map[[8]byte]*Session
+	mu       sync.RWMutex
+	sessions map[[32]byte]*Session
+	tagIndex map[[8]byte]*Session
+	// nsrTagIndex maps the expected NSR tag (derived from the NS chain key) to the
+	// initiator session waiting for the corresponding New Session Reply. Unlike
+	// tagIndex (which tracks Existing Session tags), nsrTagIndex is keyed on the
+	// unique 8-byte NSR tag that the responder will prefix on its NSR message.
+	nsrTagIndex    map[[8]byte]*Session
 	ourPrivateKey  [32]byte
 	ourPublicKey   [32]byte
 	sessionTimeout time.Duration
@@ -61,6 +66,7 @@ func NewSessionManager(privateKey [32]byte) (*SessionManager, error) {
 	return &SessionManager{
 		sessions:       make(map[[32]byte]*Session),
 		tagIndex:       make(map[[8]byte]*Session),
+		nsrTagIndex:    make(map[[8]byte]*Session),
 		ourPrivateKey:  privateKey,
 		ourPublicKey:   publicKey,
 		sessionTimeout: 10 * time.Minute,
@@ -159,6 +165,16 @@ func (sm *SessionManager) storeNewSessionState(
 
 	sm.sessions[destinationHash] = session
 
+	// Register the expected NSR tag for initiator sessions so that
+	// DecryptGarlicMessage can recognize the responder's reply and dispatch
+	// it to decryptIncomingNSR instead of trying to parse it as a New Session.
+	if isInitiator && hs != nil {
+		if err := sm.registerNSRTagLocked(session, hs); err != nil {
+			// Non-fatal: NSR dispatch won't work, but NS-derived ES will still function.
+			log.WithError(err).Warn("Failed to register NSR tag for initiator session")
+		}
+	}
+
 	if err := sm.generateTagWindow(session); err != nil {
 		return oops.Wrapf(err, "failed to generate tag window")
 	}
@@ -198,45 +214,72 @@ func (sm *SessionManager) encryptExistingSession(
 }
 
 // DecryptGarlicMessage decrypts an encrypted garlic message.
-// Handles both New Session and Existing Session message types.
-func (sm *SessionManager) DecryptGarlicMessage(encryptedGarlic []byte) ([]byte, [8]byte, error) {
+// Handles New Session, New Session Reply, and Existing Session message types.
+//
+// Returns:
+//   - plaintext: the decrypted garlic payload
+//   - sessionTag: the 8-byte tag used to identify the session (zero for NS and NSR)
+//   - sessionHash: SHA-256(initiatorStaticPub) for New Session messages; nil otherwise.
+//     Callers that need to send a New Session Reply must pass this value to EncryptNewSessionReply.
+func (sm *SessionManager) DecryptGarlicMessage(encryptedGarlic []byte) ([]byte, [8]byte, *[32]byte, error) {
 	if len(encryptedGarlic) < 8 {
-		return nil, [8]byte{}, oops.Errorf("encrypted garlic message too short: %d bytes", len(encryptedGarlic))
+		return nil, [8]byte{}, nil, oops.Errorf("encrypted garlic message too short: %d bytes", len(encryptedGarlic))
 	}
 
-	var sessionTag [8]byte
-	copy(sessionTag[:], encryptedGarlic[0:8])
+	var msgTag [8]byte
+	copy(msgTag[:], encryptedGarlic[0:8])
 
+	// Check Existing Session tag index first (most common path).
 	sm.mu.Lock()
-	session := sm.lookupSessionByTag(sessionTag)
+	session := sm.lookupSessionByTag(msgTag)
 	sm.mu.Unlock()
 
 	if session != nil {
-		return sm.decryptExistingSession(session, encryptedGarlic[8:], sessionTag)
+		plaintext, sessionTag, err := sm.decryptExistingSession(session, encryptedGarlic[8:], msgTag)
+		return plaintext, sessionTag, nil, err
 	}
 
-	plaintext, err := sm.decryptNewSession(encryptedGarlic)
+	// Check NSR tag index: initiator receiving a reply to its New Session.
+	sm.mu.Lock()
+	nsrSession, isNSR := sm.nsrTagIndex[msgTag]
+	if isNSR {
+		delete(sm.nsrTagIndex, msgTag)
+		if nsrSession.nsrTag != nil && *nsrSession.nsrTag == msgTag {
+			nsrSession.nsrTag = nil
+		}
+	}
+	sm.mu.Unlock()
+
+	if isNSR && nsrSession != nil {
+		plaintext, err := sm.decryptIncomingNSR(nsrSession, encryptedGarlic)
+		return plaintext, [8]byte{}, nil, err
+	}
+
+	// Fallthrough: New Session (Noise IK / ECIES).
+	plaintext, sessionHash, err := sm.decryptNewSession(encryptedGarlic)
 	if err != nil {
-		return nil, [8]byte{}, oops.Wrapf(err, "failed to decrypt garlic message")
+		return nil, [8]byte{}, nil, oops.Wrapf(err, "failed to decrypt garlic message")
 	}
-
-	return plaintext, [8]byte{}, nil
+	return plaintext, [8]byte{}, sessionHash, nil
 }
 
 // decryptNewSession decrypts a New Session message using the Noise IK handshake.
-func (sm *SessionManager) decryptNewSession(msg []byte) ([]byte, error) {
+// Returns the plaintext and the session hash (SHA-256 of the initiator's static pub key).
+// The session hash can be passed to EncryptNewSessionReply by the responder.
+func (sm *SessionManager) decryptNewSession(msg []byte) ([]byte, *[32]byte, error) {
 	plaintext, initiatorStaticPub, keys, hs, err := readNoiseIKMessage1(
 		sm.ourPrivateKey, sm.ourPublicKey, msg,
 	)
 	if err != nil {
-		return nil, oops.Wrapf(err, "failed to process Noise IK New Session message")
+		return nil, nil, oops.Wrapf(err, "failed to process Noise IK New Session message")
 	}
 
 	if err := sm.initializeInboundRatchetState(initiatorStaticPub, keys, hs); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	return plaintext, nil
+	sessionHash := types.SHA256(initiatorStaticPub[:])
+	return plaintext, &sessionHash, nil
 }
 
 // initializeInboundRatchetState creates and stores ratchet state for incoming sessions.
@@ -275,13 +318,121 @@ func (sm *SessionManager) initializeInboundRatchetState(remotePubKey [32]byte, k
 	return nil
 }
 
+// registerNSRTagLocked derives the expected NSR tag for an initiator session
+// and registers it in sm.nsrTagIndex. Must be called with sm.mu held for writing.
+// The tag is derived from the same chain key that the responder will use when
+// constructing its NSR, ensuring both sides agree on the routing tag.
+func (sm *SessionManager) registerNSRTagLocked(session *Session, hs *noiseHandshakeState) error {
+	nsrTagRatchet, err := deriveNSRTagRatchet(hs.ck)
+	if err != nil {
+		return oops.Wrapf(err, "failed to derive NSR tag ratchet for initiator registration")
+	}
+	tag, err := nsrTagRatchet.GenerateNextTag()
+	if err != nil {
+		return oops.Wrapf(err, "failed to generate NSR tag for initiator registration")
+	}
+	session.nsrTag = &tag
+	sm.nsrTagIndex[tag] = session
+	return nil
+}
+
+// decryptIncomingNSR processes a received New Session Reply for an initiator session.
+// It verifies the responder's Noise IK message 2, then replaces the NS-derived
+// ratchet roots with the post-handshake NSR keys, providing ee forward secrecy.
+func (sm *SessionManager) decryptIncomingNSR(session *Session, message []byte) ([]byte, error) {
+	// Phase 1: read handshake state and run NSR crypto under session lock only.
+	session.mu.Lock()
+	if session.handshakeState == nil {
+		session.mu.Unlock()
+		return nil, oops.Errorf("no pending handshake state for NSR: session may have already processed NSR")
+	}
+	hs := session.handshakeState
+	session.handshakeState = nil // consume immediately; duplicate NSRs are rejected
+	session.mu.Unlock()
+
+	plaintext, nsrKeys, err := readNoiseIKMessage2(hs, sm.ourPrivateKey, message)
+	if err != nil {
+		return nil, oops.Wrapf(err, "failed to process New Session Reply")
+	}
+
+	// Phase 2: apply NSR keys — requires sm.mu (write) + session.mu.
+	// Initiator sends in keyAB direction (A→B) and receives in keyBA direction (B→A).
+	sm.mu.Lock()
+	session.mu.Lock()
+	if applyErr := sm.applyNSRKeysToSessionWhileLocked(session, nsrKeys, true); applyErr != nil {
+		session.mu.Unlock()
+		sm.mu.Unlock()
+		return nil, oops.Wrapf(applyErr, "failed to apply NSR keys to initiator session ratchets")
+	}
+	session.LastUsed = time.Now()
+	session.mu.Unlock()
+	sm.mu.Unlock()
+
+	log.WithFields(map[string]interface{}{
+		"at": "decryptIncomingNSR",
+	}).Debug("New Session Reply received, ratchets updated with NSR keys")
+
+	return plaintext, nil
+}
+
+// applyNSRKeysToSessionWhileLocked replaces a session's NS-derived ratchet roots
+// with the NSR post-handshake directional keys. Must be called with both
+// sm.mu (write) and session.mu held.
+//
+// nsrSessionKeys.keyAB is the initiator→responder direction key;
+// nsrSessionKeys.keyBA is the responder→initiator direction key.
+// If isInitiator is true, sendKey = keyAB and recvKey = keyBA; vice versa otherwise.
+func (sm *SessionManager) applyNSRKeysToSessionWhileLocked(session *Session, nsrKeys *nsrSessionKeys, isInitiator bool) error {
+	var sendKey, recvKey [32]byte
+	if isInitiator {
+		sendKey = nsrKeys.keyAB // A sends to B
+		recvKey = nsrKeys.keyBA // A receives from B
+	} else {
+		sendKey = nsrKeys.keyBA // B sends to A
+		recvKey = nsrKeys.keyAB // B receives from A
+	}
+
+	sendTagKey, sendSymKey, err := deriveTagAndSymKeysFromChainKey(sendKey)
+	if err != nil {
+		return oops.Wrapf(err, "failed to derive NSR send-direction ratchet keys")
+	}
+	recvTagKey, recvSymKey, err := deriveTagAndSymKeysFromChainKey(recvKey)
+	if err != nil {
+		return oops.Wrapf(err, "failed to derive NSR recv-direction ratchet keys")
+	}
+
+	// Purge old NS-derived recv tags from tagIndex before replacing the ratchet.
+	for _, tag := range session.pendingTags {
+		delete(sm.tagIndex, tag)
+	}
+	session.pendingTags = session.pendingTags[:0]
+
+	// Install post-handshake ratchets.
+	session.SymmetricRatchet = ratchet.NewSymmetricRatchet(sendSymKey)
+	session.TagRatchet = ratchet.NewTagRatchet(sendTagKey)
+	session.RecvSymmetricRatchet = ratchet.NewSymmetricRatchet(recvSymKey)
+	session.RecvTagRatchet = ratchet.NewTagRatchet(recvTagKey)
+
+	// Reset message counters: the session restarts at 1 with NSR keys.
+	session.MessageCounter = 1
+	session.recvCounter = 1
+
+	// Regenerate recv tag window with the new NSR-derived recv ratchet.
+	return sm.generateTagWindow(session)
+}
+
 // EncryptNewSessionReply constructs a New Session Reply (NSR) for a session
 // that was created by receiving a New Session message. The responder calls this
 // to send a reply back to the initiator, completing the Noise IK handshake.
 //
-// sessionHash identifies the session (typically Hash(remotePubKey)).
-// payload is the reply plaintext (e.g., garlic clove response).
-// Returns the full NSR wire message.
+// sessionHash identifies the session. Pass the *[32]byte returned by
+// DecryptGarlicMessage when it processed the peer's New Session message
+// (dereference to obtain the [32]byte value: `*sessionHash`).
+// payload is the reply plaintext.
+//
+// After sending the NSR, the session's ratchet state is updated with the
+// post-handshake keys (kAB/kBA from the NSR split), replacing the NS-derived
+// roots and providing the ephemeral-ephemeral forward secrecy required by the spec.
 func (sm *SessionManager) EncryptNewSessionReply(
 	sessionHash [32]byte,
 	payload []byte,
@@ -294,29 +445,43 @@ func (sm *SessionManager) EncryptNewSessionReply(
 		return nil, oops.Errorf("no session found for hash %x", sessionHash[:8])
 	}
 
+	// Phase 1: crypto under session lock only (no sm.mu needed for key derivation).
 	session.mu.Lock()
-	defer session.mu.Unlock()
 
 	if session.handshakeState == nil {
+		session.mu.Unlock()
 		return nil, oops.Errorf("session has no pending handshake state for NSR")
 	}
 	if session.isInitiator {
+		session.mu.Unlock()
 		return nil, oops.Errorf("only the responder can send a New Session Reply")
 	}
 
-	_, wireMsg, _, err := writeNoiseIKMessage2(session.handshakeState, payload)
+	_, wireMsg, nsrKeys, err := writeNoiseIKMessage2(session.handshakeState, payload)
+	session.handshakeState = nil // consumed; NSR can only be sent once
+	session.mu.Unlock()
+
 	if err != nil {
 		return nil, oops.Wrapf(err, "failed to construct New Session Reply")
 	}
 
-	// Clear handshake state after sending NSR
-	session.handshakeState = nil
+	// Phase 2: apply NSR-derived ratchet keys — requires sm.mu (write) + session.mu.
+	// Responder sends in keyBA direction (B→A) and receives in keyAB direction (A→B).
+	sm.mu.Lock()
+	session.mu.Lock()
+	if applyErr := sm.applyNSRKeysToSessionWhileLocked(session, nsrKeys, false); applyErr != nil {
+		session.mu.Unlock()
+		sm.mu.Unlock()
+		return nil, oops.Wrapf(applyErr, "failed to apply NSR keys to responder session ratchets")
+	}
 	session.LastUsed = time.Now()
+	session.mu.Unlock()
+	sm.mu.Unlock()
 
 	log.WithFields(map[string]interface{}{
 		"at":           "EncryptNewSessionReply",
 		"payload_size": len(payload),
-	}).Debug("New Session Reply sent")
+	}).Debug("New Session Reply sent, ratchets updated with NSR keys")
 
 	return wireMsg, nil
 }
@@ -508,6 +673,9 @@ func (sm *SessionManager) evictLRUSessionLocked() {
 			for _, tag := range evicted.pendingTags {
 				delete(sm.tagIndex, tag)
 			}
+			if evicted.nsrTag != nil {
+				delete(sm.nsrTagIndex, *evicted.nsrTag)
+			}
 			delete(sm.sessions, oldestHash)
 			log.WithFields(map[string]interface{}{
 				"at":              "evictLRUSessionLocked",
@@ -531,6 +699,9 @@ func (sm *SessionManager) CleanupExpiredSessions() int {
 			delete(sm.sessions, hash)
 			for _, tag := range session.pendingTags {
 				delete(sm.tagIndex, tag)
+			}
+			if session.nsrTag != nil {
+				delete(sm.nsrTagIndex, *session.nsrTag)
 			}
 			removed++
 		}
@@ -574,6 +745,9 @@ func (sm *SessionManager) Close() error {
 	}
 	for k := range sm.tagIndex {
 		delete(sm.tagIndex, k)
+	}
+	for k := range sm.nsrTagIndex {
+		delete(sm.nsrTagIndex, k)
 	}
 
 	// Zero the private key material

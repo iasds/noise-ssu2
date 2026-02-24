@@ -42,6 +42,10 @@ type Session struct {
 	handshakeState *noiseHandshakeState
 	// isInitiator tracks whether we initiated the session (sent NS).
 	isInitiator bool
+	// nsrTag is the NSR tag registered in the SessionManager's nsrTagIndex.
+	// Non-nil only on initiator sessions until the NSR has been received.
+	// Used to clean up the index entry on session eviction or expiry.
+	nsrTag *[8]byte
 
 	// sendKeyID is the current send-direction DH ratchet key ID.
 	// Incremented each time we generate a new forward key.

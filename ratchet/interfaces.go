@@ -23,8 +23,13 @@ type GarlicEncryptor interface {
 // Implementations handle session tag lookup, key derivation, and AEAD decryption.
 type GarlicDecryptor interface {
 	// DecryptGarlicMessage decrypts an encrypted garlic message.
-	// Returns plaintext, session tag (zero value for New Session messages), and error.
-	DecryptGarlicMessage(encrypted []byte) (plaintext []byte, sessionTag [8]byte, err error)
+	// Returns:
+	//   - plaintext: the decrypted garlic payload.
+	//   - sessionTag: the 8-byte tag used to identify the session; zero for NS and NSR messages.
+	//   - sessionHash: SHA-256(initiatorStaticPub) for New Session messages; nil for ES and NSR.
+	//     Responders must pass the dereferenced value to EncryptNewSessionReply.
+	//   - err: non-nil on decryption failure.
+	DecryptGarlicMessage(encrypted []byte) (plaintext []byte, sessionTag [8]byte, sessionHash *[32]byte, err error)
 }
 
 // GarlicSessionManager combines encrypt + decrypt + lifecycle management for

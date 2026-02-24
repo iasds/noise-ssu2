@@ -79,7 +79,7 @@ func TestNewSessionEncryptDecrypt(t *testing.T) {
 	assert.GreaterOrEqual(t, len(encrypted), noiseIKMinMessageSize)
 
 	// Decrypt
-	decrypted, sessionTag, err := receiver.DecryptGarlicMessage(encrypted)
+	decrypted, sessionTag, _, err := receiver.DecryptGarlicMessage(encrypted)
 	require.NoError(t, err)
 	assert.Equal(t, plaintext, decrypted)
 	assert.Equal(t, [8]byte{}, sessionTag, "New Session should have zero session tag")
@@ -95,7 +95,7 @@ func TestExistingSessionEncryptDecrypt(t *testing.T) {
 	plaintext1 := []byte("first message")
 	enc1, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, plaintext1)
 	require.NoError(t, err)
-	dec1, _, err := receiver.DecryptGarlicMessage(enc1)
+	dec1, _, _, err := receiver.DecryptGarlicMessage(enc1)
 	require.NoError(t, err)
 	assert.Equal(t, plaintext1, dec1)
 
@@ -107,7 +107,7 @@ func TestExistingSessionEncryptDecrypt(t *testing.T) {
 	// Existing Session message should differ from New Session
 	assert.NotEqual(t, enc1, enc2)
 
-	dec2, sessionTag, err := receiver.DecryptGarlicMessage(enc2)
+	dec2, sessionTag, _, err := receiver.DecryptGarlicMessage(enc2)
 	require.NoError(t, err)
 	assert.Equal(t, plaintext2, dec2)
 	assert.NotEqual(t, [8]byte{}, sessionTag, "Existing Session should have non-zero tag")
@@ -123,7 +123,7 @@ func TestMultipleMessages(t *testing.T) {
 		plaintext := []byte("message " + string(rune('A'+i)))
 		enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, plaintext)
 		require.NoError(t, err)
-		dec, _, err := receiver.DecryptGarlicMessage(enc)
+		dec, _, _, err := receiver.DecryptGarlicMessage(enc)
 		require.NoError(t, err)
 		assert.Equal(t, plaintext, dec, "Message %d should round-trip", i)
 	}
@@ -212,7 +212,7 @@ func TestSessionTagLookup(t *testing.T) {
 	plaintext := []byte("initial message")
 	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, plaintext)
 	require.NoError(t, err)
-	_, _, err = receiver.DecryptGarlicMessage(enc)
+	_, _, _, err = receiver.DecryptGarlicMessage(enc)
 	require.NoError(t, err)
 
 	// After New Session decryption, receiver should have tags indexed
@@ -231,14 +231,14 @@ func TestTagWindowReplenishment(t *testing.T) {
 	// Create initial session
 	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("init"))
 	require.NoError(t, err)
-	_, _, err = receiver.DecryptGarlicMessage(enc)
+	_, _, _, err = receiver.DecryptGarlicMessage(enc)
 	require.NoError(t, err)
 
 	// Send multiple messages to consume tags
 	for i := 0; i < 8; i++ {
 		enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("msg"))
 		require.NoError(t, err)
-		_, _, err = receiver.DecryptGarlicMessage(enc)
+		_, _, _, err = receiver.DecryptGarlicMessage(enc)
 		require.NoError(t, err)
 	}
 
@@ -279,7 +279,7 @@ func TestDHRatchetRotation(t *testing.T) {
 	for i := 0; i < DHRatchetInterval; i++ {
 		enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("msg"))
 		require.NoError(t, err, "Message %d encrypt should succeed", i)
-		_, _, err = receiver.DecryptGarlicMessage(enc)
+		_, _, _, err = receiver.DecryptGarlicMessage(enc)
 		require.NoError(t, err, "Message %d decrypt should succeed", i)
 	}
 
@@ -288,7 +288,7 @@ func TestDHRatchetRotation(t *testing.T) {
 	require.NoError(t, err, "Encryption after rotation should succeed")
 
 	// Receiver can't decrypt because sender's ratchet keys changed
-	_, _, err = receiver.DecryptGarlicMessage(enc)
+	_, _, _, err = receiver.DecryptGarlicMessage(enc)
 	assert.Error(t, err, "Post-rotation decryption should fail without ProcessIncomingDHRatchet")
 }
 
@@ -689,7 +689,7 @@ func TestConcurrentEncryptDecrypt(t *testing.T) {
 	// Create initial session
 	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("init"))
 	require.NoError(t, err)
-	_, _, err = receiver.DecryptGarlicMessage(enc)
+	_, _, _, err = receiver.DecryptGarlicMessage(enc)
 	require.NoError(t, err)
 
 	var wg sync.WaitGroup
@@ -706,7 +706,7 @@ func TestConcurrentEncryptDecrypt(t *testing.T) {
 					t.Errorf("Goroutine %d: encrypt failed: %v", idx, err)
 					return
 				}
-				_, _, err = receiver.DecryptGarlicMessage(enc)
+				_, _, _, err = receiver.DecryptGarlicMessage(enc)
 				if err != nil {
 					// Expected: concurrent decryption may fail due to ratchet state contention
 					// This tests that no panics/races occur, not that all succeed
@@ -757,7 +757,7 @@ func TestExistingSessionMessageFormat(t *testing.T) {
 	// First message to create session
 	enc1, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("init"))
 	require.NoError(t, err)
-	_, _, err = receiver.DecryptGarlicMessage(enc1)
+	_, _, _, err = receiver.DecryptGarlicMessage(enc1)
 	require.NoError(t, err)
 
 	// Second message uses existing session
@@ -776,7 +776,7 @@ func TestExistingSessionMessageFormat(t *testing.T) {
 func TestDecryptTooShort(t *testing.T) {
 	sm := createTestSessionManager(t)
 
-	_, _, err := sm.DecryptGarlicMessage([]byte{1, 2, 3})
+	_, _, _, err := sm.DecryptGarlicMessage([]byte{1, 2, 3})
 	assert.Error(t, err, "Should reject messages shorter than 8 bytes")
 }
 
@@ -787,7 +787,7 @@ func TestDecryptGarbage(t *testing.T) {
 	_, err := rand.Read(garbage)
 	require.NoError(t, err)
 
-	_, _, err = sm.DecryptGarlicMessage(garbage)
+	_, _, _, err = sm.DecryptGarlicMessage(garbage)
 	assert.Error(t, err, "Should fail to decrypt garbage data")
 }
 
@@ -803,7 +803,7 @@ func TestDecryptWrongKey(t *testing.T) {
 	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, plaintext)
 	require.NoError(t, err)
 
-	_, _, err = wrongReceiver.DecryptGarlicMessage(enc)
+	_, _, _, err = wrongReceiver.DecryptGarlicMessage(enc)
 	assert.Error(t, err, "Should fail to decrypt with wrong private key")
 }
 
@@ -820,7 +820,7 @@ func TestExistingSessionMessageNoExplicitNonce(t *testing.T) {
 	// First message to create session
 	enc1, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("init"))
 	require.NoError(t, err)
-	_, _, err = receiver.DecryptGarlicMessage(enc1)
+	_, _, _, err = receiver.DecryptGarlicMessage(enc1)
 	require.NoError(t, err)
 
 	// Second message uses existing session with counter-based nonce
@@ -837,7 +837,7 @@ func TestExistingSessionMessageNoExplicitNonce(t *testing.T) {
 		"Existing session message should not include explicit nonce on wire")
 
 	// Verify it decrypts correctly
-	dec2, sessionTag, err := receiver.DecryptGarlicMessage(enc2)
+	dec2, sessionTag, _, err := receiver.DecryptGarlicMessage(enc2)
 	require.NoError(t, err)
 	assert.Equal(t, payload, dec2)
 	assert.NotEqual(t, [8]byte{}, sessionTag)
@@ -855,7 +855,7 @@ func TestCounterNonceDeterministic(t *testing.T) {
 	// Create session
 	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("session init"))
 	require.NoError(t, err)
-	_, _, err = receiver.DecryptGarlicMessage(enc)
+	_, _, _, err = receiver.DecryptGarlicMessage(enc)
 	require.NoError(t, err)
 
 	// Send 20 messages, each must decrypt with matching counter
@@ -864,7 +864,7 @@ func TestCounterNonceDeterministic(t *testing.T) {
 		enc, err = sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, payload)
 		require.NoError(t, err, "Encrypt message %d", i)
 
-		dec, _, err := receiver.DecryptGarlicMessage(enc)
+		dec, _, _, err := receiver.DecryptGarlicMessage(enc)
 		require.NoError(t, err, "Decrypt message %d", i)
 		assert.Equal(t, payload, dec, "Message %d round-trip", i)
 	}
@@ -879,7 +879,7 @@ func TestMaxMessageNumberEnforced(t *testing.T) {
 	// Create session
 	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("init"))
 	require.NoError(t, err)
-	_, _, err = receiver.DecryptGarlicMessage(enc)
+	_, _, _, err = receiver.DecryptGarlicMessage(enc)
 	require.NoError(t, err)
 
 	// Artificially set message counter to MaxMessageNumber
@@ -970,7 +970,7 @@ func TestFindSessionByTagReturnsTrue(t *testing.T) {
 	// Establish a session so the receiver has tags in its index.
 	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("setup"))
 	require.NoError(t, err)
-	_, _, err = receiver.DecryptGarlicMessage(enc)
+	_, _, _, err = receiver.DecryptGarlicMessage(enc)
 	require.NoError(t, err)
 
 	// Grab a pending tag from the receiver's tag index.
@@ -1014,7 +1014,7 @@ func TestFindSessionByTagReturnsFalseForExpiredSession(t *testing.T) {
 
 	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("expire me"))
 	require.NoError(t, err)
-	_, _, err = receiver.DecryptGarlicMessage(enc)
+	_, _, _, err = receiver.DecryptGarlicMessage(enc)
 	require.NoError(t, err)
 
 	// Grab a pending tag.
@@ -1081,7 +1081,7 @@ func BenchmarkExistingSessionEncrypt(b *testing.B) {
 
 	// Create initial session
 	enc, _ := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, plaintext)
-	_, _, _ = receiver.DecryptGarlicMessage(enc)
+	_, _, _, _ = receiver.DecryptGarlicMessage(enc)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -1112,6 +1112,6 @@ func BenchmarkDecryptGarlicMessage(b *testing.B) {
 		b.StopTimer()
 		enc, _ = sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, plaintext)
 		b.StartTimer()
-		_, _, _ = receiver.DecryptGarlicMessage(enc)
+		_, _, _, _ = receiver.DecryptGarlicMessage(enc)
 	}
 }

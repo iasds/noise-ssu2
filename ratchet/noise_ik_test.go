@@ -648,7 +648,7 @@ func TestSessionManager_EncryptNewSessionReply(t *testing.T) {
 	require.NoError(t, err)
 
 	// Responder decrypts NS
-	decrypted, _, err := responder.DecryptGarlicMessage(encrypted)
+	decrypted, _, _, err := responder.DecryptGarlicMessage(encrypted)
 	require.NoError(t, err)
 	assert.Equal(t, nsPayload, decrypted)
 
@@ -696,7 +696,7 @@ func TestSessionManager_EncryptNewSessionReply_ClearsHandshakeState(t *testing.T
 	)
 	require.NoError(t, err)
 
-	_, _, err = responder.DecryptGarlicMessage(encrypted)
+	_, _, _, err = responder.DecryptGarlicMessage(encrypted)
 	require.NoError(t, err)
 
 	sessionHash := hashPubKey(initiator.ourPublicKey)

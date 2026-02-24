@@ -30,3 +30,4 @@ examples/transport/transport
 *coverage*.html
 *.json
 *.html
+*.test
