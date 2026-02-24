@@ -5,7 +5,6 @@ import (
 
 	"github.com/go-i2p/crypto/chacha20poly1305"
 	"github.com/go-i2p/crypto/kdf"
-	"github.com/go-i2p/crypto/rand"
 	"github.com/go-i2p/crypto/ratchet"
 	"github.com/go-i2p/crypto/types"
 	"github.com/samber/oops"
@@ -31,6 +30,11 @@ const (
 
 	// tagWindowSize is the number of pre-generated tags per session.
 	tagWindowSize = 10
+
+	// MaxMessageNumber is the maximum AEAD message number per the spec.
+	// When reached, the session must be ratcheted. Spec ref: ratchet.md
+	// §"AEAD (ChaChaPoly)" — "Maximum value is 65535."
+	MaxMessageNumber = 65535
 )
 
 // deriveDirectionalKeys derives distinct send and receive keys from a base key
@@ -68,51 +72,46 @@ func deriveSessionKeysFromSecret(sharedSecret []byte) (*sessionKeys, error) {
 }
 
 // parseExistingSessionMessage parses an Existing Session message (without session tag prefix).
-// Format: [nonce(12)] + [ciphertext(N)] + [tag(16)]
-func parseExistingSessionMessage(msg []byte) (nonce, ciphertext []byte, tag [16]byte, err error) {
-	if len(msg) < 12+16 {
-		return nil, nil, [16]byte{}, oops.Errorf("existing session message too short")
+// Format: [ciphertext(N)] + [tag(16)]
+// The nonce is derived from the message counter, not transmitted on the wire.
+func parseExistingSessionMessage(msg []byte) (ciphertext []byte, tag [16]byte, err error) {
+	if len(msg) < 16 {
+		return nil, [16]byte{}, oops.Errorf("existing session message too short: %d bytes", len(msg))
 	}
 
-	nonce = msg[0:12]
-	ctWithTag := msg[12:]
+	ciphertext = msg[:len(msg)-16]
+	copy(tag[:], msg[len(msg)-16:])
 
-	if len(ctWithTag) < 16 {
-		return nil, nil, [16]byte{}, oops.Errorf("ciphertext too short for auth tag")
-	}
-
-	ciphertext = ctWithTag[:len(ctWithTag)-16]
-	copy(tag[:], ctWithTag[len(ctWithTag)-16:])
-
-	return nonce, ciphertext, tag, nil
+	return ciphertext, tag, nil
 }
 
 // encryptWithSessionKey encrypts plaintext using ChaCha20-Poly1305 with session tag as AAD.
-func encryptWithSessionKey(messageKey [32]byte, plaintext []byte, sessionTag [8]byte) (ciphertext []byte, tag [16]byte, nonce []byte, err error) {
+// The nonce is counter-based: [0,0,0,0 || LE64(messageNumber)] per the spec.
+func encryptWithSessionKey(messageKey [32]byte, plaintext []byte, sessionTag [8]byte, messageNumber uint32) (ciphertext []byte, tag [16]byte, err error) {
 	aead, err := chacha20poly1305.NewAEAD(messageKey)
 	if err != nil {
-		return nil, [16]byte{}, nil, oops.Wrapf(err, "failed to create AEAD")
+		return nil, [16]byte{}, oops.Wrapf(err, "failed to create AEAD")
 	}
 
-	nonce = make([]byte, chacha20poly1305.NonceSize)
-	if _, err := rand.Read(nonce); err != nil {
-		return nil, [16]byte{}, nil, oops.Wrapf(err, "failed to generate nonce")
-	}
+	nonce := noiseNonce(uint64(messageNumber))
 
 	ciphertext, tag, err = aead.Encrypt(plaintext, sessionTag[:], nonce)
 	if err != nil {
-		return nil, [16]byte{}, nil, oops.Wrapf(err, "failed to encrypt existing session message")
+		return nil, [16]byte{}, oops.Wrapf(err, "failed to encrypt existing session message")
 	}
 
-	return ciphertext, tag, nonce, nil
+	return ciphertext, tag, nil
 }
 
 // decryptWithSessionTag decrypts ciphertext using ChaCha20-Poly1305 with session tag as AAD.
-func decryptWithSessionTag(messageKey [32]byte, ciphertext []byte, tag [16]byte, sessionTag [8]byte, nonce []byte) ([]byte, error) {
+// The nonce is derived from the message number: [0,0,0,0 || LE64(messageNumber)].
+func decryptWithSessionTag(messageKey [32]byte, ciphertext []byte, tag [16]byte, sessionTag [8]byte, messageNumber uint32) ([]byte, error) {
 	aead, err := chacha20poly1305.NewAEAD(messageKey)
 	if err != nil {
 		return nil, oops.Wrapf(err, "failed to create AEAD")
 	}
+
+	nonce := noiseNonce(uint64(messageNumber))
 
 	plaintext, err := aead.Decrypt(ciphertext, tag[:], sessionTag[:], nonce)
 	if err != nil {
@@ -123,18 +122,25 @@ func decryptWithSessionTag(messageKey [32]byte, ciphertext []byte, tag [16]byte,
 }
 
 // buildExistingSessionMessage constructs the wire format for an Existing Session message.
-// Format: [sessionTag(8)] + [nonce(12)] + [ciphertext(N)] + [tag(16)]
-func buildExistingSessionMessage(sessionTag [8]byte, nonce, ciphertext []byte, tag [16]byte) []byte {
-	msg := make([]byte, 8+12+len(ciphertext)+16)
+// Format: [sessionTag(8)] + [ciphertext(N)] + [authTag(16)]
+// The nonce is not transmitted; both sides derive it from the message counter.
+func buildExistingSessionMessage(sessionTag [8]byte, ciphertext []byte, tag [16]byte) []byte {
+	msg := make([]byte, 8+len(ciphertext)+16)
 	copy(msg[0:8], sessionTag[:])
-	copy(msg[8:20], nonce)
-	copy(msg[20:20+len(ciphertext)], ciphertext)
-	copy(msg[20+len(ciphertext):], tag[:])
+	copy(msg[8:8+len(ciphertext)], ciphertext)
+	copy(msg[8+len(ciphertext):], tag[:])
 	return msg
 }
 
 // advanceRatchets advances the symmetric and tag ratchets to generate message key and session tag.
+// Returns an error if the message counter exceeds MaxMessageNumber (65535).
 func advanceRatchets(session *Session) (messageKey [32]byte, sessionTag [8]byte, err error) {
+	if session.MessageCounter > MaxMessageNumber {
+		return [32]byte{}, [8]byte{}, oops.Errorf(
+			"message number %d exceeds maximum %d, session must be ratcheted",
+			session.MessageCounter, MaxMessageNumber)
+	}
+
 	if err := attemptDHRatchetRotation(session); err != nil {
 		return [32]byte{}, [8]byte{}, err
 	}

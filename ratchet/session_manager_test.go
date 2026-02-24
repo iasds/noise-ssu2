@@ -549,8 +549,9 @@ func TestExistingSessionMessageFormat(t *testing.T) {
 	enc2, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("existing"))
 	require.NoError(t, err)
 
-	// Existing Session: [sessionTag(8)] + [nonce(12)] + [ciphertext(N)] + [tag(16)]
-	assert.GreaterOrEqual(t, len(enc2), 8+12+16)
+	// Existing Session: [sessionTag(8)] + [ciphertext(N)] + [authTag(16)]
+	// Nonce is counter-based and not transmitted on the wire.
+	assert.GreaterOrEqual(t, len(enc2), 8+16)
 }
 
 // ============================================================================
@@ -589,6 +590,145 @@ func TestDecryptWrongKey(t *testing.T) {
 
 	_, _, err = wrongReceiver.DecryptGarlicMessage(enc)
 	assert.Error(t, err, "Should fail to decrypt with wrong private key")
+}
+
+// ============================================================================
+// Counter-based Nonce & Max Message Number
+// ============================================================================
+
+func TestExistingSessionMessageNoExplicitNonce(t *testing.T) {
+	sender, receiver := createLinkedManagers(t)
+
+	var destHash [32]byte
+	copy(destHash[:], receiver.ourPublicKey[:])
+
+	// First message to create session
+	enc1, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("init"))
+	require.NoError(t, err)
+	_, _, err = receiver.DecryptGarlicMessage(enc1)
+	require.NoError(t, err)
+
+	// Second message uses existing session with counter-based nonce
+	payload := []byte("counter nonce test")
+	enc2, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, payload)
+	require.NoError(t, err)
+
+	// Wire format: [sessionTag(8)] + [ciphertext(N)] + [authTag(16)]
+	// No 12-byte nonce on the wire. Total = 8 + len(payload) + 16 (AEAD overhead) + 16 (auth tag)
+	// With ChaCha20-Poly1305, ciphertext length == plaintext length, so:
+	// total = 8 + len(payload) + 16
+	expectedMin := 8 + len(payload) + 16
+	assert.Equal(t, expectedMin, len(enc2),
+		"Existing session message should not include explicit nonce on wire")
+
+	// Verify it decrypts correctly
+	dec2, sessionTag, err := receiver.DecryptGarlicMessage(enc2)
+	require.NoError(t, err)
+	assert.Equal(t, payload, dec2)
+	assert.NotEqual(t, [8]byte{}, sessionTag)
+}
+
+func TestCounterNonceDeterministic(t *testing.T) {
+	// Two sessions with the same keys at the same counter should produce the same nonce.
+	// This is tested implicitly: if sender encrypts with counter N and receiver decrypts
+	// with counter N, it must succeed. We verify by sending multiple messages.
+	sender, receiver := createLinkedManagers(t)
+
+	var destHash [32]byte
+	copy(destHash[:], receiver.ourPublicKey[:])
+
+	// Create session
+	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("session init"))
+	require.NoError(t, err)
+	_, _, err = receiver.DecryptGarlicMessage(enc)
+	require.NoError(t, err)
+
+	// Send 20 messages, each must decrypt with matching counter
+	for i := 0; i < 20; i++ {
+		payload := []byte("msg " + string(rune('A'+i)))
+		enc, err = sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, payload)
+		require.NoError(t, err, "Encrypt message %d", i)
+
+		dec, _, err := receiver.DecryptGarlicMessage(enc)
+		require.NoError(t, err, "Decrypt message %d", i)
+		assert.Equal(t, payload, dec, "Message %d round-trip", i)
+	}
+}
+
+func TestMaxMessageNumberEnforced(t *testing.T) {
+	sender, receiver := createLinkedManagers(t)
+
+	var destHash [32]byte
+	copy(destHash[:], receiver.ourPublicKey[:])
+
+	// Create session
+	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("init"))
+	require.NoError(t, err)
+	_, _, err = receiver.DecryptGarlicMessage(enc)
+	require.NoError(t, err)
+
+	// Artificially set message counter to MaxMessageNumber
+	sender.mu.RLock()
+	session := sender.sessions[destHash]
+	sender.mu.RUnlock()
+	require.NotNil(t, session)
+
+	session.mu.Lock()
+	session.MessageCounter = MaxMessageNumber
+	session.mu.Unlock()
+
+	// This message should still succeed (counter == MaxMessageNumber, which is <= MaxMessageNumber)
+	_, err = sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("at limit"))
+	require.NoError(t, err, "Encryption at MaxMessageNumber should succeed")
+
+	// After incrementing, counter is now MaxMessageNumber+1
+	// The next attempt should fail
+	_, err = sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("past limit"))
+	assert.Error(t, err, "Encryption past MaxMessageNumber should fail")
+	assert.Contains(t, err.Error(), "exceeds maximum")
+}
+
+func TestMaxMessageNumberConstant(t *testing.T) {
+	assert.Equal(t, uint32(65535), uint32(MaxMessageNumber),
+		"MaxMessageNumber should be 65535 per the ECIES-Ratchet spec")
+}
+
+func TestBuildExistingSessionMessageFormat(t *testing.T) {
+	var sessionTag [8]byte
+	copy(sessionTag[:], []byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08})
+	ciphertext := []byte("encrypted data here")
+	var authTag [16]byte
+	copy(authTag[:], []byte{
+		0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7,
+		0xA8, 0xA9, 0xAA, 0xAB, 0xAC, 0xAD, 0xAE, 0xAF,
+	})
+
+	msg := buildExistingSessionMessage(sessionTag, ciphertext, authTag)
+
+	// Format: [tag(8)] + [ct(N)] + [authTag(16)]
+	assert.Equal(t, 8+len(ciphertext)+16, len(msg))
+	assert.Equal(t, sessionTag[:], msg[0:8])
+	assert.Equal(t, ciphertext, msg[8:8+len(ciphertext)])
+	assert.Equal(t, authTag[:], msg[8+len(ciphertext):])
+}
+
+func TestParseExistingSessionMessage(t *testing.T) {
+	// Valid message
+	ct := []byte("test ciphertext")
+	var tag [16]byte
+	_, err := rand.Read(tag[:])
+	require.NoError(t, err)
+
+	msg := append(ct, tag[:]...)
+	parsedCT, parsedTag, err := parseExistingSessionMessage(msg)
+	require.NoError(t, err)
+	assert.Equal(t, ct, parsedCT)
+	assert.Equal(t, tag, parsedTag)
+}
+
+func TestParseExistingSessionMessage_TooShort(t *testing.T) {
+	_, _, err := parseExistingSessionMessage(make([]byte, 15))
+	assert.Error(t, err, "Should reject message shorter than 16 bytes (minimum for auth tag only)")
 }
 
 // ============================================================================

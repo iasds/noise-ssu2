@@ -166,12 +166,12 @@ func (sm *SessionManager) encryptExistingSession(
 		return nil, err
 	}
 
-	ciphertext, tag, nonce, err := encryptWithSessionKey(messageKey, plaintextGarlic, sessionTag)
+	ciphertext, tag, err := encryptWithSessionKey(messageKey, plaintextGarlic, sessionTag, session.MessageCounter)
 	if err != nil {
 		return nil, err
 	}
 
-	msg := buildExistingSessionMessage(sessionTag, nonce, ciphertext, tag)
+	msg := buildExistingSessionMessage(sessionTag, ciphertext, tag)
 
 	session.LastUsed = time.Now()
 	session.MessageCounter++
@@ -257,7 +257,7 @@ func (sm *SessionManager) decryptExistingSession(
 	session.mu.Lock()
 	defer session.mu.Unlock()
 
-	nonce, ciphertext, tag, err := parseExistingSessionMessage(msg)
+	ciphertext, tag, err := parseExistingSessionMessage(msg)
 	if err != nil {
 		return nil, [8]byte{}, err
 	}
@@ -267,7 +267,7 @@ func (sm *SessionManager) decryptExistingSession(
 		return nil, [8]byte{}, err
 	}
 
-	plaintext, err := decryptWithSessionTag(messageKey, ciphertext, tag, sessionTag, nonce)
+	plaintext, err := decryptWithSessionTag(messageKey, ciphertext, tag, sessionTag, session.recvCounter)
 	if err != nil {
 		return nil, [8]byte{}, err
 	}
