@@ -91,8 +91,14 @@ func createSession(remotePubKey [32]byte, keys *sessionKeys, ourPrivateKey [32]b
 		RecvTagRatchet:       recvTagRatchet,
 		LastUsed:             time.Now(),
 		MessageCounter:       1,
-		recvCounter:          1, // starts at 1 because message 0 is the New Session (ECIES, not ratchet)
-		pendingTags:          make([][8]byte, 0, 10),
-		pendingNextKeys:      nil,
+		// recvCounter starts at 1 because the New Session message (message 0) is a
+		// one-off ECIES handshake that is not counted in the ratchet counter.
+		// After an NSR the counter resets to 1 for the same reason: the NSR itself
+		// (message 0 in the new tag set) is a handshake, not an AEAD ratchet message.
+		// Spec ref: ratchet.md §"Existing Session message" — "N=1 for the first
+		// Existing Session message after a New Session or New Session Reply".
+		recvCounter:     1,
+		pendingTags:     make([][8]byte, 0, 10),
+		pendingNextKeys: nil,
 	}, nil
 }

@@ -640,6 +640,104 @@ func TestPerformDHRatchetStep_MaxKeyID_ReturnsError(t *testing.T) {
 // Helpers
 // ============================================================================
 
+// ============================================================================
+// attemptDHRatchetRotation — failure branches
+// ============================================================================
+
+// TestAttemptDHRatchetRotation_FailOnce_ContinuesSymRatchet verifies the
+// "fail but continue" branch: when performDHRatchetStep returns an error but
+// consecutiveDHFailures has not yet hit MaxConsecutiveDHFailures,
+// attemptDHRatchetRotation swallows the error and returns nil, allowing the
+// session to keep sending via the symmetric ratchet.
+//
+// The sendKeyID=MaxKeyID trick forces performDHRatchetStep to error without
+// needing to mock the DH ratchet or break heap state.
+func TestAttemptDHRatchetRotation_FailOnce_ContinuesSymRatchet(t *testing.T) {
+	var pubKey, privKey [32]byte
+	_, _ = rand.Read(pubKey[:])
+	_, _ = rand.Read(privKey[:])
+
+	keys := &sessionKeys{}
+	_, _ = rand.Read(keys.rootKey[:])
+	_, _ = rand.Read(keys.tagKey[:])
+
+	session, err := createSession(pubKey, keys, privKey, true)
+	require.NoError(t, err)
+
+	// One increment will bring dhRatchetCounter to DHRatchetInterval, triggering
+	// the ratchet‐step attempt.
+	session.dhRatchetCounter = DHRatchetInterval - 1
+	// Force performDHRatchetStep to return an error.
+	session.sendKeyID = MaxKeyID
+
+	rotErr := attemptDHRatchetRotation(session)
+	assert.NoError(t, rotErr,
+		"first failure (below threshold) must be swallowed and return nil")
+	assert.Equal(t, uint32(1), session.consecutiveDHFailures,
+		"consecutiveDHFailures must be incremented on first failure")
+	assert.False(t, session.HasPendingNextKeys(),
+		"no NextKey block should be queued on failed step")
+}
+
+// TestAttemptDHRatchetRotation_MaxConsecutiveFailures_ReturnsError verifies
+// the "fatal failure" branch: when consecutiveDHFailures reaches
+// MaxConsecutiveDHFailures, attemptDHRatchetRotation propagates the error so
+// the caller can tear down the session rather than silently forfeiting forward
+// secrecy indefinitely.
+func TestAttemptDHRatchetRotation_MaxConsecutiveFailures_ReturnsError(t *testing.T) {
+	var pubKey, privKey [32]byte
+	_, _ = rand.Read(pubKey[:])
+	_, _ = rand.Read(privKey[:])
+
+	keys := &sessionKeys{}
+	_, _ = rand.Read(keys.rootKey[:])
+	_, _ = rand.Read(keys.tagKey[:])
+
+	session, err := createSession(pubKey, keys, privKey, true)
+	require.NoError(t, err)
+
+	// Pre-fill so one more failure crosses the threshold.
+	session.dhRatchetCounter = DHRatchetInterval - 1
+	session.sendKeyID = MaxKeyID
+	session.consecutiveDHFailures = MaxConsecutiveDHFailures - 1
+
+	rotErr := attemptDHRatchetRotation(session)
+	require.Error(t, rotErr,
+		"hitting MaxConsecutiveDHFailures must return an error")
+	assert.Contains(t, rotErr.Error(), "consecutive",
+		"error message must mention consecutive failure count")
+	assert.Equal(t, uint32(MaxConsecutiveDHFailures), session.consecutiveDHFailures)
+}
+
+// TestAttemptDHRatchetRotation_BelowInterval_NoRatchetAttempted verifies the
+// counter-gating path: when dhRatchetCounter is below DHRatchetInterval, no
+// DH ratchet step is attempted and nil is returned immediately.
+// This covers the fast path that runs for the vast majority of messages.
+func TestAttemptDHRatchetRotation_BelowInterval_NoRatchetAttempted(t *testing.T) {
+	var pubKey, privKey [32]byte
+	_, _ = rand.Read(pubKey[:])
+	_, _ = rand.Read(privKey[:])
+
+	keys := &sessionKeys{}
+	_, _ = rand.Read(keys.rootKey[:])
+	_, _ = rand.Read(keys.tagKey[:])
+
+	session, err := createSession(pubKey, keys, privKey, true)
+	require.NoError(t, err)
+
+	// Counter starts at 0; first increment → 1, which is < DHRatchetInterval (50).
+	initialKeyID := session.sendKeyID
+
+	rotErr := attemptDHRatchetRotation(session)
+	assert.NoError(t, rotErr, "below-interval call must return nil")
+	assert.Equal(t, uint32(1), session.dhRatchetCounter,
+		"dhRatchetCounter must be incremented")
+	assert.Equal(t, initialKeyID, session.sendKeyID,
+		"sendKeyID must not change when no ratchet step was attempted")
+	assert.False(t, session.HasPendingNextKeys(),
+		"no pending NextKey blocks when no ratchet step was attempted")
+}
+
 // getAnyTag extracts a tag from the session manager's tag index.
 // It grabs a fresh tag by peeking at the index. The tag IS consumed by this lookup.
 func getAnyTag(t testing.TB, sm *SessionManager) [8]byte {

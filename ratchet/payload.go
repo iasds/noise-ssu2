@@ -20,7 +20,13 @@ const (
 	// Must be the last non-padding block. Only in Existing Session messages.
 	BlockTermination BlockType = 4
 
-	// BlockOptions passes session parameters (type 5). Currently unimplemented in spec.
+	// BlockOptions passes session parameters (type 5).
+	//
+	// WARNING: this block type is currently unimplemented in the I2P ECIES
+	// spec (ratchet.md §"Unencrypted data"). No deployed I2P router will
+	// process an Options block. Do not include this block type in any
+	// outgoing message until the spec is finalised.
+	// Spec ref: ratchet.md §"Unencrypted data" — "type 5: options (unimplemented)".
 	BlockOptions BlockType = 5
 
 	// BlockMessageNumber carries the previous tag set message count (type 6).

@@ -147,7 +147,12 @@ func (c *BuildRecordCrypto) encryptChaCha20Poly1305(
 		return nil, oops.Errorf("failed to create ChaCha20-Poly1305 cipher: %w", err)
 	}
 
-	// Use first 12 bytes of IV as nonce (ChaCha20-Poly1305 requires 12-byte nonce)
+	// Use the first 12 bytes of the 16-byte IV as the ChaCha20-Poly1305 nonce.
+	// The I2P ECIES build-record spec (Proposal 152, §"ChaCha20/Poly1305")
+	// explicitly defines the nonce as "the first 12 bytes of the reply IV";
+	// the remaining 4 bytes are unused padding introduced by the AES-CBC
+	// legacy field size and are not part of the nonce uniqueness domain.
+	// This matches the reference Java implementation (RouterContext.elGamalAESEngine).
 	nonce := iv[:12]
 
 	ct, tag, err := aead.Encrypt(plaintext, nil, nonce)
@@ -182,6 +187,7 @@ func (c *BuildRecordCrypto) decryptChaCha20Poly1305(
 		return nil, oops.Errorf("failed to create ChaCha20-Poly1305 cipher: %w", err)
 	}
 
+	// See encryptChaCha20Poly1305 for nonce derivation rationale.
 	nonce := iv[:12]
 
 	// Split into ciphertext (first 528 bytes) and tag (last 16 bytes)
