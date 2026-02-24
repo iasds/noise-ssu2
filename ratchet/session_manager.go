@@ -301,10 +301,13 @@ func (sm *SessionManager) ProcessIncomingDHRatchet(sessionTag [8]byte, newRemote
 		return oops.Wrapf(err, "failed to perform receiving DH ratchet")
 	}
 
-	session.RecvSymmetricRatchet = ratchet.NewSymmetricRatchet(receivingChainKey)
+	tagKey, symKey, err := deriveTagAndSymKeysFromChainKey(receivingChainKey)
+	if err != nil {
+		return oops.Wrapf(err, "failed to derive receiving tag and symmetric keys after DH ratchet")
+	}
 
-	tagKeyInput := types.SHA256(append(receivingChainKey[:], []byte("TagRatchetKey")...))
-	session.RecvTagRatchet = ratchet.NewTagRatchet(tagKeyInput)
+	session.RecvSymmetricRatchet = ratchet.NewSymmetricRatchet(symKey)
+	session.RecvTagRatchet = ratchet.NewTagRatchet(tagKey)
 
 	session.RemotePublicKey = newRemotePubKey
 

@@ -6,7 +6,6 @@ import (
 	"github.com/go-i2p/crypto/chacha20poly1305"
 	"github.com/go-i2p/crypto/kdf"
 	"github.com/go-i2p/crypto/ratchet"
-	"github.com/go-i2p/crypto/types"
 	"github.com/samber/oops"
 )
 
@@ -25,8 +24,15 @@ const (
 	// before the session is considered degraded and should be reset.
 	MaxConsecutiveDHFailures = 3
 
-	hkdfInfoInitiator = "ECIES-Ratchet-Initiator"
-	hkdfInfoResponder = "ECIES-Ratchet-Responder"
+	// hkdfInfoDHRatchetStep is the HKDF info string for the DH initialization KDF.
+	// Used to derive directional chain keys from a root key.
+	// Spec ref: ratchet.md §"DH INITIALIZATION KDF" — HKDF(rootKey, k, "KDFDHRatchetStep", 64).
+	hkdfInfoDHRatchetStep = "KDFDHRatchetStep"
+
+	// hkdfInfoTagAndKeyGenKeys is the HKDF info string for deriving session tag
+	// and symmetric key chain keys from a chain key after DH ratchet.
+	// Spec ref: ratchet.md §"DH INITIALIZATION KDF" — HKDF(ck, ZEROLEN, "TagAndKeyGenKeys", 64).
+	hkdfInfoTagAndKeyGenKeys = "TagAndKeyGenKeys"
 
 	// tagWindowSize is the number of pre-generated tags per session.
 	tagWindowSize = 10
@@ -38,25 +44,24 @@ const (
 )
 
 // deriveDirectionalKeys derives distinct send and receive keys from a base key
-// using HKDF with role-specific info strings. Returns an error if key derivation
-// fails instead of silently falling back to the base key.
+// using HKDF with the spec-compliant "KDFDHRatchetStep" info string.
+// Produces 64 bytes split into two 32-byte directional keys (a→b and b→a).
+// The initiator sends on keys[0] and receives on keys[1]; the responder
+// reverses this to maintain symmetric key agreement.
+// Returns an error if key derivation fails.
+// Spec ref: ratchet.md §"DH INITIALIZATION KDF".
 func deriveDirectionalKeys(baseKey [32]byte, isInitiator bool) (sendKey, recvKey [32]byte, err error) {
 	kd := kdf.NewKeyDerivation(baseKey)
 
-	initiatorKey, err := kd.DeriveWithInfo(hkdfInfoInitiator)
+	keys, err := kd.DeriveKeys([]byte(hkdfInfoDHRatchetStep), 2)
 	if err != nil {
-		return [32]byte{}, [32]byte{}, oops.Wrapf(err, "failed to derive initiator directional key")
-	}
-
-	responderKey, err := kd.DeriveWithInfo(hkdfInfoResponder)
-	if err != nil {
-		return [32]byte{}, [32]byte{}, oops.Wrapf(err, "failed to derive responder directional key")
+		return [32]byte{}, [32]byte{}, oops.Wrapf(err, "failed to derive directional keys via KDFDHRatchetStep")
 	}
 
 	if isInitiator {
-		return initiatorKey, responderKey, nil
+		return keys[0], keys[1], nil
 	}
-	return responderKey, initiatorKey, nil
+	return keys[1], keys[0], nil
 }
 
 // deriveSessionKeysFromSecret derives root, symmetric, and tag keys from a shared secret.
@@ -200,7 +205,27 @@ func generateAndTrackSessionTag(session *Session) ([8]byte, error) {
 	return sessionTag, nil
 }
 
+// deriveTagAndSymKeysFromChainKey derives session tag and symmetric key chain keys
+// from a chain key using HKDF with the spec-compliant "TagAndKeyGenKeys" info string.
+// Returns (sessTag_ck, symmKey_ck) per the DH INITIALIZATION KDF:
+//
+//	keydata = HKDF(ck, ZEROLEN, "TagAndKeyGenKeys", 64)
+//	sessTag_ck = keydata[0:31], symmKey_ck = keydata[32:63]
+//
+// Spec ref: ratchet.md §"DH INITIALIZATION KDF".
+func deriveTagAndSymKeysFromChainKey(chainKey [32]byte) (tagKey, symKey [32]byte, err error) {
+	kd := kdf.NewKeyDerivation(chainKey)
+	keys, err := kd.DeriveKeys([]byte(hkdfInfoTagAndKeyGenKeys), 2)
+	if err != nil {
+		return [32]byte{}, [32]byte{}, oops.Wrapf(err, "failed to derive tag and symmetric keys via TagAndKeyGenKeys")
+	}
+	return keys[0], keys[1], nil
+}
+
 // performDHRatchetStep performs a Diffie-Hellman ratchet step for forward secrecy.
+// After obtaining the new chain key from the DH ratchet, it derives the session tag
+// and symmetric key chain keys using HKDF(ck, ZEROLEN, "TagAndKeyGenKeys", 64)
+// per the spec's DH INITIALIZATION KDF.
 func performDHRatchetStep(session *Session) error {
 	newPubKey, err := session.DHRatchet.GenerateNewKeyPair()
 	if err != nil {
@@ -212,10 +237,13 @@ func performDHRatchetStep(session *Session) error {
 		return oops.Wrapf(err, "failed to perform DH ratchet")
 	}
 
-	session.SymmetricRatchet = ratchet.NewSymmetricRatchet(sendingChainKey)
+	tagKey, symKey, err := deriveTagAndSymKeysFromChainKey(sendingChainKey)
+	if err != nil {
+		return oops.Wrapf(err, "failed to derive keys after DH ratchet step")
+	}
 
-	tagKeyInput := types.SHA256(append(sendingChainKey[:], []byte("TagRatchetKey")...))
-	session.TagRatchet = ratchet.NewTagRatchet(tagKeyInput)
+	session.SymmetricRatchet = ratchet.NewSymmetricRatchet(symKey)
+	session.TagRatchet = ratchet.NewTagRatchet(tagKey)
 
 	session.newEphemeralPub = &newPubKey
 
