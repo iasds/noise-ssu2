@@ -226,8 +226,20 @@ func deriveTagAndSymKeysFromChainKey(chainKey [32]byte) (tagKey, symKey [32]byte
 // After obtaining the new chain key from the DH ratchet, it derives the session tag
 // and symmetric key chain keys using HKDF(ck, ZEROLEN, "TagAndKeyGenKeys", 64)
 // per the spec's DH INITIALIZATION KDF.
-// On success, a NextKey block is queued for inclusion in the next outgoing message.
+// On success, a NextKey block is queued for inclusion in the next outgoing message
+// and session.sendKeyID is incremented to the new tag-set ID.
+// Spec ref: ratchet.md §"Key and Tag Set IDs" — tag set ID is incremented when a
+// new forward key is issued; maximum is MaxKeyID (32767).
 func performDHRatchetStep(session *Session) error {
+	// Refuse the step if the send key ID is already at the maximum.
+	// The session must be replaced once all tag sets are exhausted.
+	// Spec ref: ratchet.md §"Key and Tag Set IDs".
+	if session.sendKeyID >= MaxKeyID {
+		return oops.Errorf(
+			"send key ID %d has reached maximum %d, session must be replaced",
+			session.sendKeyID, MaxKeyID)
+	}
+
 	newPubKey, err := session.DHRatchet.GenerateNewKeyPair()
 	if err != nil {
 		return oops.Wrapf(err, "failed to generate new ephemeral key pair")
@@ -256,6 +268,12 @@ func performDHRatchetStep(session *Session) error {
 	nextKeyBlock := NewNextKeyBlock(session.sendKeyID, &newPubKey, false, requestReverse)
 	session.pendingNextKeys = append(session.pendingNextKeys, nextKeyBlock)
 	session.awaitingReverseKey = true
+
+	// Advance the send key ID now that the NextKey block is committed.
+	// The block carries the old ID (the peer uses it to key the reverse), and
+	// subsequent outgoing messages belong to the new tag set.
+	// Safe: guarded >= MaxKeyID above.
+	session.sendKeyID++
 
 	log.WithFields(map[string]interface{}{
 		"at":              "performDHRatchetStep",

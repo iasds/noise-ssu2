@@ -161,7 +161,7 @@ func TestProcessReceivedNextKey_ForwardKey(t *testing.T) {
 		Reverse:        false,
 		RequestReverse: false,
 		KeyID:          0,
-		PublicKey:       newKey,
+		PublicKey:      newKey,
 	}
 
 	err = receiver.ProcessReceivedNextKey(sessionTag, info)
@@ -189,7 +189,7 @@ func TestProcessReceivedNextKey_ForwardKeyRequestsReverse(t *testing.T) {
 		Reverse:        false,
 		RequestReverse: true,
 		KeyID:          0,
-		PublicKey:       newKey,
+		PublicKey:      newKey,
 	}
 
 	err = receiver.ProcessReceivedNextKey(sessionTag, info)
@@ -237,7 +237,7 @@ func TestProcessReceivedNextKey_ReverseKey(t *testing.T) {
 		Reverse:        true,
 		RequestReverse: false,
 		KeyID:          0,
-		PublicKey:       reverseKey,
+		PublicKey:      reverseKey,
 	}
 
 	err = receiver.ProcessReceivedNextKey(sessionTag, info)
@@ -507,7 +507,7 @@ func TestGenerateReverseNextKey_MaxKeyID(t *testing.T) {
 		Reverse:        false,
 		RequestReverse: true,
 		KeyID:          0,
-		PublicKey:       newKey,
+		PublicKey:      newKey,
 	}
 
 	err = receiver.ProcessReceivedNextKey(sessionTag, info)
@@ -538,6 +538,102 @@ func TestGetPublicKey_DifferentManagers(t *testing.T) {
 
 	assert.NotEqual(t, sm1.GetPublicKey(), sm2.GetPublicKey(),
 		"Different managers should have different public keys")
+}
+
+// ============================================================================
+// sendKeyID increment in performDHRatchetStep
+// ============================================================================
+
+// TestPerformDHRatchetStep_IncrementsSendKeyID verifies that the session's
+// sendKeyID is incremented after a successful DH ratchet step.
+// Spec ref: ratchet.md §"Key and Tag Set IDs" — tag set ID advances when
+// the sender issues a new forward key.
+func TestPerformDHRatchetStep_IncrementsSendKeyID(t *testing.T) {
+	var pubKey, privKey [32]byte
+	_, _ = rand.Read(pubKey[:])
+	_, _ = rand.Read(privKey[:])
+
+	keys := &sessionKeys{}
+	_, _ = rand.Read(keys.rootKey[:])
+	_, _ = rand.Read(keys.tagKey[:])
+
+	session, err := createSession(pubKey, keys, privKey, true)
+	require.NoError(t, err)
+
+	assert.Equal(t, uint16(0), session.sendKeyID, "sendKeyID must start at 0")
+
+	err = performDHRatchetStep(session)
+	require.NoError(t, err)
+
+	assert.Equal(t, uint16(1), session.sendKeyID,
+		"sendKeyID must be 1 after first DH ratchet step")
+
+	// The queued NextKey block must carry the old ID (0) so the peer
+	// can associate the reverse key with the correct tag set.
+	blocks := session.GetPendingNextKeys()
+	require.Len(t, blocks, 1)
+	info, err := blocks[0].NextKey()
+	require.NoError(t, err)
+	assert.Equal(t, uint16(0), info.KeyID,
+		"NextKey block must carry the pre-increment key ID")
+}
+
+// TestPerformDHRatchetStep_ConsecutiveRotations_KeyIDsAdvance verifies that
+// consecutive DH ratchet steps produce NextKey blocks with monotonically
+// increasing key IDs (0, 1, 2, …) and that sendKeyID tracks correctly.
+func TestPerformDHRatchetStep_ConsecutiveRotations_KeyIDsAdvance(t *testing.T) {
+	var pubKey, privKey [32]byte
+	_, _ = rand.Read(pubKey[:])
+	_, _ = rand.Read(privKey[:])
+
+	keys := &sessionKeys{}
+	_, _ = rand.Read(keys.rootKey[:])
+	_, _ = rand.Read(keys.tagKey[:])
+
+	session, err := createSession(pubKey, keys, privKey, true)
+	require.NoError(t, err)
+
+	for i := 0; i < 3; i++ {
+		err = performDHRatchetStep(session)
+		require.NoError(t, err, "step %d should succeed", i)
+	}
+
+	assert.Equal(t, uint16(3), session.sendKeyID, "sendKeyID must be 3 after three steps")
+
+	blocks := session.GetPendingNextKeys()
+	require.Len(t, blocks, 3)
+
+	for i, block := range blocks {
+		info, err := block.NextKey()
+		require.NoError(t, err)
+		assert.Equal(t, uint16(i), info.KeyID,
+			"block %d must carry key ID %d", i, i)
+	}
+}
+
+// TestPerformDHRatchetStep_MaxKeyID_ReturnsError verifies that a DH ratchet
+// step is refused when sendKeyID has reached MaxKeyID, preventing key-set ID
+// overflow. Spec ref: ratchet.md §"Key and Tag Set IDs".
+func TestPerformDHRatchetStep_MaxKeyID_ReturnsError(t *testing.T) {
+	var pubKey, privKey [32]byte
+	_, _ = rand.Read(pubKey[:])
+	_, _ = rand.Read(privKey[:])
+
+	keys := &sessionKeys{}
+	_, _ = rand.Read(keys.rootKey[:])
+	_, _ = rand.Read(keys.tagKey[:])
+
+	session, err := createSession(pubKey, keys, privKey, true)
+	require.NoError(t, err)
+	session.sendKeyID = MaxKeyID
+
+	err = performDHRatchetStep(session)
+	assert.Error(t, err, "performDHRatchetStep must error when sendKeyID is at MaxKeyID")
+	assert.Contains(t, err.Error(), "maximum")
+	assert.Equal(t, uint16(MaxKeyID), session.sendKeyID,
+		"sendKeyID must not change on error")
+	assert.False(t, session.HasPendingNextKeys(),
+		"no NextKey block should be queued on error")
 }
 
 // ============================================================================

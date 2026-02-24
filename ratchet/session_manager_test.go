@@ -1357,3 +1357,49 @@ func TestNSRKeys_RatchetsUpdatedAfterNSR(t *testing.T) {
 	assert.NotSame(t, preNSRInitTagRatchet, postNSRInitTagRatchet,
 		"Initiator's TagRatchet must be replaced after receiving NSR")
 }
+
+// ============================================================================
+// generateTagWindow — nil RecvTagRatchet
+// ============================================================================
+
+// TestGenerateTagWindow_NilRecvTagRatchet_ReturnsError verifies that
+// generateTagWindow returns an explicit error when session.RecvTagRatchet is
+// nil rather than silently falling back to the send-direction TagRatchet.
+//
+// Inserting send-direction tags into the incoming tag index would cause every
+// inbound existing-session message to fail tag lookup without any diagnostic
+// output, which is far harder to debug than an early error.
+func TestGenerateTagWindow_NilRecvTagRatchet_ReturnsError(t *testing.T) {
+	sm := createTestSessionManager(t)
+
+	var pubKey, privKey [32]byte
+	_, _ = rand.Read(pubKey[:])
+	_, _ = rand.Read(privKey[:])
+
+	keys := &sessionKeys{}
+	_, _ = rand.Read(keys.rootKey[:])
+	_, _ = rand.Read(keys.tagKey[:])
+
+	session, err := createSession(pubKey, keys, privKey, true)
+	require.NoError(t, err)
+
+	// Deliberately nil out the receive ratchet to simulate a partially
+	// constructed session (e.g., after a failed ratchet update).
+	session.RecvTagRatchet = nil
+
+	sm.mu.Lock()
+	genErr := sm.generateTagWindow(session)
+	sm.mu.Unlock()
+
+	require.Error(t, genErr, "generateTagWindow must return an error when RecvTagRatchet is nil")
+	assert.Contains(t, genErr.Error(), "RecvTagRatchet is nil",
+		"error message should identify the nil ratchet")
+
+	// The tag index must remain empty — no send-direction tags were inserted.
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	for _, sess := range sm.tagIndex {
+		assert.NotSame(t, sess, session,
+			"no tags for the broken session should appear in the index")
+	}
+}

@@ -629,11 +629,14 @@ func (sm *SessionManager) replenishTagWindowIfNeeded(session *Session) {
 // If a generated tag collides with an existing tag from another session,
 // the collision is logged and the colliding tag is skipped to avoid
 // silently overwriting another session's tag slot.
+// Returns an error if RecvTagRatchet is nil; using the send-direction TagRatchet
+// as a fallback would populate the tag index with outgoing tags, causing all
+// incoming existing-session messages to fail lookup silently.
 // Must be called with sm.mu held for writing.
 func (sm *SessionManager) generateTagWindow(session *Session) error {
 	tagRatchet := session.RecvTagRatchet
 	if tagRatchet == nil {
-		tagRatchet = session.TagRatchet
+		return oops.Errorf("RecvTagRatchet is nil for session — cannot populate incoming tag index")
 	}
 	for len(session.pendingTags) < tagWindowSize {
 		tag, err := tagRatchet.GenerateNextTag()
