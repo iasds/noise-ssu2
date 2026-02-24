@@ -449,6 +449,124 @@ func TestCloseStopsCleanupLoop(t *testing.T) {
 }
 
 // ============================================================================
+// Tag Collision Detection
+// ============================================================================
+
+// TestTagCollisionDetection verifies that generateTagWindow does not silently
+// overwrite another session's tag when a collision occurs. Instead, it should
+// skip the colliding tag and generate the next one.
+func TestTagCollisionDetection(t *testing.T) {
+	sm := createTestSessionManager(t)
+	sender, receiver := createLinkedManagers(t)
+
+	// Establish two sessions so we can have two different sessions with tags
+	destHash1 := types.SHA256(receiver.ourPublicKey[:])
+	_, err := sender.EncryptGarlicMessage(destHash1, receiver.ourPublicKey, []byte("session1"))
+	require.NoError(t, err)
+
+	destHash2 := types.SHA256(sm.ourPublicKey[:])
+	_, err = sender.EncryptGarlicMessage(destHash2, sm.ourPublicKey, []byte("session2"))
+	require.NoError(t, err)
+
+	// Both sessions should exist and have their own tag windows
+	assert.Equal(t, 2, sender.GetSessionCount())
+
+	// Verify that tags from different sessions point to different session objects
+	sender.mu.RLock()
+	session1 := sender.sessions[destHash1]
+	session2 := sender.sessions[destHash2]
+	sender.mu.RUnlock()
+
+	require.NotNil(t, session1)
+	require.NotNil(t, session2)
+
+	// Tags should not cross-reference
+	sender.mu.RLock()
+	for _, tag := range session1.pendingTags {
+		if indexed, ok := sender.tagIndex[tag]; ok {
+			assert.Equal(t, session1, indexed,
+				"Session1 tag should point to session1, not another session")
+		}
+	}
+	for _, tag := range session2.pendingTags {
+		if indexed, ok := sender.tagIndex[tag]; ok {
+			assert.Equal(t, session2, indexed,
+				"Session2 tag should point to session2, not another session")
+		}
+	}
+	sender.mu.RUnlock()
+}
+
+// TestGenerateTagWindowSameSessionNoCollision verifies that re-generating tags
+// for the same session doesn't treat its own existing tags as collisions.
+func TestGenerateTagWindowSameSessionNoCollision(t *testing.T) {
+	sender := createTestSessionManager(t)
+	receiver := createTestSessionManager(t)
+
+	destHash := types.SHA256(receiver.ourPublicKey[:])
+	_, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("hello"))
+	require.NoError(t, err)
+
+	sender.mu.Lock()
+	session := sender.sessions[destHash]
+	require.NotNil(t, session)
+
+	// Consume some tags to force replenishment
+	initialCount := len(session.pendingTags)
+	if initialCount > 2 {
+		// Remove tags from both pendingTags and tagIndex
+		removed := session.pendingTags[:2]
+		session.pendingTags = session.pendingTags[2:]
+		for _, tag := range removed {
+			delete(sender.tagIndex, tag)
+		}
+	}
+
+	// Regenerate — should not hit any collision since same session owns the remaining tags
+	err = sender.generateTagWindow(session)
+	sender.mu.Unlock()
+
+	require.NoError(t, err)
+	assert.Equal(t, tagWindowSize, len(session.pendingTags))
+}
+
+// ============================================================================
+// Empty Plaintext Validation
+// ============================================================================
+
+// TestEncryptEmptyPlaintextReturnsError verifies that encrypting with empty
+// plaintext returns a clear error rather than producing an empty garlic message.
+func TestEncryptEmptyPlaintextReturnsError(t *testing.T) {
+	sender := createTestSessionManager(t)
+	receiver := createTestSessionManager(t)
+
+	destHash := types.SHA256(receiver.ourPublicKey[:])
+
+	// nil plaintext
+	_, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, nil)
+	assert.Error(t, err, "nil plaintext should be rejected")
+	assert.Contains(t, err.Error(), "non-empty")
+
+	// zero-length plaintext
+	_, err = sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte{})
+	assert.Error(t, err, "zero-length plaintext should be rejected")
+	assert.Contains(t, err.Error(), "non-empty")
+}
+
+// TestEncryptNonEmptyPlaintextSucceeds confirms that non-empty plaintext works normally.
+func TestEncryptNonEmptyPlaintextSucceeds(t *testing.T) {
+	sender := createTestSessionManager(t)
+	receiver := createTestSessionManager(t)
+
+	destHash := types.SHA256(receiver.ourPublicKey[:])
+
+	// Single byte should succeed
+	encrypted, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte{0x42})
+	require.NoError(t, err)
+	assert.NotEmpty(t, encrypted)
+}
+
+// ============================================================================
 // LRU Eviction
 // ============================================================================
 

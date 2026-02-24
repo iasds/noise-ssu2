@@ -8,8 +8,6 @@
 package ratchet
 
 import (
-	"fmt"
-
 	"github.com/go-i2p/crypto/chacha20poly1305"
 	"github.com/go-i2p/crypto/types"
 	"github.com/go-i2p/logger"
@@ -46,12 +44,12 @@ func (c *BuildRecordCrypto) EncryptReplyRecord(
 	replyIV [16]byte,
 ) ([]byte, error) {
 	if len(cleartext) != 528 {
-		return nil, fmt.Errorf("invalid cleartext size: expected 528 bytes, got %d", len(cleartext))
+		return nil, oops.Errorf("invalid cleartext size: expected 528 bytes, got %d", len(cleartext))
 	}
 
 	encrypted, err := c.encryptChaCha20Poly1305(cleartext, replyKey, replyIV)
 	if err != nil {
-		return nil, fmt.Errorf("ChaCha20-Poly1305 encryption failed: %w", err)
+		return nil, oops.Errorf("ChaCha20-Poly1305 encryption failed: %w", err)
 	}
 
 	log.WithFields(logger.Fields{
@@ -73,16 +71,16 @@ func (c *BuildRecordCrypto) DecryptReplyRecord(
 	replyIV [16]byte,
 ) ([]byte, error) {
 	if len(encryptedData) != 544 {
-		return nil, fmt.Errorf("invalid encrypted data size: expected 544 bytes, got %d", len(encryptedData))
+		return nil, oops.Errorf("invalid encrypted data size: expected 544 bytes, got %d", len(encryptedData))
 	}
 
 	cleartext, err := c.decryptChaCha20Poly1305(encryptedData, replyKey, replyIV)
 	if err != nil {
-		return nil, fmt.Errorf("ChaCha20-Poly1305 decryption failed: %w", err)
+		return nil, oops.Errorf("ChaCha20-Poly1305 decryption failed: %w", err)
 	}
 
 	if len(cleartext) != 528 {
-		return nil, fmt.Errorf("invalid decrypted data size: expected 528 bytes, got %d", len(cleartext))
+		return nil, oops.Errorf("invalid decrypted data size: expected 528 bytes, got %d", len(cleartext))
 	}
 
 	log.Debug("Decrypted build response record")
@@ -141,12 +139,12 @@ func (c *BuildRecordCrypto) encryptChaCha20Poly1305(
 	iv [16]byte,
 ) ([]byte, error) {
 	if len(plaintext) != 528 {
-		return nil, fmt.Errorf("plaintext must be 528 bytes, got %d", len(plaintext))
+		return nil, oops.Errorf("plaintext must be 528 bytes, got %d", len(plaintext))
 	}
 
 	aead, err := chacha20poly1305.NewAEAD(key)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create ChaCha20-Poly1305 cipher: %w", err)
+		return nil, oops.Errorf("failed to create ChaCha20-Poly1305 cipher: %w", err)
 	}
 
 	// Use first 12 bytes of IV as nonce (ChaCha20-Poly1305 requires 12-byte nonce)
@@ -154,7 +152,7 @@ func (c *BuildRecordCrypto) encryptChaCha20Poly1305(
 
 	ct, tag, err := aead.Encrypt(plaintext, nil, nonce)
 	if err != nil {
-		return nil, fmt.Errorf("failed to encrypt: %w", err)
+		return nil, oops.Errorf("failed to encrypt: %w", err)
 	}
 
 	// Concatenate ciphertext + tag (528 + 16 = 544 bytes)
@@ -163,7 +161,7 @@ func (c *BuildRecordCrypto) encryptChaCha20Poly1305(
 	copy(result[len(ct):], tag[:])
 
 	if len(result) != 544 {
-		return nil, fmt.Errorf("unexpected ciphertext length: %d", len(result))
+		return nil, oops.Errorf("unexpected ciphertext length: %d", len(result))
 	}
 
 	return result, nil
@@ -176,12 +174,12 @@ func (c *BuildRecordCrypto) decryptChaCha20Poly1305(
 	iv [16]byte,
 ) ([]byte, error) {
 	if len(ciphertext) != 544 {
-		return nil, fmt.Errorf("ciphertext must be 544 bytes (528 + 16 tag), got %d", len(ciphertext))
+		return nil, oops.Errorf("ciphertext must be 544 bytes (528 + 16 tag), got %d", len(ciphertext))
 	}
 
 	aead, err := chacha20poly1305.NewAEAD(key)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create ChaCha20-Poly1305 cipher: %w", err)
+		return nil, oops.Errorf("failed to create ChaCha20-Poly1305 cipher: %w", err)
 	}
 
 	nonce := iv[:12]
@@ -192,11 +190,11 @@ func (c *BuildRecordCrypto) decryptChaCha20Poly1305(
 
 	plaintext, err := aead.Decrypt(ct, tag, nil, nonce)
 	if err != nil {
-		return nil, fmt.Errorf("decryption failed (authentication error): %w", err)
+		return nil, oops.Errorf("decryption failed (authentication error): %w", err)
 	}
 
 	if len(plaintext) != 528 {
-		return nil, fmt.Errorf("unexpected plaintext length: %d", len(plaintext))
+		return nil, oops.Errorf("unexpected plaintext length: %d", len(plaintext))
 	}
 
 	return plaintext, nil

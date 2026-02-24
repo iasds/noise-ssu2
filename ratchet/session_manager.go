@@ -82,10 +82,16 @@ func GenerateSessionManager() (*SessionManager, error) {
 }
 
 // EncryptGarlicMessage encrypts a plaintext garlic message for the given destination.
+// The plaintext must be non-empty; the I2P spec requires at least one payload block.
+// Returns an error if plaintext is nil or zero-length.
 func (sm *SessionManager) EncryptGarlicMessage(
 	destinationHash, destinationPubKey [32]byte,
 	plaintextGarlic []byte,
 ) ([]byte, error) {
+	if len(plaintextGarlic) == 0 {
+		return nil, oops.Errorf("plaintext must be non-empty: garlic messages require at least one payload block")
+	}
+
 	log.WithFields(map[string]interface{}{
 		"at":             "EncryptGarlicMessage",
 		"plaintext_size": len(plaintextGarlic),
@@ -455,6 +461,9 @@ func (sm *SessionManager) replenishTagWindowIfNeeded(session *Session) {
 }
 
 // generateTagWindow pre-generates a window of session tags for a session.
+// If a generated tag collides with an existing tag from another session,
+// the collision is logged and the colliding tag is skipped to avoid
+// silently overwriting another session's tag slot.
 // Must be called with sm.mu held for writing.
 func (sm *SessionManager) generateTagWindow(session *Session) error {
 	tagRatchet := session.RecvTagRatchet
@@ -465,6 +474,13 @@ func (sm *SessionManager) generateTagWindow(session *Session) error {
 		tag, err := tagRatchet.GenerateNextTag()
 		if err != nil {
 			return oops.Wrapf(err, "failed to generate session tag")
+		}
+		if existing, ok := sm.tagIndex[tag]; ok && existing != session {
+			log.WithFields(map[string]interface{}{
+				"at":  "generateTagWindow",
+				"tag": fmt.Sprintf("%x", tag),
+			}).Warn("Tag collision detected, skipping duplicate tag")
+			continue
 		}
 		session.pendingTags = append(session.pendingTags, tag)
 		sm.tagIndex[tag] = session
