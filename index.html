@@ -13,7 +13,7 @@
         <a href="index.html">go-i2p/go-noise</a>
       </h2>
       <div class="repo-meta">
-        📝 89 commits
+        📝 123 commits
          • 📜 License
       </div>
     </div>
@@ -50,23 +50,23 @@
         
           <li><a href="docs/DOC.html">noise</a></li>
         
-          <li><a href="docs/examples/ntcp2/DOC.html">ntcp2</a></li>
-        
           <li><a href="docs/ntcp2/DOC.html">ntcp2</a></li>
+        
+          <li><a href="docs/examples/ntcp2/DOC.html">ntcp2</a></li>
         
           <li><a href="docs/examples/ntcp2-config/DOC.html">ntcp2-config</a></li>
         
           <li><a href="docs/examples/ntcp2-listener/DOC.html">ntcp2-listener</a></li>
         
-          <li><a href="docs/pool/DOC.html">pool</a></li>
-        
           <li><a href="docs/examples/pool/DOC.html">pool</a></li>
+        
+          <li><a href="docs/pool/DOC.html">pool</a></li>
         
           <li><a href="docs/examples/retry/DOC.html">retry</a></li>
         
-          <li><a href="docs/examples/shared/DOC.html">shared</a></li>
-        
           <li><a href="docs/examples/ntcp2-shared/DOC.html">shared</a></li>
+        
+          <li><a href="docs/examples/shared/DOC.html">shared</a></li>
         
           <li><a href="docs/examples/shutdown/DOC.html">shutdown</a></li>
         
@@ -90,12 +90,12 @@
       <div class="repo-stats">
         
         <div class="repo-stat">
-          <span>📝</span> <span>89 commits</span>
+          <span>📝</span> <span>123 commits</span>
         </div>
         
         
         <div class="repo-stat">
-          <span>📅</span> <span>Last updated: February 20, 2026</span>
+          <span>📅</span> <span>Last updated: February 25, 2026</span>
         </div>
         
         
@@ -265,6 +265,31 @@ fmt.Printf(&quot;Handshake completed in %v\n&quot;, handshakeDuration)
 
 <p>Core Noise and NTCP2 implementations completed. SSU2 implementation planned.</p>
 
+<h2 id="packages">Packages</h2>
+
+<h3 id="core-noise-protocol-transport">Core: Noise Protocol Transport</h3>
+
+<p>The root package provides <code>net.Conn</code>, <code>net.Listener</code>, and <code>net.Addr</code> wrappers
+for the Noise Protocol Framework, used by I2P&rsquo;s NTCP2 transport.</p>
+
+<h3 id="ratchet-ecies-x25519-aead-ratchet"><code>ratchet/</code> — ECIES-X25519-AEAD-Ratchet</h3>
+
+<p>The <a href="ratchet/" target="_blank"><code>ratchet</code></a> package provides the ECIES-X25519-AEAD-Ratchet
+cryptographic engine for I2P&rsquo;s end-to-end garlic encryption:</p>
+
+<ul>
+<li><strong>Garlic sessions</strong>: Double-ratchet encrypt/decrypt with DH ratchet rotation</li>
+<li><strong>Build record crypto</strong>: ChaCha20-Poly1305 and ECIES for tunnel build records</li>
+<li><strong>Interface-based</strong>: All APIs defined via interfaces for testability</li>
+</ul>
+
+<p>See <a href="ratchet/README.md" target="_blank"><code>ratchet/README.md</code></a> for detailed API documentation.</p>
+
+<h3 id="ntcp2-ntcp2-transport-helpers"><code>ntcp2/</code> — NTCP2 Transport Helpers</h3>
+
+<p>The <code>ntcp2</code> package provides NTCP2-specific connection handling, replay
+detection (<code>ReplayCache</code>), and KDF utilities.</p>
+
 <h2 id="architecture">Architecture</h2>
 
 <pre><code>NoiseConn (net.Conn)
@@ -340,7 +365,7 @@ fmt.Printf(&quot;Handshake completed in %v\n&quot;, handshakeDuration)
                 eyedeekay
               </div>
               <div class="contributor-commits">
-                89 commits
+                123 commits
               </div>
             </div>
           </div>
@@ -352,7 +377,7 @@ fmt.Printf(&quot;Handshake completed in %v\n&quot;, handshakeDuration)
     </main>
     
     <footer class="page-footer">
-      <p>Generated on 2026-02-25 22:38:23 • <a href="https://github.com/go-i2p/go-noise" target="_blank">View on GitHub</a></p>
+      <p>Generated on 2026-02-25 23:00:43 • <a href="https://github.com/go-i2p/go-noise" target="_blank">View on GitHub</a></p>
     </footer>
   </div>
 </body>
