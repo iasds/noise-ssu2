@@ -16,16 +16,50 @@ import (
 
 var log = logger.GetGoI2PLogger()
 
-// Compile-time interface checks.
+// Compile-time interface checks for the focused types.
 var (
-	_ BuildReplyEncryptor = (*BuildRecordCrypto)(nil)
+	_ BuildReplyEncryptor = (*BuildReplyCrypto)(nil)
 )
 
-// BuildRecordCrypto provides encryption/decryption for tunnel build records.
-// Uses modern ChaCha20-Poly1305 AEAD encryption (I2P 0.9.44+).
-type BuildRecordCrypto struct{}
+// BuildReplyCrypto handles symmetric encryption and decryption of tunnel build
+// reply records using ChaCha20-Poly1305 (I2P 0.9.44+).
+//
+// This type handles only the symmetric half of the tunnel-build crypto:
+// EncryptReplyRecord and DecryptReplyRecord.  Callers that need only reply
+// record operations should use this type directly via the BuildReplyEncryptor
+// interface, so the expected key material (32-byte session key + 16-byte IV)
+// is clear at every call site.
+//
+// For the asymmetric ECIES-X25519 request half see BuildRequestCrypto.
+// For backward compatibility a combined type is available as BuildRecordCrypto.
+type BuildReplyCrypto struct{}
 
-// NewBuildRecordCrypto creates a new build record crypto handler.
+// NewBuildReplyCrypto creates a new BuildReplyCrypto handler.
+func NewBuildReplyCrypto() *BuildReplyCrypto {
+	return &BuildReplyCrypto{}
+}
+
+// BuildRecordCrypto is a backward-compatible wrapper that implements both
+// BuildReplyEncryptor (ChaCha20-Poly1305) and BuildRecordEncryptor
+// (ECIES-X25519) by embedding the two focused types.
+//
+// New code should prefer BuildReplyCrypto or BuildRequestCrypto directly so
+// that required key material is explicit at every call site.
+type BuildRecordCrypto struct {
+	BuildReplyCrypto
+	BuildRequestCrypto
+}
+
+// Compile-time backward-compat checks: the combined wrapper still satisfies
+// both interfaces.
+var (
+	_ BuildReplyEncryptor  = (*BuildRecordCrypto)(nil)
+	_ BuildRecordEncryptor = (*BuildRecordCrypto)(nil)
+)
+
+// NewBuildRecordCrypto creates a new BuildRecordCrypto handler.
+// Deprecated: prefer NewBuildReplyCrypto() or NewBuildRequestCrypto() for
+// call sites that use only one of the two crypto operations.
 func NewBuildRecordCrypto() *BuildRecordCrypto {
 	return &BuildRecordCrypto{}
 }
@@ -38,7 +72,7 @@ func NewBuildRecordCrypto() *BuildRecordCrypto {
 // Output: 528 bytes encrypted data + 16 bytes authentication tag = 544 bytes
 //
 // The caller (go-i2p) serializes BuildResponseRecord to cleartext before calling.
-func (c *BuildRecordCrypto) EncryptReplyRecord(
+func (c *BuildReplyCrypto) EncryptReplyRecord(
 	cleartext []byte,
 	replyKey [32]byte,
 	replyIV [16]byte,
@@ -65,7 +99,7 @@ func (c *BuildRecordCrypto) EncryptReplyRecord(
 // Uses ChaCha20-Poly1305 AEAD decryption (I2P 0.9.44+).
 // Expects 544 bytes input (528 ciphertext + 16 auth tag).
 // Returns 528 bytes plaintext; the caller (go-i2p) parses and verifies the hash.
-func (c *BuildRecordCrypto) DecryptReplyRecord(
+func (c *BuildReplyCrypto) DecryptReplyRecord(
 	encryptedData []byte,
 	replyKey [32]byte,
 	replyIV [16]byte,
@@ -133,7 +167,7 @@ func CreateBuildResponseRecordRaw(reply byte, randomData [495]byte) [32]byte {
 }
 
 // encryptChaCha20Poly1305 encrypts data using ChaCha20-Poly1305 AEAD.
-func (c *BuildRecordCrypto) encryptChaCha20Poly1305(
+func (c *BuildReplyCrypto) encryptChaCha20Poly1305(
 	plaintext []byte,
 	key [32]byte,
 	iv [16]byte,
@@ -173,7 +207,7 @@ func (c *BuildRecordCrypto) encryptChaCha20Poly1305(
 }
 
 // decryptChaCha20Poly1305 decrypts data using ChaCha20-Poly1305 AEAD.
-func (c *BuildRecordCrypto) decryptChaCha20Poly1305(
+func (c *BuildReplyCrypto) decryptChaCha20Poly1305(
 	ciphertext []byte,
 	key [32]byte,
 	iv [16]byte,

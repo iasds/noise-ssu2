@@ -551,3 +551,171 @@ func TestNSDateTimeFreshnessRejected(t *testing.T) {
 	require.Error(t, err, "NS with stale timestamp must be rejected")
 	assert.Contains(t, err.Error(), "freshness", "error must mention freshness check")
 }
+
+// ============================================================================
+// Tag Window Replenishment Tests (AUDIT items: collision skip, retry)
+// ============================================================================
+
+// TestInstallGeneratedTagsLocked_CollisionSkip verifies that
+// installGeneratedTagsLocked skips tags already owned by a different session
+// (simulating a cross-session hash collision) and only installs the
+// non-colliding subset.
+//
+// This is a unit test of the internal install path.  It ensures:
+//  1. The colliding tag is not re-attributed to the new session.
+//  2. The phantom session's ownership of the colliding tag is preserved.
+//  3. The non-colliding tags are correctly appended to pendingTags / tagIndex.
+func TestInstallGeneratedTagsLocked_CollisionSkip(t *testing.T) {
+	sm, err := GenerateSessionManager()
+	require.NoError(t, err)
+
+	// Phantom session: represents another, pre-existing session.
+	phantom := &Session{}
+
+	// Real session: the session we are trying to replenish.
+	real := &Session{
+		pendingTags: make([][8]byte, 0),
+	}
+	sm.mu.Lock()
+
+	// Three test tags — tagB is owned by phantom (simulated collision).
+	var tagA, tagB, tagC [8]byte
+	tagA[0] = 0xAA
+	tagB[0] = 0xBB
+	tagC[0] = 0xCC
+	sm.tagIndex[tagB] = phantom
+
+	sm.installGeneratedTagsLocked(real, [][8]byte{tagA, tagB, tagC})
+	sm.mu.Unlock()
+
+	// Only tagA and tagC should be installed; tagB was skipped.
+	require.Equal(t, 2, len(real.pendingTags),
+		"pendingTags should contain only non-colliding tags")
+	assert.Equal(t, tagA, real.pendingTags[0], "first installed tag should be tagA")
+	assert.Equal(t, tagC, real.pendingTags[1], "second installed tag should be tagC")
+
+	// tagIndex must reflect the correct ownership.
+	sm.mu.RLock()
+	assert.Equal(t, real, sm.tagIndex[tagA], "tagIndex[tagA] should point to real session")
+	assert.Equal(t, phantom, sm.tagIndex[tagB], "phantom must still own tagB")
+	assert.Equal(t, real, sm.tagIndex[tagC], "tagIndex[tagC] should point to real session")
+	sm.mu.RUnlock()
+}
+
+// TestReplenishTagWindow_FullReplenishment verifies that replenishTagWindowOutsideLock
+// fully restores the tag window after it has been drained to zero.
+//
+// This exercises the happy path of the retry loop: the first attempt should
+// successfully generate and install tagWindowSize entries with no collisions.
+func TestReplenishTagWindow_FullReplenishment(t *testing.T) {
+	sender, receiver := createLinkedManagers(t)
+	_ = mustBootstrapSession(t, sender, receiver)
+
+	// Locate the receiver's active session.
+	receiver.mu.RLock()
+	var sess *Session
+	for _, s := range receiver.sessions {
+		sess = s
+		break
+	}
+	receiver.mu.RUnlock()
+	require.NotNil(t, sess, "receiver must have a session after bootstrap")
+
+	// Drain the current pendingTags so the window starts empty.
+	receiver.mu.Lock()
+	sess.mu.Lock()
+	for _, tag := range sess.pendingTags {
+		delete(receiver.tagIndex, tag)
+	}
+	sess.pendingTags = sess.pendingTags[:0]
+	sess.mu.Unlock()
+	receiver.mu.Unlock()
+
+	// Confirm the window is empty.
+	sess.mu.Lock()
+	require.Equal(t, 0, len(sess.pendingTags), "pendingTags must be empty before replenishment")
+	sess.mu.Unlock()
+
+	// Run replenishment (no collisions expected; ratchet generates fresh tags).
+	receiver.replenishTagWindowOutsideLock(sess)
+
+	// Verify the window was fully restored.
+	sess.mu.Lock()
+	count := len(sess.pendingTags)
+	sess.mu.Unlock()
+
+	assert.Equal(t, tagWindowSize, count,
+		"tag window must be fully replenished to tagWindowSize=%d after drain; got %d",
+		tagWindowSize, count)
+}
+
+// TestReplenishTagWindow_PartialCollisionRetries verifies that when
+// installGeneratedTagsLocked skips some tags due to collisions, the retry loop
+// in replenishTagWindowOutsideLock continues generating until the window is full.
+//
+// Setup: after the first replenishment call installs fewer than tagWindowSize
+// entries (because we pre-occupied some slots with another session's tags), we
+// verify that the final window size equals tagWindowSize.
+//
+// Implementation note: forcing a deterministic collision requires knowing the
+// ratchet's next output in advance.  We achieve this by:
+//  1. Running one full replenishment to learn the tags (and thus the ratchet's
+//     current output window).
+//  2. Draining pendingTags and re-occupying the FIRST tag in tagIndex with a
+//     phantom session.
+//  3. Calling replenishment again — the first attempt will skip the phantom tag,
+//     but the retry loop will generate one additional tag to compensate.
+func TestReplenishTagWindow_PartialCollisionRetries(t *testing.T) {
+	sender, receiver := createLinkedManagers(t)
+	_ = mustBootstrapSession(t, sender, receiver)
+
+	// Locate the receiver's active session.
+	receiver.mu.RLock()
+	var sess *Session
+	for _, s := range receiver.sessions {
+		sess = s
+		break
+	}
+	receiver.mu.RUnlock()
+	require.NotNil(t, sess, "receiver must have a session after bootstrap")
+
+	// Do a first replenishment so the tag ratchet has produced a full window.
+	receiver.replenishTagWindowOutsideLock(sess)
+	sess.mu.Lock()
+	require.Equal(t, tagWindowSize, len(sess.pendingTags), "precondition: first replenishment must fill window")
+	// Record one of the live tags — it will become a collision trigger.
+	collidingTag := sess.pendingTags[0]
+	// Drain the window.
+	for _, tag := range sess.pendingTags {
+		receiver.mu.Lock()
+		delete(receiver.tagIndex, tag)
+		receiver.mu.Unlock()
+	}
+	sess.pendingTags = sess.pendingTags[:0]
+	sess.mu.Unlock()
+
+	// Occupy the colliding tag with a phantom session.
+	phantom := &Session{}
+	receiver.mu.Lock()
+	receiver.tagIndex[collidingTag] = phantom
+	receiver.mu.Unlock()
+
+	// Run replenishment.  The first attempt will skip collidingTag (owned by
+	// phantom), leaving the window one short.  The retry generates a further tag
+	// to bring the window back to tagWindowSize.
+	receiver.replenishTagWindowOutsideLock(sess)
+
+	sess.mu.Lock()
+	count := len(sess.pendingTags)
+	sess.mu.Unlock()
+
+	// Clean up phantom ownership to avoid leaking into tagIndex.
+	receiver.mu.Lock()
+	if receiver.tagIndex[collidingTag] == phantom {
+		delete(receiver.tagIndex, collidingTag)
+	}
+	receiver.mu.Unlock()
+
+	assert.Equal(t, tagWindowSize, count,
+		"retry loop must compensate for one collision so window reaches tagWindowSize")
+}

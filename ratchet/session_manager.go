@@ -650,6 +650,14 @@ func (sm *SessionManager) decryptExistingSession(
 	// Scan candidate counters from the window base upward.  We do not transmit
 	// the counter on the wire so we must try each candidate until the AEAD tag
 	// verifies.
+	//
+	// Amplification note: a worst-case unauthenticated message with a valid
+	// session tag triggers at most recvWindowSize (64) AEAD trial-decryptions
+	// before this function returns an error.  The amplification factor is
+	// bounded at 64 per session per incoming byte, which is acceptable for
+	// normal I2P traffic volumes.  Callers that receive many invalid messages
+	// from the same remote should apply rate-limiting at the transport layer
+	// before reaching this path.
 	var (
 		plaintext   []byte
 		usedCounter uint32
@@ -828,30 +836,67 @@ const tagReplenishThreshold = 5
 // results are installed into sm.tagIndex under a brief sm.mu write lock.
 // This prevents the global write lock from serialising all goroutines for the
 // duration of SHA-256 / HKDF rounds at high message rates.
+//
+// Collision handling: if installGeneratedTagsLocked skips some tags due to
+// cross-session hash collisions, the window can end up under-sized after the
+// first install pass.  We retry up to maxReplenishAttempts times so that the
+// window reaches tagWindowSize despite isolated collisions.  If the window is
+// still under-sized after all retries, a warning is logged so the condition is
+// visible rather than silent.
 func (sm *SessionManager) replenishTagWindowOutsideLock(session *Session) {
-	// Phase 1: derive tags under session lock only — sm.mu is NOT held here.
+	const maxReplenishAttempts = 3
+
+	for attempt := 0; attempt < maxReplenishAttempts; attempt++ {
+		// Phase 1: derive tags under session lock only — sm.mu is NOT held here.
+		session.mu.Lock()
+		stillNeeded := tagWindowSize - len(session.pendingTags)
+		if stillNeeded <= 0 {
+			session.mu.Unlock()
+			return // already full; another goroutine may have replenished already
+		}
+		newTags, err := generateTagsOutsideLock(session)
+		session.mu.Unlock()
+
+		if err != nil {
+			log.WithFields(map[string]interface{}{
+				"at":            "replenishTagWindowOutsideLock",
+				"remote_pubkey": fmt.Sprintf("%x", session.RemotePublicKey[:8]),
+				"attempt":       attempt + 1,
+				"error":         err.Error(),
+			}).Warn("Failed to generate tags during replenishment")
+			return
+		}
+		if len(newTags) == 0 {
+			return
+		}
+
+		// Phase 2: install pre-derived tags — brief sm.mu write lock, no HKDF.
+		sm.mu.Lock()
+		session.mu.Lock()
+		sm.installGeneratedTagsLocked(session, newTags)
+		remaining := tagWindowSize - len(session.pendingTags)
+		session.mu.Unlock()
+		sm.mu.Unlock()
+
+		if remaining <= 0 {
+			return // window fully replenished
+		}
+		// Window still under-sized due to collisions; retry with a fresh batch.
+	}
+
+	// All attempts exhausted: check final state and warn if still under-sized.
 	session.mu.Lock()
-	newTags, err := generateTagsOutsideLock(session)
+	finalRemaining := tagWindowSize - len(session.pendingTags)
 	session.mu.Unlock()
 
-	if err != nil {
+	if finalRemaining > 0 {
 		log.WithFields(map[string]interface{}{
 			"at":            "replenishTagWindowOutsideLock",
 			"remote_pubkey": fmt.Sprintf("%x", session.RemotePublicKey[:8]),
-			"error":         err.Error(),
-		}).Warn("Failed to generate tags during replenishment")
-		return
+			"missing_tags":  finalRemaining,
+			"max_attempts":  maxReplenishAttempts,
+		}).Warn("Tag window still under-sized after max replenishment attempts due to hash collisions; incoming ES messages may fail until next replenishment")
 	}
-	if len(newTags) == 0 {
-		return
-	}
-
-	// Phase 2: install pre-derived tags — brief sm.mu write lock, no HKDF.
-	sm.mu.Lock()
-	session.mu.Lock()
-	sm.installGeneratedTagsLocked(session, newTags)
-	session.mu.Unlock()
-	sm.mu.Unlock()
 }
 
 // generateTagsOutsideLock advances session.RecvTagRatchet to produce the tags

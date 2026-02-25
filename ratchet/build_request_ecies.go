@@ -7,7 +7,25 @@ import (
 )
 
 // Compile-time interface check.
-var _ BuildRecordEncryptor = (*BuildRecordCrypto)(nil)
+var _ BuildRecordEncryptor = (*BuildRequestCrypto)(nil)
+
+// BuildRequestCrypto handles asymmetric encryption and decryption of tunnel
+// build request records using ECIES-X25519-AEAD.
+//
+// This type handles only the asymmetric half of the tunnel-build crypto:
+// EncryptBuildRequest, DecryptBuildRequest, and VerifyIdentityHash.  Callers
+// that need only request record operations should use this type directly via
+// the BuildRecordEncryptor interface, so the expected key material
+// (X25519 public/private key) is clear at every call site.
+//
+// For the symmetric ChaCha20-Poly1305 reply half see BuildReplyCrypto.
+// For backward compatibility a combined type is available as BuildRecordCrypto.
+type BuildRequestCrypto struct{}
+
+// NewBuildRequestCrypto creates a new BuildRequestCrypto handler.
+func NewBuildRequestCrypto() *BuildRequestCrypto {
+	return &BuildRequestCrypto{}
+}
 
 // EncryptBuildRequest encrypts a serialized build request record (222 bytes)
 // using ECIES-X25519-AEAD encryption.
@@ -25,7 +43,7 @@ var _ BuildRecordEncryptor = (*BuildRecordCrypto)(nil)
 //   - cleartext: 222-byte serialized BuildRequestRecord
 //   - recipientPubKey: recipient's 32-byte X25519 public key (extracted from RouterInfo by caller)
 //   - recipientIdentityHash: recipient's 32-byte identity hash (extracted from RouterInfo by caller)
-func (c *BuildRecordCrypto) EncryptBuildRequest(
+func (c *BuildRequestCrypto) EncryptBuildRequest(
 	cleartext []byte,
 	recipientPubKey, recipientIdentityHash [32]byte,
 ) ([528]byte, error) {
@@ -70,7 +88,7 @@ func (c *BuildRecordCrypto) EncryptBuildRequest(
 //   - privateKey: our 32-byte X25519 private key
 //
 // Returns 222-byte cleartext.
-func (c *BuildRecordCrypto) DecryptBuildRequest(encrypted [528]byte, privateKey []byte) ([]byte, error) {
+func (c *BuildRequestCrypto) DecryptBuildRequest(encrypted [528]byte, privateKey []byte) ([]byte, error) {
 	if len(privateKey) != 32 {
 		return nil, oops.Errorf("invalid private key size: expected 32 bytes, got %d", len(privateKey))
 	}
@@ -104,7 +122,7 @@ func (c *BuildRecordCrypto) DecryptBuildRequest(encrypted [528]byte, privateKey 
 // Parameters:
 //   - encrypted: 528-byte encrypted build request record
 //   - ourIdentityHash: our 32-byte identity hash
-func (c *BuildRecordCrypto) VerifyIdentityHash(encrypted [528]byte, ourIdentityHash [32]byte) bool {
+func (c *BuildRequestCrypto) VerifyIdentityHash(encrypted [528]byte, ourIdentityHash [32]byte) bool {
 	for i := 0; i < 16; i++ {
 		if encrypted[i] != ourIdentityHash[i] {
 			return false
