@@ -108,13 +108,15 @@ func (slm *SipHashLengthModifier) ModifyInbound(phase handshake.HandshakePhase, 
 
 // getNextOutboundMask generates the next SipHash mask for outbound data.
 // Per NTCP2 spec: IV[n] = SipHash-2-4(sipk1, sipk2, IV[n-1]).
+// Uses a stack-allocated [8]byte to avoid a heap allocation on every frame.
 func (slm *SipHashLengthModifier) getNextOutboundMask() uint16 {
-	// Use the previous IV as SipHash input (8-byte little-endian)
-	input := make([]byte, SipHashIVSize)
-	binary.LittleEndian.PutUint64(input, slm.outboundIV)
+	// Use the previous IV as SipHash input (8-byte little-endian).
+	// Stack-allocated array avoids the per-frame 8-byte heap allocation.
+	var input [SipHashIVSize]byte
+	binary.LittleEndian.PutUint64(input[:], slm.outboundIV)
 
 	// Calculate SipHash with outbound k1, k2 keys
-	hash := siphash.Hash(slm.outboundKeys[0], slm.outboundKeys[1], input)
+	hash := siphash.Hash(slm.outboundKeys[0], slm.outboundKeys[1], input[:])
 
 	// Update IV with the hash result for next iteration
 	slm.outboundIV = hash
@@ -125,13 +127,15 @@ func (slm *SipHashLengthModifier) getNextOutboundMask() uint16 {
 
 // getNextInboundMask generates the next SipHash mask for inbound data.
 // Per NTCP2 spec: IV[n] = SipHash-2-4(sipk1, sipk2, IV[n-1]).
+// Uses a stack-allocated [8]byte to avoid a heap allocation on every frame.
 func (slm *SipHashLengthModifier) getNextInboundMask() uint16 {
-	// Use the previous IV as SipHash input (8-byte little-endian)
-	input := make([]byte, SipHashIVSize)
-	binary.LittleEndian.PutUint64(input, slm.inboundIV)
+	// Use the previous IV as SipHash input (8-byte little-endian).
+	// Stack-allocated array avoids the per-frame 8-byte heap allocation.
+	var input [SipHashIVSize]byte
+	binary.LittleEndian.PutUint64(input[:], slm.inboundIV)
 
 	// Calculate SipHash with inbound k1, k2 keys
-	hash := siphash.Hash(slm.inboundKeys[0], slm.inboundKeys[1], input)
+	hash := siphash.Hash(slm.inboundKeys[0], slm.inboundKeys[1], input[:])
 
 	// Update IV with the hash result for next iteration
 	slm.inboundIV = hash

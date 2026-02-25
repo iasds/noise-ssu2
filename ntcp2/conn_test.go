@@ -1741,3 +1741,27 @@ func TestReadFramed_PlaintextZeroed_DataReachesCallerIntact(t *testing.T) {
 	assert.Equal(t, want[5:], conn.readBuffer,
 		"readBuffer overflow must retain data despite zeroing the Decrypt output")
 }
+
+// TestAuditFix_ValidateFrameLength_TypeConstraintEnforcesUpperBound documents that
+// the previous FRAME_TOO_LARGE branch (`int(frameLen) > SpecMaxFrameSize`) was dead
+// code and has been removed.  Because frameLen is uint16 and SpecMaxFrameSize equals
+// math.MaxUint16 (65535), the wire-format type itself enforces the upper bound;
+// no runtime check is possible or required.  This test pins that the maximum uint16
+// value is always accepted and that the constant relationship holds.
+func TestAuditFix_ValidateFrameLength_TypeConstraintEnforcesUpperBound(t *testing.T) {
+	conn := createTestNTCP2Conn(&mockNoiseConn{})
+
+	// uint16(65535) == SpecMaxFrameSize == math.MaxUint16.
+	// The dead branch `int(frameLen) > 65535` could never fire; it has been removed.
+	err := conn.validateFrameLength(uint16(SpecMaxFrameSize))
+	assert.NoError(t, err,
+		"uint16(SpecMaxFrameSize)==%d must be accepted; type constraint holds", SpecMaxFrameSize)
+
+	err = conn.validateFrameLength(uint16(SpecMaxFrameSize) - 1)
+	assert.NoError(t, err, "SpecMaxFrameSize-1 must also be accepted")
+
+	// The constant relationship that makes the upper-bound check unreachable.
+	const uint16Max = 65535
+	assert.EqualValues(t, uint16Max, SpecMaxFrameSize,
+		"SpecMaxFrameSize must equal uint16 max (65535) for type constraint to hold")
+}

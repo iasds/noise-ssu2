@@ -632,3 +632,34 @@ func TestCreateDialAddresses(t *testing.T) {
 		assert.Equal(t, remoteHash, remoteAddr.RouterHash())
 	})
 }
+
+// TestAuditFix_SetNTCP2Config_NotRedundantInDialNTCP2WithHandshakeContext documents
+// the removal of the redundant ntcp2Conn.SetNTCP2Config(config) call that previously
+// existed in DialNTCP2WithHandshakeContext immediately after DialNTCP2 returned.
+// DialNTCP2 already called SetNTCP2Config via buildNTCP2Connection; the second call
+// was a no-op atomic store of the same pointer.
+//
+// This test verifies the underlying mechanism: SetNTCP2Config stores a pointer
+// atomically, and a subsequent call with the same pointer is idempotent.  It also
+// confirms that the config is accessible after a single SetNTCP2Config call, proving
+// that removing the second call does not break callers that read the config later
+// (e.g., PropagateSipHash).
+func TestAuditFix_SetNTCP2Config_NotRedundantInDialNTCP2WithHandshakeContext(t *testing.T) {
+	conn := createTestNTCP2Conn(&mockNoiseConn{})
+
+	routerHash := generateRandomBytes(32)
+	config, err := NewNTCP2Config(routerHash, true)
+	require.NoError(t, err)
+
+	// Simulate the single remaining SetNTCP2Config call (inside buildNTCP2Connection).
+	conn.SetNTCP2Config(config)
+	loadedConfig := conn.ntcp2Config.Load()
+	assert.NotNil(t, loadedConfig, "config must be set after a single SetNTCP2Config call")
+	assert.Same(t, config, loadedConfig, "stored config must be the identical pointer passed to SetNTCP2Config")
+
+	// Simulate the previously-existing redundant second call — same pointer, no effect.
+	// Verifying idempotency confirms that removing the call is safe.
+	conn.SetNTCP2Config(config)
+	assert.Same(t, config, conn.ntcp2Config.Load(),
+		"repeated SetNTCP2Config with same pointer must be idempotent (atomic store)")
+}

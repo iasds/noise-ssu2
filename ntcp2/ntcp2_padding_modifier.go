@@ -294,6 +294,10 @@ func (npm *NTCP2PaddingModifier) addAEADPadding(data []byte, paddingSize int) ([
 // tracking the end of the last non-padding block. Falls back to trailing padding
 // block detection when the data is not fully in I2P block format (e.g., raw payload
 // followed by an appended padding block).
+//
+// Per the I2P NTCP2 spec, padding MUST be the last block. If a valid padding block
+// is followed by another data block, removeAEADPadding returns an error rather than
+// silently discarding the trailing data.
 func (npm *NTCP2PaddingModifier) removeAEADPadding(data []byte) ([]byte, error) {
 	if len(data) < BlockHeaderSize {
 		return data, nil // No room for block header
@@ -301,6 +305,18 @@ func (npm *NTCP2PaddingModifier) removeAEADPadding(data []byte) ([]byte, error) 
 
 	// Try forward block parsing first (proper I2P block format)
 	result := npm.parseBlockStructure(data)
+
+	// Reject payloads where a non-padding block follows a padding block.
+	// AEAD authentication prevents a malicious peer from forging this, but a
+	// buggy sender could produce it; surface the error rather than silently
+	// truncating the trailing data block.
+	if result.blocksAfterPadding {
+		return nil, oops.
+			Code("BLOCK_ORDER_VIOLATION").
+			In("ntcp2").
+			Errorf("padding block must be last: data block found after padding block")
+	}
+
 	if result.foundValidBlocks && result.lastDataEnd > 0 && result.lastDataEnd <= len(data) {
 		return data[:result.lastDataEnd], nil
 	}
@@ -374,9 +390,13 @@ func (npm *NTCP2PaddingModifier) removePaddingFromBlocks(data []byte) ([]byte, e
 }
 
 // parseBlockStructure analyzes data as I2P block format and tracks parsing state.
+// Per the I2P NTCP2 spec, padding MUST be the last block. If any valid block
+// appears after the first padding block, result.blocksAfterPadding is set to
+// true so callers can reject the malformed payload.
 func (npm *NTCP2PaddingModifier) parseBlockStructure(data []byte) blockParseResult {
 	result := blockParseResult{}
 	offset := 0
+	foundPadding := false
 
 	for offset < len(data) {
 		if !npm.validateBlockBounds(data, offset) {
@@ -389,8 +409,18 @@ func (npm *NTCP2PaddingModifier) parseBlockStructure(data []byte) blockParseResu
 		}
 
 		result.foundValidBlocks = true
+
 		if blockType == PaddingBlockType {
-			return result // Found padding block
+			foundPadding = true
+			// Continue scanning to detect any data blocks that follow the padding block.
+			offset += 3 + blockSize
+			continue
+		}
+
+		if foundPadding {
+			// A non-padding block was found after the padding block — spec violation.
+			result.blocksAfterPadding = true
+			return result
 		}
 
 		result.lastDataEnd = offset + 3 + blockSize
@@ -404,6 +434,10 @@ func (npm *NTCP2PaddingModifier) parseBlockStructure(data []byte) blockParseResu
 type blockParseResult struct {
 	foundValidBlocks bool
 	lastDataEnd      int
+	// blocksAfterPadding is true when at least one additional valid block was
+	// found after the first padding block. Per the I2P NTCP2 spec, padding MUST
+	// be the last block; data blocks after padding indicate a malformed payload.
+	blocksAfterPadding bool
 }
 
 // validateBlockBounds checks if there's enough data for a block header at the given offset.

@@ -1183,3 +1183,85 @@ func masksEqual(a, b []uint16) bool {
 	}
 	return true
 }
+
+// buildI2PBlock constructs a single I2P block in [type:1][size:2 big-endian][data...] format.
+func buildI2PBlock(blockType byte, data []byte) []byte {
+	header := []byte{blockType, byte(len(data) >> 8), byte(len(data))}
+	return append(header, data...)
+}
+
+// TestAuditFix_RemoveAEADPadding_BlocksAfterPaddingReturnsError verifies that
+// a payload where a data block follows a padding block is rejected with
+// BLOCK_ORDER_VIOLATION.  Per the I2P NTCP2 spec, padding MUST be the last block.
+func TestAuditFix_RemoveAEADPadding_BlocksAfterPaddingReturnsError(t *testing.T) {
+	modifier, err := NewNTCP2PaddingModifier("test", 0, 64, false)
+	require.NoError(t, err)
+
+	// Build: [data_block][padding_block][data_block2] — padding is NOT last.
+	var buf []byte
+	buf = append(buf, buildI2PBlock(0x00, []byte("hello"))...)
+	buf = append(buf, buildI2PBlock(PaddingBlockType, []byte{0x00, 0x00})...)
+	buf = append(buf, buildI2PBlock(0x00, []byte("world"))...) // spec violation
+
+	_, err = modifier.removeAEADPadding(buf)
+	require.Error(t, err, "data block after padding must be rejected")
+	assert.Contains(t, err.Error(), "padding block must be last")
+}
+
+// TestAuditFix_ParseBlockStructure_BlocksAfterPaddingDetected verifies that
+// parseBlockStructure sets blocksAfterPadding=true when any non-padding block
+// follows the first padding block.
+func TestAuditFix_ParseBlockStructure_BlocksAfterPaddingDetected(t *testing.T) {
+	modifier, err := NewNTCP2PaddingModifier("test", 0, 64, false)
+	require.NoError(t, err)
+
+	// [data_block][padding_block][extra_data_block]
+	var buf []byte
+	buf = append(buf, buildI2PBlock(0x00, []byte("data"))...)
+	buf = append(buf, buildI2PBlock(PaddingBlockType, []byte{0x00})...)
+	buf = append(buf, buildI2PBlock(0x01, []byte{})...) // trailing non-padding block
+
+	result := modifier.parseBlockStructure(buf)
+	assert.True(t, result.foundValidBlocks, "blocks were parsed")
+	assert.True(t, result.blocksAfterPadding, "must detect data block following padding block")
+}
+
+// TestAuditFix_RemoveAEADPadding_CompliantOrderSucceeds verifies that a
+// spec-compliant payload ([data_block][padding_block]) is still processed
+// correctly after the block-ordering validation is added.
+func TestAuditFix_RemoveAEADPadding_CompliantOrderSucceeds(t *testing.T) {
+	modifier, err := NewNTCP2PaddingModifier("test", 0, 64, false)
+	require.NoError(t, err)
+
+	dataContent := []byte("real data")
+	var buf []byte
+	buf = append(buf, buildI2PBlock(0x00, dataContent)...)
+	buf = append(buf, buildI2PBlock(PaddingBlockType, []byte{0x00, 0x00, 0x00})...)
+
+	result, err := modifier.removeAEADPadding(buf)
+	require.NoError(t, err)
+	expected := buildI2PBlock(0x00, dataContent)
+	assert.Equal(t, expected, result, "data block must be preserved; padding block must be stripped")
+}
+
+// TestAuditFix_SipHashMask_StackAllocZero verifies that getNextOutboundMask and
+// getNextInboundMask produce zero heap allocations after replacing
+// `make([]byte, 8)` with a stack-allocated `var input [8]byte`.
+func TestAuditFix_SipHashMask_StackAllocZero(t *testing.T) {
+	sipKeys := [2]uint64{0xDEADBEEFCAFE0001, 0xC0FFEE0102030405}
+	mod := NewSipHashLengthModifier("alloc_test", sipKeys, 0xA1B2C3D4E5F60708)
+
+	// Warm up: flush any one-time initialisation allocations.
+	mod.getNextOutboundMask()
+	mod.getNextInboundMask()
+
+	outboundAllocs := testing.AllocsPerRun(200, func() {
+		mod.getNextOutboundMask()
+	})
+	inboundAllocs := testing.AllocsPerRun(200, func() {
+		mod.getNextInboundMask()
+	})
+
+	assert.Zero(t, outboundAllocs, "getNextOutboundMask must not heap-allocate (uses stack [8]byte)")
+	assert.Zero(t, inboundAllocs, "getNextInboundMask must not heap-allocate (uses stack [8]byte)")
+}

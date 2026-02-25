@@ -44,8 +44,8 @@ func DialNTCP2WithHandshakeContext(ctx context.Context, network, addr string, co
 		return nil, err
 	}
 
-	// Store the config so PropagateSipHash can read the PostHandshakeHook output.
-	ntcp2Conn.SetNTCP2Config(config)
+	// Note: SetNTCP2Config was already called inside DialNTCP2 → buildNTCP2Connection.
+	// No second call needed here.
 
 	// Perform the handshake with the provided context on the underlying NoiseConn
 	if err := ntcp2Conn.UnderlyingConn().Handshake(ctx); err != nil {

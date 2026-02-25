@@ -360,17 +360,10 @@ func (nc *NTCP2Conn) validateFrameLength(frameLen uint16) error {
 			Errorf("frame length %d below minimum %d", frameLen, MinDataPhaseFrameSize)
 	}
 
-	if int(frameLen) > SpecMaxFrameSize {
-		nc.applyProbingResistanceDelay()
-		return oops.
-			Code("FRAME_TOO_LARGE").
-			In("ntcp2").
-			With("frame_length", frameLen).
-			With("max_frame_size", SpecMaxFrameSize).
-			With("local_addr", nc.localAddr.String()).
-			With("remote_addr", nc.remoteAddr.String()).
-			Errorf("frame length %d exceeds maximum %d", frameLen, SpecMaxFrameSize)
-	}
+	// Note: the FRAME_TOO_LARGE check (frameLen > SpecMaxFrameSize) is omitted here
+	// because frameLen is a uint16 and SpecMaxFrameSize == math.MaxUint16 (65535).
+	// A uint16 value can never exceed 65535, so the branch is unreachable dead code.
+	// The wire-format type constraint enforces the upper bound; no runtime check is needed.
 
 	return nil
 }
