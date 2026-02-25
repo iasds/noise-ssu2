@@ -373,14 +373,14 @@ func TestFilterValidConnections(t *testing.T) {
 	defer pool.Close()
 
 	fresh := &PooledConn{
-		Conn:     newMockConn("127.0.0.1:8080"),
-		Created:  time.Now(),
-		LastUsed: time.Now(),
+		conn:     newMockConn("127.0.0.1:8080"),
+		created:  time.Now(),
+		lastUsed: time.Now(),
 	}
 	expired := &PooledConn{
-		Conn:     newMockConn("127.0.0.1:8081"),
-		Created:  time.Now().Add(-time.Hour),
-		LastUsed: time.Now().Add(-time.Hour),
+		conn:     newMockConn("127.0.0.1:8081"),
+		created:  time.Now().Add(-time.Hour),
+		lastUsed: time.Now().Add(-time.Hour),
 	}
 
 	result := pool.filterValidConnections([]*PooledConn{fresh, expired})
@@ -391,7 +391,7 @@ func TestFilterValidConnections(t *testing.T) {
 	if result[0] != fresh {
 		t.Error("Expected the fresh connection to survive")
 	}
-	if !expired.Conn.(*mockConn).closed {
+	if !expired.conn.(*mockConn).closed {
 		t.Error("Expired connection should be closed")
 	}
 }
@@ -405,20 +405,20 @@ func TestShouldKeepConnection(t *testing.T) {
 	defer pool.Close()
 
 	valid := &PooledConn{
-		Conn:     newMockConn("127.0.0.1:8080"),
-		Created:  time.Now(),
-		LastUsed: time.Now(),
+		conn:     newMockConn("127.0.0.1:8080"),
+		created:  time.Now(),
+		lastUsed: time.Now(),
 	}
 	inUseExpired := &PooledConn{
-		Conn:     newMockConn("127.0.0.1:8081"),
-		Created:  time.Now().Add(-2 * time.Hour),
-		LastUsed: time.Now().Add(-2 * time.Hour),
-		InUse:    true,
+		conn:     newMockConn("127.0.0.1:8081"),
+		created:  time.Now().Add(-2 * time.Hour),
+		lastUsed: time.Now().Add(-2 * time.Hour),
+		inUse:    true,
 	}
 	expired := &PooledConn{
-		Conn:     newMockConn("127.0.0.1:8082"),
-		Created:  time.Now().Add(-2 * time.Hour),
-		LastUsed: time.Now().Add(-2 * time.Hour),
+		conn:     newMockConn("127.0.0.1:8082"),
+		created:  time.Now().Add(-2 * time.Hour),
+		lastUsed: time.Now().Add(-2 * time.Hour),
 	}
 
 	if !pool.shouldKeepConnection(valid) {
@@ -437,7 +437,7 @@ func TestCloseExpiredConnection(t *testing.T) {
 	defer pool.Close()
 
 	conn := newMockConn("127.0.0.1:8080")
-	pooledConn := &PooledConn{Conn: conn}
+	pooledConn := &PooledConn{conn: conn}
 
 	pool.closeExpiredConnection(pooledConn)
 
@@ -451,12 +451,12 @@ func TestUpdateConnectionMap(t *testing.T) {
 	defer pool.Close()
 
 	pool.mu.Lock()
-	pool.conns["addr1"] = []*PooledConn{{Conn: newMockConn("addr1")}}
+	pool.conns["addr1"] = []*PooledConn{{conn: newMockConn("addr1")}}
 	pool.mu.Unlock()
 
 	// Update with non-empty list
 	pool.mu.Lock()
-	newConns := []*PooledConn{{Conn: newMockConn("addr1")}}
+	newConns := []*PooledConn{{conn: newMockConn("addr1")}}
 	pool.updateConnectionMap("addr1", newConns)
 	pool.mu.Unlock()
 

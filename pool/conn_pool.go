@@ -68,28 +68,28 @@ func (p *ConnPool) Get(remoteAddr string) net.Conn {
 	// accumulating and inflating the count against maxSize (starvation fix).
 	for i := 0; i < len(connList); i++ {
 		pooledConn := connList[i]
-		if pooledConn.InUse {
+		if pooledConn.inUse {
 			continue
 		}
 		if !p.isValid(pooledConn) {
 			// Remove expired connection immediately so it does not count against capacity.
-			pooledConn.Conn.Close()
+			pooledConn.conn.Close()
 			connList = append(connList[:i], connList[i+1:]...)
 			i--
 			p.updateConnectionMap(remoteAddr, connList)
 			continue
 		}
-		if p.healthCheck != nil && !p.healthCheck(pooledConn.Conn) {
-			pooledConn.Conn.Close()
+		if p.healthCheck != nil && !p.healthCheck(pooledConn.conn) {
+			pooledConn.conn.Close()
 			connList = append(connList[:i], connList[i+1:]...)
 			i--
 			p.updateConnectionMap(remoteAddr, connList)
 			continue
 		}
-		pooledConn.InUse = true
-		pooledConn.LastUsed = time.Now()
+		pooledConn.inUse = true
+		pooledConn.lastUsed = time.Now()
 		return &PoolConnWrapper{
-			Conn: pooledConn.Conn,
+			Conn: pooledConn.conn,
 			pool: p,
 			addr: remoteAddr,
 		}
@@ -157,7 +157,7 @@ func (p *ConnPool) exceedsCapacity(connList []*PooledConn) bool {
 // isDuplicateConn checks whether the connection is already present in the pool.
 func (p *ConnPool) isDuplicateConn(connList []*PooledConn, conn net.Conn) bool {
 	for _, existing := range connList {
-		if existing.Conn == conn {
+		if existing.conn == conn {
 			return true
 		}
 	}
@@ -167,11 +167,11 @@ func (p *ConnPool) isDuplicateConn(connList []*PooledConn, conn net.Conn) bool {
 // newPooledConn creates a new PooledConn entry with current timestamps.
 func newPooledConn(conn net.Conn, remoteAddr string) *PooledConn {
 	return &PooledConn{
-		Conn:       conn,
-		Created:    time.Now(),
-		LastUsed:   time.Now(),
-		InUse:      false,
-		RemoteAddr: remoteAddr,
+		conn:       conn,
+		created:    time.Now(),
+		lastUsed:   time.Now(),
+		inUse:      false,
+		remoteAddr: remoteAddr,
 	}
 }
 
@@ -197,9 +197,9 @@ func (p *ConnPool) Release(remoteAddr string, conn net.Conn) error {
 	}
 
 	for _, pooledConn := range connList {
-		if pooledConn.Conn == conn {
-			pooledConn.InUse = false
-			pooledConn.LastUsed = time.Now()
+		if pooledConn.conn == conn {
+			pooledConn.inUse = false
+			pooledConn.lastUsed = time.Now()
 			return nil
 		}
 	}
@@ -229,7 +229,7 @@ func (p *ConnPool) Remove(remoteAddr string, conn net.Conn) error {
 	}
 
 	for i, pooledConn := range connList {
-		if pooledConn.Conn == conn {
+		if pooledConn.conn == conn {
 			connList = append(connList[:i], connList[i+1:]...)
 			p.updateConnectionMap(remoteAddr, connList)
 			return conn.Close()
@@ -256,8 +256,8 @@ func (p *ConnPool) Close() error {
 	// closed when returned via Release() or Discard().
 	for _, connList := range p.conns {
 		for _, pooledConn := range connList {
-			if !pooledConn.InUse {
-				pooledConn.Conn.Close()
+			if !pooledConn.inUse {
+				pooledConn.conn.Close()
 			}
 		}
 	}
@@ -278,7 +278,7 @@ func (p *ConnPool) Stats() map[string]int {
 	for _, connList := range p.conns {
 		total += len(connList)
 		for _, pooledConn := range connList {
-			if pooledConn.InUse {
+			if pooledConn.inUse {
 				inUse++
 			}
 		}
@@ -297,12 +297,12 @@ func (p *ConnPool) isValid(pooledConn *PooledConn) bool {
 	now := time.Now()
 
 	// Check age limit
-	if p.maxAge > 0 && now.Sub(pooledConn.Created) > p.maxAge {
+	if p.maxAge > 0 && now.Sub(pooledConn.created) > p.maxAge {
 		return false
 	}
 
 	// Check idle time limit
-	if p.maxIdle > 0 && now.Sub(pooledConn.LastUsed) > p.maxIdle {
+	if p.maxIdle > 0 && now.Sub(pooledConn.lastUsed) > p.maxIdle {
 		return false
 	}
 
@@ -392,12 +392,12 @@ func (p *ConnPool) filterValidConnections(connList []*PooledConn) []*PooledConn 
 
 // shouldKeepConnection determines if a connection should be retained
 func (p *ConnPool) shouldKeepConnection(pooledConn *PooledConn) bool {
-	return pooledConn.InUse || p.isValid(pooledConn)
+	return pooledConn.inUse || p.isValid(pooledConn)
 }
 
 // closeExpiredConnection properly closes an expired connection
 func (p *ConnPool) closeExpiredConnection(pooledConn *PooledConn) {
-	pooledConn.Conn.Close()
+	pooledConn.conn.Close()
 }
 
 // updateConnectionMap updates the pool map with valid connections
