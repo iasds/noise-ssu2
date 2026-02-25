@@ -218,6 +218,11 @@ func (p *ConnPool) Remove(remoteAddr string, conn net.Conn) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	// Honour the closed state consistently with Get(), Put(), and Release().
+	if p.closed {
+		return conn.Close()
+	}
+
 	connList, exists := p.conns[remoteAddr]
 	if !exists {
 		return conn.Close()

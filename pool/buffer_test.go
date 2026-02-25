@@ -896,3 +896,29 @@ func TestCleanupInterval_ProportionalToConfig(t *testing.T) {
 		})
 	}
 }
+
+// TestRemove_ClosedPool verifies that Remove() checks p.closed and closes the
+// connection rather than trying to splice a dead pool's map.
+func TestRemove_ClosedPool(t *testing.T) {
+	p := NewConnPool(&PoolConfig{
+		MaxSize: 5,
+		MaxAge:  time.Hour,
+		MaxIdle: time.Hour,
+	})
+
+	conn := newMockConn("10.0.0.9:1234")
+	if err := p.Put(conn); err != nil {
+		t.Fatalf("Put failed: %v", err)
+	}
+
+	p.Close()
+
+	// Remove on a closed pool should close the conn (not panic or return an error).
+	conn2 := newMockConn("10.0.0.9:1234")
+	if err := p.Remove("10.0.0.9:1234", conn2); err != nil {
+		t.Errorf("Remove on closed pool should not error, got: %v", err)
+	}
+	if !conn2.closed {
+		t.Error("Remove on closed pool should close the supplied connection")
+	}
+}

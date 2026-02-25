@@ -3,6 +3,7 @@ package noise
 import (
 	"context"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/go-i2p/go-noise/pool"
@@ -211,16 +212,20 @@ func DialNoiseWithPool(network, addr string, config *ConnConfig) (*NoiseConn, er
 		if err != nil {
 			return nil, err
 		}
+		// Wrap the freshly-dialed conn so that NoiseConn.Close() returns it to
+		// the pool instead of closing it to the OS.  Pool-retrieved conns are
+		// already wrapped in PoolConnWrapper by ConnPool.Get(), which handles
+		// the release path; this wrapper covers only the new-connection case.
+		if globalConnPool != nil {
+			conn = newPutOnCloseWrapper(conn, globalConnPool)
+		}
 	}
+	_ = fromPool // pool-retrieved path is handled by PoolConnWrapper
 
 	noiseConn, err := createNoiseConn(conn, config, network, addr)
 	if err != nil {
 		conn.Close()
 		return nil, err
-	}
-
-	if fromPool {
-		markConnAsPooled(noiseConn, globalConnPool)
 	}
 
 	return noiseConn, nil
@@ -268,11 +273,32 @@ func createNoiseConn(conn net.Conn, config *ConnConfig, network, addr string) (*
 	return noiseConn, nil
 }
 
-// markConnAsPooled is currently a placeholder for future pool integration.
-// For now, connections from pool are handled manually by the application.
-func markConnAsPooled(nc *NoiseConn, pool *pool.ConnPool) {
-	// Future implementation: Could add metadata to track pool membership
-	// For now, this is a no-op since pool management is handled externally
+// putOnCloseWrapper wraps a freshly-dialed net.Conn so that its Close() call
+// returns the connection to the pool for reuse rather than closing it to the OS.
+// This is used by DialNoiseWithPool for new (non-pool-retrieved) connections.
+type putOnCloseWrapper struct {
+	net.Conn
+	p    *pool.ConnPool
+	mu   sync.Mutex
+	done bool
+}
+
+// newPutOnCloseWrapper creates a putOnCloseWrapper for the given connection.
+func newPutOnCloseWrapper(conn net.Conn, p *pool.ConnPool) net.Conn {
+	return &putOnCloseWrapper{Conn: conn, p: p}
+}
+
+// Close puts the underlying connection back into the pool instead of closing it.
+// The pool will close the connection itself if it is over capacity or already closed.
+func (w *putOnCloseWrapper) Close() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.done {
+		return nil
+	}
+	w.done = true
+	// pool.Put unwraps any PoolConnWrapper nesting and keys by RemoteAddr.
+	return w.p.Put(w.Conn)
 }
 
 // DialNoiseWithHandshake creates a connection to the given address, wraps it with NoiseConn,

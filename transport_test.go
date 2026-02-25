@@ -437,3 +437,88 @@ func TestDialNoiseWithPoolAndHandshake(t *testing.T) {
 		})
 	}
 }
+
+// mockTransportConn is a minimal net.Conn stub used by putOnCloseWrapper tests.
+type mockTransportConn struct {
+	closed     bool
+	remoteAddr net.Addr
+}
+
+func newMockTransportConn(addr string) *mockTransportConn {
+	return &mockTransportConn{
+		remoteAddr: &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 19999},
+	}
+}
+
+func (m *mockTransportConn) Read(b []byte) (int, error)         { return 0, nil }
+func (m *mockTransportConn) Write(b []byte) (int, error)        { return len(b), nil }
+func (m *mockTransportConn) Close() error                       { m.closed = true; return nil }
+func (m *mockTransportConn) LocalAddr() net.Addr                { return m.remoteAddr }
+func (m *mockTransportConn) RemoteAddr() net.Addr               { return m.remoteAddr }
+func (m *mockTransportConn) SetDeadline(t time.Time) error      { return nil }
+func (m *mockTransportConn) SetReadDeadline(t time.Time) error  { return nil }
+func (m *mockTransportConn) SetWriteDeadline(t time.Time) error { return nil }
+
+// TestPutOnCloseWrapper verifies that closing a putOnCloseWrapper returns the
+// underlying connection to the pool (Put) instead of closing it to the OS.
+// This is the mechanism that makes DialNoiseWithPool return new connections to
+// the pool when the caller closes the NoiseConn.
+func TestPutOnCloseWrapper(t *testing.T) {
+	p := pool.NewConnPool(&pool.PoolConfig{
+		MaxSize: 5,
+		MaxAge:  time.Hour,
+		MaxIdle: time.Hour,
+	})
+	defer p.Close()
+
+	rawConn := newMockTransportConn("127.0.0.1:19999")
+	wrapped := newPutOnCloseWrapper(rawConn, p)
+
+	// Closing the wrapper should add the raw conn to the pool.
+	if err := wrapped.Close(); err != nil {
+		t.Fatalf("Close() returned unexpected error: %v", err)
+	}
+
+	// The underlying conn must NOT have been closed to the OS.
+	if rawConn.closed {
+		t.Error("putOnCloseWrapper.Close() should not close the underlying conn; it should Put it")
+	}
+
+	// The pool must now know about the connection.
+	stats := p.Stats()
+	if stats["total"] != 1 {
+		t.Errorf("pool should contain 1 connection after Put, got total=%d", stats["total"])
+	}
+
+	// A second Close() must be idempotent and must not add a duplicate.
+	if err := wrapped.Close(); err != nil {
+		t.Fatalf("second Close() should not error, got: %v", err)
+	}
+	stats = p.Stats()
+	if stats["total"] != 1 {
+		t.Errorf("second Close() should not add a duplicate, got total=%d", stats["total"])
+	}
+}
+
+// TestPutOnCloseWrapper_ClosedPool verifies that when the pool is already closed,
+// putOnCloseWrapper.Close() falls through to Close the underlying conn gracefully.
+func TestPutOnCloseWrapper_ClosedPool(t *testing.T) {
+	p := pool.NewConnPool(&pool.PoolConfig{
+		MaxSize: 5,
+		MaxAge:  time.Hour,
+		MaxIdle: time.Hour,
+	})
+	p.Close() // close the pool first
+
+	rawConn := newMockTransportConn("127.0.0.1:19999")
+	wrapped := newPutOnCloseWrapper(rawConn, p)
+
+	// Pool.Put on a closed pool closes the conn; wrapper must propagate that.
+	if err := wrapped.Close(); err != nil {
+		t.Fatalf("Close() on closed pool returned unexpected error: %v", err)
+	}
+	// The underlying conn should have been closed by pool.Put on closed pool.
+	if !rawConn.closed {
+		t.Error("underlying conn should be closed when pool is closed")
+	}
+}
