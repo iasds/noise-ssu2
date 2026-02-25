@@ -144,7 +144,7 @@ func TestProcessReceivedNextKey_ForwardKey(t *testing.T) {
 	copy(destHash[:], receiver.ourPublicKey[:])
 
 	// Establish a session.
-	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("init"))
+	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, mustBuildNSPayload(t, []byte("init")))
 	require.NoError(t, err)
 	_, _, _, err = receiver.DecryptGarlicMessage(enc)
 	require.NoError(t, err)
@@ -174,7 +174,7 @@ func TestProcessReceivedNextKey_ForwardKeyRequestsReverse(t *testing.T) {
 	var destHash [32]byte
 	copy(destHash[:], receiver.ourPublicKey[:])
 
-	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("init"))
+	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, mustBuildNSPayload(t, []byte("init")))
 	require.NoError(t, err)
 	_, _, _, err = receiver.DecryptGarlicMessage(enc)
 	require.NoError(t, err)
@@ -216,7 +216,7 @@ func TestProcessReceivedNextKey_ReverseKey(t *testing.T) {
 	var destHash [32]byte
 	copy(destHash[:], receiver.ourPublicKey[:])
 
-	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("init"))
+	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, mustBuildNSPayload(t, []byte("init")))
 	require.NoError(t, err)
 	_, _, _, err = receiver.DecryptGarlicMessage(enc)
 	require.NoError(t, err)
@@ -260,7 +260,7 @@ func TestProcessReceivedNextKey_AckNoKey(t *testing.T) {
 	var destHash [32]byte
 	copy(destHash[:], receiver.ourPublicKey[:])
 
-	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("init"))
+	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, mustBuildNSPayload(t, []byte("init")))
 	require.NoError(t, err)
 	_, _, _, err = receiver.DecryptGarlicMessage(enc)
 	require.NoError(t, err)
@@ -310,7 +310,7 @@ func TestProcessIncomingDHRatchet_Success(t *testing.T) {
 	copy(destHash[:], receiver.ourPublicKey[:])
 
 	// Establish a session.
-	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("init"))
+	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, mustBuildNSPayload(t, []byte("init")))
 	require.NoError(t, err)
 	_, _, _, err = receiver.DecryptGarlicMessage(enc)
 	require.NoError(t, err)
@@ -346,7 +346,7 @@ func TestProcessIncomingDHRatchet_UpdatesReceivingChain(t *testing.T) {
 	var destHash [32]byte
 	copy(destHash[:], receiver.ourPublicKey[:])
 
-	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("init"))
+	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, mustBuildNSPayload(t, []byte("init")))
 	require.NoError(t, err)
 	_, _, _, err = receiver.DecryptGarlicMessage(enc)
 	require.NoError(t, err)
@@ -385,7 +385,7 @@ func TestProcessIncomingDHRatchet_MultipleRotations(t *testing.T) {
 	var destHash [32]byte
 	copy(destHash[:], receiver.ourPublicKey[:])
 
-	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("init"))
+	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, mustBuildNSPayload(t, []byte("init")))
 	require.NoError(t, err)
 	_, _, _, err = receiver.DecryptGarlicMessage(enc)
 	require.NoError(t, err)
@@ -414,7 +414,7 @@ func TestNextKeyExchange_FullFlow(t *testing.T) {
 	copy(destHash[:], receiver.ourPublicKey[:])
 
 	// 1. Establish initial session.
-	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("init"))
+	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, mustBuildNSPayload(t, []byte("init")))
 	require.NoError(t, err)
 	_, _, _, err = receiver.DecryptGarlicMessage(enc)
 	require.NoError(t, err)
@@ -486,7 +486,7 @@ func TestGenerateReverseNextKey_MaxKeyID(t *testing.T) {
 	var destHash [32]byte
 	copy(destHash[:], receiver.ourPublicKey[:])
 
-	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("init"))
+	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, mustBuildNSPayload(t, []byte("init")))
 	require.NoError(t, err)
 	_, _, _, err = receiver.DecryptGarlicMessage(enc)
 	require.NoError(t, err)

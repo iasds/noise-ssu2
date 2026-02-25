@@ -117,6 +117,48 @@ func ExistingSessionPayloadBuilder() *PayloadBuilder {
 	return NewPayloadBuilder()
 }
 
+// ValidateNewSessionPayload checks that payload is a valid New Session body:
+// it must be non-empty, parse as a sequence of valid blocks, and have a
+// DateTime block as the very first block.
+//
+// Spec ref: ratchet.md §1b — "Payload must contain a DateTime block and will
+// usually contain one or more Garlic Clove blocks."
+//
+// A caller that omits the DateTime block produces a non-compliant NS message
+// that will fail interoperability checks with any conformant I2P router.
+// Use NewSessionPayloadBuilder to construct a compliant payload automatically.
+func ValidateNewSessionPayload(payload []byte) error {
+	if len(payload) == 0 {
+		return oops.Errorf("new session payload must not be empty: spec requires a DateTime block as the first block (ratchet.md §1b)")
+	}
+	blocks, err := ParsePayload(payload)
+	if err != nil {
+		return oops.Wrapf(err, "new session payload is malformed")
+	}
+	if len(blocks) == 0 {
+		return oops.Errorf("new session payload contains no blocks: spec requires a DateTime block as the first block (ratchet.md §1b)")
+	}
+	if blocks[0].Type != BlockDateTime {
+		return oops.Errorf(
+			"new session payload first block is type %d, want BlockDateTime (type 0): spec requires DateTime as first block (ratchet.md §1b)",
+			blocks[0].Type,
+		)
+	}
+	return nil
+}
+
+// BuildNSPayload is a convenience wrapper that constructs a spec-compliant New
+// Session payload containing a fresh DateTime block followed by a single
+// GarlicClove block that carries the provided garlic data.
+//
+// Use this when you have a raw garlic byte slice and need to wrap it in the
+// structured NS payload format required by EncryptGarlicMessage.
+func BuildNSPayload(garlicData []byte) ([]byte, error) {
+	return NewSessionPayloadBuilder().
+		AddBlock(PayloadBlock{Type: BlockGarlicClove, Data: garlicData}).
+		Build()
+}
+
 // ParsePayload deserializes a byte slice into a sequence of PayloadBlocks.
 // Unknown block types are preserved (the spec requires receivers to ignore them).
 // Returns an error for malformed data (truncated headers, length overflows).

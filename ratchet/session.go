@@ -27,8 +27,17 @@ type Session struct {
 	RecvTagRatchet *ratchet.TagRatchet
 	LastUsed       time.Time
 	MessageCounter uint32
-	// recvCounter tracks the number of received messages.
-	recvCounter uint32
+	// recvWindowBase is the lowest ES message counter we will still accept.
+	// It advances as leading counters are consumed.
+	// Spec ref: ratchet.md §"Existing Session" — ≤128-message receive window.
+	recvWindowBase uint32
+	// recvFillMark is the next counter for which we have NOT yet pre-derived a
+	// message key.  Keys for [recvWindowBase, recvFillMark) live in recvKeyCache.
+	recvFillMark uint32
+	// recvKeyCache maps ES message counter → pre-derived message key.
+	// Keys are removed from the cache once consumed; the absence of a counter
+	// that is within [recvWindowBase, recvFillMark) means it was already used.
+	recvKeyCache map[uint32][32]byte
 	// pendingTags tracks tags we expect to receive (tag window).
 	pendingTags [][8]byte
 	// dhRatchetCounter tracks messages since last DH ratchet rotation.
@@ -91,13 +100,11 @@ func createSession(remotePubKey [32]byte, keys *sessionKeys, ourPrivateKey [32]b
 		RecvTagRatchet:       recvTagRatchet,
 		LastUsed:             time.Now(),
 		MessageCounter:       1,
-		// recvCounter starts at 1 because the New Session message (message 0) is a
-		// one-off ECIES handshake that is not counted in the ratchet counter.
-		// After an NSR the counter resets to 1 for the same reason: the NSR itself
-		// (message 0 in the new tag set) is a handshake, not an AEAD ratchet message.
-		// Spec ref: ratchet.md §"Existing Session message" — "N=1 for the first
-		// Existing Session message after a New Session or New Session Reply".
-		recvCounter:     1,
+		// recvWindowBase starts at 1: message 0 is the NS handshake, not an ES ratchet message.
+		// Spec ref: ratchet.md §"Existing Session message" — first ES counter is 1.
+		recvWindowBase:  1,
+		recvFillMark:    1,
+		recvKeyCache:    make(map[uint32][32]byte),
 		pendingTags:     make([][8]byte, 0, 10),
 		pendingNextKeys: nil,
 	}, nil

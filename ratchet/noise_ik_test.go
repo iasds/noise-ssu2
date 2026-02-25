@@ -779,8 +779,8 @@ func TestSessionManager_EncryptNewSessionReply(t *testing.T) {
 	initiator := createTestSessionManager(t)
 	responder := createTestSessionManager(t)
 
-	// Send NS from initiator → responder
-	nsPayload := []byte("initial garlic clove")
+	// Send NS from initiator → responder — must be a valid NS payload.
+	nsPayload := mustBuildNSPayload(t, []byte("initial garlic clove"))
 	encrypted, err := initiator.EncryptGarlicMessage(
 		hashPubKey(responder.ourPublicKey), responder.ourPublicKey, nsPayload,
 	)
@@ -814,9 +814,10 @@ func TestSessionManager_EncryptNewSessionReply_InitiatorCantSendNSR(t *testing.T
 	initiator := createTestSessionManager(t)
 	responder := createTestSessionManager(t)
 
-	// Create a session as initiator
+	// Create a session as initiator — must be a valid NS payload.
 	_, err := initiator.EncryptGarlicMessage(
-		hashPubKey(responder.ourPublicKey), responder.ourPublicKey, []byte("hello"),
+		hashPubKey(responder.ourPublicKey), responder.ourPublicKey,
+		mustBuildNSPayload(t, []byte("hello")),
 	)
 	require.NoError(t, err)
 
@@ -829,9 +830,10 @@ func TestSessionManager_EncryptNewSessionReply_ClearsHandshakeState(t *testing.T
 	initiator := createTestSessionManager(t)
 	responder := createTestSessionManager(t)
 
-	// Send NS from initiator → responder
+	// Send NS from initiator → responder — must be a valid NS payload.
 	encrypted, err := initiator.EncryptGarlicMessage(
-		hashPubKey(responder.ourPublicKey), responder.ourPublicKey, []byte("ns"),
+		hashPubKey(responder.ourPublicKey), responder.ourPublicKey,
+		mustBuildNSPayload(t, []byte("ns")),
 	)
 	require.NoError(t, err)
 

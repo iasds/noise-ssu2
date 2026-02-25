@@ -123,10 +123,17 @@ func (sm *SessionManager) EncryptGarlicMessage(
 }
 
 // encryptNewSession creates a new session and encrypts using the Noise IK handshake.
+// The payload must begin with a DateTime block per ratchet.md §1b; ValidateNewSessionPayload
+// is called here to surface non-compliant payloads immediately rather than silently
+// producing an interoperability-breaking message.
 func (sm *SessionManager) encryptNewSession(
 	destinationHash, destinationPubKey [32]byte,
 	plaintextGarlic []byte,
 ) ([]byte, error) {
+	if err := ValidateNewSessionPayload(plaintextGarlic); err != nil {
+		return nil, oops.Wrapf(err, "new session payload rejected")
+	}
+
 	msg, keys, hs, err := writeNoiseIKMessage1(
 		sm.ourPrivateKey, sm.ourPublicKey, destinationPubKey, plaintextGarlic,
 	)
@@ -230,12 +237,18 @@ func (sm *SessionManager) DecryptGarlicMessage(encryptedGarlic []byte) ([]byte, 
 	copy(msgTag[:], encryptedGarlic[0:8])
 
 	// Check Existing Session tag index first (most common path).
+	// Replenishment is deferred outside sm.mu to avoid holding the global write
+	// lock during HKDF derivations (see replenishTagWindowOutsideLock).
 	sm.mu.Lock()
 	session := sm.lookupSessionByTag(msgTag)
+	needsReplenish := session != nil && len(session.pendingTags) < tagReplenishThreshold
 	sm.mu.Unlock()
 
 	if session != nil {
 		plaintext, sessionTag, err := sm.decryptExistingSession(session, encryptedGarlic[8:], msgTag)
+		if needsReplenish {
+			sm.replenishTagWindowOutsideLock(session)
+		}
 		return plaintext, sessionTag, nil, err
 	}
 
@@ -316,6 +329,10 @@ func (sm *SessionManager) EncryptUnboundGarlicMessage(
 		"at":             "EncryptUnboundGarlicMessage",
 		"plaintext_size": len(plaintextGarlic),
 	}).Debug("Encrypting unbound garlic message")
+
+	if err := ValidateNewSessionPayload(plaintextGarlic); err != nil {
+		return nil, oops.Wrapf(err, "unbound new session payload rejected")
+	}
 
 	msg, _, err := writeNoiseIKMessage1Unbound(destinationPubKey, plaintextGarlic)
 	if err != nil {
@@ -457,7 +474,7 @@ func (sm *SessionManager) applyNSRKeysToSessionWhileLocked(session *Session, nsr
 
 	// Reset message counters: the session restarts at 1 with NSR keys.
 	session.MessageCounter = 1
-	session.recvCounter = 1
+	resetRecvWindow(session)
 
 	// Regenerate recv tag window with the new NSR-derived recv ratchet.
 	return sm.generateTagWindow(session)
@@ -529,6 +546,16 @@ func (sm *SessionManager) EncryptNewSessionReply(
 }
 
 // decryptExistingSession decrypts an Existing Session message using ratchet state.
+//
+// It implements a receive window to handle out-of-order delivery without
+// desynchronising the receive counter.  The window covers
+// [recvWindowBase, recvWindowBase+recvWindowSize) counters.  Message keys are
+// pre-derived for every counter in the window; on a successful decrypt the used
+// key is removed and the window base is advanced past any trailing consumed
+// counters.
+//
+// Spec ref: ratchet.md §"Existing Session" — "Maintain handling of out-of-order
+// messages", window ≤128.
 func (sm *SessionManager) decryptExistingSession(
 	session *Session,
 	msg []byte,
@@ -542,19 +569,53 @@ func (sm *SessionManager) decryptExistingSession(
 		return nil, [8]byte{}, err
 	}
 
-	messageKey, err := deriveDecryptionKey(session)
-	if err != nil {
+	// Ensure the key cache covers the full current window.
+	windowEnd := session.recvWindowBase + recvWindowSize
+	if err := fillRecvKeyCache(session, windowEnd); err != nil {
 		return nil, [8]byte{}, err
 	}
 
-	plaintext, err := decryptWithSessionTag(messageKey, ciphertext, tag, sessionTag, session.recvCounter)
-	if err != nil {
-		return nil, [8]byte{}, err
+	// Scan candidate counters from the window base upward.  We do not transmit
+	// the counter on the wire so we must try each candidate until the AEAD tag
+	// verifies.
+	var (
+		plaintext   []byte
+		usedCounter uint32
+		found       bool
+	)
+	for counter := session.recvWindowBase; counter < windowEnd; counter++ {
+		messageKey, inCache := session.recvKeyCache[counter]
+		if !inCache {
+			// Already consumed; skip.
+			continue
+		}
+		pt, decErr := decryptWithSessionTag(messageKey, ciphertext, tag, sessionTag, counter)
+		if decErr != nil {
+			continue
+		}
+		plaintext = pt
+		usedCounter = counter
+		found = true
+		break
+	}
+	if !found {
+		return nil, [8]byte{}, oops.Errorf(
+			"decrypt failed: message does not match any counter in recv window [%d, %d)",
+			session.recvWindowBase, windowEnd,
+		)
+	}
+
+	// Consume the key and advance the window base past any leading gap of
+	// already-consumed counters.
+	delete(session.recvKeyCache, usedCounter)
+	for session.recvWindowBase < session.recvFillMark {
+		if _, stillPending := session.recvKeyCache[session.recvWindowBase]; stillPending {
+			break
+		}
+		session.recvWindowBase++
 	}
 
 	session.LastUsed = time.Now()
-	session.recvCounter++
-
 	return plaintext, sessionTag, nil
 }
 
@@ -602,13 +663,25 @@ func (sm *SessionManager) ProcessIncomingDHRatchet(sessionTag [8]byte, newRemote
 // FindSessionByTag checks if a session tag matches a known session.
 // Returns true if the tag was found (and consumed), false otherwise.
 // This implements the TagResolver interface for independent tag-only resolution.
+//
+// Tag replenishment (HKDF) is performed outside sm.mu to avoid holding the
+// global write lock during cryptographic operations.
 func (sm *SessionManager) FindSessionByTag(tag [8]byte) bool {
 	sm.mu.Lock()
-	defer sm.mu.Unlock()
-	return sm.lookupSessionByTag(tag) != nil
+	session := sm.lookupSessionByTag(tag)
+	needsReplenish := session != nil && len(session.pendingTags) < tagReplenishThreshold
+	sm.mu.Unlock()
+
+	if needsReplenish {
+		sm.replenishTagWindowOutsideLock(session)
+	}
+	return session != nil
 }
 
-// lookupSessionByTag searches for a session that expects the given tag.
+// lookupSessionByTag searches for a session that expects the given tag, consumes
+// the tag, and returns the session. It does NOT replenish the tag window — callers
+// must do that after releasing sm.mu to avoid holding the global write lock during
+// HKDF derivations.
 // Must be called with sm.mu held for writing.
 func (sm *SessionManager) lookupSessionByTag(tag [8]byte) *Session {
 	session, exists := sm.tagIndex[tag]
@@ -625,7 +698,6 @@ func (sm *SessionManager) lookupSessionByTag(tag [8]byte) *Session {
 	}
 
 	sm.consumeTag(tag, session)
-	sm.replenishTagWindowIfNeeded(session)
 
 	return session
 }
@@ -653,17 +725,85 @@ func (sm *SessionManager) removeTagFromPendingList(tag [8]byte, session *Session
 	}
 }
 
-func (sm *SessionManager) replenishTagWindowIfNeeded(session *Session) {
-	if len(session.pendingTags) < 5 {
-		if err := sm.generateTagWindow(session); err != nil {
-			log.WithFields(map[string]interface{}{
-				"at":              "replenishTagWindowIfNeeded",
-				"remote_pubkey":   fmt.Sprintf("%x", session.RemotePublicKey[:8]),
-				"pending_tags":    len(session.pendingTags),
-				"message_counter": session.MessageCounter,
-				"error":           err.Error(),
-			}).Warn("Failed to replenish session tag window")
+// tagReplenishThreshold is the minimum number of pending tags remaining after
+// which replenishment is triggered. Checked after releasing sm.mu so that the
+// HKDF derivation does not block the global write lock.
+const tagReplenishThreshold = 5
+
+// replenishTagWindowOutsideLock generates new session tags and installs them
+// without holding sm.mu during the cryptographic (HKDF) work.
+//
+// Design: tag derivation (the slow path) runs under session.mu only, then the
+// results are installed into sm.tagIndex under a brief sm.mu write lock.
+// This prevents the global write lock from serialising all goroutines for the
+// duration of SHA-256 / HKDF rounds at high message rates.
+func (sm *SessionManager) replenishTagWindowOutsideLock(session *Session) {
+	// Phase 1: derive tags under session lock only — sm.mu is NOT held here.
+	session.mu.Lock()
+	newTags, err := generateTagsOutsideLock(session)
+	session.mu.Unlock()
+
+	if err != nil {
+		log.WithFields(map[string]interface{}{
+			"at":            "replenishTagWindowOutsideLock",
+			"remote_pubkey": fmt.Sprintf("%x", session.RemotePublicKey[:8]),
+			"error":         err.Error(),
+		}).Warn("Failed to generate tags during replenishment")
+		return
+	}
+	if len(newTags) == 0 {
+		return
+	}
+
+	// Phase 2: install pre-derived tags — brief sm.mu write lock, no HKDF.
+	sm.mu.Lock()
+	session.mu.Lock()
+	sm.installGeneratedTagsLocked(session, newTags)
+	session.mu.Unlock()
+	sm.mu.Unlock()
+}
+
+// generateTagsOutsideLock advances session.RecvTagRatchet to produce the tags
+// needed to refill the window up to tagWindowSize. The caller must hold
+// session.mu but must NOT hold sm.mu; the HKDF derivations run here.
+// Returns the new tags, which are not yet registered in sm.tagIndex.
+func generateTagsOutsideLock(session *Session) ([][8]byte, error) {
+	if session.RecvTagRatchet == nil {
+		return nil, oops.Errorf("RecvTagRatchet is nil for session — cannot replenish incoming tag window")
+	}
+	needed := tagWindowSize - len(session.pendingTags)
+	if needed <= 0 {
+		return nil, nil
+	}
+	newTags := make([][8]byte, 0, needed)
+	for i := 0; i < needed; i++ {
+		tag, err := session.RecvTagRatchet.GenerateNextTag()
+		if err != nil {
+			return newTags, oops.Wrapf(err, "failed to generate session tag at index %d", i)
 		}
+		newTags = append(newTags, tag)
+	}
+	return newTags, nil
+}
+
+// installGeneratedTagsLocked writes pre-derived tags into sm.tagIndex and
+// session.pendingTags.  Tags that collide with a different session are logged
+// and skipped.  Must be called with both sm.mu (write) and session.mu held.
+func (sm *SessionManager) installGeneratedTagsLocked(session *Session, newTags [][8]byte) {
+	for _, tag := range newTags {
+		if len(session.pendingTags) >= tagWindowSize {
+			// Another goroutine may have already replenished; stop early.
+			break
+		}
+		if existing, ok := sm.tagIndex[tag]; ok && existing != session {
+			log.WithFields(map[string]interface{}{
+				"at":  "installGeneratedTagsLocked",
+				"tag": fmt.Sprintf("%x", tag),
+			}).Warn("Tag collision detected, skipping duplicate tag")
+			continue
+		}
+		session.pendingTags = append(session.pendingTags, tag)
+		sm.tagIndex[tag] = session
 	}
 }
 

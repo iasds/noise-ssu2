@@ -618,3 +618,101 @@ func TestWireFormat_NextKey_FlagEncoding(t *testing.T) {
 	// key ID = 256 big endian
 	assert.Equal(t, uint16(256), binary.BigEndian.Uint16(b.Data[1:3]))
 }
+
+// ============================================================================
+// ValidateNewSessionPayload — spec compliance (ratchet.md §1b)
+// ============================================================================
+
+// TestValidateNewSessionPayload_AcceptsValidPayload verifies that a payload
+// built with BuildNSPayload passes validation without error.
+func TestValidateNewSessionPayload_AcceptsValidPayload(t *testing.T) {
+	payload, err := BuildNSPayload([]byte("garlic data"))
+	require.NoError(t, err, "BuildNSPayload must succeed")
+	assert.NoError(t, ValidateNewSessionPayload(payload),
+		"a properly built NS payload must pass ValidateNewSessionPayload")
+}
+
+// TestValidateNewSessionPayload_RejectsEmpty verifies that an empty payload
+// is rejected with a descriptive error.
+func TestValidateNewSessionPayload_RejectsEmpty(t *testing.T) {
+	err := ValidateNewSessionPayload([]byte{})
+	require.Error(t, err, "empty payload must be rejected")
+	assert.Contains(t, err.Error(), "empty")
+}
+
+// TestValidateNewSessionPayload_RejectsRawBytes verifies that arbitrary raw
+// bytes that do not conform to the block wire format are rejected.
+func TestValidateNewSessionPayload_RejectsRawBytes(t *testing.T) {
+	err := ValidateNewSessionPayload([]byte("raw garlic data without blocks"))
+	require.Error(t, err, "raw bytes must be rejected")
+}
+
+// TestValidateNewSessionPayload_RejectsNilPayload verifies that a nil payload
+// is treated as empty and rejected.
+func TestValidateNewSessionPayload_RejectsNilPayload(t *testing.T) {
+	err := ValidateNewSessionPayload(nil)
+	require.Error(t, err, "nil payload must be rejected")
+}
+
+// TestValidateNewSessionPayload_RejectsNonDateTimeFirstBlock verifies that a
+// payload whose first block is not BlockDateTime is rejected.  Per ratchet.md §1b
+// the DateTime block MUST be the first block in a New Session payload.
+func TestValidateNewSessionPayload_RejectsNonDateTimeFirstBlock(t *testing.T) {
+	// Build raw bytes: Padding block (type=0xFE, size=2) then DateTime block.
+	// Wire format: [type(1)][len_hi(1)][len_lo(1)][data(N)]
+	buf := []byte{
+		byte(BlockPadding), 0x00, 0x02, 0x00, 0x00, // Padding block, 2 zero bytes
+		byte(BlockDateTime), 0x00, 0x04, 0x65, 0xB8, 0xD8, 0x00, // DateTime second
+	}
+	err := ValidateNewSessionPayload(buf)
+	require.Error(t, err, "payload with non-DateTime first block must be rejected")
+	assert.Contains(t, err.Error(), "DateTime")
+}
+
+// TestBuildNSPayload_ContainsDateTimeFirstBlock verifies that BuildNSPayload
+// always places a BlockDateTime block as the first block in the output.
+func TestBuildNSPayload_ContainsDateTimeFirstBlock(t *testing.T) {
+	payload, err := BuildNSPayload([]byte("test garlic"))
+	require.NoError(t, err)
+
+	blocks, parseErr := ParsePayload(payload)
+	require.NoError(t, parseErr, "BuildNSPayload output must be parseable")
+	require.NotEmpty(t, blocks, "BuildNSPayload must produce at least one block")
+	assert.Equal(t, BlockDateTime, blocks[0].Type,
+		"first block must be BlockDateTime per ratchet.md §1b")
+}
+
+// TestBuildNSPayload_RoundTrip verifies that a payload created with BuildNSPayload
+// can be parsed back and yields the original garlic data in the second block.
+func TestBuildNSPayload_RoundTrip(t *testing.T) {
+	garlicData := []byte("round-trip garlic payload")
+	payload, err := BuildNSPayload(garlicData)
+	require.NoError(t, err)
+
+	blocks, parseErr := ParsePayload(payload)
+	require.NoError(t, parseErr)
+	require.GreaterOrEqual(t, len(blocks), 2, "must have at least DateTime + GarlicClove blocks")
+
+	assert.Equal(t, BlockDateTime, blocks[0].Type)
+
+	// Find a GarlicClove block and verify its data matches.
+	found := false
+	for _, bl := range blocks[1:] {
+		if bl.Type == BlockGarlicClove {
+			assert.Equal(t, garlicData, bl.Data,
+				"GarlicClove block data must match the original garlic data")
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "at least one BlockGarlicClove block must be present")
+}
+
+// TestBuildNSPayload_EmptyData verifies that BuildNSPayload accepts empty
+// garlic data and produces a valid, parseable payload.
+func TestBuildNSPayload_EmptyData(t *testing.T) {
+	payload, err := BuildNSPayload([]byte{})
+	require.NoError(t, err, "BuildNSPayload must accept empty garlic data")
+	assert.NoError(t, ValidateNewSessionPayload(payload),
+		"payload built from empty garlic data must still pass validation")
+}

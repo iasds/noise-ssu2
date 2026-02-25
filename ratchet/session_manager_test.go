@@ -40,6 +40,16 @@ func createLinkedManagers(t testing.TB) (sender, receiver *SessionManager) {
 	return sender, receiver
 }
 
+// mustBuildNSPayload wraps raw garlic data in a spec-compliant New Session
+// payload: DateTime block (required first) + GarlicClove block.
+// Fails the test immediately if BuildNSPayload returns an error.
+func mustBuildNSPayload(t testing.TB, data []byte) []byte {
+	t.Helper()
+	payload, err := BuildNSPayload(data)
+	require.NoError(t, err, "mustBuildNSPayload: BuildNSPayload failed")
+	return payload
+}
+
 // ============================================================================
 // Session Manager Creation
 // ============================================================================
@@ -66,7 +76,8 @@ func TestGenerateSessionManager(t *testing.T) {
 func TestNewSessionEncryptDecrypt(t *testing.T) {
 	sender, receiver := createLinkedManagers(t)
 
-	plaintext := []byte("hello, garlic world!")
+	// NS payload must begin with a DateTime block per spec (ratchet.md §1b).
+	plaintext := mustBuildNSPayload(t, []byte("hello, garlic world!"))
 	var destHash [32]byte
 	copy(destHash[:], receiver.ourPublicKey[:])
 
@@ -91,8 +102,8 @@ func TestExistingSessionEncryptDecrypt(t *testing.T) {
 	var destHash [32]byte
 	copy(destHash[:], receiver.ourPublicKey[:])
 
-	// First message: creates session
-	plaintext1 := []byte("first message")
+	// First message: creates session — must be a valid NS payload (DateTime block required).
+	plaintext1 := mustBuildNSPayload(t, []byte("first message"))
 	enc1, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, plaintext1)
 	require.NoError(t, err)
 	dec1, _, _, err := receiver.DecryptGarlicMessage(enc1)
@@ -118,6 +129,14 @@ func TestMultipleMessages(t *testing.T) {
 
 	var destHash [32]byte
 	copy(destHash[:], receiver.ourPublicKey[:])
+
+	// Establish the session with a valid NS payload before the loop so that
+	// every loop iteration uses the Existing Session path (no DateTime req).
+	initPayload := mustBuildNSPayload(t, []byte("init"))
+	initEnc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, initPayload)
+	require.NoError(t, err)
+	_, _, _, err = receiver.DecryptGarlicMessage(initEnc)
+	require.NoError(t, err)
 
 	for i := 0; i < 10; i++ {
 		plaintext := []byte("message " + string(rune('A'+i)))
@@ -208,9 +227,8 @@ func TestSessionTagLookup(t *testing.T) {
 	var destHash [32]byte
 	copy(destHash[:], receiver.ourPublicKey[:])
 
-	// Create session
-	plaintext := []byte("initial message")
-	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, plaintext)
+	// Create session — NS payload must begin with DateTime block.
+	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, mustBuildNSPayload(t, []byte("initial message")))
 	require.NoError(t, err)
 	_, _, _, err = receiver.DecryptGarlicMessage(enc)
 	require.NoError(t, err)
@@ -228,8 +246,8 @@ func TestTagWindowReplenishment(t *testing.T) {
 	var destHash [32]byte
 	copy(destHash[:], receiver.ourPublicKey[:])
 
-	// Create initial session
-	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("init"))
+	// Create initial session with valid NS payload.
+	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, mustBuildNSPayload(t, []byte("init")))
 	require.NoError(t, err)
 	_, _, _, err = receiver.DecryptGarlicMessage(enc)
 	require.NoError(t, err)
@@ -273,10 +291,17 @@ func TestDHRatchetRotation(t *testing.T) {
 	// 2) After rotation, the sender can still encrypt (no panic/error)
 	// 3) The receiver can't decrypt post-rotation (expected: mismatched keys)
 
-	// Send DHRatchetInterval messages successfully. The dhRatchetCounter starts
-	// at 0 and increments before the comparison, so rotation triggers when
-	// counter reaches DHRatchetInterval (on the DHRatchetInterval+1'th message).
-	for i := 0; i < DHRatchetInterval; i++ {
+	// Establish session with valid NS payload before the DH ratchet loop.
+	initEnc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, mustBuildNSPayload(t, []byte("init")))
+	require.NoError(t, err, "Initial NS encrypt should succeed")
+	_, _, _, err = receiver.DecryptGarlicMessage(initEnc)
+	require.NoError(t, err, "Initial NS decrypt should succeed")
+
+	// Send DHRatchetInterval-1 ES messages successfully — the NS message above consumed
+	// one slot, so we need one fewer ES messages here to avoid triggering DH ratchet rotation
+	// within the loop. Rotation triggers when dhRatchetCounter reaches DHRatchetInterval
+	// (on the DHRatchetInterval+1'th total message = the "rotation-trigger" below).
+	for i := 0; i < DHRatchetInterval-1; i++ {
 		enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("msg"))
 		require.NoError(t, err, "Message %d encrypt should succeed", i)
 		_, _, _, err = receiver.DecryptGarlicMessage(enc)
@@ -317,7 +342,7 @@ func TestCreateSessionInitializesRatchets(t *testing.T) {
 	assert.NotNil(t, session.RecvTagRatchet, "RecvTagRatchet should be initialized")
 	assert.Equal(t, pubKey, session.RemotePublicKey)
 	assert.Equal(t, uint32(1), session.MessageCounter, "MessageCounter starts at 1 (msg 0 is New Session)")
-	assert.Equal(t, uint32(1), session.recvCounter, "recvCounter starts at 1 (msg 0 is New Session)")
+	assert.Equal(t, uint32(1), session.recvWindowBase, "recvWindowBase starts at 1 (msg 0 is New Session)")
 }
 
 func TestCreateSession_DirectionalKeyIsolation(t *testing.T) {
@@ -402,7 +427,7 @@ func TestClose(t *testing.T) {
 
 	// Establish a session
 	destHash := types.SHA256(receiver.ourPublicKey[:])
-	_, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("hello"))
+	_, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, mustBuildNSPayload(t, []byte("hello")))
 	require.NoError(t, err)
 	assert.Equal(t, 1, sender.GetSessionCount())
 
@@ -461,11 +486,11 @@ func TestTagCollisionDetection(t *testing.T) {
 
 	// Establish two sessions so we can have two different sessions with tags
 	destHash1 := types.SHA256(receiver.ourPublicKey[:])
-	_, err := sender.EncryptGarlicMessage(destHash1, receiver.ourPublicKey, []byte("session1"))
+	_, err := sender.EncryptGarlicMessage(destHash1, receiver.ourPublicKey, mustBuildNSPayload(t, []byte("session1")))
 	require.NoError(t, err)
 
 	destHash2 := types.SHA256(sm.ourPublicKey[:])
-	_, err = sender.EncryptGarlicMessage(destHash2, sm.ourPublicKey, []byte("session2"))
+	_, err = sender.EncryptGarlicMessage(destHash2, sm.ourPublicKey, mustBuildNSPayload(t, []byte("session2")))
 	require.NoError(t, err)
 
 	// Both sessions should exist and have their own tag windows
@@ -504,7 +529,7 @@ func TestGenerateTagWindowSameSessionNoCollision(t *testing.T) {
 	receiver := createTestSessionManager(t)
 
 	destHash := types.SHA256(receiver.ourPublicKey[:])
-	_, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("hello"))
+	_, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, mustBuildNSPayload(t, []byte("hello")))
 	require.NoError(t, err)
 
 	sender.mu.Lock()
@@ -553,15 +578,17 @@ func TestEncryptEmptyPlaintextReturnsError(t *testing.T) {
 	assert.Contains(t, err.Error(), "non-empty")
 }
 
-// TestEncryptNonEmptyPlaintextSucceeds confirms that non-empty plaintext works normally.
+// TestEncryptNonEmptyPlaintextSucceeds confirms that a non-empty, spec-compliant NS payload
+// (with DateTime block) is accepted by EncryptGarlicMessage.
 func TestEncryptNonEmptyPlaintextSucceeds(t *testing.T) {
 	sender := createTestSessionManager(t)
 	receiver := createTestSessionManager(t)
 
 	destHash := types.SHA256(receiver.ourPublicKey[:])
 
-	// Single byte should succeed
-	encrypted, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte{0x42})
+	// Validly-structured NS payload must succeed.
+	nsPayload := mustBuildNSPayload(t, []byte{0x42})
+	encrypted, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, nsPayload)
 	require.NoError(t, err)
 	assert.NotEmpty(t, encrypted)
 }
@@ -669,10 +696,10 @@ func TestConcurrentEncrypt(t *testing.T) {
 			defer wg.Done()
 
 			var destHash [32]byte
-			destHash[0] = byte(idx) // Different destinations
-			plaintext := []byte("concurrent message")
+			destHash[0] = byte(idx) // Different destinations → each is a new NS
+			nsPayload := mustBuildNSPayload(t, []byte("concurrent message"))
 
-			_, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, plaintext)
+			_, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, nsPayload)
 			assert.NoError(t, err, "Goroutine %d: encryption should succeed", idx)
 		}(i)
 	}
@@ -686,8 +713,8 @@ func TestConcurrentEncryptDecrypt(t *testing.T) {
 	var destHash [32]byte
 	copy(destHash[:], receiver.ourPublicKey[:])
 
-	// Create initial session
-	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("init"))
+	// Create initial session with valid NS payload.
+	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, mustBuildNSPayload(t, []byte("init")))
 	require.NoError(t, err)
 	_, _, _, err = receiver.DecryptGarlicMessage(enc)
 	require.NoError(t, err)
@@ -729,7 +756,7 @@ func TestNewSessionMessageFormat(t *testing.T) {
 	var destHash [32]byte
 	copy(destHash[:], receiver.ourPublicKey[:])
 
-	plaintext := []byte("test message format")
+	plaintext := mustBuildNSPayload(t, []byte("test message format"))
 	encrypted, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, plaintext)
 	require.NoError(t, err)
 
@@ -754,13 +781,13 @@ func TestExistingSessionMessageFormat(t *testing.T) {
 	var destHash [32]byte
 	copy(destHash[:], receiver.ourPublicKey[:])
 
-	// First message to create session
-	enc1, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("init"))
+	// First message to create session — must be valid NS payload.
+	enc1, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, mustBuildNSPayload(t, []byte("init")))
 	require.NoError(t, err)
 	_, _, _, err = receiver.DecryptGarlicMessage(enc1)
 	require.NoError(t, err)
 
-	// Second message uses existing session
+	// Second message uses existing session (no DateTime block req for ES).
 	enc2, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("existing"))
 	require.NoError(t, err)
 
@@ -799,7 +826,7 @@ func TestDecryptWrongKey(t *testing.T) {
 	var destHash [32]byte
 	copy(destHash[:], receiver.ourPublicKey[:])
 
-	plaintext := []byte("secret message")
+	plaintext := mustBuildNSPayload(t, []byte("secret message"))
 	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, plaintext)
 	require.NoError(t, err)
 
@@ -817,8 +844,8 @@ func TestExistingSessionMessageNoExplicitNonce(t *testing.T) {
 	var destHash [32]byte
 	copy(destHash[:], receiver.ourPublicKey[:])
 
-	// First message to create session
-	enc1, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("init"))
+	// First message to create session with valid NS payload.
+	enc1, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, mustBuildNSPayload(t, []byte("init")))
 	require.NoError(t, err)
 	_, _, _, err = receiver.DecryptGarlicMessage(enc1)
 	require.NoError(t, err)
@@ -852,8 +879,8 @@ func TestCounterNonceDeterministic(t *testing.T) {
 	var destHash [32]byte
 	copy(destHash[:], receiver.ourPublicKey[:])
 
-	// Create session
-	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("session init"))
+	// Create session with valid NS payload.
+	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, mustBuildNSPayload(t, []byte("session init")))
 	require.NoError(t, err)
 	_, _, _, err = receiver.DecryptGarlicMessage(enc)
 	require.NoError(t, err)
@@ -876,8 +903,8 @@ func TestMaxMessageNumberEnforced(t *testing.T) {
 	var destHash [32]byte
 	copy(destHash[:], receiver.ourPublicKey[:])
 
-	// Create session
-	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("init"))
+	// Create session with valid NS payload.
+	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, mustBuildNSPayload(t, []byte("init")))
 	require.NoError(t, err)
 	_, _, _, err = receiver.DecryptGarlicMessage(enc)
 	require.NoError(t, err)
@@ -968,7 +995,7 @@ func TestFindSessionByTagReturnsTrue(t *testing.T) {
 	copy(destHash[:], receiver.ourPublicKey[:])
 
 	// Establish a session so the receiver has tags in its index.
-	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("setup"))
+	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, mustBuildNSPayload(t, []byte("setup")))
 	require.NoError(t, err)
 	_, _, _, err = receiver.DecryptGarlicMessage(enc)
 	require.NoError(t, err)
@@ -1012,7 +1039,7 @@ func TestFindSessionByTagReturnsFalseForExpiredSession(t *testing.T) {
 	var destHash [32]byte
 	copy(destHash[:], receiver.ourPublicKey[:])
 
-	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("expire me"))
+	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, mustBuildNSPayload(t, []byte("expire me")))
 	require.NoError(t, err)
 	_, _, _, err = receiver.DecryptGarlicMessage(enc)
 	require.NoError(t, err)
@@ -1054,15 +1081,15 @@ func BenchmarkNewSessionEncrypt(b *testing.B) {
 	_, _ = rand.Read(privKey[:])
 	receiver, _ := NewSessionManager(privKey)
 
-	plaintext := make([]byte, 1024)
-	_, _ = rand.Read(plaintext)
+	// Build a valid NS payload once; every iteration is a new session (new destHash).
+	nsPayload, _ := BuildNSPayload(make([]byte, 512))
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		var destHash [32]byte
 		destHash[0] = byte(i)
 		destHash[1] = byte(i >> 8)
-		_, _ = sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, plaintext)
+		_, _ = sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, nsPayload)
 	}
 }
 
@@ -1079,12 +1106,14 @@ func BenchmarkExistingSessionEncrypt(b *testing.B) {
 	plaintext := make([]byte, 1024)
 	_, _ = rand.Read(plaintext)
 
-	// Create initial session
-	enc, _ := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, plaintext)
+	// Create initial session with a valid NS payload.
+	nsPayload, _ := BuildNSPayload(make([]byte, 32))
+	enc, _ := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, nsPayload)
 	_, _, _, _ = receiver.DecryptGarlicMessage(enc)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
+		// ES path: no DateTime validation required.
 		_, _ = sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, plaintext)
 	}
 }
@@ -1102,15 +1131,18 @@ func BenchmarkDecryptGarlicMessage(b *testing.B) {
 	plaintext := make([]byte, 1024)
 	_, _ = rand.Read(plaintext)
 
-	// Encrypt one message
-	enc, _ := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, plaintext)
+	// Build a valid NS payload for benchmark iterations (each iteration re-encrypts NS).
+	nsPayload, _ := BuildNSPayload(make([]byte, 32))
+
+	// Encrypt initial session message.
+	enc, _ := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, nsPayload)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		// We can only decrypt the same New Session message once (ratchet advances),
 		// so we must encrypt fresh each iteration for a real benchmark.
 		b.StopTimer()
-		enc, _ = sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, plaintext)
+		enc, _ = sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, nsPayload)
 		b.StartTimer()
 		_, _, _, _ = receiver.DecryptGarlicMessage(enc)
 	}
@@ -1129,7 +1161,8 @@ func TestDecryptGarlicMessage_ReturnsSessionHashForNewSession(t *testing.T) {
 	initiator, responder := createLinkedManagers(t)
 
 	destHash := types.SHA256(responder.ourPublicKey[:])
-	nsPayload := []byte("new session payload")
+	// NS payload must begin with DateTime block per spec (ratchet.md §1b).
+	nsPayload := mustBuildNSPayload(t, []byte("new session payload"))
 
 	// Encrypt NS
 	encrypted, err := initiator.EncryptGarlicMessage(destHash, responder.ourPublicKey, nsPayload)
@@ -1154,8 +1187,8 @@ func TestDecryptGarlicMessage_NilSessionHashForExistingSession(t *testing.T) {
 
 	destHash := types.SHA256(responder.ourPublicKey[:])
 
-	// Establish session via first NS
-	enc1, err := initiator.EncryptGarlicMessage(destHash, responder.ourPublicKey, []byte("ns"))
+	// Establish session via first NS — must be a valid NS payload.
+	enc1, err := initiator.EncryptGarlicMessage(destHash, responder.ourPublicKey, mustBuildNSPayload(t, []byte("ns")))
 	require.NoError(t, err)
 	_, _, _, err = responder.DecryptGarlicMessage(enc1)
 	require.NoError(t, err)
@@ -1187,7 +1220,8 @@ func TestNSNSRESFlow_EndToEnd(t *testing.T) {
 
 	// ── Step 1: Alice → Bob: New Session ──────────────────────────────────
 	aliceToBobHash := types.SHA256(bob.ourPublicKey[:])
-	nsPayload := []byte("Hello Bob, session request")
+	// NS payload must begin with DateTime block per spec (ratchet.md §1b).
+	nsPayload := mustBuildNSPayload(t, []byte("Hello Bob, session request"))
 
 	nsMsg, err := alice.EncryptGarlicMessage(aliceToBobHash, bob.ourPublicKey, nsPayload)
 	require.NoError(t, err)
@@ -1241,7 +1275,7 @@ func TestEncryptNewSessionReply_UsesReturnedSessionHash(t *testing.T) {
 
 	destHash := types.SHA256(responder.ourPublicKey[:])
 
-	encrypted, err := initiator.EncryptGarlicMessage(destHash, responder.ourPublicKey, []byte("ns"))
+	encrypted, err := initiator.EncryptGarlicMessage(destHash, responder.ourPublicKey, mustBuildNSPayload(t, []byte("ns")))
 	require.NoError(t, err)
 
 	_, _, sessionHash, err := responder.DecryptGarlicMessage(encrypted)
@@ -1263,8 +1297,8 @@ func TestNSRTag_RegisteredAndConsumedOnReceipt(t *testing.T) {
 
 	destHash := types.SHA256(responder.ourPublicKey[:])
 
-	// Step 1: Alice sends NS — should register an NSR tag
-	nsMsg, err := initiator.EncryptGarlicMessage(destHash, responder.ourPublicKey, []byte("ns"))
+	// Step 1: Alice sends NS — must be a valid NS payload; registers an NSR tag.
+	nsMsg, err := initiator.EncryptGarlicMessage(destHash, responder.ourPublicKey, mustBuildNSPayload(t, []byte("ns")))
 	require.NoError(t, err)
 
 	initiator.mu.RLock()
@@ -1309,8 +1343,8 @@ func TestNSRKeys_RatchetsUpdatedAfterNSR(t *testing.T) {
 
 	destHash := types.SHA256(responder.ourPublicKey[:])
 
-	// Send NS
-	nsMsg, err := initiator.EncryptGarlicMessage(destHash, responder.ourPublicKey, []byte("ns"))
+	// Send NS — must be a valid NS payload.
+	nsMsg, err := initiator.EncryptGarlicMessage(destHash, responder.ourPublicKey, mustBuildNSPayload(t, []byte("ns")))
 	require.NoError(t, err)
 
 	_, _, sessionHash, err := responder.DecryptGarlicMessage(nsMsg)
@@ -1416,7 +1450,8 @@ func TestEncryptUnboundGarlicMessage_Roundtrip(t *testing.T) {
 	sender := createTestSessionManager(t)
 	receiver := createTestSessionManager(t)
 
-	plaintext := []byte("unbound one-way garlic message")
+	// Unbound NS messages also require a DateTime block as the first payload block.
+	plaintext := mustBuildNSPayload(t, []byte("unbound one-way garlic message"))
 
 	// Sender encrypts an unbound message (no static key on the wire).
 	ciphertext, err := sender.EncryptUnboundGarlicMessage(receiver.ourPublicKey, plaintext)
@@ -1454,7 +1489,7 @@ func TestEncryptUnboundGarlicMessage_NoSessionStateStored(t *testing.T) {
 
 	initialSessions := receiver.GetSessionCount()
 
-	ciphertext, err := sender.EncryptUnboundGarlicMessage(receiver.ourPublicKey, []byte("datagram"))
+	ciphertext, err := sender.EncryptUnboundGarlicMessage(receiver.ourPublicKey, mustBuildNSPayload(t, []byte("datagram")))
 	require.NoError(t, err)
 
 	_, _, _, err = receiver.DecryptGarlicMessage(ciphertext)
@@ -1472,10 +1507,11 @@ func TestEncryptUnboundGarlicMessage_MultipleUnboundMessages(t *testing.T) {
 	sender := createTestSessionManager(t)
 	receiver := createTestSessionManager(t)
 
+	// Unbound NS messages require DateTime block as first payload block.
 	payloads := [][]byte{
-		[]byte("first unbound"),
-		[]byte("second unbound"),
-		[]byte("third unbound"),
+		mustBuildNSPayload(t, []byte("first unbound")),
+		mustBuildNSPayload(t, []byte("second unbound")),
+		mustBuildNSPayload(t, []byte("third unbound")),
 	}
 
 	for i, payload := range payloads {
@@ -1500,7 +1536,7 @@ func TestEncryptUnboundGarlicMessage_WrongRecipientFails(t *testing.T) {
 	receiver := createTestSessionManager(t)
 	wrongReceiver := createTestSessionManager(t)
 
-	ct, err := sender.EncryptUnboundGarlicMessage(receiver.ourPublicKey, []byte("secret"))
+	ct, err := sender.EncryptUnboundGarlicMessage(receiver.ourPublicKey, mustBuildNSPayload(t, []byte("secret")))
 	require.NoError(t, err)
 
 	_, _, _, err = wrongReceiver.DecryptGarlicMessage(ct)
@@ -1514,7 +1550,7 @@ func TestEncryptUnboundGarlicMessage_IsNonRepliable(t *testing.T) {
 	sender := createTestSessionManager(t)
 	receiver := createTestSessionManager(t)
 
-	ct, err := sender.EncryptUnboundGarlicMessage(receiver.ourPublicKey, []byte("one-way"))
+	ct, err := sender.EncryptUnboundGarlicMessage(receiver.ourPublicKey, mustBuildNSPayload(t, []byte("one-way")))
 	require.NoError(t, err)
 
 	_, _, _, err = receiver.DecryptGarlicMessage(ct)
@@ -1524,4 +1560,135 @@ func TestEncryptUnboundGarlicMessage_IsNonRepliable(t *testing.T) {
 	nsrCount := len(receiver.nsrTagIndex)
 	receiver.mu.RUnlock()
 	assert.Equal(t, 0, nsrCount, "No NSR tag should be registered for an unbound session")
+}
+
+// ============================================================================
+// [SPEC] NS payload DateTime validation — AUDIT item
+// ============================================================================
+
+// TestEncryptGarlicMessage_RejectsNSPayloadWithoutDateTime verifies that
+// EncryptGarlicMessage returns an error when the caller attempts to send a New
+// Session message whose payload does not begin with a DateTime block,
+// enforcing ratchet.md §1b.
+func TestEncryptGarlicMessage_RejectsNSPayloadWithoutDateTime(t *testing.T) {
+	sender := createTestSessionManager(t)
+	receiver := createTestSessionManager(t)
+
+	var destHash [32]byte
+	copy(destHash[:], receiver.ourPublicKey[:])
+
+	// Raw bytes have no DateTime block → must be rejected.
+	_, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("raw payload without datetime"))
+	require.Error(t, err, "NS path must reject payload lacking DateTimeBlock")
+	assert.Contains(t, err.Error(), "new session payload rejected",
+		"error must identify the rejection source")
+}
+
+// TestEncryptUnboundGarlicMessage_RejectsPayloadWithoutDateTime verifies that
+// EncryptUnboundGarlicMessage also enforces the DateTime validation.
+func TestEncryptUnboundGarlicMessage_RejectsPayloadWithoutDateTime(t *testing.T) {
+	sender := createTestSessionManager(t)
+	receiver := createTestSessionManager(t)
+
+	_, err := sender.EncryptUnboundGarlicMessage(receiver.ourPublicKey, []byte("raw payload"))
+	require.Error(t, err, "Unbound NS path must reject payload lacking DateTimeBlock")
+	assert.Contains(t, err.Error(), "unbound new session payload rejected")
+}
+
+// TestEncryptGarlicMessage_AcceptsValidNSPayload verifies the happy path: a
+// properly built NS payload (with leading DateTime block) is accepted.
+func TestEncryptGarlicMessage_AcceptsValidNSPayload(t *testing.T) {
+	sender, receiver := createLinkedManagers(t)
+
+	var destHash [32]byte
+	copy(destHash[:], receiver.ourPublicKey[:])
+
+	payload := mustBuildNSPayload(t, []byte("valid payload"))
+	_, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, payload)
+	assert.NoError(t, err, "valid NS payload must be accepted")
+}
+
+// ============================================================================
+// [EDGE] Lock splitting — AUDIT item
+// ============================================================================
+
+// TestReplenishTagWindowOutsideLock_DoesNotDeadlock verifies that concurrent
+// goroutines performing encrypt+decrypt operations do not deadlock when tag
+// replenishment runs outside sm.mu.  This guards against a regression where
+// replenishTagWindowOutsideLock acquires sm.mu while session.mu is already
+// held (or vice-versa), forming a lock-order cycle.
+//
+// Strategy: run many sender→receiver pairs concurrently.  Each pair exchanges
+// enough messages to trigger at least one replenishment cycle.  If the lock
+// ordering is wrong, the test will deadlock and be caught by -timeout.
+func TestReplenishTagWindowOutsideLock_DoesNotDeadlock(t *testing.T) {
+	const goroutines = 8
+	const msgsPerPair = 20 // enough to cross the replenish threshold (tagWindowSize=10, threshold=5)
+
+	done := make(chan struct{}, goroutines)
+
+	for g := 0; g < goroutines; g++ {
+		go func(id int) {
+			defer func() { done <- struct{}{} }()
+			sender, receiver := createLinkedManagers(t)
+
+			var destHash [32]byte
+			copy(destHash[:], receiver.ourPublicKey[:])
+
+			// Establish session.
+			enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, mustBuildNSPayload(t, []byte("init")))
+			if err != nil {
+				t.Errorf("goroutine %d: NS encrypt failed: %v", id, err)
+				return
+			}
+			if _, _, _, err = receiver.DecryptGarlicMessage(enc); err != nil {
+				t.Errorf("goroutine %d: NS decrypt failed: %v", id, err)
+				return
+			}
+
+			// Exchange ES messages; replenishment will fire around message 6 and again ~12.
+			for i := 0; i < msgsPerPair; i++ {
+				enc, err = sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("ping"))
+				if err != nil {
+					t.Errorf("goroutine %d: ES encrypt %d failed: %v", id, i, err)
+					return
+				}
+				if _, _, _, err = receiver.DecryptGarlicMessage(enc); err != nil {
+					t.Errorf("goroutine %d: ES decrypt %d failed: %v", id, i, err)
+					return
+				}
+			}
+		}(g)
+	}
+
+	for i := 0; i < goroutines; i++ {
+		<-done
+	}
+}
+
+// TestReplenishTagWindowOutsideLock_ReplenishesCorrectly verifies that after
+// consuming more than tagWindowSize messages the tag window is continuously
+// replenished so that no decrypt attempt ever fails with "tag not found".
+// This is the functional regression test for the lock-split refactor.
+func TestReplenishTagWindowOutsideLock_ReplenishesCorrectly(t *testing.T) {
+	sender, receiver := createLinkedManagers(t)
+
+	var destHash [32]byte
+	copy(destHash[:], receiver.ourPublicKey[:])
+
+	// Establish session.
+	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, mustBuildNSPayload(t, []byte("bootstrap")))
+	require.NoError(t, err)
+	_, _, _, err = receiver.DecryptGarlicMessage(enc)
+	require.NoError(t, err)
+
+	// Exchange 3× tagWindowSize messages — each full window cycle triggers at
+	// least one replenishment.  All must succeed.
+	const n = tagWindowSize * 3
+	for i := 0; i < n; i++ {
+		enc, err = sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("data"))
+		require.NoError(t, err, "ES encrypt %d must succeed", i)
+		_, _, _, err = receiver.DecryptGarlicMessage(enc)
+		require.NoError(t, err, "ES decrypt %d must succeed — tag window was not replenished", i)
+	}
 }

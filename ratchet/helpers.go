@@ -41,6 +41,12 @@ const (
 	// When reached, the session must be ratcheted. Spec ref: ratchet.md
 	// §"AEAD (ChaChaPoly)" — "Maximum value is 65535."
 	MaxMessageNumber = 65535
+
+	// recvWindowSize is the number of ES message counters we pre-derive keys for
+	// and accept out-of-order.  The I2P spec mandates ≤128; we use 64 (fits a
+	// uint64 if a bitset were used, but we use a map for simplicity).
+	// Spec ref: ratchet.md §"Existing Session" receive window note.
+	recvWindowSize = 64
 )
 
 // deriveDirectionalKeys derives distinct send and receive keys from a base key
@@ -285,15 +291,33 @@ func performDHRatchetStep(session *Session) error {
 	return nil
 }
 
-// deriveDecryptionKey derives the message key from the session's receiving ratchet state.
-func deriveDecryptionKey(session *Session) ([32]byte, error) {
+// fillRecvKeyCache pre-derives ES message keys for counters in [session.recvFillMark, upTo)
+// and stores them in session.recvKeyCache.  The receiving symmetric ratchet is advanced
+// once per counter, so the chain key stays in sync with the sender's sending chain.
+//
+// Must be called with session.mu held.
+// Spec ref: ratchet.md §"Existing Session" — symmetric ratchet advances once per message.
+func fillRecvKeyCache(session *Session, upTo uint32) error {
 	recvRatchet := session.RecvSymmetricRatchet
 	if recvRatchet == nil {
 		recvRatchet = session.SymmetricRatchet
 	}
-	messageKey, _, err := recvRatchet.DeriveMessageKeyAndAdvance(session.recvCounter)
-	if err != nil {
-		return [32]byte{}, oops.Wrapf(err, "failed to derive message key")
+	for session.recvFillMark < upTo {
+		key, _, err := recvRatchet.DeriveMessageKeyAndAdvance(session.recvFillMark)
+		if err != nil {
+			return oops.Wrapf(err, "failed to pre-derive recv key for counter %d", session.recvFillMark)
+		}
+		session.recvKeyCache[session.recvFillMark] = key
+		session.recvFillMark++
 	}
-	return messageKey, nil
+	return nil
+}
+
+// resetRecvWindow reinitialises the receive-window fields after an NSR replaces
+// the session ratchet state.  Must be called with session.mu held.
+func resetRecvWindow(session *Session) {
+	session.recvWindowBase = 1
+	session.recvFillMark = 1
+	// Clear the old key cache so stale keys cannot be replayed.
+	session.recvKeyCache = make(map[uint32][32]byte)
 }
