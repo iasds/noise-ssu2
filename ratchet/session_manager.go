@@ -22,6 +22,47 @@ const (
 	MaxGarlicSessions = 5000
 )
 
+// nsMaxAge is the maximum acceptable age (or skew into the future) of the
+// DateTime block in a New Session message. NS messages whose timestamp falls
+// outside [now-nsMaxAge, now+nsMaxAge] are rejected to prevent replay-based
+// session reset attacks.
+//
+// Tests may temporarily modify this value via t.Cleanup to restore the original.
+// Default is 5 minutes, matching common I2P router practice.
+var nsMaxAge = 5 * time.Minute
+
+// validateNSDateTimeFreshness parses the decrypted NS payload, locates the
+// required DateTime block (first block per ratchet.md §1b), and verifies that
+// its timestamp is within nsMaxAge of the current time.
+//
+// A stale timestamp indicates either a replay of an old session or a severe
+// clock skew; both must be rejected to prevent an attacker from resetting an
+// active live session by replaying a captured NS message.
+func validateNSDateTimeFreshness(payload []byte) error {
+	blocks, err := ParsePayload(payload)
+	if err != nil {
+		return oops.Wrapf(err, "NS payload parse failed during freshness check")
+	}
+	if len(blocks) == 0 || blocks[0].Type != BlockDateTime {
+		return oops.Errorf("NS payload is missing required DateTime block at position 0")
+	}
+	msgTime, err := blocks[0].DateTime()
+	if err != nil {
+		return oops.Wrapf(err, "NS DateTime block is malformed")
+	}
+	age := nowFunc().Sub(msgTime)
+	if age < 0 {
+		age = -age // treat future timestamps symmetrically
+	}
+	if age > nsMaxAge {
+		return oops.Errorf(
+			"NS DateTime block fails freshness check: age=%v max=%v (replay or severe clock skew)",
+			age, nsMaxAge,
+		)
+	}
+	return nil
+}
+
 // SessionManager manages ECIES-X25519-AEAD-Ratchet sessions for garlic encryption.
 // It maintains session state for ongoing encrypted communication with remote
 // destinations, using [32]byte keys throughout (no I2P-specific types).
@@ -202,6 +243,20 @@ func (sm *SessionManager) encryptExistingSession(
 	session.mu.Lock()
 	defer session.mu.Unlock()
 
+	// Spec §1g: the initiator must not send Existing Session messages before it
+	// has received the New Session Reply from the responder. The NSR completes
+	// the initial Noise IK handshake and installs the ee forward-secrecy keys;
+	// sending ES on the pre-NSR NS-derived ratchet is a spec violation that would
+	// also break receiver key synchronisation.
+	//
+	// handshakeState is consumed (set to nil) when NSR is processed in
+	// decryptIncomingNSR, so a non-nil value here means NSR has not arrived yet.
+	if session.isInitiator && session.handshakeState != nil {
+		return nil, oops.Errorf(
+			"spec violation (ratchet.md §1g): initiator must receive New Session Reply before sending Existing Session messages",
+		)
+	}
+
 	messageKey, sessionTag, err := advanceRatchets(session)
 	if err != nil {
 		return nil, err
@@ -299,6 +354,13 @@ func (sm *SessionManager) decryptNewSession(msg []byte) ([]byte, *[32]byte, erro
 	if isUnbound {
 		log.Debug("Received unbound (N-pattern) New Session message — no session state stored")
 		return plaintext, nil, nil
+	}
+
+	// Spec §1b / replay-prevention: reject NS messages whose DateTime block
+	// is too old or too far in the future. A captured NS can otherwise be
+	// replayed to reset the active session keyed on the initiator's static key.
+	if err := validateNSDateTimeFreshness(plaintext); err != nil {
+		return nil, nil, oops.Wrapf(err, "New Session message rejected")
 	}
 
 	if err := sm.initializeInboundRatchetState(initiatorStaticPub, keys, hs); err != nil {

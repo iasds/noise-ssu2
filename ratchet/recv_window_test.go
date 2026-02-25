@@ -3,6 +3,7 @@ package ratchet
 import (
 	"math/rand"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -20,32 +21,33 @@ func TestReceiveWindow_OutOfOrder(t *testing.T) {
 	var destHash [32]byte
 	copy(destHash[:], receiver.ourPublicKey[:])
 
-	// Establish session: the first EncryptGarlicMessage sends a New Session
-	// message; the receiver processes it and sets up the ratchet state.
+	// Establish session: message 0 is NS; messages 1-4 are ES pre-encrypted after
+	// NSR completes so the initiator's ratchet is in the correct state.
 	const n = 5
 	payloads := make([][]byte, n)
 	encrypted := make([][]byte, n)
 
-	// Encrypt n distinct messages.  The sender's session is created on the
-	// first call; subsequent calls produce Existing Session messages.
-	for i := 0; i < n; i++ {
-		raw := []byte("window-test message " + string(rune('A'+i)))
-		if i == 0 {
-			payloads[i] = mustBuildNSPayload(t, raw)
-		} else {
-			payloads[i] = raw
-		}
-		enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, payloads[i])
-		require.NoError(t, err, "encrypt message %d", i)
-		encrypted[i] = enc
-	}
+	// Step 1: Encrypt the NS (message 0) and bootstrap the session with NSR.
+	raw0 := []byte("window-test message A")
+	payloads[0] = mustBuildNSPayload(t, raw0)
+	enc0, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, payloads[0])
+	require.NoError(t, err, "encrypt NS message 0")
+	encrypted[0] = enc0
 
-	// The receiver must first process message 0 (New Session) to set up key
-	// material; messages 1..n-1 are Existing Session messages.
-	// Deliver message 0 in-order to bootstrap the session …
-	pt0, _, _, err := receiver.DecryptGarlicMessage(encrypted[0])
+	pt0, _, ooNSHash, err := receiver.DecryptGarlicMessage(encrypted[0])
 	require.NoError(t, err, "decrypt NS message 0")
 	assert.Equal(t, payloads[0], pt0)
+	require.NotNil(t, ooNSHash)
+	mustCompleteNSR(t, sender, receiver, *ooNSHash)
+
+	// Step 2: Encrypt ES messages 1..n-1 now that NSR is complete.
+	for i := 1; i < n; i++ {
+		raw := []byte("window-test message " + string(rune('A'+i)))
+		payloads[i] = raw
+		enc, encErr := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, payloads[i])
+		require.NoError(t, encErr, "encrypt ES message %d", i)
+		encrypted[i] = enc
+	}
 
 	// … then deliver the remaining messages in shuffled order.
 	indices := []int{2, 4, 1, 3} // out-of-order subset of [1..4]
@@ -79,9 +81,14 @@ func TestReceiveWindow_InOrderStillWorks(t *testing.T) {
 		}
 		enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, payload)
 		require.NoError(t, err)
-		pt, _, _, decErr := receiver.DecryptGarlicMessage(enc)
+		pt, _, inOrderNSHash, decErr := receiver.DecryptGarlicMessage(enc)
 		require.NoError(t, decErr)
 		assert.Equal(t, payload, pt, "message %d should round-trip", i)
+		if i == 0 {
+			// Complete NSR so sender can send ES from message 1 onward.
+			require.NotNil(t, inOrderNSHash)
+			mustCompleteNSR(t, sender, receiver, *inOrderNSHash)
+		}
 	}
 }
 
@@ -95,21 +102,22 @@ func TestReceiveWindow_BaseAdvances(t *testing.T) {
 
 	const n = 4
 	encrypted := make([][]byte, n)
-	for i := 0; i < n; i++ {
-		var payload []byte
-		if i == 0 {
-			payload = mustBuildNSPayload(t, []byte("msg"))
-		} else {
-			payload = []byte("msg")
-		}
-		enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, payload)
-		require.NoError(t, err)
+
+	// Encrypt NS (message 0), deliver it and complete NSR before pre-encrypting ES.
+	enc0, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, mustBuildNSPayload(t, []byte("msg")))
+	require.NoError(t, err)
+	encrypted[0] = enc0
+	_, _, baseNSHash, err := receiver.DecryptGarlicMessage(encrypted[0])
+	require.NoError(t, err)
+	require.NotNil(t, baseNSHash)
+	mustCompleteNSR(t, sender, receiver, *baseNSHash)
+
+	// Encrypt ES messages 1..n-1 with the NSR-derived ratchet.
+	for i := 1; i < n; i++ {
+		enc, encErr := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("msg"))
+		require.NoError(t, encErr)
 		encrypted[i] = enc
 	}
-
-	// Deliver message 0 (NS): bootstraps the session.
-	_, _, _, err := receiver.DecryptGarlicMessage(encrypted[0])
-	require.NoError(t, err)
 
 	// Retrieve the receiver's session so we can inspect internal state.
 	var msgTag [8]byte
@@ -147,21 +155,22 @@ func TestReceiveWindow_OutOfOrder_BaseStaysOnGap(t *testing.T) {
 
 	const n = 4
 	encrypted := make([][]byte, n)
-	for i := 0; i < n; i++ {
-		var payload []byte
-		if i == 0 {
-			payload = mustBuildNSPayload(t, []byte("gap test"))
-		} else {
-			payload = []byte("gap test")
-		}
-		enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, payload)
-		require.NoError(t, err)
+
+	// Encrypt NS (message 0), deliver, complete NSR, then pre-encrypt ES messages.
+	enc0, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, mustBuildNSPayload(t, []byte("gap test")))
+	require.NoError(t, err)
+	encrypted[0] = enc0
+	_, _, gapNSHash, err := receiver.DecryptGarlicMessage(encrypted[0])
+	require.NoError(t, err)
+	require.NotNil(t, gapNSHash)
+	mustCompleteNSR(t, sender, receiver, *gapNSHash)
+
+	// Encrypt ES messages 1..n-1 with the NSR-derived ratchet.
+	for i := 1; i < n; i++ {
+		enc, encErr := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("gap test"))
+		require.NoError(t, encErr)
 		encrypted[i] = enc
 	}
-
-	// Bootstrap with NS (index 0).
-	_, _, _, err := receiver.DecryptGarlicMessage(encrypted[0])
-	require.NoError(t, err)
 
 	// Look up session from the tag of message 1.
 	var msgTag [8]byte
@@ -213,22 +222,28 @@ func TestReceiveWindow_RandomOrder(t *testing.T) {
 	const n = 7
 	payloads := make([][]byte, n)
 	encrypted := make([][]byte, n)
-	for i := 0; i < n; i++ {
-		raw := []byte("random-order " + string(rune('a'+i)))
-		if i == 0 {
-			payloads[i] = mustBuildNSPayload(t, raw)
-		} else {
-			payloads[i] = raw
-		}
-		enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, payloads[i])
-		require.NoError(t, err)
-		encrypted[i] = enc
-	}
 
-	// Always deliver the NS first.
-	pt, _, _, err := receiver.DecryptGarlicMessage(encrypted[0])
+	// Encrypt NS (message 0), deliver, complete NSR, then pre-encrypt ES messages.
+	raw0 := []byte("random-order a")
+	payloads[0] = mustBuildNSPayload(t, raw0)
+	enc0, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, payloads[0])
+	require.NoError(t, err)
+	encrypted[0] = enc0
+
+	pt, _, rndNSHash, err := receiver.DecryptGarlicMessage(encrypted[0])
 	require.NoError(t, err)
 	assert.Equal(t, payloads[0], pt)
+	require.NotNil(t, rndNSHash)
+	mustCompleteNSR(t, sender, receiver, *rndNSHash)
+
+	// Encrypt ES messages 1..n-1 now that NSR is complete.
+	for i := 1; i < n; i++ {
+		raw := []byte("random-order " + string(rune('a'+i)))
+		payloads[i] = raw
+		enc, encErr := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, payloads[i])
+		require.NoError(t, encErr)
+		encrypted[i] = enc
+	}
 
 	// Shuffle indices [1..n-1] and deliver.
 	rng := rand.New(rand.NewSource(42))
@@ -414,4 +429,125 @@ func TestSendTagPollution_RecvWindowStillWorks(t *testing.T) {
 		assert.Equal(t, payload, pt, "alice must recover exact payload on recv %d", i)
 		assert.NotEqual(t, [8]byte{}, tag, "ES message must carry a non-zero session tag")
 	}
+}
+
+// ============================================================================
+// Security Tests (AUDIT items: replay prevention, ES-before-NSR, NS freshness)
+// ============================================================================
+
+// TestESReplayRejection verifies that re-submitting an already-decrypted
+// Existing Session ciphertext returns an error on the second attempt.
+//
+// When decryptExistingSession succeeds it removes the used message key from
+// recvKeyCache. The next attempt to decrypt the same wire-frame finds no key
+// for the counter and fails with "no counter in recv window", preventing replay.
+//
+// Spec ref: ratchet.md §"Existing Session" — each message key is consumed once.
+func TestESReplayRejection(t *testing.T) {
+	alice, bob := createLinkedManagers(t)
+
+	var bobDestHash [32]byte
+	copy(bobDestHash[:], bob.ourPublicKey[:])
+
+	// Establish session: NS from alice → bob.
+	nsPayload := mustBuildNSPayload(t, []byte("ns"))
+	nsEnc, err := alice.EncryptGarlicMessage(bobDestHash, bob.ourPublicKey, nsPayload)
+	require.NoError(t, err)
+	_, _, sessionHash, err := bob.DecryptGarlicMessage(nsEnc)
+	require.NoError(t, err)
+	require.NotNil(t, sessionHash)
+
+	// NSR from bob → alice to complete bidirectional key setup.
+	nsrEnc, err := bob.EncryptNewSessionReply(*sessionHash, []byte("nsr"))
+	require.NoError(t, err)
+	_, _, _, err = alice.DecryptGarlicMessage(nsrEnc)
+	require.NoError(t, err)
+
+	// Alice sends one ES message to bob.
+	esEnc, err := alice.EncryptGarlicMessage(bobDestHash, bob.ourPublicKey, []byte("secret message"))
+	require.NoError(t, err)
+
+	// First decrypt: must succeed.
+	pt, _, _, err := bob.DecryptGarlicMessage(esEnc)
+	require.NoError(t, err, "first decrypt of ES must succeed")
+	assert.Equal(t, []byte("secret message"), pt)
+
+	// Second decrypt of the SAME ciphertext: must fail (key was consumed).
+	_, _, _, err = bob.DecryptGarlicMessage(esEnc)
+	assert.Error(t, err, "replayed ES ciphertext must be rejected")
+}
+
+// TestESBeforeNSRRejected verifies that the initiator cannot send Existing
+// Session messages before it has received the New Session Reply.
+//
+// Spec ref: ratchet.md §1g — "Alice must receive one of Bob's NSR messages
+// before sending Existing Session messages."
+func TestESBeforeNSRRejected(t *testing.T) {
+	alice, bob := createLinkedManagers(t)
+
+	var bobDestHash [32]byte
+	copy(bobDestHash[:], bob.ourPublicKey[:])
+
+	// Alice sends NS to bob — this creates alice's outbound session but NSR
+	// has not been received yet, so handshakeState is still non-nil.
+	nsPayload := mustBuildNSPayload(t, []byte("ns"))
+	nsEnc, err := alice.EncryptGarlicMessage(bobDestHash, bob.ourPublicKey, nsPayload)
+	require.NoError(t, err)
+
+	// Bob receives the NS (needed to create his responder session).
+	_, _, sessionHash, err := bob.DecryptGarlicMessage(nsEnc)
+	require.NoError(t, err)
+	require.NotNil(t, sessionHash)
+
+	// Alice immediately tries to send an ES message before receiving NSR.
+	_, err = alice.EncryptGarlicMessage(bobDestHash, bob.ourPublicKey, []byte("premature es"))
+	require.Error(t, err, "initiator must not be allowed to send ES before receiving NSR")
+	assert.Contains(t, err.Error(), "must receive New Session Reply",
+		"error message should explain the spec ordering constraint")
+
+	// Now bob sends NSR and alice receives it.
+	nsrEnc, err := bob.EncryptNewSessionReply(*sessionHash, []byte("nsr"))
+	require.NoError(t, err)
+	_, _, _, err = alice.DecryptGarlicMessage(nsrEnc)
+	require.NoError(t, err)
+
+	// After NSR, alice can now send ES messages successfully.
+	esEnc, err := alice.EncryptGarlicMessage(bobDestHash, bob.ourPublicKey, []byte("post-nsr es"))
+	require.NoError(t, err, "alice must be able to send ES after receiving NSR")
+	pt, _, _, err := bob.DecryptGarlicMessage(esEnc)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("post-nsr es"), pt)
+}
+
+// TestNSDateTimeFreshnessRejected verifies that a New Session message whose
+// DateTime block is older than nsMaxAge is rejected by the receiver.
+//
+// This prevents an attacker from replaying a captured NS to overwrite an active
+// live session (resetting its ratchet chain). An old NS has a stale timestamp
+// that falls outside the ±nsMaxAge acceptance window.
+//
+// Spec ref: ratchet.md §1b — DateTime block required; freshness prevents replay.
+func TestNSDateTimeFreshnessRejected(t *testing.T) {
+	alice, bob := createLinkedManagers(t)
+
+	var bobDestHash [32]byte
+	copy(bobDestHash[:], bob.ourPublicKey[:])
+
+	// Alice builds and encrypts an NS message with the real current time.
+	nsPayload := mustBuildNSPayload(t, []byte("real ns"))
+	nsEnc, err := alice.EncryptGarlicMessage(bobDestHash, bob.ourPublicKey, nsPayload)
+	require.NoError(t, err)
+
+	// Override nowFunc so that when bob tries to decrypt the NS, the current time
+	// appears to be well past the freshness window (nsMaxAge + 1 minute).
+	savedNowFunc := nowFunc
+	t.Cleanup(func() { nowFunc = savedNowFunc })
+	nowFunc = func() time.Time {
+		return time.Now().Add(nsMaxAge + time.Minute)
+	}
+
+	// Bob attempts to decrypt the NS — must fail because the timestamp is stale.
+	_, _, _, err = bob.DecryptGarlicMessage(nsEnc)
+	require.Error(t, err, "NS with stale timestamp must be rejected")
+	assert.Contains(t, err.Error(), "freshness", "error must mention freshness check")
 }

@@ -413,11 +413,13 @@ func TestNextKeyExchange_FullFlow(t *testing.T) {
 	var destHash [32]byte
 	copy(destHash[:], receiver.ourPublicKey[:])
 
-	// 1. Establish initial session.
+	// 1. Establish initial session with NS then NSR.
 	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, mustBuildNSPayload(t, []byte("init")))
 	require.NoError(t, err)
-	_, _, _, err = receiver.DecryptGarlicMessage(enc)
+	_, _, nkNSHash, err := receiver.DecryptGarlicMessage(enc)
 	require.NoError(t, err)
+	require.NotNil(t, nkNSHash)
+	mustCompleteNSR(t, sender, receiver, *nkNSHash)
 
 	// 2. Trigger DH ratchet on sender (artificially advance counter).
 	sender.mu.RLock()
