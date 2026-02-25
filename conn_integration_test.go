@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/go-i2p/crypto/rand"
+	"github.com/go-i2p/go-noise/handshake"
 
 	upstreamnoise "github.com/go-i2p/noise"
 	"github.com/stretchr/testify/assert"
@@ -440,4 +441,77 @@ func TestXXHandshake_NoPeerStaticNeeded(t *testing.T) {
 	}
 
 	t.Log("XX handshake + data exchange succeeded without PeerStatic")
+}
+
+// TestPhaseData_ModifierInvokedOnWriteAndRead verifies that the modifier chain
+// is called with PhaseData on every Write (outbound) and Read (inbound) after
+// the Noise handshake completes.
+func TestPhaseData_ModifierInvokedOnWriteAndRead(t *testing.T) {
+	clientPipe, serverPipe := net.Pipe()
+
+	// Install a tracking modifier on both sides.
+	clientMod := &trackingModifier{}
+	serverMod := &trackingModifier{}
+
+	clientCfg := NewConnConfig("NN", true).
+		WithHandshakeTimeout(5 * time.Second).
+		WithModifiers(clientMod)
+	serverCfg := NewConnConfig("NN", false).
+		WithHandshakeTimeout(5 * time.Second).
+		WithModifiers(serverMod)
+
+	client, err := NewNoiseConn(clientPipe, clientCfg)
+	require.NoError(t, err)
+	defer client.Close()
+
+	server, err := NewNoiseConn(serverPipe, serverCfg)
+	require.NoError(t, err)
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Perform handshake concurrently.
+	hsErr := make(chan error, 2)
+	go func() { hsErr <- client.Handshake(ctx) }()
+	go func() { hsErr <- server.Handshake(ctx) }()
+	require.NoError(t, <-hsErr)
+	require.NoError(t, <-hsErr)
+
+	msg := []byte("PhaseData wiring test message")
+
+	// Client writes; server reads.
+	writeErr := make(chan error, 1)
+	go func() {
+		_, err := client.Write(msg)
+		writeErr <- err
+	}()
+
+	buf := make([]byte, 256)
+	n, err := server.Read(buf)
+	require.NoError(t, err)
+	require.NoError(t, <-writeErr)
+	assert.Equal(t, msg, buf[:n], "round-trip data must be identical with symmetric modifier")
+
+	// Client modifier must have called ModifyOutbound with PhaseData.
+	clientMod.mu.Lock()
+	outCalls := len(clientMod.outboundCalls)
+	var outPhase handshake.HandshakePhase
+	if outCalls > 0 {
+		outPhase = clientMod.outboundCalls[0].phase
+	}
+	clientMod.mu.Unlock()
+	require.Equal(t, 1, outCalls, "Write must invoke ModifyOutbound once")
+	assert.Equal(t, handshake.PhaseData, outPhase, "Write must invoke ModifyOutbound with PhaseData")
+
+	// Server modifier must have called ModifyInbound with PhaseData.
+	serverMod.mu.Lock()
+	inCalls := len(serverMod.inboundCalls)
+	var inPhase handshake.HandshakePhase
+	if inCalls > 0 {
+		inPhase = serverMod.inboundCalls[0].phase
+	}
+	serverMod.mu.Unlock()
+	require.Equal(t, 1, inCalls, "Read must invoke ModifyInbound once")
+	assert.Equal(t, handshake.PhaseData, inPhase, "Read must invoke ModifyInbound with PhaseData")
 }

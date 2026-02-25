@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-i2p/go-noise/handshake"
 	"github.com/go-i2p/go-noise/internal"
 	"github.com/go-i2p/logger"
 	i2plogger "github.com/go-i2p/logger"
@@ -152,6 +153,12 @@ func (nc *NoiseConn) Read(b []byte) (int, error) {
 		return 0, err
 	}
 
+	// Apply PhaseData modifier chain on decrypted plaintext (e.g., strip padding).
+	decrypted, err = nc.applyInboundModifier(decrypted)
+	if err != nil {
+		return 0, err
+	}
+
 	return nc.copyDecryptedData(b, decrypted, n, len(decrypted))
 }
 
@@ -170,7 +177,15 @@ func (nc *NoiseConn) Write(b []byte) (int, error) {
 		return 0, err
 	}
 
-	encrypted, err := nc.encryptData(b)
+	// Apply PhaseData modifier chain before encryption (e.g., add padding).
+	// toEncrypt may be larger than b if a modifier adds padding; we still report
+	// len(b) as the number of caller bytes consumed.
+	toEncrypt, err := nc.applyOutboundModifier(b)
+	if err != nil {
+		return 0, err
+	}
+
+	encrypted, err := nc.encryptData(toEncrypt)
 	if err != nil {
 		return 0, err
 	}
@@ -215,6 +230,35 @@ func (nc *NoiseConn) Decrypt(encrypted []byte) ([]byte, error) {
 // resulting bytes to/from this connection with their own framing.
 func (nc *NoiseConn) Underlying() net.Conn {
 	return nc.underlying
+}
+
+// GetModifierChain returns the HandshakeModifier chain from the config.
+// Returns nil if no modifiers are configured. NTCP2 framed I/O uses this
+// to apply PhaseData transforms (padding, obfuscation) around Encrypt/Decrypt.
+func (nc *NoiseConn) GetModifierChain() *handshake.ModifierChain {
+	return nc.config.GetModifierChain()
+}
+
+// applyOutboundModifier passes plaintext through the modifier chain for
+// PhaseData (post-handshake data transport). Called by Write before encryption.
+// Returns data unchanged if no modifier chain is configured.
+func (nc *NoiseConn) applyOutboundModifier(data []byte) ([]byte, error) {
+	chain := nc.config.GetModifierChain()
+	if chain == nil {
+		return data, nil
+	}
+	return chain.ModifyOutbound(handshake.PhaseData, data)
+}
+
+// applyInboundModifier passes decrypted plaintext through the modifier chain
+// for PhaseData (post-handshake data transport). Called by Read after decryption.
+// Returns data unchanged if no modifier chain is configured.
+func (nc *NoiseConn) applyInboundModifier(data []byte) ([]byte, error) {
+	chain := nc.config.GetModifierChain()
+	if chain == nil {
+		return data, nil
+	}
+	return chain.ModifyInbound(handshake.PhaseData, data)
 }
 
 // validateWriteState validates the connection state before writing.

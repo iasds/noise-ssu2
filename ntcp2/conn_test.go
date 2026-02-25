@@ -13,6 +13,7 @@ import (
 
 	"github.com/dchest/siphash"
 	noise "github.com/go-i2p/go-noise"
+	"github.com/go-i2p/go-noise/handshake"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -1764,4 +1765,118 @@ func TestAuditFix_ValidateFrameLength_TypeConstraintEnforcesUpperBound(t *testin
 	const uint16Max = 65535
 	assert.EqualValues(t, uint16Max, SpecMaxFrameSize,
 		"SpecMaxFrameSize must equal uint16 max (65535) for type constraint to hold")
+}
+
+// ============================================================================
+// Tests for PhaseData modifier wiring in NTCP2 framed I/O path
+// ============================================================================
+
+// ntcp2TrackingModifier records calls to ModifyOutbound and ModifyInbound
+// and passes data through unchanged, allowing assertion of PhaseData wiring.
+type ntcp2TrackingModifier struct {
+	mu            sync.Mutex
+	outboundCalls []struct {
+		phase handshake.HandshakePhase
+		data  []byte
+	}
+	inboundCalls []struct {
+		phase handshake.HandshakePhase
+		data  []byte
+	}
+}
+
+func (m *ntcp2TrackingModifier) ModifyOutbound(phase handshake.HandshakePhase, data []byte) ([]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.outboundCalls = append(m.outboundCalls, struct {
+		phase handshake.HandshakePhase
+		data  []byte
+	}{phase, append([]byte(nil), data...)})
+	return data, nil
+}
+
+func (m *ntcp2TrackingModifier) ModifyInbound(phase handshake.HandshakePhase, data []byte) ([]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.inboundCalls = append(m.inboundCalls, struct {
+		phase handshake.HandshakePhase
+		data  []byte
+	}{phase, append([]byte(nil), data...)})
+	return data, nil
+}
+
+func (m *ntcp2TrackingModifier) Name() string { return "ntcp2-tracking-modifier" }
+func (m *ntcp2TrackingModifier) Close() error { return nil }
+
+// createTestNTCP2ConnWithModifier creates an NTCP2Conn whose underlying
+// NoiseConn has the supplied modifier configured. Use this to verify that
+// applyOutboundModifier / applyInboundModifier delegate to the chain.
+func createTestNTCP2ConnWithModifier(mod handshake.HandshakeModifier) *NTCP2Conn {
+	mockNet := &mockNoiseConn{}
+	cfg := noise.NewConnConfig("XK", true).WithModifiers(mod)
+	noiseConn, err := noise.NewNoiseConn(mockNet, cfg)
+	if err != nil {
+		panic(err)
+	}
+	localAddr := createTestNTCP2Addr("local", "initiator")
+	remoteAddr := createTestNTCP2Addr("remote", "responder")
+	conn, err := NewNTCP2Conn(noiseConn, localAddr, remoteAddr)
+	if err != nil {
+		panic(err)
+	}
+	return conn
+}
+
+// TestNTCP2ApplyOutboundModifier_NoChain verifies passthrough when no modifier chain is set.
+func TestNTCP2ApplyOutboundModifier_NoChain(t *testing.T) {
+	conn := createTestNTCP2Conn(&mockNoiseConn{})
+	data := []byte("hello")
+	got, err := conn.applyOutboundModifier(data)
+	require.NoError(t, err)
+	assert.Equal(t, data, got, "passthrough expected with no modifier chain")
+}
+
+// TestNTCP2ApplyInboundModifier_NoChain verifies passthrough when no modifier chain is set.
+func TestNTCP2ApplyInboundModifier_NoChain(t *testing.T) {
+	conn := createTestNTCP2Conn(&mockNoiseConn{})
+	data := []byte("hello")
+	got, err := conn.applyInboundModifier(data)
+	require.NoError(t, err)
+	assert.Equal(t, data, got, "passthrough expected with no modifier chain")
+}
+
+// TestNTCP2ApplyOutboundModifier_InvokesPhaseData verifies ModifyOutbound is
+// called with PhaseData when a modifier chain is configured.
+func TestNTCP2ApplyOutboundModifier_InvokesPhaseData(t *testing.T) {
+	mod := &ntcp2TrackingModifier{}
+	conn := createTestNTCP2ConnWithModifier(mod)
+
+	data := []byte("outbound data")
+	_, err := conn.applyOutboundModifier(data)
+	require.NoError(t, err)
+
+	mod.mu.Lock()
+	defer mod.mu.Unlock()
+	require.Len(t, mod.outboundCalls, 1, "expected exactly one outbound modifier call")
+	assert.Equal(t, handshake.PhaseData, mod.outboundCalls[0].phase,
+		"framed write must invoke modifier with PhaseData")
+	assert.Equal(t, data, mod.outboundCalls[0].data, "modifier must receive original data")
+}
+
+// TestNTCP2ApplyInboundModifier_InvokesPhaseData verifies ModifyInbound is
+// called with PhaseData when a modifier chain is configured.
+func TestNTCP2ApplyInboundModifier_InvokesPhaseData(t *testing.T) {
+	mod := &ntcp2TrackingModifier{}
+	conn := createTestNTCP2ConnWithModifier(mod)
+
+	data := []byte("inbound data")
+	_, err := conn.applyInboundModifier(data)
+	require.NoError(t, err)
+
+	mod.mu.Lock()
+	defer mod.mu.Unlock()
+	require.Len(t, mod.inboundCalls, 1, "expected exactly one inbound modifier call")
+	assert.Equal(t, handshake.PhaseData, mod.inboundCalls[0].phase,
+		"framed read must invoke modifier with PhaseData")
+	assert.Equal(t, data, mod.inboundCalls[0].data, "modifier must receive original data")
 }

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-i2p/go-noise/handshake"
 	"github.com/go-i2p/go-noise/internal"
 	"github.com/go-i2p/noise"
 	"github.com/stretchr/testify/assert"
@@ -1333,4 +1334,119 @@ func createTestConnection() (*NoiseConn, error) {
 		WithHandshakeTimeout(30 * time.Second)
 
 	return NewNoiseConn(mockConn, config)
+}
+
+// callRecord stores a single ModifyOutbound or ModifyInbound call for inspection.
+type callRecord struct {
+	phase handshake.HandshakePhase
+	data  []byte
+}
+
+// trackingModifier is a HandshakeModifier that records every call and passes
+// data through unchanged. Use it to assert that Write/Read invoke the chain.
+type trackingModifier struct {
+	mu            sync.Mutex
+	outboundCalls []callRecord
+	inboundCalls  []callRecord
+}
+
+func (m *trackingModifier) ModifyOutbound(phase handshake.HandshakePhase, data []byte) ([]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.outboundCalls = append(m.outboundCalls, callRecord{phase: phase, data: append([]byte(nil), data...)})
+	return data, nil
+}
+
+func (m *trackingModifier) ModifyInbound(phase handshake.HandshakePhase, data []byte) ([]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.inboundCalls = append(m.inboundCalls, callRecord{phase: phase, data: append([]byte(nil), data...)})
+	return data, nil
+}
+
+func (m *trackingModifier) Name() string { return "tracking-modifier" }
+func (m *trackingModifier) Close() error { return nil }
+
+// TestGetModifierChain_NoModifiers checks nil is returned for a config with no modifiers.
+func TestGetModifierChain_NoModifiers(t *testing.T) {
+	localAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8001"}
+	remoteAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8002"}
+	nc, err := NewNoiseConn(newMockNetConn(localAddr, remoteAddr), NewConnConfig("NN", true))
+	require.NoError(t, err)
+	require.Nil(t, nc.GetModifierChain(), "expected nil modifier chain when config has no modifiers")
+}
+
+// TestGetModifierChain_WithModifier checks non-nil chain is returned when a modifier is configured.
+func TestGetModifierChain_WithModifier(t *testing.T) {
+	localAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8001"}
+	remoteAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8002"}
+	mod := &trackingModifier{}
+	cfg := NewConnConfig("NN", true).WithModifiers(mod)
+	nc, err := NewNoiseConn(newMockNetConn(localAddr, remoteAddr), cfg)
+	require.NoError(t, err)
+	require.NotNil(t, nc.GetModifierChain(), "expected non-nil modifier chain")
+}
+
+// TestApplyOutboundModifier_NoChain verifies passthrough when no chain is configured.
+func TestApplyOutboundModifier_NoChain(t *testing.T) {
+	localAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8001"}
+	remoteAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8002"}
+	nc, err := NewNoiseConn(newMockNetConn(localAddr, remoteAddr), NewConnConfig("NN", true))
+	require.NoError(t, err)
+	data := []byte("hello")
+	got, err := nc.applyOutboundModifier(data)
+	require.NoError(t, err)
+	require.Equal(t, data, got, "passthrough expected with no modifier chain")
+}
+
+// TestApplyInboundModifier_NoChain verifies passthrough when no chain is configured.
+func TestApplyInboundModifier_NoChain(t *testing.T) {
+	localAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8001"}
+	remoteAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8002"}
+	nc, err := NewNoiseConn(newMockNetConn(localAddr, remoteAddr), NewConnConfig("NN", true))
+	require.NoError(t, err)
+	data := []byte("hello")
+	got, err := nc.applyInboundModifier(data)
+	require.NoError(t, err)
+	require.Equal(t, data, got, "passthrough expected with no modifier chain")
+}
+
+// TestApplyOutboundModifier_InvokesPhaseData verifies ModifyOutbound is called with PhaseData.
+func TestApplyOutboundModifier_InvokesPhaseData(t *testing.T) {
+	localAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8001"}
+	remoteAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8002"}
+	mod := &trackingModifier{}
+	cfg := NewConnConfig("NN", true).WithModifiers(mod)
+	nc, err := NewNoiseConn(newMockNetConn(localAddr, remoteAddr), cfg)
+	require.NoError(t, err)
+
+	data := []byte("outbound payload")
+	_, err = nc.applyOutboundModifier(data)
+	require.NoError(t, err)
+
+	mod.mu.Lock()
+	defer mod.mu.Unlock()
+	require.Len(t, mod.outboundCalls, 1, "expected one outbound call")
+	assert.Equal(t, handshake.PhaseData, mod.outboundCalls[0].phase, "expected PhaseData")
+	assert.Equal(t, data, mod.outboundCalls[0].data, "expected original data")
+}
+
+// TestApplyInboundModifier_InvokesPhaseData verifies ModifyInbound is called with PhaseData.
+func TestApplyInboundModifier_InvokesPhaseData(t *testing.T) {
+	localAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8001"}
+	remoteAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8002"}
+	mod := &trackingModifier{}
+	cfg := NewConnConfig("NN", true).WithModifiers(mod)
+	nc, err := NewNoiseConn(newMockNetConn(localAddr, remoteAddr), cfg)
+	require.NoError(t, err)
+
+	data := []byte("inbound payload")
+	_, err = nc.applyInboundModifier(data)
+	require.NoError(t, err)
+
+	mod.mu.Lock()
+	defer mod.mu.Unlock()
+	require.Len(t, mod.inboundCalls, 1, "expected one inbound call")
+	assert.Equal(t, handshake.PhaseData, mod.inboundCalls[0].phase, "expected PhaseData")
+	assert.Equal(t, data, mod.inboundCalls[0].data, "expected original data")
 }

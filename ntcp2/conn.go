@@ -11,6 +11,7 @@ import (
 	"github.com/go-i2p/crypto/rand"
 
 	noise "github.com/go-i2p/go-noise"
+	"github.com/go-i2p/go-noise/handshake"
 	"github.com/go-i2p/logger"
 	"github.com/samber/oops"
 )
@@ -232,6 +233,12 @@ func (nc *NTCP2Conn) readFramed(b []byte) (int, error) {
 	}
 
 	plaintext, err := nc.readAndDecryptFrame(underlying, frameLen)
+	if err != nil {
+		return 0, err
+	}
+
+	// Apply PhaseData modifier chain after decryption (e.g., strip NTCP2 AEAD padding).
+	plaintext, err = nc.applyInboundModifier(plaintext)
 	if err != nil {
 		return 0, err
 	}
@@ -466,6 +473,28 @@ func (nc *NTCP2Conn) writeDirect(b []byte) (int, error) {
 	return n, nil
 }
 
+// applyOutboundModifier passes plaintext through the NoiseConn's modifier chain
+// for PhaseData. Used by the framed write path before Encrypt. Returns data
+// unchanged when no modifier chain is configured.
+func (nc *NTCP2Conn) applyOutboundModifier(data []byte) ([]byte, error) {
+	chain := nc.noiseConn.GetModifierChain()
+	if chain == nil {
+		return data, nil
+	}
+	return chain.ModifyOutbound(handshake.PhaseData, data)
+}
+
+// applyInboundModifier passes decrypted plaintext through the NoiseConn's
+// modifier chain for PhaseData. Used by the framed read path after Decrypt.
+// Returns data unchanged when no modifier chain is configured.
+func (nc *NTCP2Conn) applyInboundModifier(data []byte) ([]byte, error) {
+	chain := nc.noiseConn.GetModifierChain()
+	if chain == nil {
+		return data, nil
+	}
+	return chain.ModifyInbound(handshake.PhaseData, data)
+}
+
 // writeFramed writes NTCP2 data-phase frame(s) with SipHash length obfuscation.
 // Large payloads are transparently split into multiple frames of at most
 // getMaxFrameSize() - Poly1305Overhead bytes of plaintext each.
@@ -502,7 +531,14 @@ func (nc *NTCP2Conn) writeSingleFrame(b []byte) (int, error) {
 		return 0, err
 	}
 
-	encrypted, err := nc.encryptFrame(b)
+	// Apply PhaseData modifier chain before encryption (e.g., NTCP2 AEAD padding).
+	// We encrypt the modified bytes but report the original len(b) to the caller.
+	toEncrypt, err := nc.applyOutboundModifier(b)
+	if err != nil {
+		return 0, err
+	}
+
+	encrypted, err := nc.encryptFrame(toEncrypt)
 	if err != nil {
 		return 0, err
 	}
