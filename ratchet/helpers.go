@@ -201,13 +201,16 @@ func deriveMessageKey(session *Session) ([32]byte, error) {
 	return messageKey, nil
 }
 
-// generateAndTrackSessionTag generates the next session tag from the tag ratchet.
+// generateAndTrackSessionTag generates the next session tag from the send-direction
+// tag ratchet. The generated tag is NOT added to session.pendingTags: pendingTags
+// tracks only incoming recv-direction tags used for the receive-window lookup.
+// Tracking outbound send tags there would pollute the recv window, cause the
+// replenishment threshold to never fire, and silently drain the actual recv window.
 func generateAndTrackSessionTag(session *Session) ([8]byte, error) {
 	sessionTag, err := session.TagRatchet.GenerateNextTag()
 	if err != nil {
 		return [8]byte{}, oops.Wrapf(err, "failed to generate session tag")
 	}
-	session.pendingTags = append(session.pendingTags, sessionTag)
 	return sessionTag, nil
 }
 
@@ -296,11 +299,14 @@ func performDHRatchetStep(session *Session) error {
 // once per counter, so the chain key stays in sync with the sender's sending chain.
 //
 // Must be called with session.mu held.
+// Returns an error if RecvSymmetricRatchet is nil rather than silently falling back to
+// the send-direction SymmetricRatchet, which would permanently desynchronise outgoing crypto.
 // Spec ref: ratchet.md §"Existing Session" — symmetric ratchet advances once per message.
 func fillRecvKeyCache(session *Session, upTo uint32) error {
 	recvRatchet := session.RecvSymmetricRatchet
 	if recvRatchet == nil {
-		recvRatchet = session.SymmetricRatchet
+		return oops.Errorf("RecvSymmetricRatchet is nil: session ratchet state is uninitialised; " +
+			"cannot derive recv keys without a valid recv ratchet")
 	}
 	for session.recvFillMark < upTo {
 		key, _, err := recvRatchet.DeriveMessageKeyAndAdvance(session.recvFillMark)

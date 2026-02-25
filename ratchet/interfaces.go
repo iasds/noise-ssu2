@@ -47,6 +47,17 @@ type GarlicSessionManager interface {
 	GarlicEncryptor
 	GarlicDecryptor
 
+	// EncryptNewSessionReply constructs and returns a New Session Reply (NSR) for a
+	// session established by a received New Session message. The responder calls this
+	// to complete the Noise IK handshake and transition to Existing Session encryption.
+	//
+	// sessionHash is the [32]byte value returned by DecryptGarlicMessage (dereference
+	// the *[32]byte: `*sessionHash`). payload is the reply plaintext.
+	//
+	// Promoting this method to the interface avoids callers casting *SessionManager
+	// directly and makes the responder role expressible without leaking the concrete type.
+	EncryptNewSessionReply(sessionHash [32]byte, payload []byte) ([]byte, error)
+
 	// ProcessIncomingDHRatchet updates a session's receiving ratchet state
 	// when a DH ratchet key is received from a peer.
 	// sessionTag: the tag that identified the session.

@@ -331,3 +331,87 @@ func TestRecvWindowReset_AfterNSR(t *testing.T) {
 		assert.Equal(t, payload, pt)
 	}
 }
+
+// TestSendTagPollution_RecvWindowStillWorks is a regression test for the bug where
+// generateAndTrackSessionTag appended outbound send-direction tags to
+// session.pendingTags, which is meant to hold only incoming recv-direction tags.
+//
+// After 10+ outgoing ES messages the old code filled pendingTags with send tags,
+// preventing the replenishment threshold check from ever firing, which silently
+// emptied the actual recv window and caused all subsequent inbound ES decrypts
+// to fail with "no matching session tag".
+//
+// The fix: generateAndTrackSessionTag no longer writes to pendingTags.
+// This test verifies:
+//  1. Alice sends 15 outgoing ES messages to Bob (> tagWindowSize == 10).
+//  2. Bob can still send ES messages back to Alice after that.
+//  3. Alice's pendingTags count stays bounded at tagWindowSize (no pollution).
+func TestSendTagPollution_RecvWindowStillWorks(t *testing.T) {
+	alice, bob := createLinkedManagers(t)
+
+	var bobDestHash [32]byte
+	copy(bobDestHash[:], bob.ourPublicKey[:])
+
+	// Step 1: Alice sends NS to Bob. Bob learns Alice's static key.
+	nsPayload := mustBuildNSPayload(t, []byte("ns from alice"))
+	nsEnc, err := alice.EncryptGarlicMessage(bobDestHash, bob.ourPublicKey, nsPayload)
+	require.NoError(t, err)
+	_, _, sessionHash, err := bob.DecryptGarlicMessage(nsEnc)
+	require.NoError(t, err)
+	require.NotNil(t, sessionHash, "DecryptGarlicMessage must return sessionHash for NS")
+
+	// Step 2: Bob sends NSR to Alice. This completes the bidirectional handshake
+	// and initialises both alice.RecvTagRatchet and alice.pendingTags correctly.
+	nsrEnc, err := bob.EncryptNewSessionReply(*sessionHash, []byte("nsr from bob"))
+	require.NoError(t, err)
+	_, _, _, err = alice.DecryptGarlicMessage(nsrEnc)
+	require.NoError(t, err)
+
+	// Step 3: Alice sends 15 outgoing ES messages to Bob. With the old bug this
+	// would fill alice's session.pendingTags with 15 send-direction tags
+	// (> tagWindowSize == 10), preventing recv-window replenishment.
+	const outgoingCount = 15
+	for i := 0; i < outgoingCount; i++ {
+		payload := []byte("alice→bob message " + string(rune('A'+i)))
+		enc, encErr := alice.EncryptGarlicMessage(bobDestHash, bob.ourPublicKey, payload)
+		require.NoError(t, encErr, "alice ES send %d should succeed", i)
+		pt, _, _, decErr := bob.DecryptGarlicMessage(enc)
+		require.NoError(t, decErr, "bob ES recv %d should succeed", i)
+		assert.Equal(t, payload, pt, "payload mismatch on message %d", i)
+	}
+
+	// Step 4: Verify alice's pendingTags is not polluted (capped at tagWindowSize,
+	// not bloated with send-direction tags).
+	alice.mu.RLock()
+	var aliceSess *Session
+	for _, s := range alice.sessions {
+		aliceSess = s
+		break
+	}
+	alice.mu.RUnlock()
+	require.NotNil(t, aliceSess, "alice must have a session after outgoing ES messages")
+
+	aliceSess.mu.Lock()
+	pendingCount := len(aliceSess.pendingTags)
+	aliceSess.mu.Unlock()
+
+	assert.LessOrEqual(t, pendingCount, tagWindowSize,
+		"alice.pendingTags must not exceed tagWindowSize=%d (send-tag pollution check); got %d",
+		tagWindowSize, pendingCount)
+
+	// Step 5: Bob sends 3 ES messages back to Alice. Bob's session for Alice is
+	// keyed by sessionHash (SHA-256 of Alice's pubkey), which is what was returned
+	// by DecryptGarlicMessage when Bob processed Alice's NS message. With the old
+	// bug these would fail because Alice's tagIndex never got replenished
+	// (pendingTags was full of useless send tags). With the fix, the recv window
+	// is correctly maintained.
+	for i := 0; i < 3; i++ {
+		payload := []byte("bob→alice reply " + string(rune('0'+i)))
+		enc, encErr := bob.EncryptGarlicMessage(*sessionHash, alice.ourPublicKey, payload)
+		require.NoError(t, encErr, "bob ES send %d should succeed", i)
+		pt, tag, _, decErr := alice.DecryptGarlicMessage(enc)
+		require.NoError(t, decErr, "alice ES recv %d must succeed — recv window should be intact", i)
+		assert.Equal(t, payload, pt, "alice must recover exact payload on recv %d", i)
+		assert.NotEqual(t, [8]byte{}, tag, "ES message must carry a non-zero session tag")
+	}
+}
