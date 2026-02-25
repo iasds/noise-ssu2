@@ -717,3 +717,182 @@ func TestHealthCheck_RejectsUnhealthyConnections(t *testing.T) {
 		t.Errorf("Pool should be empty after unhealthy conn removed, got total=%d", stats["total"])
 	}
 }
+
+// TestGet_RemovesExpiredConnections verifies that Get() closes and removes
+// connections that have exceeded their MaxIdle time instead of skipping them.
+// Prior to the fix, expired connections stayed in the slice and counted against
+// maxSize, eventually starving the pool.
+func TestGet_RemovesExpiredConnections(t *testing.T) {
+	const maxSize = 3
+	p := NewConnPool(&PoolConfig{
+		MaxSize: maxSize,
+		MaxAge:  time.Hour,
+		MaxIdle: time.Millisecond, // expire immediately
+	})
+	defer p.Close()
+
+	// Fill the pool to capacity with connections that will expire.
+	expiredConns := make([]*mockConn, maxSize)
+	for i := 0; i < maxSize; i++ {
+		expiredConns[i] = newMockConn("10.0.0.1:9000")
+		if err := p.Put(expiredConns[i]); err != nil {
+			t.Fatalf("Put[%d] failed: %v", i, err)
+		}
+	}
+
+	// Wait for MaxIdle to pass so all connections in the pool are expired.
+	time.Sleep(10 * time.Millisecond)
+
+	// Get() must remove the expired connections and return nil (no valid conn).
+	got := p.Get("10.0.0.1:9000")
+	if got != nil {
+		got.Close()
+		t.Error("Get should return nil when all connections are expired")
+	}
+
+	// All expired connections must have been closed by Get().
+	for i, c := range expiredConns {
+		if !c.closed {
+			t.Errorf("expired conn[%d] was not closed by Get()", i)
+		}
+	}
+
+	// The pool must now be empty — a new connection can be accepted.
+	fresh := newMockConn("10.0.0.1:9000")
+	if err := p.Put(fresh); err != nil {
+		t.Fatalf("Put fresh conn after expiry purge failed: %v", err)
+	}
+	stats := p.Stats()
+	if stats["total"] != 1 {
+		t.Errorf("Expected 1 fresh connection after expiry purge, got total=%d", stats["total"])
+	}
+}
+
+// TestMaxSizeZero_TreatedAsNoLimit verifies that MaxSize=0 is treated as
+// "no per-address limit" rather than silently closing every Put() call.
+func TestMaxSizeZero_TreatedAsNoLimit(t *testing.T) {
+	p := NewConnPool(&PoolConfig{
+		MaxSize: 0, // explicitly zero — should not starve the pool
+		MaxAge:  time.Hour,
+		MaxIdle: time.Hour,
+	})
+	defer p.Close()
+
+	const n = 5
+	conns := make([]*mockConn, n)
+	for i := 0; i < n; i++ {
+		conns[i] = newMockConn("10.0.0.2:9000")
+		if err := p.Put(conns[i]); err != nil {
+			t.Fatalf("Put[%d] failed with MaxSize=0: %v", i, err)
+		}
+		if conns[i].closed {
+			t.Errorf("Put[%d] closed the connection with MaxSize=0", i)
+		}
+	}
+
+	stats := p.Stats()
+	if stats["total"] != n {
+		t.Errorf("Expected %d connections with MaxSize=0 no-limit, got total=%d", n, stats["total"])
+	}
+}
+
+// TestConcurrency_PutGetRelease verifies that concurrent Put, Get, and Release
+// calls do not corrupt pool state or trigger data races.
+// Run with: go test -race ./pool/...
+func TestConcurrency_PutGetRelease(t *testing.T) {
+	const goroutines = 32
+	const iterations = 50
+	const addr = "10.0.0.3:9000"
+
+	p := NewConnPool(&PoolConfig{
+		MaxSize: 8,
+		MaxAge:  time.Hour,
+		MaxIdle: time.Hour,
+	})
+	defer p.Close()
+
+	// Pre-populate with a few connections.
+	for i := 0; i < 4; i++ {
+		p.Put(newMockConn(addr)) //nolint:errcheck
+	}
+
+	done := make(chan struct{})
+	// Continuously supply fresh connections so goroutines always have
+	// something to Get. Stopped via done after all workers finish.
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			default:
+				p.Put(newMockConn(addr)) //nolint:errcheck
+				time.Sleep(time.Millisecond)
+			}
+		}
+	}()
+
+	// Launch goroutines that each run a Get/Release loop.
+	startCh := make(chan struct{})
+	errCh := make(chan error, goroutines*iterations)
+	doneCh := make(chan struct{}, goroutines)
+
+	for g := 0; g < goroutines; g++ {
+		go func() {
+			<-startCh
+			for i := 0; i < iterations; i++ {
+				conn := p.Get(addr)
+				if conn != nil {
+					if err := p.Release(addr, conn); err != nil {
+						errCh <- err
+					}
+				}
+			}
+			doneCh <- struct{}{}
+		}()
+	}
+
+	close(startCh)
+	for i := 0; i < goroutines; i++ {
+		<-doneCh
+	}
+	close(done)
+	close(errCh)
+
+	for err := range errCh {
+		t.Errorf("concurrent error: %v", err)
+	}
+
+	// Basic sanity: total count must be non-negative.
+	stats := p.Stats()
+	if stats["total"] < 0 {
+		t.Errorf("pool total went negative: %d", stats["total"])
+	}
+}
+
+// TestCleanupInterval_ProportionalToConfig verifies that cleanupInterval()
+// returns a period proportional to the smaller of MaxIdle/2 and MaxAge/2,
+// rather than always returning the hardcoded 1-minute default.
+func TestCleanupInterval_ProportionalToConfig(t *testing.T) {
+	cases := []struct {
+		name    string
+		maxIdle time.Duration
+		maxAge  time.Duration
+		wantMax time.Duration // returned interval must be <= wantMax
+	}{
+		{"default (no limits)", 0, 0, time.Minute},
+		{"short MaxIdle", 10 * time.Second, 0, 6 * time.Second},
+		{"short MaxAge", 0, 8 * time.Second, 5 * time.Second},
+		{"both short, idle smaller", 4 * time.Second, 20 * time.Second, 3 * time.Second},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &ConnPool{maxIdle: tc.maxIdle, maxAge: tc.maxAge}
+			got := p.cleanupInterval()
+			if got > tc.wantMax {
+				t.Errorf("cleanupInterval()=%v, want <= %v (maxIdle=%v, maxAge=%v)",
+					got, tc.wantMax, tc.maxIdle, tc.maxAge)
+			}
+		})
+	}
+}

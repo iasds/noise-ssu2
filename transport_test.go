@@ -437,37 +437,3 @@ func TestDialNoiseWithPoolAndHandshake(t *testing.T) {
 		})
 	}
 }
-
-func TestCreatePoolAddr(t *testing.T) {
-	tests := []struct {
-		name     string
-		network  string
-		addr     string
-		pattern  string
-		expected string
-	}{
-		{
-			name:     "tcp connection",
-			network:  "tcp",
-			addr:     "localhost:8080",
-			pattern:  "XX",
-			expected: "tcp://localhost:8080/XX",
-		},
-		{
-			name:     "udp connection",
-			network:  "udp",
-			addr:     "127.0.0.1:9090",
-			pattern:  "NN",
-			expected: "udp://127.0.0.1:9090/NN",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := createPoolAddr(tt.network, tt.addr, tt.pattern)
-			if result != tt.expected {
-				t.Errorf("Expected %q, got %q", tt.expected, result)
-			}
-		})
-	}
-}

@@ -345,25 +345,27 @@ func DialNoiseWithPoolAndHandshake(network, addr string, config *ConnConfig) (*N
 }
 
 // DialNoiseWithPoolAndHandshakeContext combines pool checking, dialing, and handshake with context.
+// It reuses a pooled raw TCP connection when available (the pool keys by
+// conn.RemoteAddr().String(), which equals addr), wraps it in a new NoiseConn,
+// and performs the Noise handshake. Falls back to a fresh dial if the pool is
+// empty or the pooled connection fails the handshake.
 func DialNoiseWithPoolAndHandshakeContext(ctx context.Context, network, addr string, config *ConnConfig) (*NoiseConn, error) {
 	if err := validateDialParams(network, addr, config); err != nil {
 		return nil, err
 	}
 
-	// Check if we can reuse a connection from the pool
-	poolAddr := createPoolAddr(network, addr, config.Pattern)
-	if existingConn := globalConnPool.Get(poolAddr); existingConn != nil {
-		if noiseConn, ok := existingConn.(*NoiseConn); ok && !noiseConn.isClosed() {
-			return noiseConn, nil
+	// pool.Put stores entries under conn.RemoteAddr().String(), which is the
+	// plain "host:port" string — use addr directly so the keys match.
+	if globalConnPool != nil {
+		if rawConn := globalConnPool.Get(addr); rawConn != nil {
+			noiseConn, err := createAndHandshakeConn(ctx, rawConn, config, network, addr)
+			if err == nil {
+				return noiseConn, nil
+			}
+			// Pooled conn failed handshake (e.g. peer reset); fall through to fresh dial.
 		}
-		// Connection is closed or invalid, continue with new connection
 	}
 
 	// Create new connection with handshake
 	return DialNoiseWithHandshakeContext(ctx, network, addr, config)
-}
-
-// createPoolAddr creates a pool address string for connection pooling.
-func createPoolAddr(network, addr, pattern string) string {
-	return network + "://" + addr + "/" + pattern
 }

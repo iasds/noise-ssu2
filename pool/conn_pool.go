@@ -63,10 +63,20 @@ func (p *ConnPool) Get(remoteAddr string) net.Conn {
 		return nil
 	}
 
-	// Find an available, valid, and healthy connection
+	// Find an available, valid, and healthy connection.
+	// Expired connections are closed and removed here to prevent them from
+	// accumulating and inflating the count against maxSize (starvation fix).
 	for i := 0; i < len(connList); i++ {
 		pooledConn := connList[i]
-		if pooledConn.InUse || !p.isValid(pooledConn) {
+		if pooledConn.InUse {
+			continue
+		}
+		if !p.isValid(pooledConn) {
+			// Remove expired connection immediately so it does not count against capacity.
+			pooledConn.Conn.Close()
+			connList = append(connList[:i], connList[i+1:]...)
+			i--
+			p.updateConnectionMap(remoteAddr, connList)
 			continue
 		}
 		if p.healthCheck != nil && !p.healthCheck(pooledConn.Conn) {
@@ -132,8 +142,10 @@ func unwrapPoolConn(conn net.Conn) net.Conn {
 
 // exceedsCapacity returns true if the pool has no room for a new connection,
 // considering both per-address and global limits.
+// A maxSize of 0 is treated as "no per-address limit" to avoid silently
+// closing every connection when the caller explicitly sets MaxSize to zero.
 func (p *ConnPool) exceedsCapacity(connList []*PooledConn) bool {
-	if len(connList) >= p.maxSize {
+	if p.maxSize > 0 && len(connList) >= p.maxSize {
 		return true
 	}
 	if p.maxTotal > 0 && p.totalConnsLocked() >= p.maxTotal {
@@ -301,9 +313,29 @@ func (p *ConnPool) totalConnsLocked() int {
 	return total
 }
 
+// cleanupInterval returns the ticker period for the cleanup goroutine.
+// It uses half the configured MaxIdle or MaxAge (whichever is smaller and
+// non-zero) so that expired connections are evicted promptly for short-lived
+// pool configurations rather than waiting the hardcoded 1-minute default.
+func (p *ConnPool) cleanupInterval() time.Duration {
+	const defaultInterval = time.Minute
+	const minInterval = time.Second
+	interval := defaultInterval
+	if p.maxIdle > 0 && p.maxIdle/2 < interval {
+		interval = p.maxIdle / 2
+	}
+	if p.maxAge > 0 && p.maxAge/2 < interval {
+		interval = p.maxAge / 2
+	}
+	if interval < minInterval {
+		interval = minInterval
+	}
+	return interval
+}
+
 // cleanup runs periodically to remove expired connections
 func (p *ConnPool) cleanup() {
-	ticker := time.NewTicker(time.Minute)
+	ticker := time.NewTicker(p.cleanupInterval())
 	defer ticker.Stop()
 
 	for {
@@ -319,10 +351,11 @@ func (p *ConnPool) cleanup() {
 	}
 }
 
-// shouldStopCleanup checks if the cleanup process should be terminated
+// shouldStopCleanup checks if the cleanup process should be terminated.
+// Uses RLock because it only reads the closed boolean.
 func (p *ConnPool) shouldStopCleanup() bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 	return p.closed
 }
 
