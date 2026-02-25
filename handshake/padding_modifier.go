@@ -116,10 +116,12 @@ func (pm *PaddingModifier) ModifyInbound(phase HandshakePhase, data []byte) ([]b
 			Errorf("padded data too short, missing length prefix")
 	}
 
-	// Read original length from 4-byte big-endian prefix
-	originalLen := int(data[0])<<24 | int(data[1])<<16 | int(data[2])<<8 | int(data[3])
+	// Read original length from 4-byte big-endian prefix.
+	// Use binary.BigEndian.Uint32 to match the outbound encoder and avoid
+	// manual bit-shifts that overflow on 32-bit platforms.
+	originalLen := int(binary.BigEndian.Uint32(data[:4]))
 
-	if originalLen < 0 || 4+originalLen > len(data) {
+	if 4+originalLen > len(data) {
 		return nil, oops.
 			Code("INVALID_PADDED_DATA").
 			In("handshake").
@@ -139,4 +141,10 @@ func (pm *PaddingModifier) ModifyInbound(phase HandshakePhase, data []byte) ([]b
 // Name returns the name of the padding modifier for logging and debugging.
 func (pm *PaddingModifier) Name() string {
 	return pm.name
+}
+
+// Close is a no-op for PaddingModifier because it holds no sensitive key material.
+// It satisfies the HandshakeModifier lifecycle contract.
+func (pm *PaddingModifier) Close() error {
+	return nil
 }

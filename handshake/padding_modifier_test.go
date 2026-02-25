@@ -1,8 +1,10 @@
 package handshake
 
 import (
+	"fmt"
 	"math"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -278,4 +280,120 @@ func TestPaddingModifier(t *testing.T) {
 			t.Errorf("Recovered length = %v, want %v", len(recovered), len(largeData))
 		}
 	})
+}
+
+// TestPaddingModifier_PhaseData verifies that PaddingModifier handles PhaseData
+// correctly — since the phase parameter is not currently used by PaddingModifier,
+// the round-trip must succeed for every phase value.
+func TestPaddingModifier_PhaseData(t *testing.T) {
+	modifier, err := NewPaddingModifier("phase-data-test", 4, 8)
+	if err != nil {
+		t.Fatalf("NewPaddingModifier() error = %v", err)
+	}
+
+	testData := []byte("data phase test")
+
+	for _, phase := range []HandshakePhase{PhaseInitial, PhaseExchange, PhaseFinal, PhaseData} {
+		padded, err := modifier.ModifyOutbound(phase, testData)
+		if err != nil {
+			t.Errorf("ModifyOutbound(phase=%v) error = %v", phase, err)
+			continue
+		}
+		recovered, err := modifier.ModifyInbound(phase, padded)
+		if err != nil {
+			t.Errorf("ModifyInbound(phase=%v) error = %v", phase, err)
+			continue
+		}
+		if string(recovered) != string(testData) {
+			t.Errorf("Phase %v round-trip failed: got %q, want %q", phase, recovered, testData)
+		}
+	}
+}
+
+// TestPaddingModifier_ZeroPaddingPath tests the path where minPadding=0,
+// maxPadding>0 and the random draw produces exactly 0 padding bytes.
+// This results in a 4-byte wire frame ([len][data]) with no trailing padding.
+// ModifyInbound must correctly decode this shorter frame.
+func TestPaddingModifier_ZeroPaddingPath(t *testing.T) {
+	// Force paddingSize=0: use minPadding=0, maxPadding=0 would use early-return,
+	// so we need a modifier that can produce 0 bytes of padding.
+	// The only way to reliably test the 4+data wire format without relying on
+	// random draws is to show that an externally generated padded buffer
+	// (which has paddingSize=0) is decoded correctly.
+	modifier, err := NewPaddingModifier("zero-pad-path", 1, 1)
+	if err != nil {
+		t.Fatalf("NewPaddingModifier() error = %v", err)
+	}
+
+	testData := []byte("original")
+
+	// Build the wire format manually: [4-byte big-endian length][data][0 bytes padding]
+	// This is what ModifyOutbound would emit if paddingSize happened to be 0.
+	buf := make([]byte, 4+len(testData))
+	buf[0] = 0
+	buf[1] = 0
+	buf[2] = 0
+	buf[3] = byte(len(testData))
+	copy(buf[4:], testData)
+
+	recovered, err := modifier.ModifyInbound(PhaseInitial, buf)
+	if err != nil {
+		t.Fatalf("ModifyInbound() error = %v for zero-padding wire frame", err)
+	}
+
+	if string(recovered) != string(testData) {
+		t.Errorf("Zero-padding decode failed: got %q, want %q", recovered, testData)
+	}
+}
+
+// TestPaddingModifier_Close verifies that Close() is a no-op and returns nil.
+func TestPaddingModifier_Close(t *testing.T) {
+	modifier, err := NewPaddingModifier("close-test", 0, 4)
+	if err != nil {
+		t.Fatalf("NewPaddingModifier() error = %v", err)
+	}
+
+	if err := modifier.Close(); err != nil {
+		t.Errorf("Close() error = %v, want nil", err)
+	}
+}
+
+// TestPaddingModifier_Concurrent verifies that concurrent calls to ModifyOutbound
+// and ModifyInbound from multiple goroutines are race-free.
+func TestPaddingModifier_Concurrent(t *testing.T) {
+	modifier, err := NewPaddingModifier("concurrent-test", 4, 16)
+	if err != nil {
+		t.Fatalf("NewPaddingModifier() error = %v", err)
+	}
+
+	testData := []byte("concurrent padding test data")
+	const goroutines = 16
+
+	var wg sync.WaitGroup
+	errs := make(chan error, goroutines)
+
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			padded, err := modifier.ModifyOutbound(PhaseData, testData)
+			if err != nil {
+				errs <- err
+				return
+			}
+			recovered, err := modifier.ModifyInbound(PhaseData, padded)
+			if err != nil {
+				errs <- err
+				return
+			}
+			if string(recovered) != string(testData) {
+				errs <- fmt.Errorf("round-trip mismatch in concurrent test")
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
 }

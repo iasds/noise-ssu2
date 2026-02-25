@@ -552,6 +552,10 @@ func (thm *testHandshakeModifier) Name() string {
 	return thm.name
 }
 
+func (thm *testHandshakeModifier) Close() error {
+	return nil
+}
+
 // TestExtremeValidationCases tests boundary cases for validation
 func TestExtremeValidationCases(t *testing.T) {
 	tests := []struct {

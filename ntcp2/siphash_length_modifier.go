@@ -66,8 +66,9 @@ func NewSipHashLengthModifierDirectional(name string, outKeys, inKeys [2]uint64,
 
 // ModifyOutbound obfuscates 2-byte frame lengths using SipHash.
 func (slm *SipHashLengthModifier) ModifyOutbound(phase handshake.HandshakePhase, data []byte) ([]byte, error) {
-	// Only apply to data phase (not handshake messages 1, 2, or 3 part 1)
-	if phase != handshake.PhaseFinal || len(data) != FrameLengthFieldSize {
+	// Only apply to data phase (PhaseFinal and beyond, including PhaseData).
+	// Use phase < PhaseFinal so that future PhaseData (iota > PhaseFinal) is also matched.
+	if phase < handshake.PhaseFinal || len(data) != FrameLengthFieldSize {
 		return data, nil
 	}
 
@@ -87,8 +88,9 @@ func (slm *SipHashLengthModifier) ModifyOutbound(phase handshake.HandshakePhase,
 
 // ModifyInbound removes SipHash obfuscation from frame lengths.
 func (slm *SipHashLengthModifier) ModifyInbound(phase handshake.HandshakePhase, data []byte) ([]byte, error) {
-	// Only apply to data phase (not handshake messages 1, 2, or 3 part 1)
-	if phase != handshake.PhaseFinal || len(data) != FrameLengthFieldSize {
+	// Only apply to data phase (PhaseFinal and beyond, including PhaseData).
+	// Use phase < PhaseFinal so that future PhaseData (iota > PhaseFinal) is also matched.
+	if phase < handshake.PhaseFinal || len(data) != FrameLengthFieldSize {
 		return data, nil
 	}
 
@@ -179,4 +181,13 @@ func (slm *SipHashLengthModifier) ZeroKeys() {
 // Name returns the modifier name for logging and debugging.
 func (slm *SipHashLengthModifier) Name() string {
 	return slm.name
+}
+
+// Close zeroes all SipHash key material and IVs, satisfying the HandshakeModifier
+// lifecycle contract. Callers should invoke Close() when the connection is torn down
+// to prevent sensitive key material from lingering in memory.
+// This method is safe for concurrent use.
+func (slm *SipHashLengthModifier) Close() error {
+	slm.ZeroKeys()
+	return nil
 }

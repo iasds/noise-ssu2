@@ -176,3 +176,22 @@ func (aom *AESObfuscationModifier) ModifyInbound(phase handshake.HandshakePhase,
 func (aom *AESObfuscationModifier) Name() string {
 	return aom.name
 }
+
+// Close zeroes the AES key material and IV stored in the modifier to prevent
+// sensitive data from lingering in memory after the connection is closed.
+// This method is safe for concurrent use.
+func (aom *AESObfuscationModifier) Close() error {
+	aom.mu.Lock()
+	defer aom.mu.Unlock()
+	for i := range aom.routerHash {
+		aom.routerHash[i] = 0
+	}
+	for i := range aom.iv {
+		aom.iv[i] = 0
+	}
+	for i := range aom.aesState {
+		aom.aesState[i] = 0
+	}
+	aom.block = nil
+	return nil
+}

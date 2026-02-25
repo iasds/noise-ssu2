@@ -607,3 +607,9 @@ func (npm *NTCP2PaddingModifier) validateFramePaddingRules(blockType byte, block
 func (npm *NTCP2PaddingModifier) Name() string {
 	return npm.name
 }
+
+// Close is a no-op for NTCP2PaddingModifier because it holds no sensitive key
+// material. It satisfies the HandshakeModifier lifecycle contract.
+func (npm *NTCP2PaddingModifier) Close() error {
+	return nil
+}

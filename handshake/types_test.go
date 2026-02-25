@@ -10,6 +10,7 @@ type testModifier struct {
 	name           string
 	modifyOutbound func(phase HandshakePhase, data []byte) ([]byte, error)
 	modifyInbound  func(phase HandshakePhase, data []byte) ([]byte, error)
+	closeCalled    bool
 }
 
 func (tm *testModifier) ModifyOutbound(phase HandshakePhase, data []byte) ([]byte, error) {
@@ -28,6 +29,11 @@ func (tm *testModifier) ModifyInbound(phase HandshakePhase, data []byte) ([]byte
 
 func (tm *testModifier) Name() string {
 	return tm.name
+}
+
+func (tm *testModifier) Close() error {
+	tm.closeCalled = true
+	return nil
 }
 
 func TestHandshakePhase_String(t *testing.T) {

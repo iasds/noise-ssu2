@@ -1,6 +1,8 @@
 package handshake
 
 import (
+	"fmt"
+	"sync"
 	"testing"
 )
 
@@ -24,11 +26,28 @@ func TestXORModifier(t *testing.T) {
 		}
 	})
 
-	t.Run("NewXORModifier with empty key", func(t *testing.T) {
-		modifier := NewXORModifier("empty-key", []byte{})
+	t.Run("NewXORModifier with empty key generates random key", func(t *testing.T) {
+		mod1 := NewXORModifier("empty-key-1", []byte{})
+		mod2 := NewXORModifier("empty-key-2", []byte{})
 
-		if len(modifier.xorKey) != 1 || modifier.xorKey[0] != 0xAA {
-			t.Error("Empty key should default to [0xAA]")
+		// The random default should be 32 bytes long
+		if len(mod1.xorKey) != 32 {
+			t.Errorf("Empty-key default key length = %v, want 32", len(mod1.xorKey))
+		}
+		if len(mod2.xorKey) != 32 {
+			t.Errorf("Empty-key default key length = %v, want 32", len(mod2.xorKey))
+		}
+
+		// Two separate calls should produce different keys (probabilistic: P(collision) ≈ 2^-256)
+		sameKey := true
+		for i := range mod1.xorKey {
+			if mod1.xorKey[i] != mod2.xorKey[i] {
+				sameKey = false
+				break
+			}
+		}
+		if sameKey {
+			t.Error("Two NewXORModifier(empty) calls produced the same key (astronomically unlikely unless broken)")
 		}
 	})
 
@@ -60,12 +79,12 @@ func TestXORModifier(t *testing.T) {
 		}
 	})
 
-	t.Run("XOR with different phases", func(t *testing.T) {
+	t.Run("XOR with different phases including PhaseData", func(t *testing.T) {
 		modifier := NewXORModifier("phase-test", []byte{0x42})
 		testData := []byte("test")
 
-		// XOR should work the same regardless of phase
-		phases := []HandshakePhase{PhaseInitial, PhaseExchange, PhaseFinal}
+		// XOR should work the same regardless of phase, including PhaseData
+		phases := []HandshakePhase{PhaseInitial, PhaseExchange, PhaseFinal, PhaseData}
 		for _, phase := range phases {
 			result, err := modifier.ModifyOutbound(phase, testData)
 			if err != nil {
@@ -80,6 +99,15 @@ func TestXORModifier(t *testing.T) {
 
 			if string(result) != string(expected) {
 				t.Errorf("Phase %v: got %v, want %v", phase, result, expected)
+			}
+
+			// Verify round-trip for PhaseData specifically
+			recovered, err := modifier.ModifyInbound(phase, result)
+			if err != nil {
+				t.Errorf("ModifyInbound() phase %v error = %v", phase, err)
+			}
+			if string(recovered) != string(testData) {
+				t.Errorf("Round-trip failed for phase %v", phase)
 			}
 		}
 	})
@@ -119,6 +147,71 @@ func TestXORModifier(t *testing.T) {
 			if b != expected[i] {
 				t.Errorf("Byte %d: got %v, want %v", i, b, expected[i])
 			}
+		}
+	})
+
+	t.Run("Close zeroes key material", func(t *testing.T) {
+		key := []byte{0x11, 0x22, 0x33}
+		modifier := NewXORModifier("close-test", key)
+
+		if err := modifier.Close(); err != nil {
+			t.Errorf("Close() error = %v", err)
+		}
+
+		for i, b := range modifier.xorKey {
+			if b != 0 {
+				t.Errorf("xorKey[%d] = %02x after Close(), want 0x00", i, b)
+			}
+		}
+	})
+
+	t.Run("Concurrent ModifyOutbound and ModifyInbound", func(t *testing.T) {
+		modifier := NewXORModifier("concurrent-xor", []byte{0x5A, 0xA5})
+		testData := []byte("concurrent test data for XOR modifier")
+
+		const goroutines = 16
+		var wg sync.WaitGroup
+		errs := make(chan error, goroutines*2)
+
+		for i := 0; i < goroutines; i++ {
+			wg.Add(2)
+			go func() {
+				defer wg.Done()
+				out, err := modifier.ModifyOutbound(PhaseData, testData)
+				if err != nil {
+					errs <- err
+					return
+				}
+				recovered, err := modifier.ModifyInbound(PhaseData, out)
+				if err != nil {
+					errs <- err
+					return
+				}
+				if string(recovered) != string(testData) {
+					errs <- fmt.Errorf("concurrent round-trip mismatch")
+				}
+			}()
+			go func() {
+				defer wg.Done()
+				out, err := modifier.ModifyOutbound(PhaseFinal, testData)
+				if err != nil {
+					errs <- err
+					return
+				}
+				recovered, err := modifier.ModifyInbound(PhaseFinal, out)
+				if err != nil {
+					errs <- err
+					return
+				}
+				if string(recovered) != string(testData) {
+					errs <- fmt.Errorf("concurrent round-trip mismatch (PhaseFinal)")
+				}
+			}()
+		}
+		wg.Wait()
+		close(errs)
+		for err := range errs {
+			t.Error(err)
 		}
 	})
 }

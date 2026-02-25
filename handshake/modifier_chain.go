@@ -11,6 +11,13 @@ var _ HandshakeModifier = (*ModifierChain)(nil)
 // applied in sequence. The chain ensures that modifiers are applied in the
 // correct order and provides error handling for the entire chain.
 // Moved from: handshake/chain.go
+//
+// Thread-safety: ModifierChain is safe for concurrent use after construction.
+// The internal modifiers slice is immutable (copied at construction time and never
+// written afterwards). PaddingModifier uses crypto/rand (goroutine-safe);
+// XORModifier is read-only after construction. Callers do not need additional
+// synchronisation for concurrent ModifyOutbound/ModifyInbound calls, but must not
+// call Close() concurrently with other methods (Close() is not re-entrant).
 type ModifierChain struct {
 	modifiers []HandshakeModifier
 	name      string
@@ -105,4 +112,18 @@ func (mc *ModifierChain) ModifierNames() []string {
 		names[i] = modifier.Name()
 	}
 	return names
+}
+
+// Close calls Close() on every modifier in the chain, collecting all errors.
+// All members are closed regardless of intermediate errors; the first non-nil
+// error is returned. Callers should not call Close() concurrently with
+// ModifyOutbound or ModifyInbound.
+func (mc *ModifierChain) Close() error {
+	var firstErr error
+	for _, m := range mc.modifiers {
+		if err := m.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }

@@ -2,7 +2,9 @@ package handshake
 
 import (
 	"errors"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -488,4 +490,133 @@ func TestNewModifierChain_NilFiltering(t *testing.T) {
 			t.Errorf("Round-trip failed: got %q, want %q", string(recovered), string(testData))
 		}
 	})
+}
+
+// TestModifierChain_PhaseData verifies that all modifiers in a chain handle
+// PhaseData correctly — no modifier should block or corrupt data for this phase.
+func TestModifierChain_PhaseData(t *testing.T) {
+	xorMod := NewXORModifier("xor", []byte{0x7E})
+	chain := NewModifierChain("phase-data-chain", xorMod)
+	testData := []byte("phase data round-trip content")
+
+	for _, phase := range []HandshakePhase{PhaseInitial, PhaseExchange, PhaseFinal, PhaseData} {
+		out, err := chain.ModifyOutbound(phase, testData)
+		if err != nil {
+			t.Errorf("ModifyOutbound(phase=%v) error = %v", phase, err)
+			continue
+		}
+		recovered, err := chain.ModifyInbound(phase, out)
+		if err != nil {
+			t.Errorf("ModifyInbound(phase=%v) error = %v", phase, err)
+			continue
+		}
+		if string(recovered) != string(testData) {
+			t.Errorf("Phase %v round-trip failed: got %q, want %q", phase, recovered, testData)
+		}
+	}
+}
+
+// TestModifierChain_Concurrent verifies that concurrent ModifyOutbound and
+// ModifyInbound calls from multiple goroutines are race-free.
+func TestModifierChain_Concurrent(t *testing.T) {
+	xorMod := NewXORModifier("concurrent-xor", []byte{0x3C})
+	chain := NewModifierChain("concurrent-chain", xorMod)
+	testData := []byte("concurrent chain test payload")
+	const goroutines = 32
+
+	var wg sync.WaitGroup
+	errs := make(chan error, goroutines)
+
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			out, err := chain.ModifyOutbound(PhaseData, testData)
+			if err != nil {
+				errs <- err
+				return
+			}
+			recovered, err := chain.ModifyInbound(PhaseData, out)
+			if err != nil {
+				errs <- err
+				return
+			}
+			if string(recovered) != string(testData) {
+				errs <- fmt.Errorf("concurrent round-trip mismatch")
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+}
+
+// TestModifierChain_Close verifies that Close() propagates to all members.
+func TestModifierChain_Close(t *testing.T) {
+	mod1 := &testModifier{name: "m1"}
+	mod2 := &testModifier{name: "m2"}
+	chain := NewModifierChain("close-chain", mod1, mod2)
+
+	if err := chain.Close(); err != nil {
+		t.Errorf("Close() error = %v", err)
+	}
+
+	if !mod1.closeCalled {
+		t.Error("Close() not propagated to first modifier")
+	}
+	if !mod2.closeCalled {
+		t.Error("Close() not propagated to second modifier")
+	}
+}
+
+// TestModifierChain_Close_Error verifies that Close() returns the first error
+// encountered while still calling Close() on all members.
+func TestModifierChain_Close_Error(t *testing.T) {
+	closingOrder := []string{}
+
+	errMod := &closeTestModifier{
+		name:     "err-mod",
+		closeErr: errors.New("close failed"),
+		onClose:  func() { closingOrder = append(closingOrder, "err-mod") },
+	}
+	goodMod := &closeTestModifier{
+		name:    "good-mod",
+		onClose: func() { closingOrder = append(closingOrder, "good-mod") },
+	}
+	chain := NewModifierChain("error-close-chain", errMod, goodMod)
+
+	err := chain.Close()
+	if err == nil {
+		t.Error("Close() expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "close failed") {
+		t.Errorf("Close() error = %v, want 'close failed'", err)
+	}
+	// Both members must be closed regardless of the first error
+	if len(closingOrder) != 2 {
+		t.Errorf("Close() called on %d members, want 2 (all members closed despite error)", len(closingOrder))
+	}
+}
+
+// closeTestModifier is a test helper that records Close() calls and optionally returns an error.
+type closeTestModifier struct {
+	name     string
+	closeErr error
+	onClose  func()
+}
+
+func (c *closeTestModifier) ModifyOutbound(_ HandshakePhase, data []byte) ([]byte, error) {
+	return data, nil
+}
+func (c *closeTestModifier) ModifyInbound(_ HandshakePhase, data []byte) ([]byte, error) {
+	return data, nil
+}
+func (c *closeTestModifier) Name() string { return c.name }
+func (c *closeTestModifier) Close() error {
+	if c.onClose != nil {
+		c.onClose()
+	}
+	return c.closeErr
 }
