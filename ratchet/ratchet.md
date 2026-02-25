@@ -952,9 +952,15 @@ Note that we use the same initializer for both the IK pattern (bound sessions)
 and for N pattern (unbound sessions).
 
 The protocol name is modified for two reasons.
-First, to indicate that the ephemeral keys are encoded with Elligator2,
-and second, to indicate that MixHash() is called before the second message
-to mix in the tag value.
+First, to indicate that the ephemeral keys are encoded with Elligator2 (`elg2`),
+and second, to indicate that the responder's static key pre-message hash uses
+`Hash(s)` instead of `s` (`hs2`).
+
+The `+hs2` modifier means: during initialization, instead of mixing the raw
+responder static public key `bpk` into the handshake hash via `MixHash(bpk)`,
+the implementation computes `hs2 = SHA256(bpk)` and then `MixHash(hs2)`.  This
+matches i2p.net/spec/ecies which defines `hs2 = Hash(s)` for the pre-message
+publication.  See **KDF for Flags/Static Key Section** below for the exact step.
 
 ```
 This is the "e" message pattern:
@@ -986,10 +992,14 @@ This is the "e" message pattern:
   bsk = GENERATE_PRIVATE()
   bpk = DERIVE_PUBLIC(bsk)
 
-  // Bob static public key
-  // MixHash(bpk)
+  // Bob static public key (hs2 modifier: Hash(s) pre-message)
+  // The "+hs2" in the protocol name means the pre-message mixes in
+  // SHA256(bpk) — the hash of the static key — instead of bpk directly.
+  // This is the definition of hs2 from i2p.net/spec/ecies:
+  //   hs2 = SHA256(bpk)
+  //   MixHash(hs2)
   // || below means append
-  h = SHA256(h || bpk);
+  h = SHA256(h || SHA256(bpk));  // hs2: pre-hash the static key before mixing
 
   // up until here, can all be precalculated by Bob for all incoming connections
 

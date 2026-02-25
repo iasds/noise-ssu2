@@ -70,7 +70,10 @@ type GarlicSessionManager interface {
 	// CleanupExpiredSessions removes sessions past the timeout. Returns count removed.
 	CleanupExpiredSessions() int
 
-	// StartCleanupLoop starts periodic cleanup. Stops when ctx is cancelled.
+	// StartCleanupLoop starts periodic cleanup. The loop stops when EITHER
+	// ctx is cancelled OR Close() is called on the SessionManager — whichever
+	// comes first. Callers should not assume their ctx is the sole stop signal;
+	// a concurrent Close() will also terminate the loop.
 	StartCleanupLoop(ctx context.Context)
 
 	// Close stops the cleanup loop, removes all sessions, and zeroes key material.

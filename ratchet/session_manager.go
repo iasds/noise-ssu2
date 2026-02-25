@@ -292,12 +292,22 @@ func (sm *SessionManager) DecryptGarlicMessage(encryptedGarlic []byte) ([]byte, 
 	copy(msgTag[:], encryptedGarlic[0:8])
 
 	// Check Existing Session tag index first (most common path).
-	// Replenishment is deferred outside sm.mu to avoid holding the global write
-	// lock during HKDF derivations (see replenishTagWindowOutsideLock).
+	// Phase 1: under sm.mu — look up and atomically remove tag from global index.
+	// Phase 2: under session.mu only — validate session and clean pendingTags.
+	// This two-phase approach ensures sm.mu and session.mu are never held
+	// simultaneously (see lookupSessionByTag for the rationale).
 	sm.mu.Lock()
 	session := sm.lookupSessionByTag(msgTag)
-	needsReplenish := session != nil && len(session.pendingTags) < tagReplenishThreshold
 	sm.mu.Unlock()
+
+	var needsReplenish bool
+	if session != nil {
+		var valid bool
+		valid, needsReplenish = sm.validateAndConsumeTagFromSession(session, msgTag)
+		if !valid {
+			session = nil
+		}
+	}
 
 	if session != nil {
 		plaintext, sessionTag, err := sm.decryptExistingSession(session, encryptedGarlic[8:], msgTag)
@@ -726,55 +736,74 @@ func (sm *SessionManager) ProcessIncomingDHRatchet(sessionTag [8]byte, newRemote
 // Returns true if the tag was found (and consumed), false otherwise.
 // This implements the TagResolver interface for independent tag-only resolution.
 //
-// Tag replenishment (HKDF) is performed outside sm.mu to avoid holding the
-// global write lock during cryptographic operations.
+// Two-phase locking: the global index lookup (sm.mu) and per-session validation
+// (session.mu) are performed in separate, non-overlapping critical sections.
+// Tag replenishment (HKDF) is performed outside both locks.
 func (sm *SessionManager) FindSessionByTag(tag [8]byte) bool {
 	sm.mu.Lock()
 	session := sm.lookupSessionByTag(tag)
-	needsReplenish := session != nil && len(session.pendingTags) < tagReplenishThreshold
 	sm.mu.Unlock()
+
+	if session == nil {
+		return false
+	}
+
+	valid, needsReplenish := sm.validateAndConsumeTagFromSession(session, tag)
+	if !valid {
+		return false
+	}
 
 	if needsReplenish {
 		sm.replenishTagWindowOutsideLock(session)
 	}
-	return session != nil
+	return true
 }
 
-// lookupSessionByTag searches for a session that expects the given tag, consumes
-// the tag, and returns the session. It does NOT replenish the tag window — callers
-// must do that after releasing sm.mu to avoid holding the global write lock during
-// HKDF derivations.
-// Must be called with sm.mu held for writing.
+// lookupSessionByTag locates the session for tag and atomically removes it
+// from sm.tagIndex. Must be called with sm.mu held (write lock).
+//
+// Design — two-phase lock separation:
+// This function intentionally does NOT acquire session.mu. Validation and
+// pendingTags cleanup are deferred to validateAndConsumeTagFromSession, which
+// the caller invokes AFTER releasing sm.mu. Keeping the locks separate
+// eliminates the nested sm.mu → session.mu acquisition that would deadlock if
+// any future session callback re-enters SessionManager under session.mu.
+//
+// Tag removal from the global index happens here (under sm.mu) so that no
+// other goroutine can claim the same tag between the lookup and the per-session
+// validation step.
 func (sm *SessionManager) lookupSessionByTag(tag [8]byte) *Session {
 	session, exists := sm.tagIndex[tag]
 	if !exists {
 		return nil
 	}
+	// Remove from global index now, under sm.mu, to prevent double-consumption.
+	delete(sm.tagIndex, tag)
+	return session
+}
 
+// validateAndConsumeTagFromSession checks whether session is still valid (not
+// expired) and removes tag from session.pendingTags. Must be called AFTER
+// sm.mu has been released, so that sm.mu and session.mu are never held
+// simultaneously.
+//
+// Returns:
+//
+//	valid          — false if the session has expired; callers should discard it.
+//	needsReplenish — true when pendingTags falls below tagReplenishThreshold.
+func (sm *SessionManager) validateAndConsumeTagFromSession(session *Session, tag [8]byte) (valid, needsReplenish bool) {
 	session.mu.Lock()
 	defer session.mu.Unlock()
 
 	if !sm.isSessionValid(session) {
-		sm.cleanupExpiredTag(tag)
-		return nil
+		return false, false
 	}
-
-	sm.consumeTag(tag, session)
-
-	return session
+	sm.removeTagFromPendingList(tag, session)
+	return true, len(session.pendingTags) < tagReplenishThreshold
 }
 
 func (sm *SessionManager) isSessionValid(session *Session) bool {
 	return time.Since(session.LastUsed) <= sm.sessionTimeout
-}
-
-func (sm *SessionManager) cleanupExpiredTag(tag [8]byte) {
-	delete(sm.tagIndex, tag)
-}
-
-func (sm *SessionManager) consumeTag(tag [8]byte, session *Session) {
-	delete(sm.tagIndex, tag)
-	sm.removeTagFromPendingList(tag, session)
 }
 
 func (sm *SessionManager) removeTagFromPendingList(tag [8]byte, session *Session) {
@@ -1006,8 +1035,19 @@ func (sm *SessionManager) Close() error {
 	return nil
 }
 
-// StartCleanupLoop starts periodic cleanup of expired sessions.
-// The loop stops when the provided ctx is cancelled or when Close() is called.
+// StartCleanupLoop starts periodic cleanup of expired sessions in a background
+// goroutine. The loop stops when EITHER of the following occurs:
+//
+//  1. The caller-supplied ctx is cancelled.
+//  2. Close() is called on this SessionManager (which cancels the internal
+//     context regardless of the caller's ctx).
+//
+// Dual-stop behaviour: callers that hold only the GarlicSessionManager interface
+// value should be aware that Close() can terminate the loop independently of
+// the ctx they supplied here. This is intentional — it prevents orphaned cleanup
+// goroutines when the SessionManager is shut down. If the caller wants to stop
+// the loop without destroying the SessionManager, cancel the ctx passed here;
+// to stop both the loop and the manager, call Close().
 func (sm *SessionManager) StartCleanupLoop(ctx context.Context) {
 	go func() {
 		ticker := time.NewTicker(2 * time.Minute)
