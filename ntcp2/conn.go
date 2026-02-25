@@ -74,6 +74,11 @@ type NTCP2Conn struct {
 	// desynchronized and all future Read/Write calls will fail immediately.
 	broken atomic.Bool
 
+	// underlyingClosed is set when sendTCPRST has already closed the TCP socket
+	// via SetLinger(0)+Close(). Close() checks this flag and skips the second
+	// noiseConn.Close() call to prevent an fd-reuse double-close race.
+	underlyingClosed atomic.Bool
+
 	// writeNonce tracks the number of frames written (data-phase encrypt operations).
 	// The connection MUST be terminated before this reaches MaxNonce (2^64-2).
 	// Only accessed under writeMu.
@@ -232,6 +237,16 @@ func (nc *NTCP2Conn) readFramed(b []byte) (int, error) {
 	}
 
 	n := nc.bufferPlaintext(b, plaintext)
+
+	// Zero the original Decrypt output so sensitive plaintext does not linger
+	// on the heap after the caller's buffer (and readBuffer) has been filled.
+	// Per the NTCP2 spec: "routers should zero-out any in-memory ephemeral data".
+	// Note: bufferPlaintext deep-copies the overflow into readBuffer, so zeroing
+	// plaintext here is safe and does not affect the buffered remainder.
+	for i := range plaintext {
+		plaintext[i] = 0
+	}
+
 	nc.readNonce++
 
 	nc.logger.Trace("NTCP2 data read (framed)",
@@ -403,6 +418,9 @@ func (nc *NTCP2Conn) handleAEADError(underlying net.Conn) {
 // FIN handshake) and then closing the connection. Per the NTCP2 spec, AEAD failures
 // should result in an abnormal close. If the underlying connection is not a
 // *net.TCPConn, falls back to a normal Close().
+//
+// Sets underlyingClosed so that the subsequent NTCP2Conn.Close() call skips a
+// second close of the same socket, avoiding an fd-reuse double-close race.
 func (nc *NTCP2Conn) sendTCPRST(conn net.Conn) {
 	if tcpConn, ok := conn.(*net.TCPConn); ok {
 		tcpConn.SetLinger(0) //nolint:errcheck
@@ -410,6 +428,9 @@ func (nc *NTCP2Conn) sendTCPRST(conn net.Conn) {
 	} else {
 		conn.Close() //nolint:errcheck
 	}
+	// Mark the underlying socket as already closed so Close() does not attempt
+	// a second close on the same fd (see underlyingClosed field).
+	nc.underlyingClosed.Store(true)
 }
 
 // Write implements net.Conn.Write.
@@ -616,6 +637,18 @@ func (nc *NTCP2Conn) Close() error {
 			"remote_addr", nc.remoteAddr.String())
 
 		nc.zeroKeyMaterial()
+
+		// If sendTCPRST already closed the underlying TCP socket (via SetLinger
+		// + Close), skip calling noiseConn.Close() to prevent a double-close.
+		// A double-close is safe in Go (returns an error, no panic), but between
+		// the two closes the OS could reassign the fd to a new socket; the second
+		// Close() would then erroneously close that new socket.
+		if nc.underlyingClosed.Load() {
+			nc.logger.Debug("skipping noiseConn.Close(): underlying socket already RST'd",
+				"local_addr", nc.localAddr.String(),
+				"remote_addr", nc.remoteAddr.String())
+			return
+		}
 
 		err := nc.noiseConn.Close()
 		if err != nil {

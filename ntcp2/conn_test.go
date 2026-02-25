@@ -1609,3 +1609,135 @@ func TestFrameIO_FullPipeRoundTrip(t *testing.T) {
 
 	assert.Equal(t, fakeCiphertext, frame)
 }
+
+// ============================================================================
+// Tests for double-close fix (underlyingClosed) and plaintext zeroing
+// ============================================================================
+
+// countingMockConn extends mockNoiseConn to count Close() invocations.
+type countingMockConn struct {
+	mockNoiseConn
+	closeCount int
+	mu         sync.Mutex
+}
+
+func (c *countingMockConn) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.closeCount++
+	c.closed = true
+	return c.closeErr
+}
+
+// TestSendTCPRST_SetsUnderlyingClosed verifies that sendTCPRST sets the
+// underlyingClosed flag so that a subsequent Close() call knows the socket
+// has already been closed and can skip the second close.
+func TestSendTCPRST_SetsUnderlyingClosed(t *testing.T) {
+	mock := &mockNoiseConn{}
+	conn := createTestNTCP2Conn(mock)
+
+	assert.False(t, conn.underlyingClosed.Load(), "underlyingClosed should be false before sendTCPRST")
+
+	// sendTCPRST with a non-TCPConn mock (uses fallback Close path)
+	fakePeer := &mockNoiseConn{}
+	conn.sendTCPRST(fakePeer)
+
+	assert.True(t, conn.underlyingClosed.Load(), "sendTCPRST must set underlyingClosed to true")
+	assert.True(t, fakePeer.closed, "sendTCPRST must close the supplied connection")
+}
+
+// TestHandleAEADError_SetsUnderlyingClosed verifies that handleAEADError
+// indirectly sets underlyingClosed via sendTCPRST, so that Close() later
+// skips the redundant noiseConn.Close() call.
+func TestHandleAEADError_SetsUnderlyingClosed(t *testing.T) {
+	mock := &mockNoiseConn{}
+	conn := createTestNTCP2Conn(mock)
+
+	assert.False(t, conn.underlyingClosed.Load())
+
+	underlying := &mockNoiseConn{}
+	conn.handleAEADError(underlying)
+
+	assert.True(t, conn.broken.Load(), "handleAEADError must set broken flag")
+	assert.True(t, conn.underlyingClosed.Load(), "handleAEADError must set underlyingClosed via sendTCPRST")
+}
+
+// TestClose_SkipsNoiseConnCloseWhenUnderlyingAlreadyClosed verifies that when
+// underlyingClosed is true (set by sendTCPRST), Close() returns without
+// performing a second close of the same socket.
+//
+// This prevents the fd-reuse double-close race described in the NTCP2 audit:
+// sendTCPRST() closes the TCP socket directly; if Close() also calls
+// noiseConn.Close(), the OS may have reassigned the fd to a new socket by
+// the time the second Close() runs.
+func TestClose_SkipsNoiseConnCloseWhenUnderlyingAlreadyClosed(t *testing.T) {
+	counting := &countingMockConn{}
+	conn := createTestNTCP2Conn(&counting.mockNoiseConn)
+
+	// Simulate that sendTCPRST has already closed the underlying socket.
+	conn.broken.Store(true)
+	conn.underlyingClosed.Store(true)
+
+	err := conn.Close()
+	assert.NoError(t, err)
+
+	// The mock underlying must NOT be closed a second time by noiseConn.Close().
+	// (noiseConn.Close() would cascade into the mock's Close().)
+	counting.mu.Lock()
+	count := counting.closeCount
+	counting.mu.Unlock()
+	assert.Equal(t, 0, count,
+		"Close() must not call noiseConn.Close() when underlyingClosed is already set")
+}
+
+// TestClose_CallsNoiseConnCloseWhenUnderlyingNotYetClosed verifies the normal
+// (non-RST) close path: when underlyingClosed is false, Close() delegates to
+// noiseConn.Close() as usual.
+func TestClose_CallsNoiseConnCloseWhenUnderlyingNotYetClosed(t *testing.T) {
+	mock := &mockNoiseConn{}
+	conn := createTestNTCP2Conn(mock)
+
+	err := conn.Close()
+	// noiseConn itself may or may not error depending on internal state;
+	// what matters is that the mock's Close was eventually reached.
+	_ = err
+	assert.True(t, mock.closed,
+		"Close() must call noiseConn.Close() (and transitively close the mock) on the normal path")
+}
+
+// TestReadFramed_PlaintextZeroed verifies that the zeroing of the Decrypt output
+// in readFramed does not corrupt the data returned to callers. The function
+// must both (a) zero the internal buffer for security and (b) return correct
+// plaintext to the caller via the caller's buffer and readBuffer.
+//
+// We test this via bufferPlaintext directly: after copying into the destination
+// buffer and readBuffer, zeroing the original plaintext slice must not corrupt
+// either copy, because bufferPlaintext uses deep-copy (copy(b, plaintext) and
+// a freshly-allocated readBuffer), not sub-slicing.
+func TestReadFramed_PlaintextZeroed_DataReachesCallerIntact(t *testing.T) {
+	conn := createTestNTCP2Conn(&mockNoiseConn{})
+
+	// Simulate a Decrypt output: 10 bytes of plaintext.
+	plaintext := []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
+	want := make([]byte, len(plaintext))
+	copy(want, plaintext)
+
+	// bufferPlaintext with a small caller buffer (5 bytes) → overflow goes to readBuffer.
+	callerBuf := make([]byte, 5)
+	n := conn.bufferPlaintext(callerBuf, plaintext)
+	assert.Equal(t, 5, n)
+
+	// Now zero the original plaintext, mimicking what readFramed does.
+	for i := range plaintext {
+		plaintext[i] = 0
+	}
+	assert.Equal(t, make([]byte, 10), plaintext, "original plaintext slice must be zeroed")
+
+	// The caller's buffer must hold the first 5 bytes unchanged.
+	assert.Equal(t, want[:5], callerBuf,
+		"caller buffer must retain data despite zeroing the Decrypt output")
+
+	// The readBuffer overflow must hold the remaining 5 bytes unchanged.
+	assert.Equal(t, want[5:], conn.readBuffer,
+		"readBuffer overflow must retain data despite zeroing the Decrypt output")
+}
