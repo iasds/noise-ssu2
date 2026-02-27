@@ -324,6 +324,9 @@ func (sm *SessionManager) DecryptGarlicMessage(encryptedGarlic []byte) ([]byte, 
 		if needsReplenish {
 			sm.replenishTagWindowOutsideLock(session)
 		}
+		if err == nil {
+			sm.processDecryptedESBlocks(session, plaintext)
+		}
 		return plaintext, sessionTag, nil, err
 	}
 
@@ -707,6 +710,89 @@ func (sm *SessionManager) decryptExistingSession(
 
 	session.LastUsed = time.Now()
 	return plaintext, sessionTag, nil
+}
+
+// processDecryptedESBlocks inspects a decrypted Existing Session payload for
+// control blocks that require session-level side effects:
+//
+//   - BlockTermination: signals session teardown. The session is removed from
+//     sm.sessions and sm.tagIndex. Per ratchet.md §"Unencrypted data", a
+//     Termination block in an ES message means the peer is closing the session.
+//
+//   - BlockMessageNumber: carries the PN value (previous tag set message count).
+//     Per ratchet.md §"Message Numbers", on receiving a MessageNumber block the
+//     recipient should trim pre-derived keys beyond PN from the previous tag set
+//     to bound memory.
+//
+// This function is called from DecryptGarlicMessage after decryptExistingSession
+// returns successfully, with neither sm.mu nor session.mu held.
+func (sm *SessionManager) processDecryptedESBlocks(session *Session, plaintext []byte) {
+	blocks, err := ParsePayload(plaintext)
+	if err != nil {
+		// Non-fatal: the payload was already AEAD-authenticated, so a parse
+		// failure here is a local framing bug, not a security issue.
+		log.WithError(err).Warn("Failed to parse decrypted ES payload for control blocks")
+		return
+	}
+
+	for _, block := range blocks {
+		switch block.Type {
+		case BlockTermination:
+			reason, _, _ := block.TerminationInfo()
+			sm.removeSessionByPointer(session)
+			log.WithFields(map[string]interface{}{
+				"at":     "processDecryptedESBlocks",
+				"reason": reason,
+			}).Info("Session terminated by peer via Termination block")
+			return // no further block processing after teardown
+
+		case BlockMessageNumber:
+			pn, pnErr := block.MessageNumber()
+			if pnErr != nil {
+				log.WithError(pnErr).Warn("Malformed MessageNumber block in ES payload")
+				continue
+			}
+			trimRecvWindowByPN(session, pn)
+		}
+	}
+}
+
+// removeSessionByPointer locates a session in sm.sessions by pointer equality
+// and removes it along with all its tags from sm.tagIndex and sm.nsrTagIndex.
+//
+// This is used when we have a *Session reference (e.g., from a tag lookup)
+// but not the session hash key. The linear scan is acceptable because it runs
+// at most once per Termination block (a rare, session-lifetime event).
+func (sm *SessionManager) removeSessionByPointer(session *Session) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	var foundHash [32]byte
+	found := false
+	for hash, s := range sm.sessions {
+		if s == session {
+			foundHash = hash
+			found = true
+			break
+		}
+	}
+	if !found {
+		return // already removed (e.g., by concurrent cleanup)
+	}
+
+	// Clean up all index entries for this session.
+	for _, tag := range session.pendingTags {
+		delete(sm.tagIndex, tag)
+	}
+	if session.nsrTag != nil {
+		delete(sm.nsrTagIndex, *session.nsrTag)
+	}
+	delete(sm.sessions, foundHash)
+
+	log.WithFields(map[string]interface{}{
+		"at":              "removeSessionByPointer",
+		"remaining_count": len(sm.sessions),
+	}).Debug("Session removed after termination")
 }
 
 // ProcessIncomingDHRatchet processes a DH ratchet key received from a peer.

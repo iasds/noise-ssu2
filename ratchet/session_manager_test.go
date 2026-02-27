@@ -1810,3 +1810,250 @@ func TestConcurrentEncryptWithCleanup(t *testing.T) {
 	// Session must still exist after concurrent access.
 	assert.Equal(t, 1, sender.GetSessionCount(), "session should survive concurrent cleanup when actively used")
 }
+
+// ============================================================================
+// Termination Block Handling
+// ============================================================================
+
+func TestTerminationBlock_RemovesSession(t *testing.T) {
+	sender, receiver := createLinkedManagers(t)
+	destHash := mustBootstrapSession(t, sender, receiver)
+
+	assert.Equal(t, 1, sender.GetSessionCount())
+	assert.Equal(t, 1, receiver.GetSessionCount())
+
+	// Build an ES payload containing a Termination block.
+	termPayload := ExistingSessionPayloadBuilder().
+		AddBlock(NewGarlicCloveBlock([]byte("goodbye"))).
+		AddBlock(NewTerminationBlock(TerminationNormal, nil))
+	termBytes, err := termPayload.Build()
+	require.NoError(t, err)
+
+	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, termBytes)
+	require.NoError(t, err)
+
+	// Receiver decrypts — should trigger session teardown.
+	plaintext, _, _, err := receiver.DecryptGarlicMessage(enc)
+	require.NoError(t, err)
+	assert.NotNil(t, plaintext)
+
+	// The session should have been removed from the receiver.
+	assert.Equal(t, 0, receiver.GetSessionCount(),
+		"receiver should have removed the session after receiving Termination block")
+}
+
+func TestTerminationBlock_WithReason(t *testing.T) {
+	sender, receiver := createLinkedManagers(t)
+	destHash := mustBootstrapSession(t, sender, receiver)
+
+	// Send termination with TerminationReceived reason and additional data.
+	termPayload := ExistingSessionPayloadBuilder().
+		AddBlock(NewGarlicCloveBlock([]byte("closing"))).
+		AddBlock(NewTerminationBlock(TerminationReceived, []byte("extra-info")))
+	termBytes, err := termPayload.Build()
+	require.NoError(t, err)
+
+	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, termBytes)
+	require.NoError(t, err)
+
+	_, _, _, err = receiver.DecryptGarlicMessage(enc)
+	require.NoError(t, err)
+
+	assert.Equal(t, 0, receiver.GetSessionCount(),
+		"session removed regardless of termination reason")
+}
+
+func TestTerminationBlock_NoTermination_SessionSurvives(t *testing.T) {
+	sender, receiver := createLinkedManagers(t)
+	destHash := mustBootstrapSession(t, sender, receiver)
+
+	// Send a normal message without any Termination block.
+	plaintext := []byte("normal message")
+	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, plaintext)
+	require.NoError(t, err)
+
+	_, _, _, err = receiver.DecryptGarlicMessage(enc)
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, receiver.GetSessionCount(),
+		"session should survive when no Termination block is present")
+}
+
+func TestTerminationBlock_SenderSessionUnaffected(t *testing.T) {
+	sender, receiver := createLinkedManagers(t)
+	destHash := mustBootstrapSession(t, sender, receiver)
+
+	// Send a termination from sender — only receiver's session should be removed.
+	termPayload := ExistingSessionPayloadBuilder().
+		AddBlock(NewTerminationBlock(TerminationNormal, nil))
+	termBytes, err := termPayload.Build()
+	require.NoError(t, err)
+
+	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, termBytes)
+	require.NoError(t, err)
+
+	_, _, _, err = receiver.DecryptGarlicMessage(enc)
+	require.NoError(t, err)
+
+	// Sender's session should be unaffected.
+	assert.Equal(t, 1, sender.GetSessionCount(),
+		"sender session should not be removed by sending a Termination block")
+	assert.Equal(t, 0, receiver.GetSessionCount(),
+		"receiver session should be removed after receiving Termination block")
+}
+
+// ============================================================================
+// MessageNumber (PN) Block Handling
+// ============================================================================
+
+func TestMessageNumberBlock_TrimRecvWindow(t *testing.T) {
+	sender, receiver := createLinkedManagers(t)
+	destHash := mustBootstrapSession(t, sender, receiver)
+
+	// Send a few messages to advance the counters.
+	for i := 0; i < 5; i++ {
+		enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("msg"))
+		require.NoError(t, err)
+		_, _, _, err = receiver.DecryptGarlicMessage(enc)
+		require.NoError(t, err)
+	}
+
+	// Now send a message with a MessageNumber block indicating PN=3.
+	// This tells the receiver that the previous tag set's last message was counter 3,
+	// so keys above 3 in the previous range can be deleted.
+	pnPayload := ExistingSessionPayloadBuilder().
+		AddBlock(NewMessageNumberBlock(3)).
+		AddBlock(NewGarlicCloveBlock([]byte("with PN")))
+	pnBytes, err := pnPayload.Build()
+	require.NoError(t, err)
+
+	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, pnBytes)
+	require.NoError(t, err)
+
+	plaintext, _, _, err := receiver.DecryptGarlicMessage(enc)
+	require.NoError(t, err)
+	assert.NotNil(t, plaintext)
+
+	// The session should still exist after PN processing.
+	assert.Equal(t, 1, receiver.GetSessionCount(),
+		"session should survive after processing MessageNumber block")
+}
+
+func TestMessageNumberBlock_SessionSurvivesSubsequentMessages(t *testing.T) {
+	sender, receiver := createLinkedManagers(t)
+	destHash := mustBootstrapSession(t, sender, receiver)
+
+	// Send a message with PN block.
+	pnPayload := ExistingSessionPayloadBuilder().
+		AddBlock(NewMessageNumberBlock(0)).
+		AddBlock(NewGarlicCloveBlock([]byte("pn-msg")))
+	pnBytes, err := pnPayload.Build()
+	require.NoError(t, err)
+
+	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, pnBytes)
+	require.NoError(t, err)
+	_, _, _, err = receiver.DecryptGarlicMessage(enc)
+	require.NoError(t, err)
+
+	// Subsequent messages should still work.
+	for i := 0; i < 5; i++ {
+		enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("after-pn"))
+		require.NoError(t, err)
+		_, _, _, err = receiver.DecryptGarlicMessage(enc)
+		require.NoError(t, err)
+	}
+
+	assert.Equal(t, 1, receiver.GetSessionCount())
+}
+
+// ============================================================================
+// trimRecvWindowByPN unit tests
+// ============================================================================
+
+func TestTrimRecvWindowByPN_NoKeysToTrim(t *testing.T) {
+	session := &Session{
+		recvWindowBase: 10,
+		recvFillMark:   20,
+		recvKeyCache:   make(map[uint32][32]byte),
+	}
+	// Populate keys in the current window (10-19).
+	for i := uint32(10); i < 20; i++ {
+		session.recvKeyCache[i] = [32]byte{byte(i)}
+	}
+
+	// PN=5 is below recvWindowBase so no keys should be trimmed.
+	trimRecvWindowByPN(session, 5)
+	assert.Equal(t, 10, len(session.recvKeyCache),
+		"no keys should be trimmed when PN is below window base")
+}
+
+func TestTrimRecvWindowByPN_TrimsStaleKeys(t *testing.T) {
+	session := &Session{
+		recvWindowBase: 10,
+		recvFillMark:   20,
+		recvKeyCache:   make(map[uint32][32]byte),
+	}
+	// Simulate stale keys from a previous tag set (counters 4-9) that are
+	// below recvWindowBase but still in the cache.
+	for i := uint32(4); i < 10; i++ {
+		session.recvKeyCache[i] = [32]byte{byte(i)}
+	}
+	// Also populate current window keys.
+	for i := uint32(10); i < 20; i++ {
+		session.recvKeyCache[i] = [32]byte{byte(i)}
+	}
+
+	// PN=6 means only counters 4,5,6 should survive (<=6), counters 7,8,9 trimmed.
+	trimRecvWindowByPN(session, 6)
+
+	// Current window keys (10-19) should be untouched.
+	for i := uint32(10); i < 20; i++ {
+		_, exists := session.recvKeyCache[i]
+		assert.True(t, exists, "current window key %d should not be trimmed", i)
+	}
+	// Stale keys at 7,8,9 (above PN=6, below recvWindowBase=10) should be trimmed.
+	for i := uint32(7); i < 10; i++ {
+		_, exists := session.recvKeyCache[i]
+		assert.False(t, exists, "stale key %d above PN should be trimmed", i)
+	}
+	// Keys at 4,5,6 (<=PN=6) should survive.
+	for i := uint32(4); i <= 6; i++ {
+		_, exists := session.recvKeyCache[i]
+		assert.True(t, exists, "key %d at or below PN should not be trimmed", i)
+	}
+}
+
+// ============================================================================
+// removeSessionByPointer tests
+// ============================================================================
+
+func TestRemoveSessionByPointer_RemovesCorrectSession(t *testing.T) {
+	sm := createTestSessionManager(t)
+	receiver := createTestSessionManager(t)
+
+	// Bootstrap two sessions to different destinations.
+	destHash1 := mustBootstrapSession(t, sm, receiver)
+	_ = destHash1
+
+	assert.Equal(t, 1, sm.GetSessionCount())
+	sm.mu.RLock()
+	var session *Session
+	for _, s := range sm.sessions {
+		session = s
+		break
+	}
+	sm.mu.RUnlock()
+
+	sm.removeSessionByPointer(session)
+	assert.Equal(t, 0, sm.GetSessionCount(),
+		"session should be removed by pointer")
+}
+
+func TestRemoveSessionByPointer_AlreadyRemoved(t *testing.T) {
+	sm := createTestSessionManager(t)
+	session := &Session{} // not in sm.sessions
+
+	// Should not panic when session is not found.
+	sm.removeSessionByPointer(session)
+	assert.Equal(t, 0, sm.GetSessionCount())
+}

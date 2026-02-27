@@ -328,6 +328,38 @@ func resetRecvWindow(session *Session) {
 	session.recvKeyCache = make(map[uint32][32]byte)
 }
 
+// trimRecvWindowByPN removes pre-derived message keys from the receive window
+// that are above the PN (previous tag set message count) value received in a
+// MessageNumber block. Per ratchet.md §"Message Numbers", when a peer signals
+// PN it indicates the last message counter used in the previous tag set. Keys
+// for counters beyond PN in that range will never arrive, so they can be
+// deleted to bound memory usage.
+//
+// This is safe to call from outside session.mu — it acquires the lock itself.
+func trimRecvWindowByPN(session *Session, pn uint16) {
+	session.mu.Lock()
+	defer session.mu.Unlock()
+
+	pn32 := uint32(pn)
+	trimmed := 0
+	for counter := range session.recvKeyCache {
+		if counter > pn32 && counter < session.recvWindowBase {
+			// Keys below recvWindowBase that are above PN belong to the
+			// previous tag set and will never be used.
+			delete(session.recvKeyCache, counter)
+			trimmed++
+		}
+	}
+
+	if trimmed > 0 {
+		log.WithFields(map[string]interface{}{
+			"at":      "trimRecvWindowByPN",
+			"pn":      pn,
+			"trimmed": trimmed,
+		}).Debug("Trimmed stale recv window keys above PN")
+	}
+}
+
 // prependPendingNextKeys checks for queued NextKey blocks on the session and,
 // if any exist, serializes them and prepends them to the caller's plaintext
 // payload. This ensures that DH ratchet key rotation signals are included
