@@ -1747,3 +1747,66 @@ func TestReplenishTagWindowOutsideLock_ReplenishesCorrectly(t *testing.T) {
 		require.NoError(t, err, "ES decrypt %d must succeed — tag window was not replenished", i)
 	}
 }
+
+// TestConcurrentEncryptWithCleanup exercises the race condition fix where
+// EncryptGarlicMessage now holds sm.mu.RLock through the encryptExistingSession
+// call, preventing concurrent CleanupExpiredSessions from evicting the session
+// (and its tags from tagIndex) between lookup and encryption.
+//
+// This test runs many goroutines: some continuously encrypting ES messages,
+// others continuously calling CleanupExpiredSessions. With the race detector
+// enabled (-race), any unsafe concurrent access would be flagged. The test
+// also verifies that no encrypt calls fail due to session eviction while the
+// session is actively being used.
+func TestConcurrentEncryptWithCleanup(t *testing.T) {
+	sender, receiver := createLinkedManagers(t)
+	sender.sessionTimeout = 200 * time.Millisecond
+
+	destHash := mustBootstrapSession(t, sender, receiver)
+
+	const (
+		encryptGoroutines = 5
+		cleanupGoroutines = 3
+		messagesPerGor    = 20
+	)
+
+	var wg sync.WaitGroup
+	encryptErrors := make(chan error, encryptGoroutines*messagesPerGor)
+
+	// Goroutines that continuously encrypt ES messages.
+	for i := 0; i < encryptGoroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < messagesPerGor; j++ {
+				_, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("concurrent-es"))
+				if err != nil {
+					encryptErrors <- err
+				}
+			}
+		}()
+	}
+
+	// Goroutines that continuously try to clean up expired sessions.
+	for i := 0; i < cleanupGoroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < messagesPerGor; j++ {
+				sender.CleanupExpiredSessions()
+			}
+		}()
+	}
+
+	wg.Wait()
+	close(encryptErrors)
+
+	// The session is actively used, so CleanupExpiredSessions should not evict
+	// it. No encrypt call should fail due to session eviction.
+	for err := range encryptErrors {
+		t.Errorf("unexpected encrypt error during concurrent cleanup: %v", err)
+	}
+
+	// Session must still exist after concurrent access.
+	assert.Equal(t, 1, sender.GetSessionCount(), "session should survive concurrent cleanup when actively used")
+}

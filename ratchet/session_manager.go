@@ -131,6 +131,12 @@ func GenerateSessionManager() (*SessionManager, error) {
 // EncryptGarlicMessage encrypts a plaintext garlic message for the given destination.
 // The plaintext must be non-empty; the I2P spec requires at least one payload block.
 // Returns an error if plaintext is nil or zero-length.
+//
+// Thread safety: when an existing session is found, sm.mu.RLock is held through the
+// entire encryptExistingSession call. This prevents concurrent CleanupExpiredSessions
+// or evictLRUSessionLocked (which require sm.mu.Lock) from removing the session and
+// its tags between lookup and encryption, which would produce ES messages with
+// unregistered tags that the receiver cannot match.
 func (sm *SessionManager) EncryptGarlicMessage(
 	destinationHash, destinationPubKey [32]byte,
 	plaintextGarlic []byte,
@@ -144,23 +150,19 @@ func (sm *SessionManager) EncryptGarlicMessage(
 		"plaintext_size": len(plaintextGarlic),
 	}).Debug("Encrypting garlic message")
 
+	// Hold RLock through the encrypt dispatch to prevent concurrent session
+	// eviction. encryptExistingSession is CPU-only (no network I/O), so
+	// holding RLock during encryption does not create a bottleneck.
 	sm.mu.RLock()
 	session, exists := sm.sessions[destinationHash]
+	if exists {
+		result, err := sm.encryptExistingSession(session, plaintextGarlic)
+		sm.mu.RUnlock()
+		return result, err
+	}
 	sm.mu.RUnlock()
 
-	if !exists {
-		sm.mu.Lock()
-		session, exists = sm.sessions[destinationHash]
-		if exists {
-			sm.mu.Unlock()
-			return sm.encryptExistingSession(session, plaintextGarlic)
-		}
-		sm.mu.Unlock()
-
-		return sm.encryptNewSession(destinationHash, destinationPubKey, plaintextGarlic)
-	}
-
-	return sm.encryptExistingSession(session, plaintextGarlic)
+	return sm.encryptNewSession(destinationHash, destinationPubKey, plaintextGarlic)
 }
 
 // encryptNewSession creates a new session and encrypts using the Noise IK handshake.
