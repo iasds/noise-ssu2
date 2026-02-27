@@ -3,6 +3,8 @@ package noise
 import (
 	"context"
 	"crypto/ecdh"
+	"encoding/binary"
+	"io"
 	"net"
 	"strings"
 	"sync"
@@ -15,6 +17,10 @@ import (
 	"github.com/go-i2p/noise"
 	"github.com/samber/oops"
 )
+
+// maxNoiseMessageSize is the maximum Noise message size per the Noise spec (§12.3).
+// Each message on the wire is preceded by a 2-byte big-endian length prefix.
+const maxNoiseMessageSize = 65535
 
 // Connection state constants for public API
 const (
@@ -316,10 +322,11 @@ func (nc *NoiseConn) encryptData(data []byte) ([]byte, error) {
 	return encrypted, nil
 }
 
-// writeEncryptedData writes encrypted data to the underlying connection and handles the response.
+// writeEncryptedData writes a length-prefixed encrypted frame to the
+// underlying connection and handles the response. Per Noise spec §12.3,
+// each message is preceded by a 2-byte big-endian length prefix.
 func (nc *NoiseConn) writeEncryptedData(originalData, encryptedData []byte) (int, error) {
-	n, err := nc.underlying.Write(encryptedData)
-	if err != nil {
+	if err := nc.writeFramedMessage(encryptedData); err != nil {
 		return 0, oops.
 			Code("UNDERLYING_WRITE_FAILED").
 			In("noise").
@@ -335,19 +342,9 @@ func (nc *NoiseConn) writeEncryptedData(originalData, encryptedData []byte) (int
 	nc.logger.WithFields(i2plogger.Fields{
 		"plaintext_bytes": len(originalData),
 		"encrypted_bytes": len(encryptedData),
-		"written_bytes":   n,
 	}).Trace("encrypted data written to wire")
 
-	if n == len(encryptedData) {
-		return len(originalData), nil
-	}
-
-	return 0, oops.
-		Code("PARTIAL_WRITE").
-		In("noise").
-		With("expected", len(encryptedData)).
-		With("written", n).
-		Errorf("partial write not supported with encryption")
+	return len(originalData), nil
 }
 
 // Close closes the connection.
@@ -675,69 +672,17 @@ func (nc *NoiseConn) performInitiatorHandshake(ctx context.Context) error {
 
 // performOneWayInitiator handles one-way patterns (N, K, X)
 func (nc *NoiseConn) performOneWayInitiator(ctx context.Context) error {
-	// Send single message
-	msg, cs1, cs2, err := nc.handshakeState.WriteMessage(nil, nil)
-	if err != nil {
-		return oops.
-			Code("WRITE_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to create handshake message")
-	}
-
-	if _, err := nc.underlying.Write(msg); err != nil {
-		return oops.
-			Code("SEND_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to send handshake message")
-	}
-
-	// Store cipher state
-	nc.updateCipherStates(cs1, cs2)
-	return nil
+	return nc.sendNoiseHandshakeMsg("one-way")
 }
 
 // performNNInitiator handles NN pattern as initiator
 func (nc *NoiseConn) performNNInitiator(ctx context.Context) error {
 	// Message 1: → e (send ephemeral)
-	msg, cs1, cs2, err := nc.handshakeState.WriteMessage(nil, nil)
-	if err != nil {
-		return oops.
-			Code("WRITE_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to create first handshake message")
+	if err := nc.sendNoiseHandshakeMsg("first NN"); err != nil {
+		return err
 	}
-
-	if _, err := nc.underlying.Write(msg); err != nil {
-		return oops.
-			Code("SEND_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to send first handshake message")
-	}
-
-	// Store cipher states if available
-	nc.updateCipherStates(cs1, cs2)
-
 	// Message 2: ← e, ee (receive ephemeral and compute shared secret)
-	buffer := make([]byte, 2048)
-	n, err := nc.underlying.Read(buffer)
-	if err != nil {
-		return oops.
-			Code("READ_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to read second handshake message")
-	}
-
-	_, cs1, cs2, err = nc.handshakeState.ReadMessage(nil, buffer[:n])
-	if err != nil {
-		return oops.
-			Code("PROCESS_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to process second handshake message")
-	}
-
-	// Update cipher states
-	nc.updateCipherStates(cs1, cs2)
-	return nil
+	return nc.receiveNoiseHandshakeMsg("second NN")
 }
 
 // performXXInitiator handles XX pattern as initiator
@@ -832,8 +777,8 @@ func (nc *NoiseConn) sendHandshakeMessage(ctx context.Context) error {
 			Wrapf(err, "failed to create handshake message")
 	}
 
-	// Send message over underlying connection
-	if _, err := nc.underlying.Write(msg); err != nil {
+	// Send length-prefixed message over underlying connection
+	if err := nc.writeFramedMessage(msg); err != nil {
 		return oops.
 			Code("SEND_MESSAGE_FAILED").
 			In("noise").
@@ -847,9 +792,8 @@ func (nc *NoiseConn) sendHandshakeMessage(ctx context.Context) error {
 
 // receiveHandshakeMessage receives and processes a handshake message
 func (nc *NoiseConn) receiveHandshakeMessage(ctx context.Context) error {
-	// Read message from underlying connection
-	buffer := make([]byte, 2048) // Increased buffer size for larger handshake messages
-	n, err := nc.underlying.Read(buffer)
+	// Read length-prefixed message from underlying connection
+	buffer, err := nc.readFramedMessage()
 	if err != nil {
 		return oops.
 			Code("READ_MESSAGE_FAILED").
@@ -858,7 +802,7 @@ func (nc *NoiseConn) receiveHandshakeMessage(ctx context.Context) error {
 	}
 
 	// Process message using handshake state
-	_, cs1, cs2, err := nc.handshakeState.ReadMessage(nil, buffer[:n])
+	_, cs1, cs2, err := nc.handshakeState.ReadMessage(nil, buffer)
 	if err != nil {
 		return oops.
 			Code("PROCESS_MESSAGE_FAILED").
@@ -882,7 +826,7 @@ func (nc *NoiseConn) sendNoiseHandshakeMsg(label string) error {
 			Wrapf(err, "failed to create %s handshake message", label)
 	}
 
-	if _, err := nc.underlying.Write(msg); err != nil {
+	if err := nc.writeFramedMessage(msg); err != nil {
 		return oops.
 			Code("SEND_MESSAGE_FAILED").
 			In("noise").
@@ -893,12 +837,11 @@ func (nc *NoiseConn) sendNoiseHandshakeMsg(label string) error {
 	return nil
 }
 
-// receiveNoiseHandshakeMsg reads a Noise handshake message from the underlying connection,
-// processes it via the handshake state, and updates cipher states. The label parameter
-// identifies the message for error context.
+// receiveNoiseHandshakeMsg reads a length-prefixed Noise handshake message from
+// the underlying connection, processes it via the handshake state, and updates
+// cipher states. The label parameter identifies the message for error context.
 func (nc *NoiseConn) receiveNoiseHandshakeMsg(label string) error {
-	buffer := make([]byte, 2048)
-	n, err := nc.underlying.Read(buffer)
+	buffer, err := nc.readFramedMessage()
 	if err != nil {
 		return oops.
 			Code("READ_MESSAGE_FAILED").
@@ -906,7 +849,7 @@ func (nc *NoiseConn) receiveNoiseHandshakeMsg(label string) error {
 			Wrapf(err, "failed to read %s handshake message", label)
 	}
 
-	_, cs1, cs2, err := nc.handshakeState.ReadMessage(nil, buffer[:n])
+	_, cs1, cs2, err := nc.handshakeState.ReadMessage(nil, buffer)
 	if err != nil {
 		return oops.
 			Code("PROCESS_MESSAGE_FAILED").
@@ -1015,70 +958,17 @@ func (nc *NoiseConn) performResponderHandshake(ctx context.Context) error {
 // performOneWayResponder handles one-way patterns (N, K, X)
 func (nc *NoiseConn) performOneWayResponder(ctx context.Context) error {
 	// Receive single message
-	buffer := make([]byte, 2048)
-	n, err := nc.underlying.Read(buffer)
-	if err != nil {
-		return oops.
-			Code("READ_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to read handshake message")
-	}
-
-	_, cs1, cs2, err := nc.handshakeState.ReadMessage(nil, buffer[:n])
-	if err != nil {
-		return oops.
-			Code("PROCESS_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to process handshake message")
-	}
-
-	// Store cipher state
-	nc.updateCipherStates(cs1, cs2)
-	return nil
+	return nc.receiveNoiseHandshakeMsg("OneWay")
 }
 
 // performNNResponder handles NN pattern as responder
 func (nc *NoiseConn) performNNResponder(ctx context.Context) error {
 	// Message 1: → e (receive ephemeral)
-	buffer := make([]byte, 2048)
-	n, err := nc.underlying.Read(buffer)
-	if err != nil {
-		return oops.
-			Code("READ_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to read first handshake message")
+	if err := nc.receiveNoiseHandshakeMsg("first NN"); err != nil {
+		return err
 	}
-
-	_, cs1, cs2, err := nc.handshakeState.ReadMessage(nil, buffer[:n])
-	if err != nil {
-		return oops.
-			Code("PROCESS_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to process first handshake message")
-	}
-
-	// Store cipher states if available
-	nc.updateCipherStates(cs1, cs2)
-
 	// Message 2: ← e, ee (send ephemeral and compute shared secret)
-	msg, cs1, cs2, err := nc.handshakeState.WriteMessage(nil, nil)
-	if err != nil {
-		return oops.
-			Code("WRITE_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to create second handshake message")
-	}
-
-	if _, err := nc.underlying.Write(msg); err != nil {
-		return oops.
-			Code("SEND_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to send second handshake message")
-	}
-
-	// Update cipher states
-	nc.updateCipherStates(cs1, cs2)
-	return nil
+	return nc.sendNoiseHandshakeMsg("second NN")
 }
 
 // performXXResponder handles XX pattern as responder
@@ -1101,68 +991,17 @@ func (nc *NoiseConn) performXXResponder(ctx context.Context) error {
 
 // performNInitiator handles N pattern as initiator: → e, es
 func (nc *NoiseConn) performNInitiator(ctx context.Context) error {
-	// Message 1: → e, es (send ephemeral, encrypt with responder's static)
-	msg, cs1, cs2, err := nc.handshakeState.WriteMessage(nil, nil)
-	if err != nil {
-		return oops.
-			Code("WRITE_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to create N handshake message")
-	}
-
-	if _, err := nc.underlying.Write(msg); err != nil {
-		return oops.
-			Code("SEND_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to send N handshake message")
-	}
-
-	nc.updateCipherStates(cs1, cs2)
-	return nil
+	return nc.sendNoiseHandshakeMsg("N")
 }
 
 // performKInitiator handles K pattern as initiator: → e, es, ss
 func (nc *NoiseConn) performKInitiator(ctx context.Context) error {
-	// Message 1: → e, es, ss (send ephemeral, encrypt with both static keys)
-	msg, cs1, cs2, err := nc.handshakeState.WriteMessage(nil, nil)
-	if err != nil {
-		return oops.
-			Code("WRITE_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to create K handshake message")
-	}
-
-	if _, err := nc.underlying.Write(msg); err != nil {
-		return oops.
-			Code("SEND_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to send K handshake message")
-	}
-
-	nc.updateCipherStates(cs1, cs2)
-	return nil
+	return nc.sendNoiseHandshakeMsg("K")
 }
 
 // performXInitiator handles X pattern as initiator: → e, es, s, ss
 func (nc *NoiseConn) performXInitiator(ctx context.Context) error {
-	// Message 1: → e, es, s, ss (send ephemeral and static, encrypt with responder's static)
-	msg, cs1, cs2, err := nc.handshakeState.WriteMessage(nil, nil)
-	if err != nil {
-		return oops.
-			Code("WRITE_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to create X handshake message")
-	}
-
-	if _, err := nc.underlying.Write(msg); err != nil {
-		return oops.
-			Code("SEND_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to send X handshake message")
-	}
-
-	nc.updateCipherStates(cs1, cs2)
-	return nil
+	return nc.sendNoiseHandshakeMsg("X")
 }
 
 // ============================================================================
@@ -1172,85 +1011,21 @@ func (nc *NoiseConn) performXInitiator(ctx context.Context) error {
 // performNKInitiator handles NK pattern as initiator: → e, es, ← e, ee
 func (nc *NoiseConn) performNKInitiator(ctx context.Context) error {
 	// Message 1: → e, es (send ephemeral, encrypt with responder's static)
-	msg, cs1, cs2, err := nc.handshakeState.WriteMessage(nil, nil)
-	if err != nil {
-		return oops.
-			Code("WRITE_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to create first NK handshake message")
+	if err := nc.sendNoiseHandshakeMsg("first NK"); err != nil {
+		return err
 	}
-
-	if _, err := nc.underlying.Write(msg); err != nil {
-		return oops.
-			Code("SEND_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to send first NK handshake message")
-	}
-
-	nc.updateCipherStates(cs1, cs2)
-
 	// Message 2: ← e, ee (receive ephemeral and compute DH)
-	buffer := make([]byte, 2048)
-	n, err := nc.underlying.Read(buffer)
-	if err != nil {
-		return oops.
-			Code("READ_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to read second NK handshake message")
-	}
-
-	_, cs1, cs2, err = nc.handshakeState.ReadMessage(nil, buffer[:n])
-	if err != nil {
-		return oops.
-			Code("PROCESS_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to process second NK handshake message")
-	}
-
-	nc.updateCipherStates(cs1, cs2)
-	return nil
+	return nc.receiveNoiseHandshakeMsg("second NK")
 }
 
 // performNXInitiator handles NX pattern as initiator: → e, ← e, ee, s, es
 func (nc *NoiseConn) performNXInitiator(ctx context.Context) error {
 	// Message 1: → e (send ephemeral)
-	msg, cs1, cs2, err := nc.handshakeState.WriteMessage(nil, nil)
-	if err != nil {
-		return oops.
-			Code("WRITE_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to create first NX handshake message")
+	if err := nc.sendNoiseHandshakeMsg("first NX"); err != nil {
+		return err
 	}
-
-	if _, err := nc.underlying.Write(msg); err != nil {
-		return oops.
-			Code("SEND_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to send first NX handshake message")
-	}
-
-	nc.updateCipherStates(cs1, cs2)
-
 	// Message 2: ← e, ee, s, es (receive ephemeral and static, compute DH)
-	buffer := make([]byte, 2048)
-	n, err := nc.underlying.Read(buffer)
-	if err != nil {
-		return oops.
-			Code("READ_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to read second NX handshake message")
-	}
-
-	_, cs1, cs2, err = nc.handshakeState.ReadMessage(nil, buffer[:n])
-	if err != nil {
-		return oops.
-			Code("PROCESS_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to process second NX handshake message")
-	}
-
-	nc.updateCipherStates(cs1, cs2)
-	return nil
+	return nc.receiveNoiseHandshakeMsg("second NX")
 }
 
 // performXNInitiator handles XN pattern as initiator (3 messages):
@@ -1293,211 +1068,51 @@ func (nc *NoiseConn) performXKInitiator(ctx context.Context) error {
 // performKNInitiator handles KN pattern as initiator: → e, ← e, ee, se, es
 func (nc *NoiseConn) performKNInitiator(ctx context.Context) error {
 	// Message 1: → e (send ephemeral)
-	msg, cs1, cs2, err := nc.handshakeState.WriteMessage(nil, nil)
-	if err != nil {
-		return oops.
-			Code("WRITE_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to create first KN handshake message")
+	if err := nc.sendNoiseHandshakeMsg("first KN"); err != nil {
+		return err
 	}
-
-	if _, err := nc.underlying.Write(msg); err != nil {
-		return oops.
-			Code("SEND_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to send first KN handshake message")
-	}
-
-	nc.updateCipherStates(cs1, cs2)
-
 	// Message 2: ← e, ee, se, es (receive ephemeral and static, compute DH)
-	buffer := make([]byte, 2048)
-	n, err := nc.underlying.Read(buffer)
-	if err != nil {
-		return oops.
-			Code("READ_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to read second KN handshake message")
-	}
-
-	_, cs1, cs2, err = nc.handshakeState.ReadMessage(nil, buffer[:n])
-	if err != nil {
-		return oops.
-			Code("PROCESS_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to process second KN handshake message")
-	}
-
-	nc.updateCipherStates(cs1, cs2)
-	return nil
+	return nc.receiveNoiseHandshakeMsg("second KN")
 }
 
 // performKKInitiator handles KK pattern as initiator: → e, es, ss, ← e, ee, se
 func (nc *NoiseConn) performKKInitiator(ctx context.Context) error {
 	// Message 1: → e, es, ss (send ephemeral, encrypt with responder's static and our static)
-	msg, cs1, cs2, err := nc.handshakeState.WriteMessage(nil, nil)
-	if err != nil {
-		return oops.
-			Code("WRITE_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to create first KK handshake message")
+	if err := nc.sendNoiseHandshakeMsg("first KK"); err != nil {
+		return err
 	}
-
-	if _, err := nc.underlying.Write(msg); err != nil {
-		return oops.
-			Code("SEND_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to send first KK handshake message")
-	}
-
-	nc.updateCipherStates(cs1, cs2)
-
 	// Message 2: ← e, ee, se (receive ephemeral, compute DH)
-	buffer := make([]byte, 2048)
-	n, err := nc.underlying.Read(buffer)
-	if err != nil {
-		return oops.
-			Code("READ_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to read second KK handshake message")
-	}
-
-	_, cs1, cs2, err = nc.handshakeState.ReadMessage(nil, buffer[:n])
-	if err != nil {
-		return oops.
-			Code("PROCESS_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to process second KK handshake message")
-	}
-
-	nc.updateCipherStates(cs1, cs2)
-	return nil
+	return nc.receiveNoiseHandshakeMsg("second KK")
 }
 
 // performINInitiator handles IN pattern as initiator: → e, s, ← e, ee, se, es
 func (nc *NoiseConn) performINInitiator(ctx context.Context) error {
 	// Message 1: → e, s (send ephemeral and static)
-	msg, cs1, cs2, err := nc.handshakeState.WriteMessage(nil, nil)
-	if err != nil {
-		return oops.
-			Code("WRITE_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to create first IN handshake message")
+	if err := nc.sendNoiseHandshakeMsg("first IN"); err != nil {
+		return err
 	}
-
-	if _, err := nc.underlying.Write(msg); err != nil {
-		return oops.
-			Code("SEND_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to send first IN handshake message")
-	}
-
-	nc.updateCipherStates(cs1, cs2)
-
 	// Message 2: ← e, ee, se, es (receive ephemeral and static, compute DH)
-	buffer := make([]byte, 2048)
-	n, err := nc.underlying.Read(buffer)
-	if err != nil {
-		return oops.
-			Code("READ_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to read second IN handshake message")
-	}
-
-	_, cs1, cs2, err = nc.handshakeState.ReadMessage(nil, buffer[:n])
-	if err != nil {
-		return oops.
-			Code("PROCESS_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to process second IN handshake message")
-	}
-
-	nc.updateCipherStates(cs1, cs2)
-	return nil
+	return nc.receiveNoiseHandshakeMsg("second IN")
 }
 
 // performIKInitiator handles IK pattern as initiator: → e, es, s, ss, ← e, ee, se
 func (nc *NoiseConn) performIKInitiator(ctx context.Context) error {
 	// Message 1: → e, es, s, ss (send ephemeral and static, encrypt with responder's static)
-	msg, cs1, cs2, err := nc.handshakeState.WriteMessage(nil, nil)
-	if err != nil {
-		return oops.
-			Code("WRITE_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to create first IK handshake message")
+	if err := nc.sendNoiseHandshakeMsg("first IK"); err != nil {
+		return err
 	}
-
-	if _, err := nc.underlying.Write(msg); err != nil {
-		return oops.
-			Code("SEND_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to send first IK handshake message")
-	}
-
-	nc.updateCipherStates(cs1, cs2)
-
 	// Message 2: ← e, ee, se (receive ephemeral, compute DH)
-	buffer := make([]byte, 2048)
-	n, err := nc.underlying.Read(buffer)
-	if err != nil {
-		return oops.
-			Code("READ_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to read second IK handshake message")
-	}
-
-	_, cs1, cs2, err = nc.handshakeState.ReadMessage(nil, buffer[:n])
-	if err != nil {
-		return oops.
-			Code("PROCESS_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to process second IK handshake message")
-	}
-
-	nc.updateCipherStates(cs1, cs2)
-	return nil
+	return nc.receiveNoiseHandshakeMsg("second IK")
 }
 
 // performIXInitiator handles IX pattern as initiator: → e, s, ← e, ee, se, s, es
 func (nc *NoiseConn) performIXInitiator(ctx context.Context) error {
 	// Message 1: → e, s (send ephemeral and static)
-	msg, cs1, cs2, err := nc.handshakeState.WriteMessage(nil, nil)
-	if err != nil {
-		return oops.
-			Code("WRITE_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to create first IX handshake message")
+	if err := nc.sendNoiseHandshakeMsg("first IX"); err != nil {
+		return err
 	}
-
-	if _, err := nc.underlying.Write(msg); err != nil {
-		return oops.
-			Code("SEND_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to send first IX handshake message")
-	}
-
-	nc.updateCipherStates(cs1, cs2)
-
 	// Message 2: ← e, ee, se, s, es (receive ephemeral and static, compute DH)
-	buffer := make([]byte, 2048)
-	n, err := nc.underlying.Read(buffer)
-	if err != nil {
-		return oops.
-			Code("READ_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to read second IX handshake message")
-	}
-
-	_, cs1, cs2, err = nc.handshakeState.ReadMessage(nil, buffer[:n])
-	if err != nil {
-		return oops.
-			Code("PROCESS_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to process second IX handshake message")
-	}
-
-	nc.updateCipherStates(cs1, cs2)
-	return nil
+	return nc.receiveNoiseHandshakeMsg("second IX")
 }
 
 // ============================================================================
@@ -1511,43 +1126,11 @@ func (nc *NoiseConn) performIXInitiator(ctx context.Context) error {
 //	← e, ee, se, s, es
 func (nc *NoiseConn) performKXInitiator(ctx context.Context) error {
 	// Message 1: → e (send ephemeral)
-	msg, cs1, cs2, err := nc.handshakeState.WriteMessage(nil, nil)
-	if err != nil {
-		return oops.
-			Code("WRITE_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to create first KX handshake message")
+	if err := nc.sendNoiseHandshakeMsg("first KX"); err != nil {
+		return err
 	}
-
-	if _, err := nc.underlying.Write(msg); err != nil {
-		return oops.
-			Code("SEND_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to send first KX handshake message")
-	}
-
-	nc.updateCipherStates(cs1, cs2)
-
 	// Message 2: ← e, ee, se, s, es (receive responder ephemeral + static, compute DH — final message)
-	buffer := make([]byte, 2048)
-	n, err := nc.underlying.Read(buffer)
-	if err != nil {
-		return oops.
-			Code("READ_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to read second KX handshake message")
-	}
-
-	_, cs1, cs2, err = nc.handshakeState.ReadMessage(nil, buffer[:n])
-	if err != nil {
-		return oops.
-			Code("PROCESS_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to process second KX handshake message")
-	}
-
-	nc.updateCipherStates(cs1, cs2)
-	return nil
+	return nc.receiveNoiseHandshakeMsg("second KX")
 }
 
 // ============================================================================
@@ -1556,74 +1139,17 @@ func (nc *NoiseConn) performKXInitiator(ctx context.Context) error {
 
 // performNResponder handles N pattern as responder: → e, es
 func (nc *NoiseConn) performNResponder(ctx context.Context) error {
-	// Message 1: → e, es (receive ephemeral encrypted with our static)
-	buffer := make([]byte, 2048)
-	n, err := nc.underlying.Read(buffer)
-	if err != nil {
-		return oops.
-			Code("READ_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to read N handshake message")
-	}
-
-	_, cs1, cs2, err := nc.handshakeState.ReadMessage(nil, buffer[:n])
-	if err != nil {
-		return oops.
-			Code("PROCESS_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to process N handshake message")
-	}
-
-	nc.updateCipherStates(cs1, cs2)
-	return nil
+	return nc.receiveNoiseHandshakeMsg("N")
 }
 
 // performKResponder handles K pattern as responder: → e, es, ss
 func (nc *NoiseConn) performKResponder(ctx context.Context) error {
-	// Message 1: → e, es, ss (receive ephemeral encrypted with both static keys)
-	buffer := make([]byte, 2048)
-	n, err := nc.underlying.Read(buffer)
-	if err != nil {
-		return oops.
-			Code("READ_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to read K handshake message")
-	}
-
-	_, cs1, cs2, err := nc.handshakeState.ReadMessage(nil, buffer[:n])
-	if err != nil {
-		return oops.
-			Code("PROCESS_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to process K handshake message")
-	}
-
-	nc.updateCipherStates(cs1, cs2)
-	return nil
+	return nc.receiveNoiseHandshakeMsg("K")
 }
 
 // performXResponder handles X pattern as responder: → e, es, s, ss
 func (nc *NoiseConn) performXResponder(ctx context.Context) error {
-	// Message 1: → e, es, s, ss (receive ephemeral and static encrypted with our static)
-	buffer := make([]byte, 2048)
-	n, err := nc.underlying.Read(buffer)
-	if err != nil {
-		return oops.
-			Code("READ_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to read X handshake message")
-	}
-
-	_, cs1, cs2, err := nc.handshakeState.ReadMessage(nil, buffer[:n])
-	if err != nil {
-		return oops.
-			Code("PROCESS_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to process X handshake message")
-	}
-
-	nc.updateCipherStates(cs1, cs2)
-	return nil
+	return nc.receiveNoiseHandshakeMsg("X")
 }
 
 // ============================================================================
@@ -1633,85 +1159,21 @@ func (nc *NoiseConn) performXResponder(ctx context.Context) error {
 // performNKResponder handles NK pattern as responder: → e, es, ← e, ee
 func (nc *NoiseConn) performNKResponder(ctx context.Context) error {
 	// Message 1: → e, es (receive ephemeral encrypted with our static)
-	buffer := make([]byte, 2048)
-	n, err := nc.underlying.Read(buffer)
-	if err != nil {
-		return oops.
-			Code("READ_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to read first NK handshake message")
+	if err := nc.receiveNoiseHandshakeMsg("first NK"); err != nil {
+		return err
 	}
-
-	_, cs1, cs2, err := nc.handshakeState.ReadMessage(nil, buffer[:n])
-	if err != nil {
-		return oops.
-			Code("PROCESS_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to process first NK handshake message")
-	}
-
-	nc.updateCipherStates(cs1, cs2)
-
 	// Message 2: ← e, ee (send ephemeral and compute DH)
-	msg, cs1, cs2, err := nc.handshakeState.WriteMessage(nil, nil)
-	if err != nil {
-		return oops.
-			Code("WRITE_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to create second NK handshake message")
-	}
-
-	if _, err := nc.underlying.Write(msg); err != nil {
-		return oops.
-			Code("SEND_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to send second NK handshake message")
-	}
-
-	nc.updateCipherStates(cs1, cs2)
-	return nil
+	return nc.sendNoiseHandshakeMsg("second NK")
 }
 
 // performNXResponder handles NX pattern as responder: → e, ← e, ee, s, es
 func (nc *NoiseConn) performNXResponder(ctx context.Context) error {
 	// Message 1: → e (receive ephemeral)
-	buffer := make([]byte, 2048)
-	n, err := nc.underlying.Read(buffer)
-	if err != nil {
-		return oops.
-			Code("READ_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to read first NX handshake message")
+	if err := nc.receiveNoiseHandshakeMsg("first NX"); err != nil {
+		return err
 	}
-
-	_, cs1, cs2, err := nc.handshakeState.ReadMessage(nil, buffer[:n])
-	if err != nil {
-		return oops.
-			Code("PROCESS_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to process first NX handshake message")
-	}
-
-	nc.updateCipherStates(cs1, cs2)
-
 	// Message 2: ← e, ee, s, es (send ephemeral and static, compute DH)
-	msg, cs1, cs2, err := nc.handshakeState.WriteMessage(nil, nil)
-	if err != nil {
-		return oops.
-			Code("WRITE_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to create second NX handshake message")
-	}
-
-	if _, err := nc.underlying.Write(msg); err != nil {
-		return oops.
-			Code("SEND_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to send second NX handshake message")
-	}
-
-	nc.updateCipherStates(cs1, cs2)
-	return nil
+	return nc.sendNoiseHandshakeMsg("second NX")
 }
 
 // performXNResponder handles XN pattern as responder (3 messages):
@@ -1754,211 +1216,51 @@ func (nc *NoiseConn) performXKResponder(ctx context.Context) error {
 // performKNResponder handles KN pattern as responder: → e, ← e, ee, se, es
 func (nc *NoiseConn) performKNResponder(ctx context.Context) error {
 	// Message 1: → e (receive ephemeral)
-	buffer := make([]byte, 2048)
-	n, err := nc.underlying.Read(buffer)
-	if err != nil {
-		return oops.
-			Code("READ_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to read first KN handshake message")
+	if err := nc.receiveNoiseHandshakeMsg("first KN"); err != nil {
+		return err
 	}
-
-	_, cs1, cs2, err := nc.handshakeState.ReadMessage(nil, buffer[:n])
-	if err != nil {
-		return oops.
-			Code("PROCESS_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to process first KN handshake message")
-	}
-
-	nc.updateCipherStates(cs1, cs2)
-
 	// Message 2: ← e, ee, se, es (send ephemeral and static, compute DH)
-	msg, cs1, cs2, err := nc.handshakeState.WriteMessage(nil, nil)
-	if err != nil {
-		return oops.
-			Code("WRITE_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to create second KN handshake message")
-	}
-
-	if _, err := nc.underlying.Write(msg); err != nil {
-		return oops.
-			Code("SEND_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to send second KN handshake message")
-	}
-
-	nc.updateCipherStates(cs1, cs2)
-	return nil
+	return nc.sendNoiseHandshakeMsg("second KN")
 }
 
 // performKKResponder handles KK pattern as responder: → e, es, ss, ← e, ee, se
 func (nc *NoiseConn) performKKResponder(ctx context.Context) error {
 	// Message 1: → e, es, ss (receive ephemeral encrypted with both static keys)
-	buffer := make([]byte, 2048)
-	n, err := nc.underlying.Read(buffer)
-	if err != nil {
-		return oops.
-			Code("READ_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to read first KK handshake message")
+	if err := nc.receiveNoiseHandshakeMsg("first KK"); err != nil {
+		return err
 	}
-
-	_, cs1, cs2, err := nc.handshakeState.ReadMessage(nil, buffer[:n])
-	if err != nil {
-		return oops.
-			Code("PROCESS_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to process first KK handshake message")
-	}
-
-	nc.updateCipherStates(cs1, cs2)
-
 	// Message 2: ← e, ee, se (send ephemeral, compute DH)
-	msg, cs1, cs2, err := nc.handshakeState.WriteMessage(nil, nil)
-	if err != nil {
-		return oops.
-			Code("WRITE_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to create second KK handshake message")
-	}
-
-	if _, err := nc.underlying.Write(msg); err != nil {
-		return oops.
-			Code("SEND_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to send second KK handshake message")
-	}
-
-	nc.updateCipherStates(cs1, cs2)
-	return nil
+	return nc.sendNoiseHandshakeMsg("second KK")
 }
 
 // performINResponder handles IN pattern as responder: → e, s, ← e, ee, se, es
 func (nc *NoiseConn) performINResponder(ctx context.Context) error {
 	// Message 1: → e, s (receive ephemeral and static)
-	buffer := make([]byte, 2048)
-	n, err := nc.underlying.Read(buffer)
-	if err != nil {
-		return oops.
-			Code("READ_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to read first IN handshake message")
+	if err := nc.receiveNoiseHandshakeMsg("first IN"); err != nil {
+		return err
 	}
-
-	_, cs1, cs2, err := nc.handshakeState.ReadMessage(nil, buffer[:n])
-	if err != nil {
-		return oops.
-			Code("PROCESS_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to process first IN handshake message")
-	}
-
-	nc.updateCipherStates(cs1, cs2)
-
 	// Message 2: ← e, ee, se, es (send ephemeral and static, compute DH)
-	msg, cs1, cs2, err := nc.handshakeState.WriteMessage(nil, nil)
-	if err != nil {
-		return oops.
-			Code("WRITE_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to create second IN handshake message")
-	}
-
-	if _, err := nc.underlying.Write(msg); err != nil {
-		return oops.
-			Code("SEND_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to send second IN handshake message")
-	}
-
-	nc.updateCipherStates(cs1, cs2)
-	return nil
+	return nc.sendNoiseHandshakeMsg("second IN")
 }
 
 // performIKResponder handles IK pattern as responder: → e, es, s, ss, ← e, ee, se
 func (nc *NoiseConn) performIKResponder(ctx context.Context) error {
 	// Message 1: → e, es, s, ss (receive ephemeral and static encrypted with our static)
-	buffer := make([]byte, 2048)
-	n, err := nc.underlying.Read(buffer)
-	if err != nil {
-		return oops.
-			Code("READ_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to read first IK handshake message")
+	if err := nc.receiveNoiseHandshakeMsg("first IK"); err != nil {
+		return err
 	}
-
-	_, cs1, cs2, err := nc.handshakeState.ReadMessage(nil, buffer[:n])
-	if err != nil {
-		return oops.
-			Code("PROCESS_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to process first IK handshake message")
-	}
-
-	nc.updateCipherStates(cs1, cs2)
-
 	// Message 2: ← e, ee, se (send ephemeral, compute DH)
-	msg, cs1, cs2, err := nc.handshakeState.WriteMessage(nil, nil)
-	if err != nil {
-		return oops.
-			Code("WRITE_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to create second IK handshake message")
-	}
-
-	if _, err := nc.underlying.Write(msg); err != nil {
-		return oops.
-			Code("SEND_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to send second IK handshake message")
-	}
-
-	nc.updateCipherStates(cs1, cs2)
-	return nil
+	return nc.sendNoiseHandshakeMsg("second IK")
 }
 
 // performIXResponder handles IX pattern as responder: → e, s, ← e, ee, se, s, es
 func (nc *NoiseConn) performIXResponder(ctx context.Context) error {
 	// Message 1: → e, s (receive ephemeral and static)
-	buffer := make([]byte, 2048)
-	n, err := nc.underlying.Read(buffer)
-	if err != nil {
-		return oops.
-			Code("READ_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to read first IX handshake message")
+	if err := nc.receiveNoiseHandshakeMsg("first IX"); err != nil {
+		return err
 	}
-
-	_, cs1, cs2, err := nc.handshakeState.ReadMessage(nil, buffer[:n])
-	if err != nil {
-		return oops.
-			Code("PROCESS_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to process first IX handshake message")
-	}
-
-	nc.updateCipherStates(cs1, cs2)
-
 	// Message 2: ← e, ee, se, s, es (send ephemeral and static, compute DH)
-	msg, cs1, cs2, err := nc.handshakeState.WriteMessage(nil, nil)
-	if err != nil {
-		return oops.
-			Code("WRITE_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to create second IX handshake message")
-	}
-
-	if _, err := nc.underlying.Write(msg); err != nil {
-		return oops.
-			Code("SEND_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to send second IX handshake message")
-	}
-
-	nc.updateCipherStates(cs1, cs2)
-	return nil
+	return nc.sendNoiseHandshakeMsg("second IX")
 }
 
 // ============================================================================
@@ -1972,43 +1274,11 @@ func (nc *NoiseConn) performIXResponder(ctx context.Context) error {
 //	← e, ee, se, s, es
 func (nc *NoiseConn) performKXResponder(ctx context.Context) error {
 	// Message 1: → e (receive initiator ephemeral)
-	buffer := make([]byte, 2048)
-	n, err := nc.underlying.Read(buffer)
-	if err != nil {
-		return oops.
-			Code("READ_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to read first KX handshake message")
+	if err := nc.receiveNoiseHandshakeMsg("first KX"); err != nil {
+		return err
 	}
-
-	_, cs1, cs2, err := nc.handshakeState.ReadMessage(nil, buffer[:n])
-	if err != nil {
-		return oops.
-			Code("PROCESS_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to process first KX handshake message")
-	}
-
-	nc.updateCipherStates(cs1, cs2)
-
 	// Message 2: ← e, ee, se, s, es (send our ephemeral + static, compute DH — final message)
-	msg, cs1, cs2, err := nc.handshakeState.WriteMessage(nil, nil)
-	if err != nil {
-		return oops.
-			Code("WRITE_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to create second KX handshake message")
-	}
-
-	if _, err := nc.underlying.Write(msg); err != nil {
-		return oops.
-			Code("SEND_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to send second KX handshake message")
-	}
-
-	nc.updateCipherStates(cs1, cs2)
-	return nil
+	return nc.sendNoiseHandshakeMsg("second KX")
 }
 
 // parseHandshakePattern maps pattern name strings to go-i2p/noise HandshakePattern types.
@@ -2097,19 +1367,79 @@ func (nc *NoiseConn) configureReadTimeout() error {
 	return nil
 }
 
-// readEncryptedData reads encrypted data from the underlying connection.
+// readEncryptedData reads a length-prefixed encrypted frame from the
+// underlying connection. Per the Noise spec §12.3, each message is preceded
+// by a 2-byte big-endian length field. This method reads the length, then
+// reads exactly that many bytes of ciphertext before returning.
 func (nc *NoiseConn) readEncryptedData(b []byte) ([]byte, int, error) {
-	encrypted := make([]byte, len(b)+16) // Additional space for auth tag
-	n, err := nc.underlying.Read(encrypted)
+	encrypted, err := nc.readFramedMessage()
 	if err != nil {
-		return nil, 0, oops.
+		return nil, 0, err
+	}
+	return encrypted, len(encrypted), nil
+}
+
+// writeFramedMessage writes a 2-byte big-endian length prefix followed by
+// the message data to the underlying connection. Per Noise spec §12.3:
+// "Applications should add a length field for each Noise message."
+func (nc *NoiseConn) writeFramedMessage(data []byte) error {
+	if len(data) > maxNoiseMessageSize {
+		return oops.
+			Code("MESSAGE_TOO_LARGE").
+			In("noise").
+			With("message_len", len(data)).
+			With("max_len", maxNoiseMessageSize).
+			Errorf("message exceeds maximum Noise message size")
+	}
+	var header [2]byte
+	binary.BigEndian.PutUint16(header[:], uint16(len(data)))
+	if _, err := nc.underlying.Write(header[:]); err != nil {
+		return oops.
+			Code("WRITE_LENGTH_FAILED").
+			In("noise").
+			Wrapf(err, "failed to write message length prefix")
+	}
+	if _, err := nc.underlying.Write(data); err != nil {
+		return oops.
+			Code("WRITE_PAYLOAD_FAILED").
+			In("noise").
+			Wrapf(err, "failed to write message payload")
+	}
+	return nil
+}
+
+// readFramedMessage reads a 2-byte big-endian length prefix from the
+// underlying connection, then reads exactly that many bytes. This ensures
+// complete Noise messages are received before decryption, preventing
+// AES-GCM authentication failures from partial TCP reads.
+func (nc *NoiseConn) readFramedMessage() ([]byte, error) {
+	var header [2]byte
+	if _, err := io.ReadFull(nc.underlying, header[:]); err != nil {
+		return nil, oops.
+			Code("READ_LENGTH_FAILED").
+			In("noise").
+			With("local_addr", nc.LocalAddr().String()).
+			With("remote_addr", nc.RemoteAddr().String()).
+			Wrapf(err, "failed to read message length prefix")
+	}
+	msgLen := binary.BigEndian.Uint16(header[:])
+	if msgLen == 0 {
+		return nil, oops.
+			Code("EMPTY_MESSAGE").
+			In("noise").
+			Errorf("received zero-length message")
+	}
+	buf := make([]byte, msgLen)
+	if _, err := io.ReadFull(nc.underlying, buf); err != nil {
+		return nil, oops.
 			Code("UNDERLYING_READ_FAILED").
 			In("noise").
 			With("local_addr", nc.LocalAddr().String()).
 			With("remote_addr", nc.RemoteAddr().String()).
-			Wrapf(err, "underlying connection read failed")
+			With("expected_len", msgLen).
+			Wrapf(err, "failed to read complete message")
 	}
-	return encrypted, n, nil
+	return buf, nil
 }
 
 // decryptData decrypts the provided encrypted data.
@@ -2258,7 +1588,25 @@ func (nc *NoiseConn) createHandshakeContext(ctx context.Context) *handshakeConte
 }
 
 // executeRoleBasedHandshake performs handshake based on initiator/responder role.
+// It translates the context deadline into a socket-level deadline so that
+// underlying Read/Write calls (which do not observe context) are bounded.
 func (nc *NoiseConn) executeRoleBasedHandshake(ctx context.Context) error {
+	// Enforce context deadline on the underlying socket so that blocking
+	// Read/Write calls respect the handshake timeout.
+	if deadline, ok := ctx.Deadline(); ok {
+		if err := nc.underlying.SetDeadline(deadline); err != nil {
+			return oops.
+				Code("SET_DEADLINE_FAILED").
+				In("noise").
+				Wrapf(err, "failed to set handshake deadline on underlying connection")
+		}
+		// Clear the deadline once the handshake finishes (or fails) so
+		// subsequent data-phase I/O is not accidentally time-limited.
+		defer func() {
+			_ = nc.underlying.SetDeadline(time.Time{})
+		}()
+	}
+
 	if nc.config.Initiator {
 		if err := nc.performInitiatorHandshake(ctx); err != nil {
 			return oops.
