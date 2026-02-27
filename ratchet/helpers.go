@@ -327,3 +327,48 @@ func resetRecvWindow(session *Session) {
 	// Clear the old key cache so stale keys cannot be replayed.
 	session.recvKeyCache = make(map[uint32][32]byte)
 }
+
+// prependPendingNextKeys checks for queued NextKey blocks on the session and,
+// if any exist, serializes them and prepends them to the caller's plaintext
+// payload. This ensures that DH ratchet key rotation signals are included
+// inside the AEAD-encrypted Existing Session message, as required by
+// ratchet.md §"Next DH Ratchet Public Key".
+//
+// If no NextKey blocks are pending, the original plaintext is returned unmodified
+// (zero-copy fast path).
+//
+// Must be called with session.mu held.
+func prependPendingNextKeys(session *Session, plaintext []byte) ([]byte, error) {
+	pendingBlocks := session.GetPendingNextKeys()
+	if len(pendingBlocks) == 0 {
+		return plaintext, nil
+	}
+
+	// Calculate the total size needed for NextKey block headers + data.
+	nextKeySize := 0
+	for _, block := range pendingBlocks {
+		nextKeySize += block.SerializeSize()
+	}
+
+	// Build a combined payload: [NextKey blocks...] + [original plaintext].
+	combined := make([]byte, nextKeySize+len(plaintext))
+	offset := 0
+	for _, block := range pendingBlocks {
+		n, err := block.Serialize(combined[offset:])
+		if err != nil {
+			return nil, oops.Wrapf(err, "failed to serialize NextKey block (keyID in data)")
+		}
+		offset += n
+	}
+	copy(combined[offset:], plaintext)
+
+	log.WithFields(map[string]interface{}{
+		"at":              "prependPendingNextKeys",
+		"next_key_blocks": len(pendingBlocks),
+		"next_key_bytes":  nextKeySize,
+		"original_size":   len(plaintext),
+		"combined_size":   len(combined),
+	}).Debug("Prepended NextKey blocks to ES payload")
+
+	return combined, nil
+}

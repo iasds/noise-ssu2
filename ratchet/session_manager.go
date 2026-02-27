@@ -262,7 +262,15 @@ func (sm *SessionManager) encryptExistingSession(
 		return nil, err
 	}
 
-	ciphertext, tag, err := encryptWithSessionKey(messageKey, plaintextGarlic, sessionTag, session.MessageCounter)
+	// Spec §"Next DH Ratchet Public Key": if a DH ratchet rotation occurred,
+	// the resulting NextKey blocks must be serialized into the encrypted payload
+	// so the peer can process the key rotation and maintain forward secrecy.
+	payload, err := prependPendingNextKeys(session, plaintextGarlic)
+	if err != nil {
+		return nil, oops.Wrapf(err, "failed to prepend NextKey blocks to payload")
+	}
+
+	ciphertext, tag, err := encryptWithSessionKey(messageKey, payload, sessionTag, session.MessageCounter)
 	if err != nil {
 		return nil, err
 	}
