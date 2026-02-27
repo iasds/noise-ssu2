@@ -151,12 +151,14 @@ func writeNoiseIKMessage2(
 	ns.mixHash(ephEncoded) // MixHash the wire representation
 
 	// "ee" pattern: DH(besk, aepk)
+	// Per I2P ratchet.md §1g, "ee" uses single-output HKDF: only ck is updated.
+	// The cipher key (k) is not modified until the subsequent "se" step.
 	ephPriv := x25519.PrivateKey(ephPrivBytes)
 	sharedEE, err := ephPriv.SharedKey(x25519.PublicKey(hs.remoteEphPub[:]))
 	if err != nil {
 		return [8]byte{}, nil, nil, oops.Wrapf(err, "failed to compute NSR DH(e, re)")
 	}
-	ns.mixKey(sharedEE)
+	ns.mixKeyCKOnly(sharedEE)
 
 	// "se" pattern: DH(besk, apk)
 	sharedSE, err := ephPriv.SharedKey(x25519.PublicKey(hs.remoteStaticPub[:]))
@@ -226,12 +228,14 @@ func readNoiseIKMessage2(
 	}
 
 	// "ee" pattern: DH(aesk, bepk)
+	// Per I2P ratchet.md §1g, "ee" uses single-output HKDF: only ck is updated.
+	// The cipher key (k) is not modified until the subsequent "se" step.
 	ephPriv := x25519.PrivateKey(hs.localEphPriv)
 	sharedEE, err := ephPriv.SharedKey(x25519.PublicKey(ephPubBytes))
 	if err != nil {
 		return nil, nil, oops.Wrapf(err, "failed to compute NSR DH(e, re)")
 	}
-	ns.mixKey(sharedEE)
+	ns.mixKeyCKOnly(sharedEE)
 
 	// "se" pattern: DH(ask, bepk)
 	ourPriv := x25519.PrivateKey(ourStaticPriv[:])

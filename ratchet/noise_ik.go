@@ -100,6 +100,18 @@ func (ns *noiseIKState) mixKey(ikm []byte) {
 	ns.hasKey = true
 }
 
+// mixKeyCKOnly updates only the chaining key via a single-output HKDF.
+// Per I2P ratchet.md §1g, the "ee" handshake token in the NSR uses:
+//
+//	ck = HKDF(chainKey, DH(e, re), "", 32)
+//
+// Unlike mixKey, this does NOT update the cipher key (k) or reset the nonce.
+// The spec mandates single-output HKDF for "ee" to prevent accidental use
+// of an intermediate cipher key between the "ee" and "se" steps.
+func (ns *noiseIKState) mixKeyCKOnly(ikm []byte) {
+	ns.ck = noiseHKDF1(ns.ck[:], ikm)
+}
+
 // encryptAndHash encrypts plaintext using the current cipher key with h as AD.
 // Returns ciphertext || tag (N + 16 bytes). Updates h with the ciphertext.
 func (ns *noiseIKState) encryptAndHash(plaintext []byte) ([]byte, error) {
@@ -164,6 +176,19 @@ func noiseNonce(counter uint64) []byte {
 	nonce := make([]byte, 12)
 	binary.LittleEndian.PutUint64(nonce[4:], counter)
 	return nonce
+}
+
+// noiseHKDF1 computes HKDF with 1 output as defined by the Noise spec §4.3.
+// Returns a single 32-byte output (the new chaining key).
+// Per I2P ratchet.md §1g, the "ee" handshake token uses a single-output HKDF:
+//
+//	ck = HKDF(chainKey, sharedSecret, "", 32)
+//
+// This updates only the chaining key, not the cipher key.
+func noiseHKDF1(chainingKey, inputKeyMaterial []byte) [32]byte {
+	tempKey := hmacSHA256(chainingKey, inputKeyMaterial)
+	output1 := hmacSHA256(tempKey[:], []byte{0x01})
+	return output1
 }
 
 // noiseHKDF2 computes HKDF with 2 outputs as defined by the Noise spec §4.3.

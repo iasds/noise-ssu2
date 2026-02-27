@@ -56,6 +56,88 @@ func TestNoiseIKState_MixKey(t *testing.T) {
 	assert.Equal(t, uint64(0), ns.n, "MixKey should reset nonce to 0")
 }
 
+// TestNoiseHKDF1_MatchesFirstOutputOfHKDF2 verifies that noiseHKDF1 produces
+// the same value as the first output of noiseHKDF2. This ensures the "ee"
+// single-output HKDF and the standard 2-output HKDF agree on the chaining key.
+func TestNoiseHKDF1_MatchesFirstOutputOfHKDF2(t *testing.T) {
+	ck := make([]byte, 32)
+	ikm := make([]byte, 32)
+	_, err := rand.Read(ck)
+	require.NoError(t, err)
+	_, err = rand.Read(ikm)
+	require.NoError(t, err)
+
+	output1 := noiseHKDF1(ck, ikm)
+	first, _ := noiseHKDF2(ck, ikm)
+	assert.Equal(t, first, output1, "noiseHKDF1 should produce the same output as the first output of noiseHKDF2")
+}
+
+// TestNoiseIKState_MixKeyCKOnly verifies that mixKeyCKOnly updates only the
+// chaining key (ck) and does NOT update the cipher key (k), nonce (n), or
+// hasKey flag. Per I2P ratchet.md §1g, the "ee" handshake token uses a
+// single-output HKDF that only advances the chaining key.
+func TestNoiseIKState_MixKeyCKOnly(t *testing.T) {
+	var respPub [32]byte
+	_, err := rand.Read(respPub[:])
+	require.NoError(t, err)
+
+	ns := initNoiseIK(respPub)
+
+	// Set a known cipher key via mixKey so we can verify it's preserved
+	ikm := make([]byte, 32)
+	_, err = rand.Read(ikm)
+	require.NoError(t, err)
+	ns.mixKey(ikm)
+	assert.True(t, ns.hasKey, "mixKey should set hasKey")
+
+	// Record state before mixKeyCKOnly
+	oldCK := ns.ck
+	oldK := ns.k
+	oldN := ns.n
+	oldHasKey := ns.hasKey
+
+	// Apply mixKeyCKOnly with new input
+	eeIKM := make([]byte, 32)
+	_, err = rand.Read(eeIKM)
+	require.NoError(t, err)
+	ns.mixKeyCKOnly(eeIKM)
+
+	// ck MUST change
+	assert.NotEqual(t, oldCK, ns.ck, "mixKeyCKOnly should update chaining key")
+	// k, n, hasKey MUST NOT change
+	assert.Equal(t, oldK, ns.k, "mixKeyCKOnly must NOT update cipher key")
+	assert.Equal(t, oldN, ns.n, "mixKeyCKOnly must NOT reset nonce")
+	assert.Equal(t, oldHasKey, ns.hasKey, "mixKeyCKOnly must NOT change hasKey flag")
+
+	// Verify ck matches noiseHKDF1 directly
+	expected := noiseHKDF1(oldCK[:], eeIKM)
+	assert.Equal(t, expected, ns.ck, "ck should equal noiseHKDF1(oldCK, ikm)")
+}
+
+// TestNSR_EE_DoesNotSetCipherKey verifies that the "ee" step in the NSR
+// handshake does not set a cipher key, matching the I2P ratchet.md §1g spec.
+// The cipher key should only be set by the subsequent "se" step.
+func TestNSR_EE_DoesNotSetCipherKey(t *testing.T) {
+	var respPub [32]byte
+	_, err := rand.Read(respPub[:])
+	require.NoError(t, err)
+
+	ns := initNoiseIK(respPub)
+	assert.False(t, ns.hasKey, "Initial state should not have a cipher key")
+
+	// Simulate the "ee" step using mixKeyCKOnly
+	eeIKM := make([]byte, 32)
+	_, err = rand.Read(eeIKM)
+	require.NoError(t, err)
+	ns.mixKeyCKOnly(eeIKM)
+
+	// After "ee", there should be no cipher key set (hasKey remains false
+	// if it was false before — the "es" step from message 1 would have set
+	// hasKey=true, but mixKeyCKOnly must not change it)
+	assert.False(t, ns.hasKey,
+		"mixKeyCKOnly (ee step) must not set hasKey; cipher key is set by the subsequent 'se' step")
+}
+
 func TestNoiseIKState_EncryptDecryptAndHash(t *testing.T) {
 	var respPub [32]byte
 	_, err := rand.Read(respPub[:])
