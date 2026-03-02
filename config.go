@@ -82,6 +82,15 @@ type ConnConfig struct {
 	// If the hook returns an error, the handshake is considered failed and
 	// the connection reverts to the Init state.
 	PostHandshakeHook func(*NoiseConn) error
+
+	// cachedChain holds the lazily-initialized ModifierChain built from Modifiers.
+	// It is invalidated when the modifier list is mutated via WithModifiers,
+	// AddModifier, or ClearModifiers.
+	cachedChain *handshake.ModifierChain
+
+	// chainCached indicates whether cachedChain has been computed.
+	// Needed to distinguish "no modifiers (nil chain)" from "not yet computed".
+	chainCached bool
 }
 
 // NewConnConfig creates a new ConnConfig with sensible defaults.
@@ -151,28 +160,46 @@ func (c *ConnConfig) WithRetryBackoff(backoff time.Duration) *ConnConfig {
 func (c *ConnConfig) WithModifiers(modifiers ...handshake.HandshakeModifier) *ConnConfig {
 	c.Modifiers = make([]handshake.HandshakeModifier, len(modifiers))
 	copy(c.Modifiers, modifiers)
+	c.invalidateModifierCache()
 	return c
 }
 
 // AddModifier appends a single modifier to the existing modifier list.
 func (c *ConnConfig) AddModifier(modifier handshake.HandshakeModifier) *ConnConfig {
 	c.Modifiers = append(c.Modifiers, modifier)
+	c.invalidateModifierCache()
 	return c
 }
 
 // ClearModifiers removes all modifiers from the configuration.
 func (c *ConnConfig) ClearModifiers() *ConnConfig {
 	c.Modifiers = nil
+	c.invalidateModifierCache()
 	return c
 }
 
 // GetModifierChain returns a ModifierChain containing all configured modifiers.
-// Returns nil if no modifiers are configured.
+// Returns nil if no modifiers are configured. The chain is lazily initialized
+// and cached; subsequent calls return the same instance until the modifier
+// list is mutated via WithModifiers, AddModifier, or ClearModifiers.
 func (c *ConnConfig) GetModifierChain() *handshake.ModifierChain {
-	if len(c.Modifiers) == 0 {
-		return nil
+	if c.chainCached {
+		return c.cachedChain
 	}
-	return handshake.NewModifierChain("config-chain", c.Modifiers...)
+	if len(c.Modifiers) == 0 {
+		c.cachedChain = nil
+	} else {
+		c.cachedChain = handshake.NewModifierChain("config-chain", c.Modifiers...)
+	}
+	c.chainCached = true
+	return c.cachedChain
+}
+
+// invalidateModifierCache resets the cached modifier chain so it will be
+// recomputed on the next call to GetModifierChain.
+func (c *ConnConfig) invalidateModifierCache() {
+	c.cachedChain = nil
+	c.chainCached = false
 }
 
 // Validate checks if the configuration is valid and complete.

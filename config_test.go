@@ -535,6 +535,82 @@ func TestConnConfig_ModifierMethods(t *testing.T) {
 	})
 }
 
+// TestGetModifierChainCaching verifies that GetModifierChain() returns the same
+// cached instance on repeated calls and properly invalidates on mutation.
+func TestGetModifierChainCaching(t *testing.T) {
+	mod1 := &testHandshakeModifier{name: "modifier1"}
+	mod2 := &testHandshakeModifier{name: "modifier2"}
+
+	t.Run("repeated calls return same instance", func(t *testing.T) {
+		config := NewConnConfig("XX", true).WithModifiers(mod1, mod2)
+		chain1 := config.GetModifierChain()
+		chain2 := config.GetModifierChain()
+
+		if chain1 == nil {
+			t.Fatal("expected non-nil chain")
+		}
+		if chain1 != chain2 {
+			t.Error("GetModifierChain() returned different instances; expected cached result")
+		}
+	})
+
+	t.Run("WithModifiers invalidates cache", func(t *testing.T) {
+		config := NewConnConfig("XX", true).WithModifiers(mod1)
+		chain1 := config.GetModifierChain()
+		config.WithModifiers(mod1, mod2)
+		chain2 := config.GetModifierChain()
+
+		if chain1 == chain2 {
+			t.Error("expected new chain after WithModifiers; got same instance")
+		}
+		if chain2.Count() != 2 {
+			t.Errorf("new chain count = %d, want 2", chain2.Count())
+		}
+	})
+
+	t.Run("AddModifier invalidates cache", func(t *testing.T) {
+		config := NewConnConfig("XX", true).WithModifiers(mod1)
+		chain1 := config.GetModifierChain()
+		config.AddModifier(mod2)
+		chain2 := config.GetModifierChain()
+
+		if chain1 == chain2 {
+			t.Error("expected new chain after AddModifier; got same instance")
+		}
+		if chain2.Count() != 2 {
+			t.Errorf("new chain count = %d, want 2", chain2.Count())
+		}
+	})
+
+	t.Run("ClearModifiers invalidates cache", func(t *testing.T) {
+		config := NewConnConfig("XX", true).WithModifiers(mod1, mod2)
+		chain1 := config.GetModifierChain()
+		if chain1 == nil {
+			t.Fatal("expected non-nil chain before ClearModifiers")
+		}
+		config.ClearModifiers()
+		chain2 := config.GetModifierChain()
+
+		if chain2 != nil {
+			t.Error("expected nil chain after ClearModifiers")
+		}
+	})
+
+	t.Run("no modifiers returns cached nil", func(t *testing.T) {
+		config := NewConnConfig("XX", true)
+		chain1 := config.GetModifierChain()
+		chain2 := config.GetModifierChain()
+
+		if chain1 != nil || chain2 != nil {
+			t.Error("expected nil for both calls with no modifiers")
+		}
+		// Verify it was cached (chainCached should be true)
+		if !config.chainCached {
+			t.Error("expected chainCached=true after first call")
+		}
+	})
+}
+
 // testHandshakeModifier is a simple test implementation for ConnConfig tests
 type testHandshakeModifier struct {
 	name string
