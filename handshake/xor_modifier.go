@@ -5,6 +5,7 @@ import (
 	"io"
 
 	"github.com/go-i2p/logger"
+	"github.com/samber/oops"
 )
 
 var log = logger.GetGoI2PLogger()
@@ -18,10 +19,16 @@ var randReader io.Reader = rand.Reader
 // It XORs handshake data with a configurable key pattern to provide
 // basic obfuscation without compromising Noise protocol security.
 // Moved from: handshake/modifiers.go
+//
+// After Close() is called, ModifyOutbound and ModifyInbound return an error.
+// This prevents silent security degradation where zeroed key material would
+// cause XOR to become a no-op (identity function), passing data through
+// without any obfuscation.
 type XORModifier struct {
 	name    string
 	xorKey  []byte
 	keySize int
+	closed  bool
 }
 
 // NewXORModifier creates a new XOR modifier with the specified key.
@@ -58,7 +65,16 @@ func NewXORModifier(name string, xorKey []byte) *XORModifier {
 }
 
 // ModifyOutbound applies XOR obfuscation to outbound handshake data.
+// Returns an error if Close() has been called.
 func (xm *XORModifier) ModifyOutbound(phase HandshakePhase, data []byte) ([]byte, error) {
+	if xm.closed {
+		return nil, oops.
+			Code("MODIFIER_CLOSED").
+			In("handshake").
+			With("modifier_name", xm.name).
+			Errorf("XORModifier has been closed")
+	}
+
 	if len(data) == 0 {
 		return data, nil
 	}
@@ -83,10 +99,13 @@ func (xm *XORModifier) Name() string {
 }
 
 // Close zeroes the XOR key to prevent session-derived key material from
-// lingering in memory after the connection is torn down.
+// lingering in memory after the connection is torn down. After Close(),
+// ModifyOutbound and ModifyInbound will return an error to prevent silent
+// security degradation from XOR with an all-zero key.
 func (xm *XORModifier) Close() error {
 	for i := range xm.xorKey {
 		xm.xorKey[i] = 0
 	}
+	xm.closed = true
 	return nil
 }

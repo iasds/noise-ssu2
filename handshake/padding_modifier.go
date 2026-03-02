@@ -150,19 +150,22 @@ func (pm *PaddingModifier) ModifyInbound(phase HandshakePhase, data []byte) ([]b
 	}
 
 	// Read original length from 4-byte big-endian prefix.
-	// Use binary.BigEndian.Uint32 to match the outbound encoder and avoid
-	// manual bit-shifts that overflow on 32-bit platforms.
-	originalLen := int(binary.BigEndian.Uint32(data[:4]))
-
-	if 4+originalLen > len(data) {
+	// Validate as uint32 before casting to int to prevent integer overflow
+	// on 32-bit platforms where int is 32 bits. A uint32 value >= 2^31 would
+	// wrap to a negative int, bypassing the subsequent bounds check and
+	// causing make() to panic with a negative length.
+	rawLen := binary.BigEndian.Uint32(data[:4])
+	available := uint32(len(data) - 4)
+	if rawLen > available {
 		return nil, oops.
 			Code("INVALID_PADDED_DATA").
 			In("handshake").
-			With("original_length", originalLen).
+			With("original_length", rawLen).
 			With("data_length", len(data)).
 			With("modifier_name", pm.name).
 			Errorf("invalid original length in padded data")
 	}
+	originalLen := int(rawLen)
 
 	// Extract original data
 	result := make([]byte, originalLen)

@@ -662,3 +662,56 @@ func (c *closeTestModifier) Close() error {
 	}
 	return c.closeErr
 }
+
+// TestModifierChain_Nesting verifies that a ModifierChain containing another
+// ModifierChain as a member correctly applies transformations in both directions.
+// Since ModifierChain implements HandshakeModifier, nesting is supported by the
+// type system but needs validation for correct round-trip behavior.
+func TestModifierChain_Nesting(t *testing.T) {
+	// Create an inner chain with two XOR modifiers
+	xor1 := NewXORModifier("inner-xor-1", []byte{0xAA})
+	xor2 := NewXORModifier("inner-xor-2", []byte{0x55})
+	innerChain := NewModifierChain("inner-chain", xor1, xor2)
+
+	// Create an outer chain that includes the inner chain plus another modifier
+	xor3 := NewXORModifier("outer-xor", []byte{0x0F})
+	outerChain := NewModifierChain("outer-chain", innerChain, xor3)
+
+	originalData := []byte("nested chain test data for round-trip")
+
+	// Outbound: inner-xor-1 -> inner-xor-2 -> outer-xor
+	outbound, err := outerChain.ModifyOutbound(PhaseExchange, originalData)
+	if err != nil {
+		t.Fatalf("Nested ModifyOutbound() error = %v", err)
+	}
+
+	// Data should be transformed
+	if string(outbound) == string(originalData) {
+		t.Error("Nested chain should transform data")
+	}
+
+	// Inbound (reverse): outer-xor -> inner-xor-2 -> inner-xor-1
+	recovered, err := outerChain.ModifyInbound(PhaseExchange, outbound)
+	if err != nil {
+		t.Fatalf("Nested ModifyInbound() error = %v", err)
+	}
+
+	if string(recovered) != string(originalData) {
+		t.Errorf("Nested chain round-trip failed: got %q, want %q", recovered, originalData)
+	}
+
+	// Verify Close propagates through nested chains
+	if err := outerChain.Close(); err != nil {
+		t.Errorf("Nested Close() error = %v", err)
+	}
+
+	// After Close, inner modifiers should be closed (use-after-close returns error)
+	_, err = xor1.ModifyOutbound(PhaseInitial, originalData)
+	if err == nil {
+		t.Error("Inner modifier should return error after nested Close()")
+	}
+	_, err = xor3.ModifyOutbound(PhaseInitial, originalData)
+	if err == nil {
+		t.Error("Outer modifier should return error after nested Close()")
+	}
+}

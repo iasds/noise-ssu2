@@ -282,3 +282,56 @@ func TestNewXORModifier_NormalRandReaderRestored(t *testing.T) {
 		t.Errorf("Expected 32-byte random key after reader restore, got %d bytes", len(mod.xorKey))
 	}
 }
+
+// TestXORModifier_UseAfterClose verifies that ModifyOutbound and ModifyInbound
+// return errors after Close() has been called, preventing silent security
+// degradation where zeroed key material would cause XOR to become a no-op.
+func TestXORModifier_UseAfterClose(t *testing.T) {
+	key := []byte{0xAA, 0xBB, 0xCC}
+	modifier := NewXORModifier("use-after-close", key)
+	testData := []byte("hello noise")
+
+	// Verify it works before Close
+	out, err := modifier.ModifyOutbound(PhaseInitial, testData)
+	if err != nil {
+		t.Fatalf("ModifyOutbound() before Close error = %v", err)
+	}
+	if string(out) == string(testData) {
+		t.Fatal("ModifyOutbound() should transform data before Close")
+	}
+
+	// Close the modifier
+	if err := modifier.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	// ModifyOutbound after Close should return error
+	_, err = modifier.ModifyOutbound(PhaseInitial, testData)
+	if err == nil {
+		t.Error("ModifyOutbound() after Close() should return error")
+	}
+
+	// ModifyInbound after Close should return error
+	_, err = modifier.ModifyInbound(PhaseInitial, testData)
+	if err == nil {
+		t.Error("ModifyInbound() after Close() should return error")
+	}
+
+	// Empty data after Close should also return error
+	_, err = modifier.ModifyOutbound(PhaseInitial, []byte{})
+	if err == nil {
+		t.Error("ModifyOutbound() with empty data after Close() should return error")
+	}
+
+	// All phases should return error after Close
+	for _, phase := range []HandshakePhase{PhaseInitial, PhaseExchange, PhaseFinal, PhaseData} {
+		_, err = modifier.ModifyOutbound(phase, testData)
+		if err == nil {
+			t.Errorf("ModifyOutbound(phase=%v) after Close() should return error", phase)
+		}
+		_, err = modifier.ModifyInbound(phase, testData)
+		if err == nil {
+			t.Errorf("ModifyInbound(phase=%v) after Close() should return error", phase)
+		}
+	}
+}

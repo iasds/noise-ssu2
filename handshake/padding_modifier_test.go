@@ -422,3 +422,45 @@ func TestPaddingModifier_Concurrent(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+// TestPaddingModifier_InboundOverflowLengthPrefix tests that ModifyInbound
+// correctly rejects a crafted length prefix with a value near the int boundary
+// (0x80000000 and 0xFFFFFFFF). On 32-bit platforms, these values would wrap to
+// negative when cast to int, potentially bypassing bounds checks. This test
+// verifies the uint32-based validation catches these cases on all platforms.
+func TestPaddingModifier_InboundOverflowLengthPrefix(t *testing.T) {
+	modifier, err := NewPaddingModifier("overflow-test", 1, 1)
+	if err != nil {
+		t.Fatalf("NewPaddingModifier() error = %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		rawLen uint32
+	}{
+		{"0x80000000 (2^31)", 0x80000000},
+		{"0xFFFFFFFF (max uint32)", 0xFFFFFFFF},
+		{"0x7FFFFFFF (max int32)", 0x7FFFFFFF},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Craft a 4-byte big-endian length prefix with the overflow value
+			// followed by a small payload (not enough data to satisfy the length)
+			data := make([]byte, 8) // 4-byte prefix + 4 bytes of fake payload
+			data[0] = byte(tt.rawLen >> 24)
+			data[1] = byte(tt.rawLen >> 16)
+			data[2] = byte(tt.rawLen >> 8)
+			data[3] = byte(tt.rawLen)
+			data[4] = 0xDE
+			data[5] = 0xAD
+			data[6] = 0xBE
+			data[7] = 0xEF
+
+			_, err := modifier.ModifyInbound(PhaseInitial, data)
+			if err == nil {
+				t.Errorf("ModifyInbound() with length prefix %#x should return error", tt.rawLen)
+			}
+		})
+	}
+}
