@@ -249,6 +249,9 @@ func TestPaddingModifier(t *testing.T) {
 		// The 4-byte big-endian length prefix supports max math.MaxUint32.
 		// We can't allocate >4GB in tests, but we verify the guard exists
 		// by checking that the max uint32 value matches expectations.
+		// NOTE: The overflow guard branch (len(data) > math.MaxUint32) is
+		// intentionally excluded from coverage — allocating >4 GiB in a test
+		// is impractical and the branch is unreachable on 32-bit platforms.
 		if math.MaxUint32 != 4294967295 {
 			t.Errorf("math.MaxUint32 = %v, expected 4294967295", math.MaxUint32)
 		}
@@ -282,9 +285,9 @@ func TestPaddingModifier(t *testing.T) {
 	})
 }
 
-// TestPaddingModifier_PhaseData verifies that PaddingModifier handles PhaseData
-// correctly — since the phase parameter is not currently used by PaddingModifier,
-// the round-trip must succeed for every phase value.
+// TestPaddingModifier_PhaseData verifies that PaddingModifier returns data
+// unmodified for PhaseData (post-handshake), preventing silent corruption
+// of data-transport frames. Handshake phases should still apply padding.
 func TestPaddingModifier_PhaseData(t *testing.T) {
 	modifier, err := NewPaddingModifier("phase-data-test", 4, 8)
 	if err != nil {
@@ -293,10 +296,15 @@ func TestPaddingModifier_PhaseData(t *testing.T) {
 
 	testData := []byte("data phase test")
 
-	for _, phase := range []HandshakePhase{PhaseInitial, PhaseExchange, PhaseFinal, PhaseData} {
+	// Handshake phases should apply padding (round-trip succeeds)
+	for _, phase := range []HandshakePhase{PhaseInitial, PhaseExchange, PhaseFinal} {
 		padded, err := modifier.ModifyOutbound(phase, testData)
 		if err != nil {
 			t.Errorf("ModifyOutbound(phase=%v) error = %v", phase, err)
+			continue
+		}
+		if len(padded) <= len(testData) {
+			t.Errorf("Phase %v: expected padding to be added, but output len=%d <= input len=%d", phase, len(padded), len(testData))
 			continue
 		}
 		recovered, err := modifier.ModifyInbound(phase, padded)
@@ -307,6 +315,23 @@ func TestPaddingModifier_PhaseData(t *testing.T) {
 		if string(recovered) != string(testData) {
 			t.Errorf("Phase %v round-trip failed: got %q, want %q", phase, recovered, testData)
 		}
+	}
+
+	// PhaseData should pass through unmodified
+	outbound, err := modifier.ModifyOutbound(PhaseData, testData)
+	if err != nil {
+		t.Fatalf("ModifyOutbound(PhaseData) error = %v", err)
+	}
+	if string(outbound) != string(testData) {
+		t.Errorf("PhaseData ModifyOutbound should pass through unmodified: got %q, want %q", outbound, testData)
+	}
+
+	inbound, err := modifier.ModifyInbound(PhaseData, testData)
+	if err != nil {
+		t.Fatalf("ModifyInbound(PhaseData) error = %v", err)
+	}
+	if string(inbound) != string(testData) {
+		t.Errorf("PhaseData ModifyInbound should pass through unmodified: got %q, want %q", inbound, testData)
 	}
 }
 
@@ -376,12 +401,12 @@ func TestPaddingModifier_Concurrent(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			padded, err := modifier.ModifyOutbound(PhaseData, testData)
+			padded, err := modifier.ModifyOutbound(PhaseExchange, testData)
 			if err != nil {
 				errs <- err
 				return
 			}
-			recovered, err := modifier.ModifyInbound(PhaseData, padded)
+			recovered, err := modifier.ModifyInbound(PhaseExchange, padded)
 			if err != nil {
 				errs <- err
 				return

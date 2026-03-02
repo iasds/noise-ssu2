@@ -11,7 +11,19 @@ import (
 
 // PaddingModifier implements padding-based obfuscation by adding random
 // padding to handshake messages and removing it during processing.
-// Moved from: handshake/modifiers.go
+//
+// WARNING: PaddingModifier uses a custom wire format ([4-byte big-endian length][data][padding])
+// that is NOT part of any I2P specification. It MUST NOT be used in NTCP2 modifier chains
+// or any context that expects fixed-size protocol fields (e.g., NTCP2 Message 1 is exactly
+// 64 bytes per spec §3.2). Using PaddingModifier in place of ntcp2.NTCP2PaddingModifier will
+// produce non-interoperable messages with no error at the modifier layer.
+//
+// For I2P NTCP2 transport contexts, use ntcp2.NTCP2PaddingModifier instead.
+//
+// PaddingModifier is phase-aware: it only applies padding during handshake phases
+// (PhaseInitial, PhaseExchange, PhaseFinal). For PhaseData and any unknown phase,
+// data is passed through unmodified to prevent silent corruption of post-handshake
+// transport messages.
 type PaddingModifier struct {
 	name       string
 	minPadding int
@@ -48,11 +60,24 @@ func NewPaddingModifier(name string, minPadding, maxPadding int) (*PaddingModifi
 // ModifyOutbound adds padding to outbound handshake data.
 // Padding format: [original_length:4][original_data][padding_data]
 // Returns an error if data exceeds the 4-byte length prefix capacity (math.MaxUint32).
+//
+// For PhaseData (and any future phases beyond PhaseFinal), data is returned
+// unmodified. This prevents silent corruption of post-handshake transport
+// messages that use their own framing (e.g., Noise transport, NTCP2 SipHash).
 func (pm *PaddingModifier) ModifyOutbound(phase HandshakePhase, data []byte) ([]byte, error) {
+	if phase > PhaseFinal {
+		return data, nil // Post-handshake: pass through unmodified
+	}
+
 	if pm.minPadding == 0 && pm.maxPadding == 0 {
 		return data, nil // No padding configured
 	}
 
+	// Guard: reject data larger than the 4-byte length prefix can encode.
+	// This branch is unreachable on 32-bit platforms (where len() <= MaxInt32 < MaxUint32)
+	// and practically unreachable on 64-bit platforms (requires >4 GiB allocation).
+	// It is retained as a defensive check; allocating >4 GiB in tests is impractical,
+	// so this branch is excluded from coverage expectations.
 	if len(data) > math.MaxUint32 {
 		return nil, oops.
 			Code("DATA_TOO_LARGE").
@@ -102,7 +127,15 @@ func (pm *PaddingModifier) ModifyOutbound(phase HandshakePhase, data []byte) ([]
 }
 
 // ModifyInbound removes padding from inbound handshake data.
+//
+// For PhaseData (and any future phases beyond PhaseFinal), data is returned
+// unmodified. This mirrors ModifyOutbound's phase guard and prevents
+// misinterpretation of post-handshake transport frames as padded messages.
 func (pm *PaddingModifier) ModifyInbound(phase HandshakePhase, data []byte) ([]byte, error) {
+	if phase > PhaseFinal {
+		return data, nil // Post-handshake: pass through unmodified
+	}
+
 	if pm.minPadding == 0 && pm.maxPadding == 0 {
 		return data, nil // No padding configured, return data unchanged
 	}

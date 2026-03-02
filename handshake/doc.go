@@ -17,6 +17,12 @@
 //
 //   - [PaddingModifier]: Adds cryptographically random padding with a 4-byte
 //     length prefix. Padding size is uniformly random within [min, max].
+//     WARNING: PaddingModifier uses a custom wire format that is NOT part of
+//     any I2P specification. It must not be used as a replacement for
+//     ntcp2.NTCP2PaddingModifier in NTCP2 transport chains. PaddingModifier
+//     is phase-aware and only applies padding during handshake phases
+//     (PhaseInitial, PhaseExchange, PhaseFinal); PhaseData passes through
+//     unmodified.
 //   - [XORModifier]: Applies repeating-key XOR to data. Self-inverting, so
 //     the same modifier works for both outbound and inbound.
 //
