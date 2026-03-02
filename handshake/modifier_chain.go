@@ -1,6 +1,8 @@
 package handshake
 
 import (
+	"errors"
+
 	"github.com/samber/oops"
 )
 
@@ -115,15 +117,16 @@ func (mc *ModifierChain) ModifierNames() []string {
 }
 
 // Close calls Close() on every modifier in the chain, collecting all errors.
-// All members are closed regardless of intermediate errors; the first non-nil
-// error is returned. Callers should not call Close() concurrently with
-// ModifyOutbound or ModifyInbound.
+// All members are closed regardless of intermediate errors; the aggregated
+// error (via errors.Join) is returned so callers can inspect all failures.
+// Callers should not call Close() concurrently with ModifyOutbound or
+// ModifyInbound.
 func (mc *ModifierChain) Close() error {
-	var firstErr error
+	var errs []error
 	for _, m := range mc.modifiers {
-		if err := m.Close(); err != nil && firstErr == nil {
-			firstErr = err
+		if err := m.Close(); err != nil {
+			errs = append(errs, err)
 		}
 	}
-	return firstErr
+	return errors.Join(errs...)
 }

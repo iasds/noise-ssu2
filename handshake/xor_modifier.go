@@ -1,6 +1,18 @@
 package handshake
 
-import "crypto/rand"
+import (
+	"crypto/rand"
+	"io"
+
+	"github.com/go-i2p/logger"
+)
+
+var log = logger.GetGoI2PLogger()
+
+// randReader is the random source used by NewXORModifier. It is a package-level
+// variable to allow tests to inject a failing reader for the entropy-failure
+// fallback path without relying on OS-level entropy failures.
+var randReader io.Reader = rand.Reader
 
 // XORModifier implements a simple XOR-based obfuscation modifier.
 // It XORs handshake data with a configurable key pattern to provide
@@ -23,13 +35,12 @@ func NewXORModifier(name string, xorKey []byte) *XORModifier {
 	if len(xorKey) == 0 {
 		// Generate a cryptographically random 32-byte key so that each modifier
 		// instance with no explicit key still produces distinct output.
-		// Panic is unreachable in practice: crypto/rand.Read only fails if the
-		// OS entropy source is unavailable, which is a fatal system condition.
 		randomKey := make([]byte, 32)
-		if _, err := rand.Read(randomKey); err != nil {
+		if _, err := io.ReadFull(randReader, randomKey); err != nil {
 			// Fall back to a single non-zero byte only if the OS rand source is
-			// completely broken.  This is documented as a security regression but
-			// is vastly preferable to a silent panic mid-handshake.
+			// completely broken.  This is a security degradation: the resulting
+			// key provides near-zero obfuscation (1 byte, well-known constant).
+			log.Errorf("handshake: XORModifier %q: crypto/rand failed, falling back to degraded 1-byte key: %v", name, err)
 			randomKey = []byte{0x01}
 		}
 		xorKey = randomKey
