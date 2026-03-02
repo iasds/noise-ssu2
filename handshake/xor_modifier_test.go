@@ -1,7 +1,9 @@
 package handshake
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"sync"
 	"testing"
 )
@@ -214,4 +216,69 @@ func TestXORModifier(t *testing.T) {
 			t.Error(err)
 		}
 	})
+}
+
+// failingReader is an io.Reader that always returns an error, used to test
+// the NewXORModifier entropy-failure fallback path.
+type failingReader struct{}
+
+func (failingReader) Read([]byte) (int, error) {
+	return 0, errors.New("simulated entropy failure")
+}
+
+// TestNewXORModifier_EntropyFailureFallback verifies that when the random
+// source fails, NewXORModifier produces a modifier with the degraded 1-byte
+// fallback key {0x01} instead of panicking. This covers the otherwise-
+// unreachable path in production (crypto/rand.Read only fails if the OS
+// entropy source is broken).
+func TestNewXORModifier_EntropyFailureFallback(t *testing.T) {
+	// Save and restore the package-level randReader
+	originalReader := randReader
+	t.Cleanup(func() { randReader = originalReader })
+
+	// Inject a failing reader
+	randReader = io.Reader(failingReader{})
+
+	mod := NewXORModifier("entropy-fail", nil)
+
+	// The fallback key should be the well-known degraded value
+	if len(mod.xorKey) != 1 {
+		t.Fatalf("Fallback key length = %d, want 1", len(mod.xorKey))
+	}
+	if mod.xorKey[0] != 0x01 {
+		t.Errorf("Fallback key = %#x, want 0x01", mod.xorKey[0])
+	}
+
+	// The modifier should still function (XOR with 0x01)
+	data := []byte{0x10, 0x20, 0x30}
+	out, err := mod.ModifyOutbound(PhaseInitial, data)
+	if err != nil {
+		t.Fatalf("ModifyOutbound() error = %v", err)
+	}
+	expected := []byte{0x11, 0x21, 0x31}
+	for i, b := range out {
+		if b != expected[i] {
+			t.Errorf("ModifyOutbound byte %d = %#x, want %#x", i, b, expected[i])
+		}
+	}
+
+	// Round-trip should still work
+	recovered, err := mod.ModifyInbound(PhaseInitial, out)
+	if err != nil {
+		t.Fatalf("ModifyInbound() error = %v", err)
+	}
+	for i, b := range recovered {
+		if b != data[i] {
+			t.Errorf("Round-trip byte %d = %#x, want %#x", i, b, data[i])
+		}
+	}
+}
+
+// TestNewXORModifier_NormalRandReaderRestored verifies that the injected
+// reader does not leak across tests (basic sanity check).
+func TestNewXORModifier_NormalRandReaderRestored(t *testing.T) {
+	mod := NewXORModifier("after-restore", nil)
+	if len(mod.xorKey) != 32 {
+		t.Errorf("Expected 32-byte random key after reader restore, got %d bytes", len(mod.xorKey))
+	}
 }

@@ -571,8 +571,8 @@ func TestModifierChain_Close(t *testing.T) {
 	}
 }
 
-// TestModifierChain_Close_Error verifies that Close() returns the first error
-// encountered while still calling Close() on all members.
+// TestModifierChain_Close_Error verifies that Close() returns all errors
+// aggregated via errors.Join while still calling Close() on all members.
 func TestModifierChain_Close_Error(t *testing.T) {
 	closingOrder := []string{}
 
@@ -597,6 +597,48 @@ func TestModifierChain_Close_Error(t *testing.T) {
 	// Both members must be closed regardless of the first error
 	if len(closingOrder) != 2 {
 		t.Errorf("Close() called on %d members, want 2 (all members closed despite error)", len(closingOrder))
+	}
+}
+
+// TestModifierChain_Close_AllErrorsAggregated verifies that Close() aggregates
+// all errors from failing modifiers via errors.Join, not just the first.
+func TestModifierChain_Close_AllErrorsAggregated(t *testing.T) {
+	err1 := errors.New("first close error")
+	err2 := errors.New("second close error")
+	err3 := errors.New("third close error")
+
+	mod1 := &closeTestModifier{name: "fail-1", closeErr: err1}
+	mod2 := &closeTestModifier{name: "fail-2", closeErr: err2}
+	mod3 := &closeTestModifier{name: "fail-3", closeErr: err3}
+
+	chain := NewModifierChain("all-errors-chain", mod1, mod2, mod3)
+
+	err := chain.Close()
+	if err == nil {
+		t.Fatal("Close() expected aggregated error, got nil")
+	}
+
+	// errors.Join produces an error that unwraps to each component via errors.Is
+	if !errors.Is(err, err1) {
+		t.Errorf("Close() error does not wrap first error: %v", err)
+	}
+	if !errors.Is(err, err2) {
+		t.Errorf("Close() error does not wrap second error: %v", err)
+	}
+	if !errors.Is(err, err3) {
+		t.Errorf("Close() error does not wrap third error: %v", err)
+	}
+
+	// The string representation should contain all three messages
+	errStr := err.Error()
+	if !strings.Contains(errStr, "first close error") {
+		t.Errorf("Close() error string missing 'first close error': %v", errStr)
+	}
+	if !strings.Contains(errStr, "second close error") {
+		t.Errorf("Close() error string missing 'second close error': %v", errStr)
+	}
+	if !strings.Contains(errStr, "third close error") {
+		t.Errorf("Close() error string missing 'third close error': %v", errStr)
 	}
 }
 
