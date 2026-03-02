@@ -1212,9 +1212,9 @@ func TestConnectionMetrics(t *testing.T) {
 		}
 		defer conn.Close()
 
-		conn.metrics.SetHandshakeStart()
+		conn.metricsForTest().SetHandshakeStart()
 		time.Sleep(10 * time.Millisecond)
-		conn.metrics.SetHandshakeEnd()
+		conn.metricsForTest().SetHandshakeEnd()
 
 		_, _, duration := conn.GetConnectionMetrics()
 		if duration < 10*time.Millisecond {
@@ -1229,8 +1229,8 @@ func TestConnectionMetrics(t *testing.T) {
 		}
 		defer conn.Close()
 
-		conn.metrics.AddBytesRead(100)
-		conn.metrics.AddBytesWritten(200)
+		conn.metricsForTest().AddBytesRead(100)
+		conn.metricsForTest().AddBytesWritten(200)
 
 		bytesRead, bytesWritten, _ := conn.GetConnectionMetrics()
 

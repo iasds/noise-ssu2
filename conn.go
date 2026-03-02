@@ -405,6 +405,13 @@ func (nc *NoiseConn) GetConnectionMetrics() (bytesRead, bytesWritten int64, hand
 	return nc.metrics.GetStats()
 }
 
+// metricsForTest returns the underlying ConnectionMetrics for test access.
+// This decouples tests from the internal field name, so only this accessor
+// needs updating if the field is renamed or restructured.
+func (nc *NoiseConn) metricsForTest() *internal.ConnectionMetrics {
+	return nc.metrics
+}
+
 // GetConnectionState returns the current connection state
 //
 // Thread Safety: This method is safe for concurrent use. It uses a read lock

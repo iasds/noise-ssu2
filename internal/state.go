@@ -35,13 +35,15 @@ func (s ConnState) String() string {
 	}
 }
 
-// ConnectionMetrics holds connection performance metrics
+// ConnectionMetrics holds connection performance metrics.
+// Mutable fields are unexported and accessed only through thread-safe methods.
+// Created is exported because it is immutable after construction.
 type ConnectionMetrics struct {
 	mu               sync.RWMutex
-	HandshakeStarted time.Time
-	HandshakeEnded   time.Time
-	BytesRead        int64
-	BytesWritten     int64
+	handshakeStarted time.Time
+	handshakeEnded   time.Time
+	bytesRead        int64
+	bytesWritten     int64
 	Created          time.Time
 }
 
@@ -57,38 +59,38 @@ func (m *ConnectionMetrics) HandshakeDuration() time.Duration {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	if m.HandshakeStarted.IsZero() || m.HandshakeEnded.IsZero() {
+	if m.handshakeStarted.IsZero() || m.handshakeEnded.IsZero() {
 		return 0
 	}
-	return m.HandshakeEnded.Sub(m.HandshakeStarted)
+	return m.handshakeEnded.Sub(m.handshakeStarted)
 }
 
 // SetHandshakeStart records the handshake start time
 func (m *ConnectionMetrics) SetHandshakeStart() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.HandshakeStarted = time.Now()
+	m.handshakeStarted = time.Now()
 }
 
 // SetHandshakeEnd records the handshake completion time
 func (m *ConnectionMetrics) SetHandshakeEnd() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.HandshakeEnded = time.Now()
+	m.handshakeEnded = time.Now()
 }
 
 // AddBytesRead increments the bytes read counter
 func (m *ConnectionMetrics) AddBytesRead(n int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.BytesRead += n
+	m.bytesRead += n
 }
 
 // AddBytesWritten increments the bytes written counter
 func (m *ConnectionMetrics) AddBytesWritten(n int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.BytesWritten += n
+	m.bytesWritten += n
 }
 
 // GetStats returns current connection statistics.
@@ -98,10 +100,10 @@ func (m *ConnectionMetrics) AddBytesWritten(n int64) {
 func (m *ConnectionMetrics) GetStats() (bytesRead, bytesWritten int64, duration time.Duration) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	bytesRead = m.BytesRead
-	bytesWritten = m.BytesWritten
-	if !m.HandshakeStarted.IsZero() && !m.HandshakeEnded.IsZero() {
-		duration = m.HandshakeEnded.Sub(m.HandshakeStarted)
+	bytesRead = m.bytesRead
+	bytesWritten = m.bytesWritten
+	if !m.handshakeStarted.IsZero() && !m.handshakeEnded.IsZero() {
+		duration = m.handshakeEnded.Sub(m.handshakeStarted)
 	}
 	return
 }

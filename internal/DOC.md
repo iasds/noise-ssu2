@@ -13,14 +13,16 @@
 ```go
 func RandomBytes(n int) ([]byte, error)
 ```
-RandomBytes generates cryptographically secure random bytes
+RandomBytes generates cryptographically secure random bytes. Returns an error if
+n is negative. If n is zero, returns an empty slice.
 
 #### func  SecureZero
 
 ```go
 func SecureZero(b []byte)
 ```
-SecureZero securely zeroes out the given byte slice
+SecureZero zeroes out the given byte slice (best-effort; not guaranteed resistant
+to dead-store elimination by the compiler)
 
 #### func  ValidateKeySize
 
@@ -61,15 +63,13 @@ String returns the string representation of the connection state
 
 ```go
 type ConnectionMetrics struct {
-	HandshakeStarted time.Time
-	HandshakeEnded   time.Time
-	BytesRead        int64
-	BytesWritten     int64
-	Created          time.Time
+	Created time.Time
 }
 ```
 
-ConnectionMetrics holds connection performance metrics
+ConnectionMetrics holds connection performance metrics. Mutable fields are
+unexported and accessed only through thread-safe methods. Created is exported
+because it is immutable after construction.
 
 #### func  NewConnectionMetrics
 
@@ -97,7 +97,8 @@ AddBytesWritten increments the bytes written counter
 ```go
 func (m *ConnectionMetrics) GetStats() (bytesRead, bytesWritten int64, duration time.Duration)
 ```
-GetStats returns current connection statistics
+GetStats returns current connection statistics. All fields are read within a
+single lock acquisition to avoid nested RLock calls on the same goroutine.
 
 #### func (*ConnectionMetrics) HandshakeDuration
 
