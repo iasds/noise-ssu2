@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"sync"
 	"sync/atomic"
 
 	noise "github.com/go-i2p/go-noise"
@@ -31,9 +30,6 @@ type NTCP2Listener struct {
 
 	// closed indicates if the listener has been closed (atomic for lock-free reads)
 	closed atomic.Bool
-
-	// acceptMutex protects accept operations
-	acceptMutex sync.Mutex
 }
 
 // NewNTCP2Listener creates a new NTCP2Listener that wraps the underlying TCP listener.
@@ -186,18 +182,14 @@ func (nl *NTCP2Listener) wrapInNTCP2Conn(noiseConn *noise.NoiseConn, remoteAddr 
 // The returned connection is wrapped in an NTCP2Conn configured as a responder
 // with the full NTCP2 cipher suite, protocol name, and modifiers.
 func (nl *NTCP2Listener) Accept() (net.Conn, error) {
-	// Only hold acceptMutex for the state check and raw TCP accept.
-	// Release it before the Noise handshake wrapping so that multiple
-	// connections can handshake concurrently.
-	nl.acceptMutex.Lock()
 	if err := nl.validateAcceptState(); err != nil {
-		nl.acceptMutex.Unlock()
 		return nil, err
 	}
 
 	// Accept raw TCP connection from the underlying listener.
+	// No mutex needed: isClosed() uses atomic.Bool, and
+	// net.TCPListener.Accept() is concurrency-safe.
 	underlying, err := nl.underlying.Accept()
-	nl.acceptMutex.Unlock() // Release before expensive handshake wrapping
 	if err != nil {
 		return nil, oops.
 			Code("ACCEPT_FAILED").

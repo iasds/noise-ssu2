@@ -379,16 +379,6 @@ func (npm *NTCP2PaddingModifier) matchTrailingPaddingAt(data []byte, paddingSize
 	return nil, false
 }
 
-// removePaddingFromBlocks parses data as proper I2P block structure to locate padding blocks.
-// Returns original data if no valid block structure or padding found.
-func (npm *NTCP2PaddingModifier) removePaddingFromBlocks(data []byte) ([]byte, error) {
-	result := npm.parseBlockStructure(data)
-	if result.foundValidBlocks && result.lastDataEnd > 0 && result.lastDataEnd <= len(data) {
-		return data[:result.lastDataEnd], nil
-	}
-	return data, nil
-}
-
 // parseBlockStructure analyzes data as I2P block format and tracks parsing state.
 // Per the I2P NTCP2 spec, padding MUST be the last block. If any valid block
 // appears after the first padding block, result.blocksAfterPadding is set to
