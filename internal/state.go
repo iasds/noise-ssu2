@@ -91,9 +91,17 @@ func (m *ConnectionMetrics) AddBytesWritten(n int64) {
 	m.BytesWritten += n
 }
 
-// GetStats returns current connection statistics
+// GetStats returns current connection statistics.
+// All fields are read within a single lock acquisition to avoid
+// nested RLock calls on the same goroutine, which can deadlock
+// under write contention due to Go's RWMutex write-priority fairness.
 func (m *ConnectionMetrics) GetStats() (bytesRead, bytesWritten int64, duration time.Duration) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.BytesRead, m.BytesWritten, m.HandshakeDuration()
+	bytesRead = m.BytesRead
+	bytesWritten = m.BytesWritten
+	if !m.HandshakeStarted.IsZero() && !m.HandshakeEnded.IsZero() {
+		duration = m.HandshakeEnded.Sub(m.HandshakeStarted)
+	}
+	return
 }
