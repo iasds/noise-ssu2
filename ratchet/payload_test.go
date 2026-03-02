@@ -716,3 +716,107 @@ func TestBuildNSPayload_EmptyData(t *testing.T) {
 	assert.NoError(t, ValidateNewSessionPayload(payload),
 		"payload built from empty garlic data must still pass validation")
 }
+
+// ============================================================================
+// BlockOptions Guard
+// ============================================================================
+
+// TestPayloadBuilder_BlockOptions_Rejected verifies that PayloadBuilder.Build()
+// returns an error when a BlockOptions (type 5) block is included, since the
+// spec marks it unimplemented and interoperability-breaking.
+func TestPayloadBuilder_BlockOptions_Rejected(t *testing.T) {
+	pb := NewPayloadBuilder().
+		AddBlock(NewDateTimeBlock(time.Now())).
+		AddBlock(PayloadBlock{Type: BlockOptions, Data: []byte{0x01, 0x02}})
+
+	_, err := pb.Build()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "BlockOptions")
+	assert.Contains(t, err.Error(), "unimplemented")
+}
+
+// TestPayloadBuilder_BlockOptions_RejectedAlone verifies that even a single
+// BlockOptions block without any other blocks is rejected.
+func TestPayloadBuilder_BlockOptions_RejectedAlone(t *testing.T) {
+	pb := NewPayloadBuilder().
+		AddBlock(PayloadBlock{Type: BlockOptions, Data: nil})
+
+	_, err := pb.Build()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "BlockOptions")
+}
+
+// TestPayloadBuilder_BlockOptions_RejectedInNewSession verifies that
+// NewSessionPayloadBuilder also rejects BlockOptions.
+func TestPayloadBuilder_BlockOptions_RejectedInNewSession(t *testing.T) {
+	origNow := nowFunc
+	nowFunc = func() time.Time { return time.Unix(1700000000, 0) }
+	defer func() { nowFunc = origNow }()
+
+	pb := NewSessionPayloadBuilder().
+		AddBlock(PayloadBlock{Type: BlockOptions, Data: []byte{0xFF}}).
+		AddBlock(NewGarlicCloveBlock([]byte("clove")))
+
+	_, err := pb.Build()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "BlockOptions")
+}
+
+// TestPayloadBuilder_BlockOptions_RejectedInExistingSession verifies that
+// ExistingSessionPayloadBuilder also rejects BlockOptions.
+func TestPayloadBuilder_BlockOptions_RejectedInExistingSession(t *testing.T) {
+	pb := ExistingSessionPayloadBuilder().
+		AddBlock(NewGarlicCloveBlock([]byte("clove"))).
+		AddBlock(PayloadBlock{Type: BlockOptions, Data: []byte{0x01}}).
+		AddBlock(NewPaddingBlock(4))
+
+	_, err := pb.Build()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "BlockOptions")
+}
+
+// TestParsePayload_BlockOptions_PreservedWithWarning verifies that
+// ParsePayload preserves BlockOptions blocks in the output (so callers
+// can inspect them) rather than rejecting them. The spec says receivers
+// should ignore unknown/unimplemented blocks — we log a warning but
+// do not fail.
+func TestParsePayload_BlockOptions_PreservedWithWarning(t *testing.T) {
+	// Manually construct a wire payload containing a BlockOptions block:
+	// [type=5] [length=0,2] [data=0xAA,0xBB]
+	data := []byte{byte(BlockOptions), 0, 2, 0xAA, 0xBB}
+
+	blocks, err := ParsePayload(data)
+	require.NoError(t, err, "ParsePayload must not reject BlockOptions on the receive path")
+	require.Len(t, blocks, 1)
+	assert.Equal(t, BlockOptions, blocks[0].Type)
+	assert.Equal(t, []byte{0xAA, 0xBB}, blocks[0].Data)
+}
+
+// TestParsePayload_BlockOptions_AmongOtherBlocks verifies that a
+// BlockOptions block embedded among valid blocks is preserved and does
+// not corrupt parsing of surrounding blocks.
+func TestParsePayload_BlockOptions_AmongOtherBlocks(t *testing.T) {
+	// Build a valid DateTime block, then manually append an Options block,
+	// then a padding block.
+	dtBlock := NewDateTimeBlock(time.Unix(1700000000, 0))
+	dtBuf := make([]byte, dtBlock.SerializeSize())
+	_, err := dtBlock.Serialize(dtBuf)
+	require.NoError(t, err)
+
+	// Options block: type 5, length 1, data 0xFF
+	optionsWire := []byte{byte(BlockOptions), 0, 1, 0xFF}
+
+	// Padding block: type 254, length 0
+	paddingWire := []byte{byte(BlockPadding), 0, 0}
+
+	combined := append(dtBuf, optionsWire...)
+	combined = append(combined, paddingWire...)
+
+	blocks, err := ParsePayload(combined)
+	require.NoError(t, err)
+	require.Len(t, blocks, 3)
+	assert.Equal(t, BlockDateTime, blocks[0].Type)
+	assert.Equal(t, BlockOptions, blocks[1].Type)
+	assert.Equal(t, []byte{0xFF}, blocks[1].Data)
+	assert.Equal(t, BlockPadding, blocks[2].Type)
+}

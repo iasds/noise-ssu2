@@ -62,6 +62,9 @@ func (pb *PayloadBuilder) Build() ([]byte, error) {
 }
 
 // validate checks block ordering rules per the spec.
+// It also rejects BlockOptions (type 5), which is unimplemented in the I2P
+// ECIES spec (ratchet.md §"Unencrypted data") and would produce
+// non-interoperable messages if transmitted.
 func (pb *PayloadBuilder) validate() error {
 	if len(pb.blocks) == 0 {
 		return nil // empty payload is allowed
@@ -73,6 +76,12 @@ func (pb *PayloadBuilder) validate() error {
 
 	for i, b := range pb.blocks {
 		switch b.Type {
+		case BlockOptions:
+			return oops.Errorf(
+				"BlockOptions (type %d) is unimplemented in the I2P ECIES spec "+
+					"and must not appear in outgoing messages (ratchet.md §\"Unencrypted data\")",
+				BlockOptions,
+			)
 		case BlockPadding:
 			paddingCount++
 			if paddingCount > 1 {
@@ -162,6 +171,10 @@ func BuildNSPayload(garlicData []byte) ([]byte, error) {
 // ParsePayload deserializes a byte slice into a sequence of PayloadBlocks.
 // Unknown block types are preserved (the spec requires receivers to ignore them).
 // Returns an error for malformed data (truncated headers, length overflows).
+//
+// A BlockOptions (type 5) block is preserved in the output for completeness
+// (so the caller can inspect it), but a warning is logged because the block
+// type is unimplemented in the I2P ECIES spec and indicates a non-conformant peer.
 func ParsePayload(data []byte) ([]PayloadBlock, error) {
 	var blocks []PayloadBlock
 	offset := 0
@@ -182,6 +195,12 @@ func ParsePayload(data []byte) ([]PayloadBlock, error) {
 
 		blockData := make([]byte, blockLen)
 		copy(blockData, data[offset:offset+blockLen])
+
+		if blockType == BlockOptions {
+			log.Warn("received BlockOptions (type 5) in payload: " +
+				"this block type is unimplemented in the I2P ECIES spec " +
+				"and indicates a non-conformant peer (ratchet.md §\"Unencrypted data\")")
+		}
 
 		blocks = append(blocks, PayloadBlock{
 			Type: blockType,
