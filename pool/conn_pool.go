@@ -374,6 +374,61 @@ func (p *ConnPool) Remove(remoteAddr string, conn net.Conn) error {
 	return conn.Close()
 }
 
+// Drain waits for all in-use connections to be returned to the pool.
+// It blocks until either all connections are idle (in_use == 0) or
+// the provided context is cancelled. Use this during graceful shutdown
+// to allow in-flight sessions to complete before calling Close().
+//
+// Drain does not prevent new connections from being checked out; it
+// only waits for the current in-use count to reach zero. Callers
+// should stop accepting new work before calling Drain.
+func (p *ConnPool) Drain(ctx context.Context) error {
+	const pollInterval = 50 * time.Millisecond
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	for {
+		stats := p.Stats()
+		if stats["in_use"] == 0 {
+			return nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return oops.
+				Code("DRAIN_TIMEOUT").
+				In("pool").
+				Wrapf(ctx.Err(), "drain: %d connections still in use", p.Stats()["in_use"])
+		case <-ticker.C:
+			// Poll again.
+		}
+	}
+}
+
+// Snapshot returns a point-in-time copy of all pooled connections' metadata.
+// Each returned PooledConn is a shallow copy — the underlying net.Conn is
+// shared with the pool, so callers must not Close or Write on it. Use
+// Snapshot for diagnostics, monitoring, or testing where you need to inspect
+// pool state without modifying it.
+func (p *ConnPool) Snapshot() []*PooledConn {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	var result []*PooledConn
+	for _, connList := range p.conns {
+		for _, pc := range connList {
+			result = append(result, &PooledConn{
+				conn:       pc.conn,
+				created:    pc.created,
+				lastUsed:   pc.lastUsed,
+				inUse:      pc.inUse,
+				remoteAddr: pc.remoteAddr,
+			})
+		}
+	}
+	return result
+}
+
 // Close closes idle connections and prevents new connections from being added.
 // In-use connections are closed when returned via Release() or Discard().
 func (p *ConnPool) Close() error {
