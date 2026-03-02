@@ -11,6 +11,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// testModifier is a minimal HandshakeModifier implementation for Clone() tests.
+type testModifier struct {
+	name string
+}
+
+func (m *testModifier) ModifyOutbound(_ handshake.HandshakePhase, data []byte) ([]byte, error) {
+	return data, nil
+}
+
+func (m *testModifier) ModifyInbound(_ handshake.HandshakePhase, data []byte) ([]byte, error) {
+	return data, nil
+}
+
+func (m *testModifier) Name() string { return m.name }
+func (m *testModifier) Close() error { return nil }
+
 func TestNewNTCP2ConfigWithInitiator(t *testing.T) {
 	routerHash := make([]byte, 32)
 	_, err := rand.Read(routerHash)
@@ -722,6 +738,277 @@ func TestAuditFix_Clone_DocCommentsPresent(t *testing.T) {
 	clone.BobRouterHash[0] = 0xFF
 	assert.NotEqual(t, byte(0xFF), config.BobRouterHash[0],
 		"Clone must deep-copy BobRouterHash")
+}
+
+// TestClone_AllNilOptionalFields verifies that Clone() correctly handles the case
+// where all optional byte-slice/modifier fields are nil. This covers the nil-check
+// branches that were at 0% coverage in the audit (~40% of Clone()'s branches).
+func TestClone_AllNilOptionalFields(t *testing.T) {
+	// Create a config with only required fields set (BobRouterHash) and
+	// explicitly nil optional fields
+	original := &NTCP2Config{
+		Pattern:              "XK",
+		Initiator:            true,
+		BobRouterHash:        make([]byte, 32),
+		HandshakeTimeout:     30 * time.Second,
+		MaxFrameSize:         16384,
+		EnableAESObfuscation: true,
+		EnableSipHashLength:  true,
+		// All optional slice fields left nil:
+		// StaticKey, RemoteRouterHash, RemoteStaticKey, ObfuscationIV, Modifiers
+	}
+
+	clone := original.Clone()
+
+	// All nil fields must remain nil in the clone
+	assert.Nil(t, clone.StaticKey, "StaticKey should be nil when original is nil")
+	assert.Nil(t, clone.RemoteRouterHash, "RemoteRouterHash should be nil when original is nil")
+	assert.Nil(t, clone.RemoteStaticKey, "RemoteStaticKey should be nil when original is nil")
+	assert.Nil(t, clone.ObfuscationIV, "ObfuscationIV should be nil when original is nil")
+	assert.Nil(t, clone.Modifiers, "Modifiers should be nil when original is nil")
+
+	// Value fields are still copied
+	assert.Equal(t, original.Pattern, clone.Pattern)
+	assert.Equal(t, original.Initiator, clone.Initiator)
+	assert.Equal(t, original.HandshakeTimeout, clone.HandshakeTimeout)
+	assert.Equal(t, original.MaxFrameSize, clone.MaxFrameSize)
+	assert.Equal(t, original.EnableAESObfuscation, clone.EnableAESObfuscation)
+	assert.Equal(t, original.EnableSipHashLength, clone.EnableSipHashLength)
+
+	// BobRouterHash (non-nil) is still deep copied
+	assert.NotNil(t, clone.BobRouterHash)
+	clone.BobRouterHash[0] = 0xFF
+	assert.NotEqual(t, byte(0xFF), original.BobRouterHash[0],
+		"BobRouterHash must be deep-copied even when other fields are nil")
+}
+
+// TestClone_AllOptionalFieldsPopulated verifies that Clone() deep-copies every
+// optional byte-slice and modifier field when all are populated. This exercises
+// all 6 non-nil branches in Clone() and confirms mutation independence.
+func TestClone_AllOptionalFieldsPopulated(t *testing.T) {
+	staticKey := make([]byte, 32)
+	for i := range staticKey {
+		staticKey[i] = byte(i + 1)
+	}
+	remoteRouterHash := make([]byte, 32)
+	for i := range remoteRouterHash {
+		remoteRouterHash[i] = byte(i + 0x20)
+	}
+	remoteStaticKey := make([]byte, 32)
+	for i := range remoteStaticKey {
+		remoteStaticKey[i] = byte(i + 0x40)
+	}
+	obfuscationIV := make([]byte, 16)
+	for i := range obfuscationIV {
+		obfuscationIV[i] = byte(i + 0x60)
+	}
+
+	mod1 := &testModifier{name: "mod1"}
+	mod2 := &testModifier{name: "mod2"}
+
+	original := &NTCP2Config{
+		Pattern:          "XK",
+		Initiator:        true,
+		BobRouterHash:    make([]byte, 32),
+		StaticKey:        staticKey,
+		RemoteRouterHash: remoteRouterHash,
+		RemoteStaticKey:  remoteStaticKey,
+		ObfuscationIV:    obfuscationIV,
+		Modifiers:        []handshake.HandshakeModifier{mod1, mod2},
+		MaxFrameSize:     16384,
+		SipHashKeys:      [2]uint64{0x1234, 0x5678},
+	}
+
+	clone := original.Clone()
+
+	// All fields are populated in the clone
+	assert.NotNil(t, clone.StaticKey)
+	assert.NotNil(t, clone.RemoteRouterHash)
+	assert.NotNil(t, clone.RemoteStaticKey)
+	assert.NotNil(t, clone.ObfuscationIV)
+	assert.NotNil(t, clone.Modifiers)
+	assert.Len(t, clone.Modifiers, 2)
+
+	// Values match
+	assert.Equal(t, original.StaticKey, clone.StaticKey)
+	assert.Equal(t, original.RemoteRouterHash, clone.RemoteRouterHash)
+	assert.Equal(t, original.RemoteStaticKey, clone.RemoteStaticKey)
+	assert.Equal(t, original.ObfuscationIV, clone.ObfuscationIV)
+	assert.Equal(t, original.SipHashKeys, clone.SipHashKeys)
+
+	// Deep copy: mutating clone must not affect original
+	clone.StaticKey[0] = 0xFF
+	assert.NotEqual(t, byte(0xFF), original.StaticKey[0],
+		"StaticKey must be deep-copied")
+
+	clone.RemoteRouterHash[0] = 0xFF
+	assert.NotEqual(t, byte(0xFF), original.RemoteRouterHash[0],
+		"RemoteRouterHash must be deep-copied")
+
+	clone.RemoteStaticKey[0] = 0xFF
+	assert.NotEqual(t, byte(0xFF), original.RemoteStaticKey[0],
+		"RemoteStaticKey must be deep-copied")
+
+	clone.ObfuscationIV[0] = 0xFF
+	assert.NotEqual(t, byte(0xFF), original.ObfuscationIV[0],
+		"ObfuscationIV must be deep-copied")
+
+	// Modifiers slice is a shallow copy (slice header independent, elements shared)
+	clone.Modifiers[0] = nil
+	assert.NotNil(t, original.Modifiers[0],
+		"Modifiers slice header must be independent")
+}
+
+// TestClone_PartialNilFields covers the mixed case where some optional fields
+// are nil and some are populated. Each nil-check branch is tested independently.
+func TestClone_PartialNilFields(t *testing.T) {
+	t.Run("StaticKey_nil_others_set", func(t *testing.T) {
+		original := &NTCP2Config{
+			BobRouterHash:    make([]byte, 32),
+			StaticKey:        nil,
+			RemoteRouterHash: make([]byte, 32),
+			RemoteStaticKey:  make([]byte, 32),
+			ObfuscationIV:    make([]byte, 16),
+		}
+		clone := original.Clone()
+		assert.Nil(t, clone.StaticKey)
+		assert.NotNil(t, clone.RemoteRouterHash)
+		assert.NotNil(t, clone.RemoteStaticKey)
+		assert.NotNil(t, clone.ObfuscationIV)
+	})
+
+	t.Run("RemoteRouterHash_nil_others_set", func(t *testing.T) {
+		original := &NTCP2Config{
+			BobRouterHash:    make([]byte, 32),
+			StaticKey:        make([]byte, 32),
+			RemoteRouterHash: nil,
+			RemoteStaticKey:  make([]byte, 32),
+			ObfuscationIV:    make([]byte, 16),
+		}
+		clone := original.Clone()
+		assert.NotNil(t, clone.StaticKey)
+		assert.Nil(t, clone.RemoteRouterHash)
+		assert.NotNil(t, clone.RemoteStaticKey)
+		assert.NotNil(t, clone.ObfuscationIV)
+	})
+
+	t.Run("RemoteStaticKey_nil_others_set", func(t *testing.T) {
+		original := &NTCP2Config{
+			BobRouterHash:    make([]byte, 32),
+			StaticKey:        make([]byte, 32),
+			RemoteRouterHash: make([]byte, 32),
+			RemoteStaticKey:  nil,
+			ObfuscationIV:    make([]byte, 16),
+		}
+		clone := original.Clone()
+		assert.NotNil(t, clone.StaticKey)
+		assert.NotNil(t, clone.RemoteRouterHash)
+		assert.Nil(t, clone.RemoteStaticKey)
+		assert.NotNil(t, clone.ObfuscationIV)
+	})
+
+	t.Run("ObfuscationIV_nil_others_set", func(t *testing.T) {
+		original := &NTCP2Config{
+			BobRouterHash:    make([]byte, 32),
+			StaticKey:        make([]byte, 32),
+			RemoteRouterHash: make([]byte, 32),
+			RemoteStaticKey:  make([]byte, 32),
+			ObfuscationIV:    nil,
+		}
+		clone := original.Clone()
+		assert.NotNil(t, clone.StaticKey)
+		assert.NotNil(t, clone.RemoteRouterHash)
+		assert.NotNil(t, clone.RemoteStaticKey)
+		assert.Nil(t, clone.ObfuscationIV)
+	})
+
+	t.Run("Modifiers_nil_others_set", func(t *testing.T) {
+		original := &NTCP2Config{
+			BobRouterHash: make([]byte, 32),
+			StaticKey:     make([]byte, 32),
+			Modifiers:     nil,
+		}
+		clone := original.Clone()
+		assert.NotNil(t, clone.StaticKey)
+		assert.Nil(t, clone.Modifiers)
+	})
+
+	t.Run("Modifiers_empty_slice", func(t *testing.T) {
+		original := &NTCP2Config{
+			BobRouterHash: make([]byte, 32),
+			Modifiers:     []handshake.HandshakeModifier{},
+		}
+		clone := original.Clone()
+		// Empty (non-nil) slice is preserved
+		assert.NotNil(t, clone.Modifiers)
+		assert.Empty(t, clone.Modifiers)
+	})
+
+	t.Run("BobRouterHash_nil", func(t *testing.T) {
+		original := &NTCP2Config{
+			BobRouterHash: nil,
+			StaticKey:     make([]byte, 32),
+		}
+		clone := original.Clone()
+		assert.Nil(t, clone.BobRouterHash)
+		assert.NotNil(t, clone.StaticKey)
+	})
+}
+
+// TestClone_ValueFieldIndependence verifies that all value-type fields in the
+// clone are independent of the original (no shared pointer state).
+func TestClone_ValueFieldIndependence(t *testing.T) {
+	original := &NTCP2Config{
+		Pattern:              "XK",
+		Initiator:            true,
+		BobRouterHash:        make([]byte, 32),
+		HandshakeTimeout:     30 * time.Second,
+		ReadTimeout:          5 * time.Second,
+		WriteTimeout:         10 * time.Second,
+		HandshakeRetries:     3,
+		RetryBackoff:         2 * time.Second,
+		EnableAESObfuscation: true,
+		EnableSipHashLength:  true,
+		SipHashKeys:          [2]uint64{0xAAAA, 0xBBBB},
+		MaxFrameSize:         16384,
+		FramePaddingEnabled:  true,
+		MinPaddingSize:       8,
+		MaxPaddingSize:       128,
+	}
+
+	clone := original.Clone()
+
+	// Mutate every value field in the clone
+	clone.Pattern = "NN"
+	clone.Initiator = false
+	clone.HandshakeTimeout = 1 * time.Second
+	clone.ReadTimeout = 1 * time.Second
+	clone.WriteTimeout = 1 * time.Second
+	clone.HandshakeRetries = 0
+	clone.RetryBackoff = 0
+	clone.EnableAESObfuscation = false
+	clone.EnableSipHashLength = false
+	clone.SipHashKeys = [2]uint64{0, 0}
+	clone.MaxFrameSize = 1024
+	clone.FramePaddingEnabled = false
+	clone.MinPaddingSize = 0
+	clone.MaxPaddingSize = 0
+
+	// Original must be unaffected
+	assert.Equal(t, "XK", original.Pattern)
+	assert.True(t, original.Initiator)
+	assert.Equal(t, 30*time.Second, original.HandshakeTimeout)
+	assert.Equal(t, 5*time.Second, original.ReadTimeout)
+	assert.Equal(t, 10*time.Second, original.WriteTimeout)
+	assert.Equal(t, 3, original.HandshakeRetries)
+	assert.Equal(t, 2*time.Second, original.RetryBackoff)
+	assert.True(t, original.EnableAESObfuscation)
+	assert.True(t, original.EnableSipHashLength)
+	assert.Equal(t, [2]uint64{0xAAAA, 0xBBBB}, original.SipHashKeys)
+	assert.Equal(t, 16384, original.MaxFrameSize)
+	assert.True(t, original.FramePaddingEnabled)
+	assert.Equal(t, 8, original.MinPaddingSize)
+	assert.Equal(t, 128, original.MaxPaddingSize)
 }
 
 // TestConfigSipHashModifier verifies that NTCP2Config stores and returns

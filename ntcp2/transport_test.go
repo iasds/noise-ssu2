@@ -633,6 +633,107 @@ func TestCreateDialAddresses(t *testing.T) {
 	})
 }
 
+// TestDialNTCP2WithHandshake_Wrapper tests the DialNTCP2WithHandshake convenience
+// function, which delegates to DialNTCP2WithHandshakeContext with context.Background().
+// This covers the thin wrapper at 0% coverage identified in the audit.
+func TestDialNTCP2WithHandshake_Wrapper(t *testing.T) {
+	t.Run("delegates to DialNTCP2WithHandshakeContext", func(t *testing.T) {
+		cs := upstreamnoise.NewCipherSuite(
+			upstreamnoise.DH25519,
+			upstreamnoise.CipherChaChaPoly,
+			upstreamnoise.HashSHA256,
+		)
+
+		// Generate real Curve25519 keypairs so the XK handshake works
+		responderKP, err := cs.GenerateKeypair(rand.Reader)
+		require.NoError(t, err)
+		initiatorKP, err := cs.GenerateKeypair(rand.Reader)
+		require.NoError(t, err)
+
+		// Create responder (listener) config
+		routerHash := generateRandomBytes(32)
+		listenerConfig, err := NewNTCP2Config(routerHash, false)
+		require.NoError(t, err)
+		listenerConfig, err = listenerConfig.WithStaticKey(responderKP.Private)
+		require.NoError(t, err)
+		listenerConfig, err = listenerConfig.WithAESObfuscation(false, nil)
+		require.NoError(t, err)
+
+		listener, err := ListenNTCP2("tcp", "127.0.0.1:0", listenerConfig)
+		require.NoError(t, err)
+		defer listener.Close()
+
+		// Accept and handshake on the server side
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			conn, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				return
+			}
+			ntcp2Conn := conn.(*NTCP2Conn)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if hsErr := ntcp2Conn.UnderlyingConn().Handshake(ctx); hsErr != nil {
+				ntcp2Conn.Close()
+				return
+			}
+			ntcp2Conn.PropagateSipHash()
+			ntcp2Conn.Close()
+		}()
+
+		// Create initiator config
+		clientRouterHash := generateRandomBytes(32)
+		dialConfig, err := NewNTCP2Config(clientRouterHash, true)
+		require.NoError(t, err)
+		dialConfig, err = dialConfig.WithStaticKey(initiatorKP.Private)
+		require.NoError(t, err)
+		dialConfig, err = dialConfig.WithRemoteRouterHash(routerHash)
+		require.NoError(t, err)
+		dialConfig, err = dialConfig.WithRemoteStaticKey(responderKP.Public)
+		require.NoError(t, err)
+		dialConfig, err = dialConfig.WithAESObfuscation(false, nil)
+		require.NoError(t, err)
+		dialConfig = dialConfig.WithHandshakeTimeout(5 * time.Second)
+
+		ntcp2Addr := listener.Addr().(*NTCP2Addr)
+		underlyingAddr := ntcp2Addr.UnderlyingAddr().String()
+
+		// Call the wrapper (not the Context variant) — this is the path under test
+		conn, err := DialNTCP2WithHandshake("tcp", underlyingAddr, dialConfig)
+		assert.NoError(t, err)
+		if conn != nil {
+			conn.Close()
+		}
+
+		wg.Wait()
+	})
+
+	t.Run("error propagated from invalid config", func(t *testing.T) {
+		routerHash := generateRandomBytes(32)
+		config, err := NewNTCP2Config(routerHash, true)
+		require.NoError(t, err)
+
+		// Dial with empty network — validation error
+		conn, err := DialNTCP2WithHandshake("", "127.0.0.1:8080", config)
+		assert.Error(t, err)
+		assert.Nil(t, conn)
+		assert.Contains(t, err.Error(), "network cannot be empty")
+	})
+
+	t.Run("error propagated from unreachable address", func(t *testing.T) {
+		routerHash := generateRandomBytes(32)
+		config, err := NewNTCP2Config(routerHash, true)
+		require.NoError(t, err)
+
+		// Dial an address that can't be reached — TCP connect error
+		conn, err := DialNTCP2WithHandshake("tcp", "127.0.0.1:0", config)
+		assert.Error(t, err)
+		assert.Nil(t, conn)
+	})
+}
+
 // TestAuditFix_SetNTCP2Config_NotRedundantInDialNTCP2WithHandshakeContext documents
 // the removal of the redundant ntcp2Conn.SetNTCP2Config(config) call that previously
 // existed in DialNTCP2WithHandshakeContext immediately after DialNTCP2 returned.
