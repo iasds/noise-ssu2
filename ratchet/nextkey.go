@@ -152,9 +152,9 @@ func (sm *SessionManager) processNextKeyAck(session *Session, info NextKeyInfo) 
 	}
 
 	log.WithFields(map[string]interface{}{
-		"at":       "processNextKeyAck",
-		"key_id":   info.KeyID,
-		"reverse":  info.Reverse,
+		"at":      "processNextKeyAck",
+		"key_id":  info.KeyID,
+		"reverse": info.Reverse,
 	}).Debug("Processed NextKey acknowledgment from peer")
 
 	return nil
@@ -186,7 +186,13 @@ func (sm *SessionManager) applyIncomingDHKey(session *Session, remotePubKey [32]
 }
 
 // generateReverseNextKey generates a new DH key pair and queues a reverse
-// NextKey block for the next outgoing message.
+// NextKey block for the next outgoing message. The block carries the current
+// sendKeyID value, and sendKeyID is incremented afterwards to prevent
+// collision with the next forward NextKey block from performDHRatchetStep.
+//
+// Without the increment, a double-rotation scenario (forward rotation →
+// reverse response → another forward rotation) would produce two blocks
+// with the same sendKeyID, confusing the peer's keyID tracking.
 func (sm *SessionManager) generateReverseNextKey(session *Session) error {
 	if session.sendKeyID >= MaxKeyID {
 		return oops.Errorf("send key ID %d has reached maximum %d", session.sendKeyID, MaxKeyID)
@@ -197,17 +203,21 @@ func (sm *SessionManager) generateReverseNextKey(session *Session) error {
 		return oops.Wrapf(err, "failed to generate reverse NextKey key pair")
 	}
 
-	// Queue a reverse NextKey block.
+	// Queue a reverse NextKey block with the current sendKeyID.
 	reverseBlock := NewNextKeyBlock(session.sendKeyID, &newPubKey, true, false)
 	session.pendingNextKeys = append(session.pendingNextKeys, reverseBlock)
 
 	session.newEphemeralPub = &newPubKey
 
+	// Advance sendKeyID so the next forward block gets a distinct ID.
+	// Safe: guarded >= MaxKeyID above.
+	session.sendKeyID++
+
 	log.WithFields(map[string]interface{}{
 		"at":          "generateReverseNextKey",
 		"send_key_id": session.sendKeyID,
 		"new_pub_key": fmt.Sprintf("%x", newPubKey[:8]),
-	}).Debug("Reverse NextKey block queued")
+	}).Debug("Reverse NextKey block queued, sendKeyID advanced")
 
 	return nil
 }

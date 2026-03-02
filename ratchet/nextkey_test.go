@@ -670,6 +670,132 @@ func TestPerformDHRatchetStep_MaxKeyID_ReturnsError(t *testing.T) {
 }
 
 // ============================================================================
+// generateReverseNextKey — sendKeyID increment
+// ============================================================================
+
+// TestGenerateReverseNextKey_IncrementsSendKeyID verifies that generateReverseNextKey
+// increments sendKeyID after queuing the reverse block. Without this increment, a
+// subsequent forward rotation via performDHRatchetStep would produce a NextKey block
+// with the same keyID as the reverse block, confusing the peer's keyID tracking.
+func TestGenerateReverseNextKey_IncrementsSendKeyID(t *testing.T) {
+	sender, receiver := createLinkedManagers(t)
+
+	var destHash [32]byte
+	copy(destHash[:], receiver.ourPublicKey[:])
+
+	// Bootstrap a full NS→NSR session.
+	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, mustBuildNSPayload(t, []byte("init")))
+	require.NoError(t, err)
+	_, _, sessionHash, err := receiver.DecryptGarlicMessage(enc)
+	require.NoError(t, err)
+	require.NotNil(t, sessionHash)
+	nsrEnc, err := receiver.EncryptNewSessionReply(*sessionHash, []byte("nsr"))
+	require.NoError(t, err)
+	_, _, _, err = sender.DecryptGarlicMessage(nsrEnc)
+	require.NoError(t, err)
+
+	// Look up the receiver's session and record the initial sendKeyID.
+	session := lookupSessionByAnyTag(t, receiver)
+	session.mu.Lock()
+	initialKeyID := session.sendKeyID
+	session.mu.Unlock()
+
+	// Simulate a forward NextKey from the sender requesting a reverse.
+	sessionTag := getAnyTag(t, receiver)
+	var newKey [32]byte
+	_, _ = rand.Read(newKey[:])
+	info := NextKeyInfo{
+		KeyPresent:     true,
+		Reverse:        false,
+		RequestReverse: true,
+		KeyID:          0,
+		PublicKey:      newKey,
+	}
+	err = receiver.ProcessReceivedNextKey(sessionTag, info)
+	require.NoError(t, err)
+
+	// After generating the reverse key, sendKeyID must have been incremented.
+	session.mu.Lock()
+	afterReverseKeyID := session.sendKeyID
+	pending := session.GetPendingNextKeys()
+	session.mu.Unlock()
+
+	assert.Equal(t, initialKeyID+1, afterReverseKeyID,
+		"sendKeyID must be incremented after generating a reverse NextKey")
+	require.Len(t, pending, 1, "exactly one reverse NextKey block should be queued")
+
+	// The block should carry the OLD (pre-increment) keyID.
+	blockInfo, err := pending[0].NextKey()
+	require.NoError(t, err)
+	assert.Equal(t, initialKeyID, blockInfo.KeyID,
+		"reverse NextKey block must carry the pre-increment keyID")
+	assert.True(t, blockInfo.Reverse, "block must be flagged as reverse")
+}
+
+// TestForwardAndReverse_NoKeyIDCollision verifies the double-rotation scenario:
+//  1. Forward rotation (performDHRatchetStep) — creates forward block with keyID=N, sendKeyID→N+1
+//  2. Reverse response (generateReverseNextKey) — creates reverse block with keyID=N+1, sendKeyID→N+2
+//  3. Another forward rotation — creates forward block with keyID=N+2
+//
+// All three keyIDs must be distinct, preventing peer-side confusion.
+func TestForwardAndReverse_NoKeyIDCollision(t *testing.T) {
+	var pubKey, privKey [32]byte
+	_, _ = rand.Read(pubKey[:])
+	_, _ = rand.Read(privKey[:])
+
+	keys := &sessionKeys{}
+	_, _ = rand.Read(keys.rootKey[:])
+	_, _ = rand.Read(keys.tagKey[:])
+
+	session, err := createSession(pubKey, keys, privKey, true)
+	require.NoError(t, err)
+
+	sm := createTestSessionManager(t)
+
+	// Step 1: Forward rotation.
+	err = performDHRatchetStep(session)
+	require.NoError(t, err)
+	forwardBlocks := session.GetPendingNextKeys()
+	require.Len(t, forwardBlocks, 1)
+	fwdInfo1, err := forwardBlocks[0].NextKey()
+	require.NoError(t, err)
+
+	// Step 2: Reverse response.
+	err = sm.generateReverseNextKey(session)
+	require.NoError(t, err)
+	reverseBlocks := session.GetPendingNextKeys()
+	require.Len(t, reverseBlocks, 1)
+	revInfo, err := reverseBlocks[0].NextKey()
+	require.NoError(t, err)
+
+	// Step 3: Another forward rotation.
+	err = performDHRatchetStep(session)
+	require.NoError(t, err)
+	forwardBlocks2 := session.GetPendingNextKeys()
+	require.Len(t, forwardBlocks2, 1)
+	fwdInfo2, err := forwardBlocks2[0].NextKey()
+	require.NoError(t, err)
+
+	// All three keyIDs must be distinct.
+	allIDs := []uint16{fwdInfo1.KeyID, revInfo.KeyID, fwdInfo2.KeyID}
+	seen := make(map[uint16]bool)
+	for _, id := range allIDs {
+		assert.False(t, seen[id],
+			"keyID %d appears more than once in [forward=%d, reverse=%d, forward2=%d]",
+			id, allIDs[0], allIDs[1], allIDs[2])
+		seen[id] = true
+	}
+
+	// Verify the expected sequence: 0, 1, 2.
+	assert.Equal(t, uint16(0), fwdInfo1.KeyID, "first forward block should carry keyID=0")
+	assert.Equal(t, uint16(1), revInfo.KeyID, "reverse block should carry keyID=1")
+	assert.Equal(t, uint16(2), fwdInfo2.KeyID, "second forward block should carry keyID=2")
+
+	t.Logf("KeyID sequence: forward=%d, reverse=%d, forward=%d — no collision",
+		fwdInfo1.KeyID, revInfo.KeyID, fwdInfo2.KeyID)
+}
+
+// ============================================================================
 // Helpers
 // ============================================================================
 
