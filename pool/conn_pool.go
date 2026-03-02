@@ -1,6 +1,7 @@
 package pool
 
 import (
+	"errors"
 	"net"
 	"sync"
 	"time"
@@ -108,7 +109,15 @@ func (p *ConnPool) Put(conn net.Conn) error {
 	}
 
 	conn = unwrapPoolConn(conn)
-	remoteAddr := conn.RemoteAddr().String()
+
+	addr := conn.RemoteAddr()
+	if addr == nil {
+		return oops.
+			Code("INVALID_CONNECTION").
+			In("pool").
+			Errorf("connection has nil RemoteAddr")
+	}
+	remoteAddr := addr.String()
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -177,9 +186,18 @@ func newPooledConn(conn net.Conn, remoteAddr string) *PooledConn {
 
 // Release marks a connection as no longer in use, making it available for reuse.
 // Returns an error if the pool is closed or the connection is not found.
+//
+// If conn is a *PoolConnWrapper, the wrapper is marked closed so that a
+// subsequent call to wrapper.Close() returns an ALREADY_CLOSED error instead
+// of issuing a second release (preventing a double-release vulnerability).
 func (p *ConnPool) Release(remoteAddr string, conn net.Conn) error {
-	// Unwrap PoolConnWrapper for correct identity comparison
+	// Unwrap PoolConnWrapper for correct identity comparison.
+	// Mark the wrapper closed to prevent a subsequent Close() from
+	// issuing a second release.
 	if wrapper, ok := conn.(*PoolConnWrapper); ok {
+		wrapper.mu.Lock()
+		wrapper.closed = true
+		wrapper.mu.Unlock()
 		conn = wrapper.Conn
 	}
 
@@ -254,17 +272,20 @@ func (p *ConnPool) Close() error {
 
 	// Close only idle connections; in-use connections will be
 	// closed when returned via Release() or Discard().
+	var errs []error
 	for _, connList := range p.conns {
 		for _, pooledConn := range connList {
 			if !pooledConn.inUse {
-				pooledConn.conn.Close()
+				if err := pooledConn.conn.Close(); err != nil {
+					errs = append(errs, err)
+				}
 			}
 		}
 	}
 
 	p.conns = make(map[string][]*PooledConn)
 
-	return nil
+	return errors.Join(errs...)
 }
 
 // Stats returns pool statistics
