@@ -585,7 +585,11 @@ func TestInstallGeneratedTagsLocked_CollisionSkip(t *testing.T) {
 	tagC[0] = 0xCC
 	sm.tagIndex[tagB] = phantom
 
-	sm.installGeneratedTagsLocked(real, [][8]byte{tagA, tagB, tagC})
+	sm.installGeneratedTagsLocked(real, []tagWithCounter{
+		{tag: tagA, counter: 1},
+		{tag: tagB, counter: 2},
+		{tag: tagC, counter: 3},
+	})
 	sm.mu.Unlock()
 
 	// Only tagA and tagC should be installed; tagB was skipped.
@@ -599,6 +603,11 @@ func TestInstallGeneratedTagsLocked_CollisionSkip(t *testing.T) {
 	assert.Equal(t, real, sm.tagIndex[tagA], "tagIndex[tagA] should point to real session")
 	assert.Equal(t, phantom, sm.tagIndex[tagB], "phantom must still own tagB")
 	assert.Equal(t, real, sm.tagIndex[tagC], "tagIndex[tagC] should point to real session")
+	// tagCounterIndex should only have entries for installed tags.
+	assert.Equal(t, uint32(1), sm.tagCounterIndex[tagA], "tagCounterIndex[tagA] should be 1")
+	_, hasBCounter := sm.tagCounterIndex[tagB]
+	assert.False(t, hasBCounter, "tagCounterIndex should not contain skipped tagB")
+	assert.Equal(t, uint32(3), sm.tagCounterIndex[tagC], "tagCounterIndex[tagC] should be 3")
 	sm.mu.RUnlock()
 }
 

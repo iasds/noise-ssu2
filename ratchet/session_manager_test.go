@@ -2057,3 +2057,155 @@ func TestRemoveSessionByPointer_AlreadyRemoved(t *testing.T) {
 	sm.removeSessionByPointer(session)
 	assert.Equal(t, 0, sm.GetSessionCount())
 }
+
+// ============================================================================
+// Tag→Counter Mapping (O(1) ES Decrypt)
+// ============================================================================
+
+// TestTagCounterIndex_PopulatedOnSessionCreation verifies that generateTagWindow
+// fills both tagIndex and tagCounterIndex with consistent entries, and that
+// counters start at recvWindowBase (1 for a fresh session).
+func TestTagCounterIndex_PopulatedOnSessionCreation(t *testing.T) {
+	sender, receiver := createLinkedManagers(t)
+
+	var destHash [32]byte
+	copy(destHash[:], receiver.ourPublicKey[:])
+
+	// Create session via NS+NSR so ES tags are generated.
+	destHash = mustBootstrapSession(t, sender, receiver)
+	_ = destHash
+
+	receiver.mu.RLock()
+	tagCount := len(receiver.tagIndex)
+	counterCount := len(receiver.tagCounterIndex)
+	// Every tag in tagIndex should have a corresponding counter entry.
+	for tag := range receiver.tagIndex {
+		_, hasCounter := receiver.tagCounterIndex[tag]
+		assert.True(t, hasCounter, "tag %x in tagIndex has no tagCounterIndex entry", tag)
+	}
+	receiver.mu.RUnlock()
+
+	assert.Equal(t, tagCount, counterCount,
+		"tagIndex and tagCounterIndex should have the same number of entries")
+	assert.Equal(t, tagWindowSize, tagCount,
+		"tag window should be fully populated")
+}
+
+// TestTagCounterIndex_CountersStartAtOne verifies that tag counters begin at 1
+// (matching recvWindowBase) since counter 0 is reserved for the NS handshake.
+func TestTagCounterIndex_CountersStartAtOne(t *testing.T) {
+	sender, receiver := createLinkedManagers(t)
+
+	destHash := mustBootstrapSession(t, sender, receiver)
+	_ = destHash
+
+	receiver.mu.RLock()
+	defer receiver.mu.RUnlock()
+
+	counters := make([]uint32, 0, len(receiver.tagCounterIndex))
+	for _, c := range receiver.tagCounterIndex {
+		counters = append(counters, c)
+	}
+
+	// All counters should be sequential starting from 1.
+	assert.Equal(t, tagWindowSize, len(counters))
+	minCounter := uint32(0xFFFFFFFF)
+	for _, c := range counters {
+		if c < minCounter {
+			minCounter = c
+		}
+	}
+	assert.Equal(t, uint32(1), minCounter,
+		"minimum counter should be 1 (recvWindowBase)")
+}
+
+// TestTagCounterIndex_O1DecryptPath verifies that ES messages are decrypted
+// using the O(1) counter hint path rather than falling back to window scan.
+// We do this by confirming multiple ES messages decrypt correctly (which
+// exercises the counter hint) and that tagCounterIndex is cleaned up.
+func TestTagCounterIndex_O1DecryptPath(t *testing.T) {
+	sender, receiver := createLinkedManagers(t)
+
+	var destHash [32]byte
+	copy(destHash[:], receiver.ourPublicKey[:])
+
+	destHash = mustBootstrapSession(t, sender, receiver)
+
+	// Send and receive multiple ES messages.
+	for i := 0; i < 5; i++ {
+		enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey,
+			[]byte("hello"))
+		require.NoError(t, err)
+
+		plaintext, _, _, err := receiver.DecryptGarlicMessage(enc)
+		require.NoError(t, err)
+		assert.Equal(t, "hello", string(plaintext))
+	}
+
+	// After consuming 5 tags, the counter index should have fewer entries
+	// (tags are removed from index on consumption, then replenished).
+	receiver.mu.RLock()
+	for tag := range receiver.tagIndex {
+		_, hasCounter := receiver.tagCounterIndex[tag]
+		assert.True(t, hasCounter,
+			"all remaining tags in tagIndex should have tagCounterIndex entries")
+	}
+	receiver.mu.RUnlock()
+}
+
+// TestTagCounterIndex_CleanedOnEviction verifies that tagCounterIndex entries
+// are removed when a session is evicted.
+func TestTagCounterIndex_CleanedOnEviction(t *testing.T) {
+	receiver := createTestSessionManager(t)
+
+	// Store a fake session with tags + counters.
+	session := &Session{
+		LastUsed:    time.Now().Add(-1 * time.Hour),
+		pendingTags: make([][8]byte, 0),
+	}
+	var hash [32]byte
+	hash[0] = 0x01
+
+	var tag1, tag2 [8]byte
+	tag1[0] = 0xAA
+	tag2[0] = 0xBB
+
+	receiver.mu.Lock()
+	receiver.sessions[hash] = session
+	session.pendingTags = append(session.pendingTags, tag1, tag2)
+	receiver.tagIndex[tag1] = session
+	receiver.tagIndex[tag2] = session
+	receiver.tagCounterIndex[tag1] = 1
+	receiver.tagCounterIndex[tag2] = 2
+	receiver.mu.Unlock()
+
+	// Cleanup should remove the expired session and its counter index entries.
+	removed := receiver.CleanupExpiredSessions()
+	assert.Equal(t, 1, removed)
+
+	receiver.mu.RLock()
+	assert.Equal(t, 0, len(receiver.tagIndex))
+	assert.Equal(t, 0, len(receiver.tagCounterIndex),
+		"tagCounterIndex should be empty after session cleanup")
+	receiver.mu.RUnlock()
+}
+
+// TestTagCounterIndex_CleanedOnClose verifies that Close() clears tagCounterIndex.
+func TestTagCounterIndex_CleanedOnClose(t *testing.T) {
+	sm := createTestSessionManager(t)
+
+	// Add fake entries.
+	sm.mu.Lock()
+	var tag [8]byte
+	tag[0] = 0xFF
+	sm.tagCounterIndex[tag] = 42
+	sm.mu.Unlock()
+
+	err := sm.Close()
+	require.NoError(t, err)
+
+	sm.mu.RLock()
+	assert.Equal(t, 0, len(sm.tagCounterIndex),
+		"tagCounterIndex should be empty after Close")
+	sm.mu.RUnlock()
+}

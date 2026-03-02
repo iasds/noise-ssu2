@@ -324,6 +324,7 @@ func fillRecvKeyCache(session *Session, upTo uint32) error {
 func resetRecvWindow(session *Session) {
 	session.recvWindowBase = 1
 	session.recvFillMark = 1
+	session.nextRecvTagCounter = 1
 	// Clear the old key cache so stale keys cannot be replayed.
 	session.recvKeyCache = make(map[uint32][32]byte)
 }

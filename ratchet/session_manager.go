@@ -79,12 +79,13 @@ type SessionManager struct {
 	// initiator session waiting for the corresponding New Session Reply. Unlike
 	// tagIndex (which tracks Existing Session tags), nsrTagIndex is keyed on the
 	// unique 8-byte NSR tag that the responder will prefix on its NSR message.
-	nsrTagIndex    map[[8]byte]*Session
-	ourPrivateKey  [32]byte
-	ourPublicKey   [32]byte
-	sessionTimeout time.Duration
-	ctx            context.Context
-	cancel         context.CancelFunc
+	nsrTagIndex     map[[8]byte]*Session
+	tagCounterIndex map[[8]byte]uint32
+	ourPrivateKey   [32]byte
+	ourPublicKey    [32]byte
+	sessionTimeout  time.Duration
+	ctx             context.Context
+	cancel          context.CancelFunc
 }
 
 // NewSessionManager creates a new session manager with the given private key.
@@ -105,14 +106,15 @@ func NewSessionManager(privateKey [32]byte) (*SessionManager, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &SessionManager{
-		sessions:       make(map[[32]byte]*Session),
-		tagIndex:       make(map[[8]byte]*Session),
-		nsrTagIndex:    make(map[[8]byte]*Session),
-		ourPrivateKey:  privateKey,
-		ourPublicKey:   publicKey,
-		sessionTimeout: 10 * time.Minute,
-		ctx:            ctx,
-		cancel:         cancel,
+		sessions:        make(map[[32]byte]*Session),
+		tagIndex:        make(map[[8]byte]*Session),
+		nsrTagIndex:     make(map[[8]byte]*Session),
+		tagCounterIndex: make(map[[8]byte]uint32),
+		ourPrivateKey:   privateKey,
+		ourPublicKey:    publicKey,
+		sessionTimeout:  10 * time.Minute,
+		ctx:             ctx,
+		cancel:          cancel,
 	}, nil
 }
 
@@ -307,7 +309,7 @@ func (sm *SessionManager) DecryptGarlicMessage(encryptedGarlic []byte) ([]byte, 
 	// This two-phase approach ensures sm.mu and session.mu are never held
 	// simultaneously (see lookupSessionByTag for the rationale).
 	sm.mu.Lock()
-	session := sm.lookupSessionByTag(msgTag)
+	session, counterHint := sm.lookupSessionByTag(msgTag)
 	sm.mu.Unlock()
 
 	var needsReplenish bool
@@ -320,7 +322,7 @@ func (sm *SessionManager) DecryptGarlicMessage(encryptedGarlic []byte) ([]byte, 
 	}
 
 	if session != nil {
-		plaintext, sessionTag, err := sm.decryptExistingSession(session, encryptedGarlic[8:], msgTag)
+		plaintext, sessionTag, err := sm.decryptExistingSession(session, encryptedGarlic[8:], msgTag, counterHint)
 		if needsReplenish {
 			sm.replenishTagWindowOutsideLock(session)
 		}
@@ -548,6 +550,7 @@ func (sm *SessionManager) applyNSRKeysToSessionWhileLocked(session *Session, nsr
 	// Purge old NS-derived recv tags from tagIndex before replacing the ratchet.
 	for _, tag := range session.pendingTags {
 		delete(sm.tagIndex, tag)
+		delete(sm.tagCounterIndex, tag)
 	}
 	session.pendingTags = session.pendingTags[:0]
 
@@ -639,12 +642,18 @@ func (sm *SessionManager) EncryptNewSessionReply(
 // key is removed and the window base is advanced past any trailing consumed
 // counters.
 //
+// counterHint, when non-nil, provides the ES message counter associated with
+// the session tag (from tagCounterIndex). This enables O(1) AEAD decryption
+// by trying the exact counter first, avoiding the window scan. A nil hint
+// falls back to the full window scan for robustness.
+//
 // Spec ref: ratchet.md §"Existing Session" — "Maintain handling of out-of-order
 // messages", window ≤128.
 func (sm *SessionManager) decryptExistingSession(
 	session *Session,
 	msg []byte,
 	sessionTag [8]byte,
+	counterHint *uint32,
 ) ([]byte, [8]byte, error) {
 	session.mu.Lock()
 	defer session.mu.Unlock()
@@ -660,36 +669,47 @@ func (sm *SessionManager) decryptExistingSession(
 		return nil, [8]byte{}, err
 	}
 
-	// Scan candidate counters from the window base upward.  We do not transmit
-	// the counter on the wire so we must try each candidate until the AEAD tag
-	// verifies.
-	//
-	// Amplification note: a worst-case unauthenticated message with a valid
-	// session tag triggers at most recvWindowSize (64) AEAD trial-decryptions
-	// before this function returns an error.  The amplification factor is
-	// bounded at 64 per session per incoming byte, which is acceptable for
-	// normal I2P traffic volumes.  Callers that receive many invalid messages
-	// from the same remote should apply rate-limiting at the transport layer
-	// before reaching this path.
 	var (
 		plaintext   []byte
 		usedCounter uint32
 		found       bool
 	)
-	for counter := session.recvWindowBase; counter < windowEnd; counter++ {
-		messageKey, inCache := session.recvKeyCache[counter]
-		if !inCache {
-			// Already consumed; skip.
-			continue
+
+	// O(1) fast path: if a counter hint is available (from tag→counter index),
+	// try that counter directly. This avoids scanning up to 64 AEAD trial
+	// decryptions per message.
+	if counterHint != nil {
+		c := *counterHint
+		if c >= session.recvWindowBase && c < windowEnd {
+			if messageKey, inCache := session.recvKeyCache[c]; inCache {
+				pt, decErr := decryptWithSessionTag(messageKey, ciphertext, tag, sessionTag, c)
+				if decErr == nil {
+					plaintext = pt
+					usedCounter = c
+					found = true
+				}
+			}
 		}
-		pt, decErr := decryptWithSessionTag(messageKey, ciphertext, tag, sessionTag, counter)
-		if decErr != nil {
-			continue
+	}
+
+	// Fallback: scan candidate counters from the window base upward if the
+	// hint was unavailable or did not decrypt successfully.
+	if !found {
+		for counter := session.recvWindowBase; counter < windowEnd; counter++ {
+			messageKey, inCache := session.recvKeyCache[counter]
+			if !inCache {
+				// Already consumed; skip.
+				continue
+			}
+			pt, decErr := decryptWithSessionTag(messageKey, ciphertext, tag, sessionTag, counter)
+			if decErr != nil {
+				continue
+			}
+			plaintext = pt
+			usedCounter = counter
+			found = true
+			break
 		}
-		plaintext = pt
-		usedCounter = counter
-		found = true
-		break
 	}
 	if !found {
 		return nil, [8]byte{}, oops.Errorf(
@@ -783,6 +803,7 @@ func (sm *SessionManager) removeSessionByPointer(session *Session) {
 	// Clean up all index entries for this session.
 	for _, tag := range session.pendingTags {
 		delete(sm.tagIndex, tag)
+		delete(sm.tagCounterIndex, tag)
 	}
 	if session.nsrTag != nil {
 		delete(sm.nsrTagIndex, *session.nsrTag)
@@ -845,7 +866,7 @@ func (sm *SessionManager) ProcessIncomingDHRatchet(sessionTag [8]byte, newRemote
 // Tag replenishment (HKDF) is performed outside both locks.
 func (sm *SessionManager) FindSessionByTag(tag [8]byte) bool {
 	sm.mu.Lock()
-	session := sm.lookupSessionByTag(tag)
+	session, _ := sm.lookupSessionByTag(tag)
 	sm.mu.Unlock()
 
 	if session == nil {
@@ -864,7 +885,12 @@ func (sm *SessionManager) FindSessionByTag(tag [8]byte) bool {
 }
 
 // lookupSessionByTag locates the session for tag and atomically removes it
-// from sm.tagIndex. Must be called with sm.mu held (write lock).
+// from sm.tagIndex and sm.tagCounterIndex. Must be called with sm.mu held
+// (write lock).
+//
+// Returns the session and a counter hint. If the counter is non-nil, it is
+// the ES message counter associated with this tag, enabling O(1) AEAD
+// decryption in decryptExistingSession instead of a window scan.
 //
 // Design — two-phase lock separation:
 // This function intentionally does NOT acquire session.mu. Validation and
@@ -876,14 +902,21 @@ func (sm *SessionManager) FindSessionByTag(tag [8]byte) bool {
 // Tag removal from the global index happens here (under sm.mu) so that no
 // other goroutine can claim the same tag between the lookup and the per-session
 // validation step.
-func (sm *SessionManager) lookupSessionByTag(tag [8]byte) *Session {
+func (sm *SessionManager) lookupSessionByTag(tag [8]byte) (*Session, *uint32) {
 	session, exists := sm.tagIndex[tag]
 	if !exists {
-		return nil
+		return nil, nil
 	}
 	// Remove from global index now, under sm.mu, to prevent double-consumption.
 	delete(sm.tagIndex, tag)
-	return session
+	counter, hasCounter := sm.tagCounterIndex[tag]
+	if hasCounter {
+		delete(sm.tagCounterIndex, tag)
+	}
+	if hasCounter {
+		return session, &counter
+	}
+	return session, nil
 }
 
 // validateAndConsumeTagFromSession checks whether session is still valid (not
@@ -995,11 +1028,20 @@ func (sm *SessionManager) replenishTagWindowOutsideLock(session *Session) {
 	}
 }
 
+// tagWithCounter pairs a pre-derived session tag with the ES message counter
+// it corresponds to. Used to transfer tag→counter mappings between the
+// generation phase (under session.mu) and the installation phase (under sm.mu).
+type tagWithCounter struct {
+	tag     [8]byte
+	counter uint32
+}
+
 // generateTagsOutsideLock advances session.RecvTagRatchet to produce the tags
 // needed to refill the window up to tagWindowSize. The caller must hold
 // session.mu but must NOT hold sm.mu; the HKDF derivations run here.
-// Returns the new tags, which are not yet registered in sm.tagIndex.
-func generateTagsOutsideLock(session *Session) ([][8]byte, error) {
+// Returns the new tags with their associated counters, which are not yet
+// registered in sm.tagIndex or sm.tagCounterIndex.
+func generateTagsOutsideLock(session *Session) ([]tagWithCounter, error) {
 	if session.RecvTagRatchet == nil {
 		return nil, oops.Errorf("RecvTagRatchet is nil for session — cannot replenish incoming tag window")
 	}
@@ -1007,35 +1049,39 @@ func generateTagsOutsideLock(session *Session) ([][8]byte, error) {
 	if needed <= 0 {
 		return nil, nil
 	}
-	newTags := make([][8]byte, 0, needed)
+	newTags := make([]tagWithCounter, 0, needed)
 	for i := 0; i < needed; i++ {
 		tag, err := session.RecvTagRatchet.GenerateNextTag()
 		if err != nil {
 			return newTags, oops.Wrapf(err, "failed to generate session tag at index %d", i)
 		}
-		newTags = append(newTags, tag)
+		counter := session.nextRecvTagCounter
+		session.nextRecvTagCounter++
+		newTags = append(newTags, tagWithCounter{tag: tag, counter: counter})
 	}
 	return newTags, nil
 }
 
-// installGeneratedTagsLocked writes pre-derived tags into sm.tagIndex and
-// session.pendingTags.  Tags that collide with a different session are logged
-// and skipped.  Must be called with both sm.mu (write) and session.mu held.
-func (sm *SessionManager) installGeneratedTagsLocked(session *Session, newTags [][8]byte) {
-	for _, tag := range newTags {
+// installGeneratedTagsLocked writes pre-derived tags into sm.tagIndex,
+// sm.tagCounterIndex, and session.pendingTags.  Tags that collide with a
+// different session are logged and skipped.  Must be called with both
+// sm.mu (write) and session.mu held.
+func (sm *SessionManager) installGeneratedTagsLocked(session *Session, newTags []tagWithCounter) {
+	for _, tc := range newTags {
 		if len(session.pendingTags) >= tagWindowSize {
 			// Another goroutine may have already replenished; stop early.
 			break
 		}
-		if existing, ok := sm.tagIndex[tag]; ok && existing != session {
+		if existing, ok := sm.tagIndex[tc.tag]; ok && existing != session {
 			log.WithFields(map[string]interface{}{
 				"at":  "installGeneratedTagsLocked",
-				"tag": fmt.Sprintf("%x", tag),
+				"tag": fmt.Sprintf("%x", tc.tag),
 			}).Warn("Tag collision detected, skipping duplicate tag")
 			continue
 		}
-		session.pendingTags = append(session.pendingTags, tag)
-		sm.tagIndex[tag] = session
+		session.pendingTags = append(session.pendingTags, tc.tag)
+		sm.tagIndex[tc.tag] = session
+		sm.tagCounterIndex[tc.tag] = tc.counter
 	}
 }
 
@@ -1057,6 +1103,8 @@ func (sm *SessionManager) generateTagWindow(session *Session) error {
 		if err != nil {
 			return oops.Wrapf(err, "failed to generate session tag")
 		}
+		counter := session.nextRecvTagCounter
+		session.nextRecvTagCounter++
 		if existing, ok := sm.tagIndex[tag]; ok && existing != session {
 			log.WithFields(map[string]interface{}{
 				"at":  "generateTagWindow",
@@ -1066,6 +1114,7 @@ func (sm *SessionManager) generateTagWindow(session *Session) error {
 		}
 		session.pendingTags = append(session.pendingTags, tag)
 		sm.tagIndex[tag] = session
+		sm.tagCounterIndex[tag] = counter
 	}
 	return nil
 }
@@ -1089,6 +1138,7 @@ func (sm *SessionManager) evictLRUSessionLocked() {
 		if evicted, ok := sm.sessions[oldestHash]; ok {
 			for _, tag := range evicted.pendingTags {
 				delete(sm.tagIndex, tag)
+				delete(sm.tagCounterIndex, tag)
 			}
 			if evicted.nsrTag != nil {
 				delete(sm.nsrTagIndex, *evicted.nsrTag)
@@ -1116,6 +1166,7 @@ func (sm *SessionManager) CleanupExpiredSessions() int {
 			delete(sm.sessions, hash)
 			for _, tag := range session.pendingTags {
 				delete(sm.tagIndex, tag)
+				delete(sm.tagCounterIndex, tag)
 			}
 			if session.nsrTag != nil {
 				delete(sm.nsrTagIndex, *session.nsrTag)
@@ -1162,6 +1213,9 @@ func (sm *SessionManager) Close() error {
 	}
 	for k := range sm.tagIndex {
 		delete(sm.tagIndex, k)
+	}
+	for k := range sm.tagCounterIndex {
+		delete(sm.tagCounterIndex, k)
 	}
 	for k := range sm.nsrTagIndex {
 		delete(sm.nsrTagIndex, k)
