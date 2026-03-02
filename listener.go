@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-i2p/go-noise/handshake"
 	"github.com/go-i2p/logger"
 	i2plogger "github.com/go-i2p/logger"
 	"github.com/samber/oops"
@@ -34,9 +35,6 @@ type NoiseListener struct {
 
 	// closeMutex protects close operations
 	closeMutex sync.Mutex
-
-	// acceptMutex protects accept operations
-	acceptMutex sync.Mutex
 }
 
 // ListenerConfig contains configuration for creating a NoiseListener.
@@ -59,6 +57,33 @@ type ListenerConfig struct {
 	// WriteTimeout is the timeout for write operations after handshake
 	// Default: no timeout (0)
 	WriteTimeout time.Duration
+
+	// Modifiers is a list of handshake modifiers for obfuscation and padding.
+	// Modifiers are applied in order during outbound processing and in reverse
+	// order during inbound processing. Required for NTCP2 server-side
+	// connections that need AES-CBC obfuscation and SipHash length obfuscation.
+	// Default: empty (no modifiers)
+	Modifiers []handshake.HandshakeModifier
+
+	// PostHandshakeHook is an optional callback invoked after the Noise
+	// handshake completes successfully but before the connection transitions
+	// to the Established state. This allows protocol layers (e.g., NTCP2)
+	// to derive additional key material from the handshake hash, set up
+	// data-phase obfuscators, or perform post-handshake validation.
+	//
+	// If the hook returns an error, the handshake is considered failed and
+	// the connection reverts to the Init state.
+	PostHandshakeHook func(*NoiseConn) error
+
+	// AdditionalSymmetricKeyLabels specifies labels for Additional Symmetric
+	// Key (ASK) derivation at Split() time, per Noise spec §10.3. Each label
+	// produces a 32-byte key derived from the chaining key. The derived keys
+	// are available via NoiseConn.AdditionalSymmetricKeys() after the
+	// handshake completes.
+	//
+	// For NTCP2, this should be set to [][]byte{[]byte("ask")} to derive
+	// the ask_master used for SipHash key derivation.
+	AdditionalSymmetricKeyLabels [][]byte
 }
 
 // NewListenerConfig creates a new ListenerConfig with sensible defaults.
@@ -93,6 +118,29 @@ func (lc *ListenerConfig) WithReadTimeout(timeout time.Duration) *ListenerConfig
 // WithWriteTimeout sets the write timeout for accepted connections.
 func (lc *ListenerConfig) WithWriteTimeout(timeout time.Duration) *ListenerConfig {
 	lc.WriteTimeout = timeout
+	return lc
+}
+
+// WithModifiers sets the handshake modifiers for accepted connections.
+// Modifiers are applied in the order provided for outbound data and in
+// reverse order for inbound data. Required for NTCP2 server-side connections.
+func (lc *ListenerConfig) WithModifiers(modifiers ...handshake.HandshakeModifier) *ListenerConfig {
+	lc.Modifiers = make([]handshake.HandshakeModifier, len(modifiers))
+	copy(lc.Modifiers, modifiers)
+	return lc
+}
+
+// WithPostHandshakeHook sets a callback invoked after the Noise handshake completes
+// but before the connection transitions to the Established state.
+func (lc *ListenerConfig) WithPostHandshakeHook(hook func(*NoiseConn) error) *ListenerConfig {
+	lc.PostHandshakeHook = hook
+	return lc
+}
+
+// WithAdditionalSymmetricKeyLabels sets labels for ASK derivation at Split() time.
+// For NTCP2, use [][]byte{[]byte("ask")}.
+func (lc *ListenerConfig) WithAdditionalSymmetricKeyLabels(labels [][]byte) *ListenerConfig {
+	lc.AdditionalSymmetricKeyLabels = labels
 	return lc
 }
 
@@ -182,10 +230,8 @@ func NewNoiseListener(underlying net.Listener, config *ListenerConfig) (*NoiseLi
 
 // Accept waits for and returns the next connection to the listener.
 // The returned connection is wrapped in a NoiseConn configured as a responder.
+// This method is safe for concurrent use by multiple goroutines.
 func (nl *NoiseListener) Accept() (net.Conn, error) {
-	nl.acceptMutex.Lock()
-	defer nl.acceptMutex.Unlock()
-
 	if nl.isClosed() {
 		return nil, oops.
 			Code("LISTENER_CLOSED").
@@ -194,7 +240,8 @@ func (nl *NoiseListener) Accept() (net.Conn, error) {
 			Errorf("listener is closed")
 	}
 
-	// Accept the underlying connection
+	// Accept the underlying connection — net.TCPListener.Accept() is
+	// concurrency-safe, so no mutex is needed here.
 	underlying, err := nl.underlying.Accept()
 	if err != nil {
 		return nil, oops.
@@ -204,12 +251,10 @@ func (nl *NoiseListener) Accept() (net.Conn, error) {
 			Wrapf(err, "failed to accept underlying connection")
 	}
 
-	// Create connection config for the accepted connection (as responder)
-	connConfig := NewConnConfig(nl.config.Pattern, false). // false = responder
-								WithStaticKey(nl.config.StaticKey).
-								WithHandshakeTimeout(nl.config.HandshakeTimeout).
-								WithReadTimeout(nl.config.ReadTimeout).
-								WithWriteTimeout(nl.config.WriteTimeout)
+	// Create connection config for the accepted connection (as responder),
+	// propagating modifiers, post-handshake hook, and ASK labels from
+	// the listener config.
+	connConfig := nl.createAcceptConnConfig()
 
 	// Wrap in NoiseConn
 	noiseConn, err := NewNoiseConn(underlying, connConfig)
@@ -229,6 +274,29 @@ func (nl *NoiseListener) Accept() (net.Conn, error) {
 	}).Debug("accepted new noise connection")
 
 	return noiseConn, nil
+}
+
+// createAcceptConnConfig builds a ConnConfig for an accepted (responder)
+// connection, propagating all relevant fields from the ListenerConfig
+// including modifiers, post-handshake hook, and ASK labels.
+func (nl *NoiseListener) createAcceptConnConfig() *ConnConfig {
+	connConfig := NewConnConfig(nl.config.Pattern, false). // false = responder
+								WithStaticKey(nl.config.StaticKey).
+								WithHandshakeTimeout(nl.config.HandshakeTimeout).
+								WithReadTimeout(nl.config.ReadTimeout).
+								WithWriteTimeout(nl.config.WriteTimeout)
+
+	if len(nl.config.Modifiers) > 0 {
+		connConfig = connConfig.WithModifiers(nl.config.Modifiers...)
+	}
+	if nl.config.PostHandshakeHook != nil {
+		connConfig.PostHandshakeHook = nl.config.PostHandshakeHook
+	}
+	if len(nl.config.AdditionalSymmetricKeyLabels) > 0 {
+		connConfig.AdditionalSymmetricKeyLabels = nl.config.AdditionalSymmetricKeyLabels
+	}
+
+	return connConfig
 }
 
 // Close closes the listener and prevents new connections from being accepted.
@@ -286,7 +354,8 @@ func (nl *NoiseListener) Addr() net.Addr {
 }
 
 // isClosed returns true if the listener has been closed.
-// This method is not thread-safe and should only be called while holding closeMutex.
+// This method is thread-safe and acquires closeMutex internally;
+// do not call it while holding closeMutex.
 func (nl *NoiseListener) isClosed() bool {
 	nl.closeMutex.Lock()
 	defer nl.closeMutex.Unlock()

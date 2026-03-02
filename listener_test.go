@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/go-i2p/crypto/rand"
+	"github.com/go-i2p/go-noise/handshake"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -466,4 +467,327 @@ func BenchmarkListenerConfigValidation(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
+}
+
+// --- Tests for ListenerConfig Modifiers, PostHandshakeHook, AdditionalSymmetricKeyLabels ---
+
+// testModifier is a minimal HandshakeModifier for testing.
+type testModifier struct {
+	name string
+}
+
+func (m *testModifier) ModifyOutbound(_ handshake.HandshakePhase, data []byte) ([]byte, error) {
+	return data, nil
+}
+func (m *testModifier) ModifyInbound(_ handshake.HandshakePhase, data []byte) ([]byte, error) {
+	return data, nil
+}
+func (m *testModifier) Name() string { return m.name }
+func (m *testModifier) Close() error { return nil }
+
+func TestListenerConfigWithModifiers(t *testing.T) {
+	mod1 := &testModifier{name: "mod1"}
+	mod2 := &testModifier{name: "mod2"}
+
+	config := NewListenerConfig("XX").
+		WithModifiers(mod1, mod2)
+
+	require.Len(t, config.Modifiers, 2)
+	assert.Equal(t, "mod1", config.Modifiers[0].Name())
+	assert.Equal(t, "mod2", config.Modifiers[1].Name())
+}
+
+func TestListenerConfigWithModifiers_DefensiveCopy(t *testing.T) {
+	mod1 := &testModifier{name: "mod1"}
+	mods := []handshake.HandshakeModifier{mod1}
+
+	config := NewListenerConfig("XX").WithModifiers(mods...)
+
+	// Mutating the original slice should not affect the config
+	mods[0] = &testModifier{name: "replaced"}
+	assert.Equal(t, "mod1", config.Modifiers[0].Name())
+}
+
+func TestListenerConfigWithPostHandshakeHook(t *testing.T) {
+	hookCalled := false
+	hook := func(nc *NoiseConn) error {
+		hookCalled = true
+		return nil
+	}
+
+	config := NewListenerConfig("XX").
+		WithPostHandshakeHook(hook)
+
+	require.NotNil(t, config.PostHandshakeHook)
+
+	// Verify hook is callable
+	err := config.PostHandshakeHook(nil)
+	assert.NoError(t, err)
+	assert.True(t, hookCalled)
+}
+
+func TestListenerConfigWithAdditionalSymmetricKeyLabels(t *testing.T) {
+	labels := [][]byte{[]byte("ask"), []byte("extra")}
+
+	config := NewListenerConfig("XX").
+		WithAdditionalSymmetricKeyLabels(labels)
+
+	require.Len(t, config.AdditionalSymmetricKeyLabels, 2)
+	assert.Equal(t, []byte("ask"), config.AdditionalSymmetricKeyLabels[0])
+	assert.Equal(t, []byte("extra"), config.AdditionalSymmetricKeyLabels[1])
+}
+
+func TestListenerConfigBuilderChain_AllFields(t *testing.T) {
+	staticKey := make([]byte, 32)
+	_, err := rand.Read(staticKey)
+	require.NoError(t, err)
+
+	mod := &testModifier{name: "test-mod"}
+	hookCalled := false
+	hook := func(nc *NoiseConn) error {
+		hookCalled = true
+		return nil
+	}
+	labels := [][]byte{[]byte("ask")}
+
+	config := NewListenerConfig("XX").
+		WithStaticKey(staticKey).
+		WithHandshakeTimeout(10 * time.Second).
+		WithReadTimeout(5 * time.Second).
+		WithWriteTimeout(5 * time.Second).
+		WithModifiers(mod).
+		WithPostHandshakeHook(hook).
+		WithAdditionalSymmetricKeyLabels(labels)
+
+	assert.Equal(t, "XX", config.Pattern)
+	assert.Equal(t, staticKey, config.StaticKey)
+	assert.Equal(t, 10*time.Second, config.HandshakeTimeout)
+	assert.Len(t, config.Modifiers, 1)
+	assert.Equal(t, "test-mod", config.Modifiers[0].Name())
+	assert.NotNil(t, config.PostHandshakeHook)
+	assert.Len(t, config.AdditionalSymmetricKeyLabels, 1)
+
+	// Verify hook works
+	_ = config.PostHandshakeHook(nil)
+	assert.True(t, hookCalled)
+}
+
+// --- Test that Accept() propagates Modifiers/Hook/ASKLabels to ConnConfig ---
+
+func TestNoiseListenerAcceptPropagatesModifiers(t *testing.T) {
+	// Use a mock listener that returns a mock conn on Accept
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+
+	addr := &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 9090}
+	ml := &mockListener{
+		addr: addr,
+		acceptFunc: func() (net.Conn, error) {
+			return serverConn, nil
+		},
+	}
+
+	staticKey := make([]byte, 32)
+	_, err := rand.Read(staticKey)
+	require.NoError(t, err)
+
+	mod := &testModifier{name: "propagated-mod"}
+	hookCalled := false
+	hook := func(nc *NoiseConn) error {
+		hookCalled = true
+		return nil
+	}
+	labels := [][]byte{[]byte("ask")}
+
+	config := NewListenerConfig("XX").
+		WithStaticKey(staticKey).
+		WithModifiers(mod).
+		WithPostHandshakeHook(hook).
+		WithAdditionalSymmetricKeyLabels(labels)
+
+	noiseListener, err := NewNoiseListener(ml, config)
+	require.NoError(t, err)
+	defer noiseListener.Close()
+
+	conn, err := noiseListener.Accept()
+	require.NoError(t, err)
+	require.NotNil(t, conn)
+
+	noiseConn, ok := conn.(*NoiseConn)
+	require.True(t, ok)
+	defer noiseConn.Close()
+
+	// Verify modifiers were propagated
+	require.Len(t, noiseConn.config.Modifiers, 1)
+	assert.Equal(t, "propagated-mod", noiseConn.config.Modifiers[0].Name())
+
+	// Verify PostHandshakeHook was propagated
+	require.NotNil(t, noiseConn.config.PostHandshakeHook)
+
+	// Verify ASK labels were propagated
+	require.Len(t, noiseConn.config.AdditionalSymmetricKeyLabels, 1)
+	assert.Equal(t, []byte("ask"), noiseConn.config.AdditionalSymmetricKeyLabels[0])
+
+	// Verify hook is functional
+	_ = noiseConn.config.PostHandshakeHook(nil)
+	assert.True(t, hookCalled)
+}
+
+func TestNoiseListenerAcceptNoModifiers(t *testing.T) {
+	// Verify Accept works correctly when no modifiers are configured (no regression)
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+
+	addr := &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 9091}
+	ml := &mockListener{
+		addr: addr,
+		acceptFunc: func() (net.Conn, error) {
+			return serverConn, nil
+		},
+	}
+
+	staticKey := make([]byte, 32)
+	_, err := rand.Read(staticKey)
+	require.NoError(t, err)
+
+	config := NewListenerConfig("XX").WithStaticKey(staticKey)
+	noiseListener, err := NewNoiseListener(ml, config)
+	require.NoError(t, err)
+	defer noiseListener.Close()
+
+	conn, err := noiseListener.Accept()
+	require.NoError(t, err)
+	require.NotNil(t, conn)
+
+	noiseConn := conn.(*NoiseConn)
+	defer noiseConn.Close()
+
+	assert.Empty(t, noiseConn.config.Modifiers)
+	assert.Nil(t, noiseConn.config.PostHandshakeHook)
+	assert.Empty(t, noiseConn.config.AdditionalSymmetricKeyLabels)
+}
+
+// --- Test isClosed() is thread-safe ---
+
+func TestNoiseListenerIsClosedThreadSafe(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	staticKey := make([]byte, 32)
+	_, err = rand.Read(staticKey)
+	require.NoError(t, err)
+
+	config := NewListenerConfig("XX").WithStaticKey(staticKey)
+	noiseListener, err := NewNoiseListener(listener, config)
+	require.NoError(t, err)
+
+	// Concurrent readers calling isClosed() while a writer calls Close()
+	// should not deadlock or panic.
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			// Call isClosed() repeatedly — this is the method that previously
+			// had a misleading doc comment saying it was NOT thread-safe.
+			for j := 0; j < 100; j++ {
+				_ = noiseListener.isClosed()
+			}
+		}()
+	}
+
+	// Close from another goroutine
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		time.Sleep(1 * time.Millisecond)
+		noiseListener.Close()
+	}()
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Success — no deadlock
+	case <-time.After(5 * time.Second):
+		t.Fatal("deadlock detected: isClosed() is not thread-safe")
+	}
+}
+
+// --- Test concurrent Accept without acceptMutex serialization ---
+
+func TestNoiseListenerConcurrentAccepts(t *testing.T) {
+	// Create a real TCP listener
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	staticKey := make([]byte, 32)
+	_, err = rand.Read(staticKey)
+	require.NoError(t, err)
+
+	config := NewListenerConfig("XX").WithStaticKey(staticKey)
+	noiseListener, err := NewNoiseListener(listener, config)
+	require.NoError(t, err)
+	defer noiseListener.Close()
+
+	const numAcceptors = 3
+	const numConnections = 3
+
+	// Spawn multiple concurrent acceptors
+	accepted := make(chan net.Conn, numConnections)
+	acceptErrs := make(chan error, numAcceptors)
+
+	for i := 0; i < numAcceptors; i++ {
+		go func() {
+			conn, err := noiseListener.Accept()
+			if err != nil {
+				acceptErrs <- err
+				return
+			}
+			accepted <- conn
+		}()
+	}
+
+	// Give acceptors time to all block on Accept()
+	time.Sleep(50 * time.Millisecond)
+
+	// Connect clients
+	for i := 0; i < numConnections; i++ {
+		go func() {
+			conn, err := net.Dial("tcp", listener.Addr().String())
+			if err == nil {
+				defer conn.Close()
+				time.Sleep(200 * time.Millisecond)
+			}
+		}()
+	}
+
+	// Collect accepted connections
+	var conns []net.Conn
+	timeout := time.After(5 * time.Second)
+	for i := 0; i < numConnections; i++ {
+		select {
+		case conn := <-accepted:
+			conns = append(conns, conn)
+		case <-timeout:
+			// Some may not be accepted due to timing; that's fine
+			break
+		}
+	}
+
+	// Clean up
+	noiseListener.Close()
+	for _, c := range conns {
+		c.Close()
+	}
+
+	// At least one concurrent accept should have succeeded
+	assert.GreaterOrEqual(t, len(conns), 1,
+		"at least one concurrent accept should succeed without acceptMutex serialization")
 }
