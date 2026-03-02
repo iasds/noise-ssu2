@@ -106,7 +106,7 @@ func TestConnConfig_ValidateRetryConfig(t *testing.T) {
 func TestNewConnConfig_RetryDefaults(t *testing.T) {
 	config := NewConnConfig("XX", true)
 
-	expectedRetries := 3
+	expectedRetries := 0
 	if config.HandshakeRetries != expectedRetries {
 		t.Errorf("Expected default HandshakeRetries %d, got %d", expectedRetries, config.HandshakeRetries)
 	}

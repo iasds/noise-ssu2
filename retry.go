@@ -11,7 +11,11 @@ import (
 )
 
 // HandshakeWithRetry performs a handshake with retry logic based on configuration.
-// It implements exponential backoff for retry delays and respects context cancellation.
+// It uses the HandshakeRetries and RetryBackoff fields from ConnConfig to control
+// the number of attempts and exponential backoff delay between retries.
+// If HandshakeRetries is 0 (the default), this method behaves identically to
+// Handshake() — a single attempt with no retries.
+// It respects context cancellation between retry attempts.
 func (nc *NoiseConn) HandshakeWithRetry(ctx context.Context) error {
 	if nc.shouldUseSingleAttempt() {
 		return nc.Handshake(ctx)

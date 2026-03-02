@@ -36,8 +36,11 @@ type ConnConfig struct {
 	// Default: no timeout (0)
 	WriteTimeout time.Duration
 
-	// HandshakeRetries is the number of handshake retry attempts
-	// Default: 3 attempts (0 = no retries, -1 = infinite retries)
+	// HandshakeRetries is the number of handshake retry attempts.
+	// Default: 0 (no retries). Set to a positive value and use
+	// HandshakeWithRetry() to enable retry semantics with exponential
+	// backoff. Handshake() always performs a single attempt regardless
+	// of this setting. Use -1 for infinite retries.
 	HandshakeRetries int
 
 	// RetryBackoff is the base delay between retry attempts
@@ -101,7 +104,7 @@ func NewConnConfig(pattern string, initiator bool) *ConnConfig {
 		HandshakeTimeout: 30 * time.Second,
 		ReadTimeout:      0,               // No timeout by default
 		WriteTimeout:     0,               // No timeout by default
-		HandshakeRetries: 3,               // Default to 3 retries
+		HandshakeRetries: 0,               // Default to no retries; use HandshakeWithRetry() for retry semantics
 		RetryBackoff:     1 * time.Second, // Default backoff 1 second
 	}
 }
@@ -140,7 +143,9 @@ func (c *ConnConfig) WithWriteTimeout(timeout time.Duration) *ConnConfig {
 	return c
 }
 
-// WithHandshakeRetries sets the number of handshake retry attempts.
+// WithHandshakeRetries sets the number of handshake retry attempts
+// used by HandshakeWithRetry. Handshake() always performs a single
+// attempt regardless of this setting.
 // Use 0 for no retries, -1 for infinite retries.
 func (c *ConnConfig) WithHandshakeRetries(retries int) *ConnConfig {
 	c.HandshakeRetries = retries

@@ -576,8 +576,13 @@ func (nc *NoiseConn) SetWriteDeadline(t time.Time) error {
 	return nil
 }
 
-// Handshake performs the Noise Protocol handshake.
+// Handshake performs a single Noise Protocol handshake attempt.
 // This must be called before using Read/Write operations.
+//
+// Handshake always performs exactly one attempt and does not use the
+// HandshakeRetries or RetryBackoff configuration fields. To perform a
+// handshake with automatic retries and exponential backoff, use
+// HandshakeWithRetry instead.
 //
 // Thread Safety: This method is safe for concurrent use but handshake operations
 // are serialized. Only one handshake can be in progress at a time per connection.
