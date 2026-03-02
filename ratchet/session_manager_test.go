@@ -2209,3 +2209,166 @@ func TestTagCounterIndex_CleanedOnClose(t *testing.T) {
 		"tagCounterIndex should be empty after Close")
 	sm.mu.RUnlock()
 }
+
+// ============================================================================
+// Audit-mandated tests
+// ============================================================================
+
+// TestCleanupExpiredSessions_RemovesNSRTag verifies that CleanupExpiredSessions
+// correctly removes the NSR tag from sm.nsrTagIndex when an initiator session
+// expires before the NSR is received. This covers the co-path where an NS was
+// sent but the responder never replied (or replied too late), and the session's
+// inactivity timeout fires.
+func TestCleanupExpiredSessions_RemovesNSRTag(t *testing.T) {
+	alice, bob := createLinkedManagers(t)
+	alice.sessionTimeout = 1 * time.Millisecond // very short timeout for test
+
+	destHash := types.SHA256(bob.ourPublicKey[:])
+
+	// Step 1: Alice sends NS — registers an NSR tag in alice.nsrTagIndex.
+	_, err := alice.EncryptGarlicMessage(destHash, bob.ourPublicKey, mustBuildNSPayload(t, []byte("ns-pre-expiry")))
+	require.NoError(t, err)
+
+	// Verify nsrTagIndex has exactly one entry and the session has a non-nil nsrTag.
+	alice.mu.RLock()
+	nsrTagCount := len(alice.nsrTagIndex)
+	session := alice.sessions[destHash]
+	alice.mu.RUnlock()
+	require.Equal(t, 1, nsrTagCount, "After sending NS, initiator should have one NSR tag")
+	require.NotNil(t, session, "Session should exist after NS send")
+
+	session.mu.Lock()
+	require.NotNil(t, session.nsrTag, "Session nsrTag should be non-nil before NSR")
+	var expectedNSRTag [8]byte
+	copy(expectedNSRTag[:], session.nsrTag[:])
+	session.mu.Unlock()
+
+	// Step 2: Do NOT complete NSR — let the session expire.
+	// Force the session to look expired by backdating LastUsed.
+	session.mu.Lock()
+	session.LastUsed = time.Now().Add(-time.Second) // well past the 1ms timeout
+	session.mu.Unlock()
+
+	// Step 3: CleanupExpiredSessions should remove the session AND its nsrTagIndex entry.
+	removed := alice.CleanupExpiredSessions()
+	assert.Equal(t, 1, removed, "One expired session should be removed")
+	assert.Equal(t, 0, alice.GetSessionCount(), "No sessions should remain")
+
+	// Verify nsrTagIndex is empty — this is the specific assertion from the audit.
+	alice.mu.RLock()
+	_, nsrTagStillPresent := alice.nsrTagIndex[expectedNSRTag]
+	nsrTagIndexLen := len(alice.nsrTagIndex)
+	alice.mu.RUnlock()
+	assert.False(t, nsrTagStillPresent,
+		"NSR tag should be removed from nsrTagIndex after session expiry")
+	assert.Equal(t, 0, nsrTagIndexLen,
+		"nsrTagIndex should be fully drained after expired session cleanup")
+
+	// Verify tagIndex is also empty.
+	alice.mu.RLock()
+	tagIndexLen := len(alice.tagIndex)
+	tagCounterIndexLen := len(alice.tagCounterIndex)
+	alice.mu.RUnlock()
+	assert.Equal(t, 0, tagIndexLen, "tagIndex should be empty after cleanup")
+	assert.Equal(t, 0, tagCounterIndexLen, "tagCounterIndex should be empty after cleanup")
+}
+
+// TestCleanupExpiredSessions_ConcurrentWithPartialNSR exercises the cleanup
+// path concurrently: one goroutine is waiting to complete an NSR while
+// another runs CleanupExpiredSessions. The session should either survive
+// (if NSR completes first) or be fully cleaned up (if cleanup fires first)
+// with no dangling nsrTagIndex entries in either case.
+func TestCleanupExpiredSessions_ConcurrentWithPartialNSR(t *testing.T) {
+	alice, bob := createLinkedManagers(t)
+	alice.sessionTimeout = 50 * time.Millisecond
+
+	destHash := types.SHA256(bob.ourPublicKey[:])
+
+	// Alice sends NS.
+	nsMsg, err := alice.EncryptGarlicMessage(destHash, bob.ourPublicKey, mustBuildNSPayload(t, []byte("concurrent-nsr")))
+	require.NoError(t, err)
+
+	// Bob decrypts NS but holds the NSR for a moment.
+	_, _, sessionHash, err := bob.DecryptGarlicMessage(nsMsg)
+	require.NoError(t, err)
+	require.NotNil(t, sessionHash)
+
+	nsrMsg, err := bob.EncryptNewSessionReply(*sessionHash, []byte("nsr-reply"))
+	require.NoError(t, err)
+
+	// Race: run cleanup and NSR receipt concurrently.
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		time.Sleep(40 * time.Millisecond) // give cleanup a chance
+		alice.CleanupExpiredSessions()
+	}()
+
+	go func() {
+		defer wg.Done()
+		time.Sleep(30 * time.Millisecond)
+		// Attempt NSR — may fail if cleanup already removed the session.
+		_, _, _, _ = alice.DecryptGarlicMessage(nsrMsg)
+	}()
+
+	wg.Wait()
+
+	// Invariant: regardless of race outcome, nsrTagIndex must not have stale entries.
+	alice.mu.RLock()
+	nsrTagIndexLen := len(alice.nsrTagIndex)
+	alice.mu.RUnlock()
+	assert.Equal(t, 0, nsrTagIndexLen,
+		"nsrTagIndex should have no stale entries after concurrent cleanup + NSR")
+}
+
+// TestDecryptExistingSession_CounterNotInWindow verifies the error path where
+// a session tag is valid (lookup succeeds) but the ciphertext is corrupted,
+// causing AEAD decryption to fail for every counter in the receive window.
+// The expected error message format is:
+//
+//	"decrypt failed: message does not match any counter in recv window [base, base+64)"
+func TestDecryptExistingSession_CounterNotInWindow(t *testing.T) {
+	alice, bob := createLinkedManagers(t)
+
+	// Fully establish session: NS → NSR.
+	destHash := mustBootstrapSession(t, alice, bob)
+
+	// Alice encrypts an ES message.
+	payload := mustBuildNSPayload(t, []byte("valid-message"))
+	encMsg, err := alice.EncryptGarlicMessage(destHash, bob.ourPublicKey, payload)
+	require.NoError(t, err)
+	require.True(t, len(encMsg) > 24, "Encrypted ES message should be longer than tag+header")
+
+	// Corrupt the ciphertext body (bytes after the 8-byte session tag).
+	// Flip bits in the middle of the ciphertext to ensure AEAD auth fails.
+	corruptedMsg := make([]byte, len(encMsg))
+	copy(corruptedMsg, encMsg)
+	// Corrupt several bytes in the encrypted payload area.
+	for i := 8; i < len(corruptedMsg)-16 && i < 24; i++ {
+		corruptedMsg[i] ^= 0xFF
+	}
+
+	// Bob tries to decrypt — tag lookup will succeed but AEAD will fail.
+	_, _, _, err = bob.DecryptGarlicMessage(corruptedMsg)
+	require.Error(t, err, "Corrupted ciphertext should cause decrypt failure")
+	assert.Contains(t, err.Error(), "does not match any counter in recv window",
+		"Error should indicate counter/window exhaustion, got: %s", err.Error())
+}
+
+// TestDecryptExistingSession_ForgedTag_FallsThrough verifies that a message
+// with a completely unknown session tag does not match any existing session
+// or NSR tag and falls through to the New Session decrypt path (which also
+// fails for a malformed message).
+func TestDecryptExistingSession_ForgedTag_FallsThrough(t *testing.T) {
+	_, bob := createLinkedManagers(t)
+
+	// Construct a fake message with a random tag that isn't in any index.
+	fakeMsg := make([]byte, 64)
+	_, err := rand.Read(fakeMsg)
+	require.NoError(t, err)
+
+	_, _, _, err = bob.DecryptGarlicMessage(fakeMsg)
+	require.Error(t, err, "Message with forged tag should fail decryption")
+}
