@@ -19,4 +19,17 @@ type PoolConfig struct {
 	// HealthCheck is an optional callback to probe connection liveness
 	// before returning it from Get(). Return true if healthy.
 	HealthCheck func(net.Conn) bool
+	// ReadyCheck is an optional callback invoked by Put() to verify that a
+	// connection is ready for reuse (e.g., that a Noise handshake has been
+	// completed). Return true if the connection is ready to be pooled.
+	// When nil, all connections are accepted by Put().
+	//
+	// For NTCP2 connections, the recommended check is:
+	//   func(c net.Conn) bool {
+	//       if nc, ok := c.(*noise.NoiseConn); ok {
+	//           return nc.GetConnectionState() == internal.StateEstablished
+	//       }
+	//       return true
+	//   }
+	ReadyCheck func(net.Conn) bool
 }

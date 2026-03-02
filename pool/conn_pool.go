@@ -1,6 +1,7 @@
 package pool
 
 import (
+	"context"
 	"errors"
 	"net"
 	"sync"
@@ -19,8 +20,11 @@ type ConnPool struct {
 	maxAge      time.Duration
 	maxIdle     time.Duration
 	healthCheck func(net.Conn) bool
+	readyCheck  func(net.Conn) bool
 	closed      bool
 	done        chan struct{}
+	// dialMu serializes GetOrDial per address to prevent TOCTOU races.
+	dialMu sync.Map // map[string]*sync.Mutex
 }
 
 // NewConnPool creates a new connection pool with the given configuration
@@ -40,6 +44,7 @@ func NewConnPool(config *PoolConfig) *ConnPool {
 		maxAge:      config.MaxAge,
 		maxIdle:     config.MaxIdle,
 		healthCheck: config.HealthCheck,
+		readyCheck:  config.ReadyCheck,
 		done:        make(chan struct{}),
 	}
 
@@ -99,7 +104,112 @@ func (p *ConnPool) Get(remoteAddr string) net.Conn {
 	return nil
 }
 
-// Put adds a connection to the pool for reuse
+// getOrDialMu returns the per-address mutex for GetOrDial serialization.
+func (p *ConnPool) getOrDialMu(remoteAddr string) *sync.Mutex {
+	val, _ := p.dialMu.LoadOrStore(remoteAddr, &sync.Mutex{})
+	return val.(*sync.Mutex)
+}
+
+// GetOrDial atomically retrieves an idle connection for remoteAddr or, if none
+// is available, calls dial to create a new one. The dial function is called
+// outside the pool lock so it may perform blocking I/O (e.g., TCP connect +
+// Noise handshake), but only one goroutine at a time will dial for a given
+// remoteAddr. This prevents the TOCTOU race where multiple goroutines
+// simultaneously discover an empty pool and each dial a fresh connection to
+// the same NTCP2 router — which the NTCP2 spec considers a protocol error
+// (§2.1: "only one active NTCP2 session per router").
+//
+// The returned connection is wrapped in a PoolConnWrapper. If dial succeeds,
+// the new connection is added to the pool and checked out in a single
+// atomic step.
+//
+// If ctx is cancelled before dial completes, GetOrDial returns ctx.Err().
+func (p *ConnPool) GetOrDial(ctx context.Context, remoteAddr string, dial func(ctx context.Context) (net.Conn, error)) (net.Conn, error) {
+	// Fast path: try to get an existing connection.
+	if conn := p.Get(remoteAddr); conn != nil {
+		return conn, nil
+	}
+
+	// Serialize dialing per address to prevent duplicate sessions.
+	addrMu := p.getOrDialMu(remoteAddr)
+	addrMu.Lock()
+	defer addrMu.Unlock()
+
+	// Re-check after acquiring the per-address lock — another goroutine
+	// may have dialed and put a connection while we waited.
+	if conn := p.Get(remoteAddr); conn != nil {
+		return conn, nil
+	}
+
+	// Check context before dialing.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	// Dial outside the pool lock.
+	conn, err := dial(ctx)
+	if err != nil {
+		return nil, oops.
+			Code("DIAL_FAILED").
+			In("pool").
+			Wrapf(err, "GetOrDial: dial failed for %s", remoteAddr)
+	}
+
+	// Put the new connection into the pool and immediately check it out.
+	return p.putAndGet(remoteAddr, conn)
+}
+
+// putAndGet adds a newly-dialed connection to the pool and returns it
+// as a checked-out PoolConnWrapper in a single atomic step.
+func (p *ConnPool) putAndGet(remoteAddr string, conn net.Conn) (net.Conn, error) {
+	conn = unwrapPoolConn(conn)
+
+	if p.readyCheck != nil && !p.readyCheck(conn) {
+		conn.Close()
+		return nil, oops.
+			Code("CONNECTION_NOT_READY").
+			In("pool").
+			Errorf("GetOrDial: connection failed ReadyCheck for %s", remoteAddr)
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.closed {
+		conn.Close()
+		return nil, oops.
+			Code("POOL_CLOSED").
+			In("pool").
+			Errorf("GetOrDial: pool is closed")
+	}
+
+	connList := p.conns[remoteAddr]
+	if p.exceedsCapacity(connList) {
+		conn.Close()
+		return nil, oops.
+			Code("POOL_FULL").
+			In("pool").
+			Errorf("GetOrDial: pool at capacity for %s", remoteAddr)
+	}
+
+	pc := newPooledConn(conn, remoteAddr)
+	pc.inUse = true
+	p.conns[remoteAddr] = append(connList, pc)
+
+	return &PoolConnWrapper{
+		Conn: conn,
+		pool: p,
+		addr: remoteAddr,
+	}, nil
+}
+
+// Put adds a connection to the pool for reuse.
+//
+// Callers must only Put() connections whose Noise handshake has been
+// completed. If a ReadyCheck callback is configured in PoolConfig, it is
+// called before pooling; the connection is rejected (closed) if the check
+// returns false. Without a ReadyCheck, it is the caller's responsibility
+// to ensure the connection is in a usable state.
 func (p *ConnPool) Put(conn net.Conn) error {
 	if conn == nil {
 		return oops.
@@ -109,6 +219,13 @@ func (p *ConnPool) Put(conn net.Conn) error {
 	}
 
 	conn = unwrapPoolConn(conn)
+
+	if p.readyCheck != nil && !p.readyCheck(conn) {
+		return oops.
+			Code("CONNECTION_NOT_READY").
+			In("pool").
+			Errorf("connection failed ReadyCheck; not pooled")
+	}
 
 	addr := conn.RemoteAddr()
 	if addr == nil {
