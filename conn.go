@@ -375,6 +375,14 @@ func (nc *NoiseConn) Close() error {
 
 	nc.logger.Debug("Closing NoiseConn")
 
+	// Zero cipher state key material before closing
+	nc.ZeroKeys()
+
+	// Zero static key material from config to prevent lingering in memory
+	if nc.config != nil && len(nc.config.StaticKey) > 0 {
+		internal.SecureZero(nc.config.StaticKey)
+	}
+
 	// Unregister from shutdown manager if set
 	if nc.shutdownManager != nil {
 		nc.shutdownManager.UnregisterConnection(nc)
