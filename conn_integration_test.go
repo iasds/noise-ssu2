@@ -2,6 +2,7 @@ package noise
 
 import (
 	"context"
+	"errors"
 	"net"
 	"sync"
 	"testing"
@@ -514,4 +515,89 @@ func TestPhaseData_ModifierInvokedOnWriteAndRead(t *testing.T) {
 	serverMod.mu.Unlock()
 	require.Equal(t, 1, inCalls, "Read must invoke ModifyInbound once")
 	assert.Equal(t, handshake.PhaseData, inPhase, "Read must invoke ModifyInbound with PhaseData")
+}
+
+// TestHandshakeTimeoutWithStalledPeer verifies that a stalled peer (one that
+// never sends any handshake messages) causes the Handshake call to return a
+// deadline-exceeded error rather than blocking indefinitely.
+func TestHandshakeTimeoutWithStalledPeer(t *testing.T) {
+	// Create a pipe; only the initiator side will attempt a handshake.
+	// The responder side is left idle — simulating a stalled or malicious peer.
+	initiatorConn, _ := net.Pipe()
+	defer initiatorConn.Close()
+
+	config := NewConnConfig("NN", true).
+		WithHandshakeTimeout(100 * time.Millisecond)
+
+	client, err := NewNoiseConn(initiatorConn, config)
+	require.NoError(t, err, "NewNoiseConn should succeed")
+	defer client.Close()
+
+	ctx := context.Background()
+
+	start := time.Now()
+	err = client.Handshake(ctx)
+	elapsed := time.Since(start)
+
+	// The handshake must fail because the peer never responds.
+	require.Error(t, err, "Handshake must fail when peer is stalled")
+
+	// Verify the error is a deadline/timeout, not some other failure.
+	require.True(t,
+		isTimeoutError(err),
+		"expected a timeout/deadline error, got: %v", err)
+
+	// Verify it completed in a reasonable time (not stuck forever).
+	// Allow generous margin: up to 5s for slow CI, but it should be ~100ms.
+	require.Less(t, elapsed, 5*time.Second,
+		"Handshake should have timed out promptly, took %v", elapsed)
+}
+
+// isTimeoutError checks whether err (or any wrapped error) is a deadline/timeout.
+func isTimeoutError(err error) bool {
+	if err == nil {
+		return false
+	}
+	// Check for net.Error timeout interface
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	// Check for context deadline exceeded
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	// Fall back to string matching for wrapped errors (oops wraps messages)
+	msg := err.Error()
+	return contains(msg, "deadline") || contains(msg, "timeout") || contains(msg, "i/o timeout")
+}
+
+// contains is a simple case-insensitive substring check.
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && searchCI(s, substr)
+}
+
+func searchCI(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if eqFoldASCII(s[i:i+len(substr)], substr) {
+			return true
+		}
+	}
+	return false
+}
+
+func eqFoldASCII(a, b string) bool {
+	for i := 0; i < len(a); i++ {
+		ca, cb := a[i], b[i]
+		if ca >= 'A' && ca <= 'Z' {
+			ca += 'a' - 'A'
+		}
+		if cb >= 'A' && cb <= 'Z' {
+			cb += 'a' - 'A'
+		}
+		if ca != cb {
+			return false
+		}
+	}
+	return true
 }

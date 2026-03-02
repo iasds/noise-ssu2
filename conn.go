@@ -6,13 +6,11 @@ import (
 	"encoding/binary"
 	"io"
 	"net"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/go-i2p/go-noise/handshake"
 	"github.com/go-i2p/go-noise/internal"
-	"github.com/go-i2p/logger"
 	i2plogger "github.com/go-i2p/logger"
 	"github.com/go-i2p/noise"
 	"github.com/samber/oops"
@@ -91,7 +89,7 @@ type NoiseConn struct {
 	handshakeMutex sync.Mutex
 
 	// logger for connection events
-	logger *logger.Logger
+	logger *i2plogger.Logger
 
 	// shutdownManager for coordinated shutdown (optional)
 	shutdownManager *ShutdownManager
@@ -512,7 +510,7 @@ func (nc *NoiseConn) Rekey() error {
 	}
 	nc.sendCipherState.Rekey()
 	nc.recvCipherState.Rekey()
-	nc.logger.WithFields(logger.Fields{
+	nc.logger.WithFields(i2plogger.Fields{
 		"pattern":     nc.config.Pattern,
 		"local_addr":  nc.localAddr.String(),
 		"remote_addr": nc.remoteAddr.String(),
@@ -679,6 +677,8 @@ func (nc *NoiseConn) performInitiatorHandshake(ctx context.Context) error {
 	// Three-message patterns
 	case "XX", "Noise_XX_25519_AESGCM_SHA256":
 		return nc.performXXInitiator(ctx)
+
+	// Two-message patterns with pre-messages
 	case "KX", "Noise_KX_25519_AESGCM_SHA256":
 		return nc.performKXInitiator(ctx)
 
@@ -688,11 +688,6 @@ func (nc *NoiseConn) performInitiatorHandshake(ctx context.Context) error {
 			In("noise").
 			Errorf("unsupported handshake pattern: %s", pattern)
 	}
-}
-
-// performOneWayInitiator handles one-way patterns (N, K, X)
-func (nc *NoiseConn) performOneWayInitiator(ctx context.Context) error {
-	return nc.sendNoiseHandshakeMsg("one-way")
 }
 
 // performNNInitiator handles NN pattern as initiator
@@ -717,122 +712,6 @@ func (nc *NoiseConn) performXXInitiator(ctx context.Context) error {
 	}
 	// Message 3: → s, se (send)
 	return nc.sendNoiseHandshakeMsg("third XX")
-}
-
-// getPatternMessageCount returns the expected number of handshake messages for each pattern.
-// Returns an error for unknown patterns instead of defaulting, preventing configuration errors.
-func (nc *NoiseConn) getPatternMessageCount() (int, error) {
-	pattern := nc.config.Pattern
-
-	switch pattern {
-	case "N", "K", "X":
-		nc.logPatternDetected(pattern, 1, "one-way", "short")
-		return 1, nil
-	case "NN", "NK", "NX", "KN", "KK", "KX", "IN", "IK", "IX":
-		nc.logPatternDetected(pattern, 2, "two-message-interactive", "short")
-		return 2, nil
-	case "XN", "XK", "XX":
-		nc.logPatternDetected(pattern, 3, "three-message", "short")
-		return 3, nil
-	default:
-		return nc.matchFullFormPattern(pattern)
-	}
-}
-
-// matchFullFormPattern detects full-form Noise protocol pattern names (e.g.
-// "Noise_XX_25519_AESGCM_SHA256") and returns the expected message count.
-func (nc *NoiseConn) matchFullFormPattern(pattern string) (int, error) {
-	oneWay := []string{"_N_", "_K_", "_X_"}
-	twoMsg := []string{"_NN_", "_NK_", "_NX_", "_KN_", "_KK_", "_KX_", "_IN_", "_IK_", "_IX_"}
-	threeMsg := []string{"_XN_", "_XK_", "_XX_"}
-
-	if containsAny(pattern, oneWay) {
-		nc.logPatternDetected(pattern, 1, "one-way", "full")
-		return 1, nil
-	}
-	if containsAny(pattern, twoMsg) {
-		nc.logPatternDetected(pattern, 2, "two-message-interactive", "full")
-		return 2, nil
-	}
-	if containsAny(pattern, threeMsg) {
-		nc.logPatternDetected(pattern, 3, "three-message", "full")
-		return 3, nil
-	}
-
-	return 0, oops.
-		Code("UNKNOWN_PATTERN").
-		In("noise").
-		With("pattern", pattern).
-		Errorf("unknown handshake pattern: %s", pattern)
-}
-
-// logPatternDetected logs the detection of a handshake pattern with its expected message count.
-func (nc *NoiseConn) logPatternDetected(pattern string, msgCount int, patternType, patternFormat string) {
-	nc.logger.WithFields(i2plogger.Fields{
-		"pattern":           pattern,
-		"expected_messages": msgCount,
-		"pattern_type":      patternType,
-		"pattern_format":    patternFormat,
-	}).Debug("detected handshake pattern")
-}
-
-// containsAny returns true if s contains any of the given substrings.
-func containsAny(s string, substrings []string) bool {
-	for _, sub := range substrings {
-		if strings.Contains(s, sub) {
-			return true
-		}
-	}
-	return false
-}
-
-// sendHandshakeMessage sends a handshake message
-func (nc *NoiseConn) sendHandshakeMessage(ctx context.Context) error {
-	// Write handshake message using the handshake state
-	msg, cs1, cs2, err := nc.handshakeState.WriteMessage(nil, nil)
-	if err != nil {
-		return oops.
-			Code("WRITE_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to create handshake message")
-	}
-
-	// Send length-prefixed message over underlying connection
-	if err := nc.writeFramedMessage(msg); err != nil {
-		return oops.
-			Code("SEND_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to send handshake message")
-	}
-
-	// Store cipher states if handshake is complete
-	nc.updateCipherStates(cs1, cs2)
-	return nil
-}
-
-// receiveHandshakeMessage receives and processes a handshake message
-func (nc *NoiseConn) receiveHandshakeMessage(ctx context.Context) error {
-	// Read length-prefixed message from underlying connection
-	buffer, err := nc.readFramedMessage()
-	if err != nil {
-		return oops.
-			Code("READ_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to read handshake message")
-	}
-
-	// Process message using handshake state
-	_, cs1, cs2, err := nc.handshakeState.ReadMessage(nil, buffer)
-	if err != nil {
-		return oops.
-			Code("PROCESS_MESSAGE_FAILED").
-			In("noise").
-			Wrapf(err, "failed to process handshake message")
-	}
-
-	// Store cipher states if handshake is complete
-	nc.updateCipherStates(cs1, cs2)
-	return nil
 }
 
 // sendNoiseHandshakeMsg writes a Noise handshake message to the underlying connection
@@ -964,6 +843,8 @@ func (nc *NoiseConn) performResponderHandshake(ctx context.Context) error {
 	// Three-message patterns
 	case "XX", "Noise_XX_25519_AESGCM_SHA256":
 		return nc.performXXResponder(ctx)
+
+	// Two-message patterns with pre-messages
 	case "KX", "Noise_KX_25519_AESGCM_SHA256":
 		return nc.performKXResponder(ctx)
 
@@ -973,12 +854,6 @@ func (nc *NoiseConn) performResponderHandshake(ctx context.Context) error {
 			In("noise").
 			Errorf("unsupported handshake pattern: %s", pattern)
 	}
-}
-
-// performOneWayResponder handles one-way patterns (N, K, X)
-func (nc *NoiseConn) performOneWayResponder(ctx context.Context) error {
-	// Receive single message
-	return nc.receiveNoiseHandshakeMsg("OneWay")
 }
 
 // performNNResponder handles NN pattern as responder
@@ -1136,7 +1011,7 @@ func (nc *NoiseConn) performIXInitiator(ctx context.Context) error {
 }
 
 // ============================================================================
-// THREE-MESSAGE PATTERNS
+// TWO-MESSAGE PRE-KEY PATTERNS (pre-message + 2 wire messages)
 // ============================================================================
 
 // performKXInitiator handles KX pattern as initiator (2 messages):
@@ -1284,7 +1159,7 @@ func (nc *NoiseConn) performIXResponder(ctx context.Context) error {
 }
 
 // ============================================================================
-// THREE-MESSAGE PATTERN RESPONDERS
+// TWO-MESSAGE PRE-KEY PATTERN RESPONDERS (pre-message + 2 wire messages)
 // ============================================================================
 
 // performKXResponder handles KX pattern as responder (2 messages):
