@@ -399,3 +399,85 @@ func TestFormatRouterHash(t *testing.T) {
 		})
 	}
 }
+
+// ============================================================================
+// Listener accept error-path tests (TEST-2 from AUDIT.md)
+// ============================================================================
+
+// errorListener is a net.Listener whose Accept always returns an error,
+// simulating transient errors (e.g., EMFILE, network reset).
+type errorListener struct {
+	addr net.Addr
+	err  error
+}
+
+func (e *errorListener) Accept() (net.Conn, error) { return nil, e.err }
+func (e *errorListener) Close() error              { return nil }
+func (e *errorListener) Addr() net.Addr            { return e.addr }
+
+// TestNTCP2Listener_AcceptUnderlyingError verifies that a transient error
+// from the underlying TCP listener is correctly propagated by Accept().
+func TestNTCP2Listener_AcceptUnderlyingError(t *testing.T) {
+	routerHash := make([]byte, RouterHashSize)
+	copy(routerHash, "responder-hash-32-bytes-long!!!!")
+
+	config, err := NewNTCP2Config(routerHash, false)
+	require.NoError(t, err)
+	config, err = config.WithAESObfuscation(false, nil)
+	require.NoError(t, err)
+
+	tcpLn, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	addr := tcpLn.Addr()
+	tcpLn.Close() // close the real one
+
+	fakeErr := net.UnknownNetworkError("simulated EMFILE")
+	el := &errorListener{addr: addr, err: fakeErr}
+
+	ntcp2Ln, err := NewNTCP2Listener(el, config)
+	require.NoError(t, err)
+	defer ntcp2Ln.Close()
+
+	conn, err := ntcp2Ln.Accept()
+	assert.Nil(t, conn, "conn should be nil on underlying accept error")
+	assert.Error(t, err, "accept should propagate underlying error")
+	assert.Contains(t, err.Error(), "simulated EMFILE")
+}
+
+// TestNTCP2Listener_AcceptToConnConfigError verifies that if ToConnConfig()
+// fails mid-accept (e.g., due to an invalid config mutation), the raw
+// connection is closed and the error is propagated.
+func TestNTCP2Listener_AcceptToConnConfigError(t *testing.T) {
+	routerHash := make([]byte, RouterHashSize)
+	copy(routerHash, "responder-hash-32-bytes-long!!!!")
+
+	config, err := NewNTCP2Config(routerHash, false)
+	require.NoError(t, err)
+	config, err = config.WithAESObfuscation(false, nil)
+	require.NoError(t, err)
+
+	// Create a real listener so Accept() succeeds
+	tcpLn, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer tcpLn.Close()
+
+	ntcp2Ln, err := NewNTCP2Listener(tcpLn, config)
+	require.NoError(t, err)
+	defer ntcp2Ln.Close()
+
+	// Corrupt the config's pattern so ToConnConfig() will fail during Accept.
+	// The listener clones config on each accept, so we corrupt the source.
+	ntcp2Ln.config.Pattern = "" // empty pattern → invalid
+
+	// Dial to unblock Accept
+	go func() {
+		conn, err := net.DialTimeout("tcp", tcpLn.Addr().String(), 2*time.Second)
+		if err == nil {
+			conn.Close()
+		}
+	}()
+
+	conn, err := ntcp2Ln.Accept()
+	assert.Nil(t, conn, "conn should be nil when ToConnConfig fails")
+	assert.Error(t, err, "Accept should return error from createResponderConnConfig")
+}

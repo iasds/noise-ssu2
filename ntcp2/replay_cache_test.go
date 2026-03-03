@@ -145,6 +145,38 @@ func TestReplayCache_MaxSizeEviction(t *testing.T) {
 	assert.LessOrEqual(t, rc.Size(), replayCacheMaxSize)
 }
 
+// TestReplayCache_DoubleClose verifies that calling Close() twice does not
+// panic. This exercises the sync.Once guard added to fix BUG-1 from AUDIT.md.
+func TestReplayCache_DoubleClose(t *testing.T) {
+	rc := NewReplayCache()
+
+	// First close should succeed without panic
+	rc.Close()
+
+	// Second close must not panic (previously panicked on double-close of rc.done channel)
+	assert.NotPanics(t, func() {
+		rc.Close()
+	}, "ReplayCache.Close() must be idempotent — second call must not panic")
+}
+
+// TestReplayCache_ConcurrentClose verifies that concurrent Close() calls
+// from multiple goroutines do not panic or race.
+func TestReplayCache_ConcurrentClose(t *testing.T) {
+	rc := NewReplayCache()
+
+	const numGoroutines = 10
+	var wg sync.WaitGroup
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			rc.Close()
+		}()
+	}
+	wg.Wait()
+	// If we reach here without panic, the test passes
+}
+
 // =============================================================================
 // BENCHMARKS
 // =============================================================================

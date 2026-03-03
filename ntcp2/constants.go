@@ -76,12 +76,21 @@ const (
 	// AEADErrorMaxJunkBytes is the maximum number of random bytes to read
 	// on an AEAD authentication failure for probing resistance. Per the spec:
 	// "random number of bytes (range TBD)" — we use 1024 as a reasonable upper bound.
+	//
+	// INVARIANT: AEADErrorMaxJunkBytes MUST be a power of two.
+	// The bitmask in handleAEADError (val & (AEADErrorMaxJunkBytes - 1)) only
+	// produces a uniform distribution when this constant is a power of two.
+	// Changing it to a non-power-of-two value will introduce modulo bias.
 	AEADErrorMaxJunkBytes = 1024
 
-	// AEADErrorTimeout is the maximum duration to wait while reading random
+	// AEADErrorTimeoutMin is the minimum duration to wait while reading random
 	// bytes on an AEAD authentication failure. Per the spec: "random timeout
-	// (range TBD)" — we use 2 seconds as a reasonable upper bound.
-	AEADErrorTimeout = 2 * time.Second
+	// (range TBD)" — randomized over [1s, 3s] to avoid timing fingerprints.
+	AEADErrorTimeoutMin = 1 * time.Second
+
+	// AEADErrorTimeoutMax is the maximum duration to wait while reading random
+	// bytes on an AEAD authentication failure.
+	AEADErrorTimeoutMax = 3 * time.Second
 
 	// NonceRekeyThreshold is the nonce value at which the connection should
 	// be considered approaching exhaustion. Since Noise Rekey() does not reset

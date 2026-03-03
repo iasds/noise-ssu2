@@ -404,14 +404,32 @@ func (nc *NTCP2Conn) handleAEADError(underlying net.Conn) {
 	}
 	junkLen := int(binary.BigEndian.Uint16(rndBuf[:]) & (AEADErrorMaxJunkBytes - 1))
 	if junkLen > 0 {
-		// Set a short deadline so we don't block forever if the peer stops sending.
-		underlying.SetReadDeadline(time.Now().Add(AEADErrorTimeout)) //nolint:errcheck
+		// Randomize the timeout duration within [AEADErrorTimeoutMin, AEADErrorTimeoutMax]
+		// to avoid creating a timing fingerprint (per spec: "random timeout").
+		timeout := randomAEADTimeout()
+		underlying.SetReadDeadline(time.Now().Add(timeout)) //nolint:errcheck
 		junk := make([]byte, junkLen)
 		underlying.Read(junk) //nolint:errcheck // best effort
 	}
 
 	// Per the spec: "This should be an abnormal close (TCP RST)"
 	nc.sendTCPRST(underlying)
+}
+
+// randomAEADTimeout returns a uniformly random duration in the range
+// [AEADErrorTimeoutMin, AEADErrorTimeoutMax] for probing-resistance delays.
+// The spec says "random timeout (range TBD)" — we randomize to avoid creating
+// a timing fingerprint that would allow an attacker to identify AEAD failures.
+func randomAEADTimeout() time.Duration {
+	spread := AEADErrorTimeoutMax - AEADErrorTimeoutMin
+	var buf [8]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		// Fallback to midpoint on entropy failure (best effort)
+		return AEADErrorTimeoutMin + spread/2
+	}
+	n := binary.BigEndian.Uint64(buf[:])
+	offset := time.Duration(n % uint64(spread+1))
+	return AEADErrorTimeoutMin + offset
 }
 
 // sendTCPRST sends a TCP RST by setting SO_LINGER to 0 (immediate close without

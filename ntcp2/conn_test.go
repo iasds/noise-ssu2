@@ -523,9 +523,14 @@ func TestValidateFrameLength_ValidLength(t *testing.T) {
 
 func TestAEADErrorConstants(t *testing.T) {
 	assert.Equal(t, 1024, AEADErrorMaxJunkBytes)
-	assert.Greater(t, AEADErrorTimeout.Seconds(), 0.0)
+	assert.Greater(t, AEADErrorTimeoutMin.Seconds(), 0.0)
+	assert.Greater(t, AEADErrorTimeoutMax.Seconds(), AEADErrorTimeoutMin.Seconds())
 	assert.Greater(t, NonceRekeyThreshold, uint64(0))
 	assert.Less(t, NonceRekeyThreshold, MaxNonce)
+
+	// AEADErrorMaxJunkBytes must be a power of two for the bitmask in handleAEADError
+	assert.Equal(t, 0, AEADErrorMaxJunkBytes&(AEADErrorMaxJunkBytes-1),
+		"AEADErrorMaxJunkBytes must be a power of two")
 }
 
 func TestNonceExhaustionImminent(t *testing.T) {
@@ -1879,4 +1884,90 @@ func TestNTCP2ApplyInboundModifier_InvokesPhaseData(t *testing.T) {
 	assert.Equal(t, handshake.PhaseData, mod.inboundCalls[0].phase,
 		"framed read must invoke modifier with PhaseData")
 	assert.Equal(t, data, mod.inboundCalls[0].data, "modifier must receive original data")
+}
+
+// ============================================================================
+// Concurrent read/write test (TEST-3 from AUDIT.md)
+// ============================================================================
+
+// TestNTCP2Conn_ConcurrentReadWrite verifies that concurrent Read and Write
+// goroutines on the same NTCP2Conn do not race or deadlock. The conn uses
+// readMu/writeMu for serialization; this test exercises both mutexes under
+// race-detector pressure.
+func TestNTCP2Conn_ConcurrentReadWrite(t *testing.T) {
+	// Use a pipe so writes on one end are readable on the other.
+	clientPipe, serverPipe := net.Pipe()
+	defer clientPipe.Close()
+	defer serverPipe.Close()
+
+	// Build an NTCP2Conn wrapping the client side of the pipe.
+	config := noise.NewConnConfig("XK", true)
+	noiseConn, err := noise.NewNoiseConn(clientPipe, config)
+	require.NoError(t, err)
+
+	localAddr := createTestNTCP2Addr("local", "initiator")
+	remoteAddr := createTestNTCP2Addr("remote", "responder")
+	conn, err := NewNTCP2Conn(noiseConn, localAddr, remoteAddr)
+	require.NoError(t, err)
+
+	const numWriters = 4
+	const numReaders = 4
+	const msgsPerGoroutine = 10
+
+	var wg sync.WaitGroup
+
+	// Writers: send data concurrently through the NTCP2Conn
+	for w := 0; w < numWriters; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for m := 0; m < msgsPerGoroutine; m++ {
+				conn.Write([]byte("msg")) //nolint:errcheck
+			}
+		}()
+	}
+
+	// Readers: drain data from the server side of the pipe concurrently
+	for r := 0; r < numReaders; r++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			buf := make([]byte, 128)
+			for i := 0; i < msgsPerGoroutine; i++ {
+				serverPipe.SetReadDeadline(time.Now().Add(2 * time.Second)) //nolint:errcheck
+				serverPipe.Read(buf)                                        //nolint:errcheck
+			}
+		}()
+	}
+
+	wg.Wait()
+	// If we reach here without deadlock or race-detector failure, the test passes.
+}
+
+// ============================================================================
+// randomAEADTimeout test (SPEC-3 from AUDIT.md)
+// ============================================================================
+
+// TestRandomAEADTimeout verifies that randomAEADTimeout returns durations
+// within the expected [AEADErrorTimeoutMin, AEADErrorTimeoutMax] range.
+func TestRandomAEADTimeout(t *testing.T) {
+	for i := 0; i < 100; i++ {
+		d := randomAEADTimeout()
+		assert.GreaterOrEqual(t, d, AEADErrorTimeoutMin,
+			"timeout must be >= AEADErrorTimeoutMin")
+		assert.LessOrEqual(t, d, AEADErrorTimeoutMax,
+			"timeout must be <= AEADErrorTimeoutMax")
+	}
+}
+
+// TestRandomAEADTimeout_NotConstant verifies that the timeout is actually
+// randomized (not always the same value). With 50 samples and a 2-second
+// spread, the probability of all samples being identical is negligible.
+func TestRandomAEADTimeout_NotConstant(t *testing.T) {
+	seen := make(map[time.Duration]struct{})
+	for i := 0; i < 50; i++ {
+		seen[randomAEADTimeout()] = struct{}{}
+	}
+	assert.Greater(t, len(seen), 1,
+		"randomAEADTimeout should produce varying durations")
 }

@@ -40,9 +40,10 @@ const (
 //
 // ReplayCache implements the ReplayDetector interface.
 type ReplayCache struct {
-	mu      sync.RWMutex
-	entries map[[32]byte]time.Time // ephemeral key → first-seen time
-	done    chan struct{}          // signals the cleanup goroutine to stop
+	mu        sync.RWMutex
+	entries   map[[32]byte]time.Time // ephemeral key → first-seen time
+	done      chan struct{}          // signals the cleanup goroutine to stop
+	closeOnce sync.Once              // ensures Close is idempotent (no double-close panic)
 }
 
 // compile-time interface check
@@ -97,8 +98,9 @@ func (rc *ReplayCache) Size() int {
 }
 
 // Close stops the background cleanup goroutine and releases resources.
+// Close is idempotent — calling it more than once is safe and will not panic.
 func (rc *ReplayCache) Close() {
-	close(rc.done)
+	rc.closeOnce.Do(func() { close(rc.done) })
 }
 
 // cleanupLoop periodically evicts expired entries from the cache.
