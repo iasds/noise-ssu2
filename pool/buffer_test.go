@@ -2,6 +2,7 @@ package pool
 
 import (
 	"net"
+	"strings"
 	"testing"
 	"time"
 )
@@ -894,6 +895,133 @@ func TestCleanupInterval_ProportionalToConfig(t *testing.T) {
 					got, tc.wantMax, tc.maxIdle, tc.maxAge)
 			}
 		})
+	}
+}
+
+// TestRemove_ConnectionNotInList verifies that Remove() returns a
+// CONNECTION_NOT_FOUND error when the address exists in the pool but the
+// specific connection is not in the list. The connection is still closed
+// to prevent resource leaks.
+func TestRemove_ConnectionNotInList(t *testing.T) {
+	p := NewConnPool(&PoolConfig{
+		MaxSize: 5,
+		MaxAge:  time.Hour,
+		MaxIdle: time.Hour,
+	})
+	defer p.Close()
+
+	// Put conn1 into the pool.
+	conn1 := newMockConn("10.0.0.11:7000")
+	if err := p.Put(conn1); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+
+	// Try to remove conn2, which is NOT in the pool but shares the address.
+	conn2 := newMockConn("10.0.0.11:7000")
+	err := p.Remove("10.0.0.11:7000", conn2)
+	if err == nil {
+		t.Fatal("Remove should return an error when the connection is not in the pool list")
+	}
+	if !strings.Contains(err.Error(), "CONNECTION_NOT_FOUND") &&
+		!strings.Contains(err.Error(), "not in pool list") {
+		t.Errorf("expected CONNECTION_NOT_FOUND error, got: %v", err)
+	}
+
+	// conn2 should still be closed to prevent resource leaks.
+	if !conn2.closed {
+		t.Error("connection should be closed even when not found in pool")
+	}
+
+	// conn1 should still be in the pool.
+	stats := p.Stats()
+	if stats["total"] != 1 {
+		t.Errorf("expected 1 connection still in pool, got %d", stats["total"])
+	}
+}
+
+// TestRemove_AddressNotInPool verifies that Remove() returns a
+// CONNECTION_NOT_FOUND error when the address does not exist at all.
+func TestRemove_AddressNotInPool(t *testing.T) {
+	p := NewConnPool(&PoolConfig{
+		MaxSize: 5,
+		MaxAge:  time.Hour,
+		MaxIdle: time.Hour,
+	})
+	defer p.Close()
+
+	conn := newMockConn("10.0.0.12:8000")
+	err := p.Remove("10.0.0.12:8000", conn)
+	if err == nil {
+		t.Fatal("Remove should return an error when address is not in the pool")
+	}
+	if !conn.closed {
+		t.Error("connection should be closed even when address not in pool")
+	}
+}
+
+// TestDialMu_CleanedUpOnLastRemove verifies that per-address dial mutexes
+// are deleted from dialMu when the last connection for an address is removed.
+func TestDialMu_CleanedUpOnLastRemove(t *testing.T) {
+	p := NewConnPool(&PoolConfig{
+		MaxSize: 5,
+		MaxAge:  time.Hour,
+		MaxIdle: time.Hour,
+	})
+	defer p.Close()
+
+	addr := "10.0.0.13:9000"
+
+	// Force creation of a dialMu entry via getOrDialMu.
+	_ = p.getOrDialMu(addr)
+	if _, ok := p.dialMu.Load(addr); !ok {
+		t.Fatal("dialMu entry should exist after getOrDialMu")
+	}
+
+	// Add and then remove a connection — should clean up dialMu.
+	conn := newMockConn(addr)
+	if err := p.Put(conn); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if err := p.Remove(addr, conn); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+
+	if _, ok := p.dialMu.Load(addr); ok {
+		t.Error("dialMu entry should be deleted after last connection is removed")
+	}
+}
+
+// TestCleanup_TickerFires verifies that the cleanup goroutine's ticker
+// actually fires and removes expired connections without manual calls
+// to performCleanupCycle.
+func TestCleanup_TickerFires(t *testing.T) {
+	p := NewConnPool(&PoolConfig{
+		MaxSize: 10,
+		MaxAge:  500 * time.Millisecond,
+		MaxIdle: 500 * time.Millisecond,
+	})
+	defer p.Close()
+
+	conn := newMockConn("10.0.0.14:1234")
+	if err := p.Put(conn); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+
+	stats := p.Stats()
+	if stats["total"] != 1 {
+		t.Fatalf("expected 1 connection, got %d", stats["total"])
+	}
+
+	// Wait long enough for the cleanup interval (min 1s) to fire
+	// and the connection to expire (500ms). Total wait: 2s.
+	time.Sleep(2 * time.Second)
+
+	stats = p.Stats()
+	if stats["total"] != 0 {
+		t.Errorf("expected 0 connections after cleanup ticker fired, got %d", stats["total"])
+	}
+	if !conn.closed {
+		t.Error("expired connection should have been closed by cleanup goroutine")
 	}
 }
 

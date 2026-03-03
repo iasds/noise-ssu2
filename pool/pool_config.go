@@ -8,6 +8,7 @@ import (
 // PoolConfig configures a connection pool
 type PoolConfig struct {
 	// MaxSize is the maximum number of connections per remote address.
+	// A value of 0 means no per-address limit is enforced.
 	MaxSize int
 	// MaxTotal is the maximum total number of connections across all addresses.
 	// A zero value means no global limit is enforced.

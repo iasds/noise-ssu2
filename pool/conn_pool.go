@@ -322,6 +322,9 @@ func (p *ConnPool) Release(remoteAddr string, conn net.Conn) error {
 	defer p.mu.Unlock()
 
 	if p.closed {
+		// Remove the in-use entry from the map so Stats()/Drain() no
+		// longer see it, then close the underlying connection.
+		p.removeConnLocked(remoteAddr, conn)
 		return conn.Close()
 	}
 
@@ -343,8 +346,28 @@ func (p *ConnPool) Release(remoteAddr string, conn net.Conn) error {
 		Errorf("connection not found in pool for address %s", remoteAddr)
 }
 
+// removeConnLocked removes a specific connection from the pool's internal map.
+// Must be called with p.mu held.
+func (p *ConnPool) removeConnLocked(remoteAddr string, conn net.Conn) {
+	connList, exists := p.conns[remoteAddr]
+	if !exists {
+		return
+	}
+	for i, pooledConn := range connList {
+		if pooledConn.conn == conn {
+			connList = append(connList[:i], connList[i+1:]...)
+			p.updateConnectionMap(remoteAddr, connList)
+			return
+		}
+	}
+}
+
 // Remove closes a connection and permanently removes it from the pool.
 // Use this when a connection is known to be broken.
+//
+// Returns CONNECTION_NOT_FOUND if the connection was not in the pool
+// for the given address (the connection is still closed in this case
+// to avoid resource leaks). Returns nil on success.
 func (p *ConnPool) Remove(remoteAddr string, conn net.Conn) error {
 	if wrapper, ok := conn.(*PoolConnWrapper); ok {
 		conn = wrapper.Conn
@@ -355,12 +378,17 @@ func (p *ConnPool) Remove(remoteAddr string, conn net.Conn) error {
 
 	// Honour the closed state consistently with Get(), Put(), and Release().
 	if p.closed {
+		p.removeConnLocked(remoteAddr, conn)
 		return conn.Close()
 	}
 
 	connList, exists := p.conns[remoteAddr]
 	if !exists {
-		return conn.Close()
+		// Close the connection to prevent resource leaks, but signal
+		// to the caller that it was not found in the pool.
+		conn.Close()
+		return oops.Code("CONNECTION_NOT_FOUND").In("pool").
+			Errorf("connection not found for address %s (closed anyway)", remoteAddr)
 	}
 
 	for i, pooledConn := range connList {
@@ -371,7 +399,10 @@ func (p *ConnPool) Remove(remoteAddr string, conn net.Conn) error {
 		}
 	}
 
-	return conn.Close()
+	// Connection not found in the list for this address.
+	conn.Close()
+	return oops.Code("CONNECTION_NOT_FOUND").In("pool").
+		Errorf("connection not in pool list for address %s (closed anyway)", remoteAddr)
 }
 
 // Drain waits for all in-use connections to be returned to the pool.
@@ -431,6 +462,11 @@ func (p *ConnPool) Snapshot() []*PooledConn {
 
 // Close closes idle connections and prevents new connections from being added.
 // In-use connections are closed when returned via Release() or Discard().
+//
+// Callers should call Drain() before Close() if they want to wait for
+// in-flight sessions to complete. If Drain() is called concurrently with
+// or after Close(), it will still correctly observe in-use connections
+// and wait for them to be returned.
 func (p *ConnPool) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -444,18 +480,27 @@ func (p *ConnPool) Close() error {
 
 	// Close only idle connections; in-use connections will be
 	// closed when returned via Release() or Discard().
+	// Retain in-use entries in the map so that Stats() and Drain()
+	// continue to observe them until they are returned.
 	var errs []error
-	for _, connList := range p.conns {
+	for addr, connList := range p.conns {
+		var remaining []*PooledConn
 		for _, pooledConn := range connList {
-			if !pooledConn.inUse {
+			if pooledConn.inUse {
+				remaining = append(remaining, pooledConn)
+			} else {
 				if err := pooledConn.conn.Close(); err != nil {
 					errs = append(errs, err)
 				}
 			}
 		}
+		if len(remaining) == 0 {
+			delete(p.conns, addr)
+			p.dialMu.Delete(addr)
+		} else {
+			p.conns[addr] = remaining
+		}
 	}
-
-	p.conns = make(map[string][]*PooledConn)
 
 	return errors.Join(errs...)
 }
@@ -593,10 +638,14 @@ func (p *ConnPool) closeExpiredConnection(pooledConn *PooledConn) {
 	pooledConn.conn.Close()
 }
 
-// updateConnectionMap updates the pool map with valid connections
+// updateConnectionMap updates the pool map with valid connections.
+// When the last connection for an address is removed, the corresponding
+// per-address dial mutex is also deleted from dialMu to prevent unbounded
+// memory growth in long-running processes (BUG fix: dialMu leak).
 func (p *ConnPool) updateConnectionMap(addr string, validConns []*PooledConn) {
 	if len(validConns) == 0 {
 		delete(p.conns, addr)
+		p.dialMu.Delete(addr)
 	} else {
 		p.conns[addr] = validConns
 	}

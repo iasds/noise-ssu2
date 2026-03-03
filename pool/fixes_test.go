@@ -331,6 +331,51 @@ func TestClose_InUseConnectionsNotClosed(t *testing.T) {
 	}
 }
 
+// TestPoolConnWrapper_DoubleDiscard verifies that calling Discard() twice on
+// the same wrapper returns an ALREADY_CLOSED error on the second call.
+func TestPoolConnWrapper_DoubleDiscard(t *testing.T) {
+	p := NewConnPool(&PoolConfig{
+		MaxSize: 5,
+		MaxAge:  time.Hour,
+		MaxIdle: time.Hour,
+	})
+	defer p.Close()
+
+	conn := newMockConn("10.0.0.10:6000")
+	if err := p.Put(conn); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+
+	wrapped := p.Get("10.0.0.10:6000")
+	if wrapped == nil {
+		t.Fatal("Get returned nil")
+	}
+
+	wrapper, ok := wrapped.(*PoolConnWrapper)
+	if !ok {
+		t.Fatal("expected PoolConnWrapper")
+	}
+
+	// First Discard should succeed.
+	if err := wrapper.Discard(); err != nil {
+		t.Fatalf("first Discard should succeed: %v", err)
+	}
+
+	if !conn.closed {
+		t.Error("connection should be closed after Discard")
+	}
+
+	// Second Discard should return ALREADY_CLOSED.
+	err := wrapper.Discard()
+	if err == nil {
+		t.Fatal("second Discard should return an error")
+	}
+	if !strings.Contains(err.Error(), "ALREADY_CLOSED") &&
+		!strings.Contains(err.Error(), "already closed") {
+		t.Errorf("expected ALREADY_CLOSED error, got: %v", err)
+	}
+}
+
 // TestClose_MixedErrors verifies Close() handles a mix of successful and
 // failing connection closures correctly.
 func TestClose_MixedErrors(t *testing.T) {
