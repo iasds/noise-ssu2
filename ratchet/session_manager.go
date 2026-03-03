@@ -22,22 +22,32 @@ const (
 	MaxGarlicSessions = 5000
 )
 
-// nsMaxAge is the maximum acceptable age (or skew into the future) of the
-// DateTime block in a New Session message. NS messages whose timestamp falls
-// outside [now-nsMaxAge, now+nsMaxAge] are rejected to prevent replay-based
-// session reset attacks.
+// nsMaxPastAge is the maximum acceptable age of the DateTime block in a New
+// Session message. NS messages whose timestamp is more than nsMaxPastAge in the
+// past are rejected to prevent replay-based session reset attacks.
 //
 // Tests may temporarily modify this value via t.Cleanup to restore the original.
-// Default is 5 minutes, matching common I2P router practice.
-var nsMaxAge = 5 * time.Minute
+// Default is 5 minutes per ratchet.md §"Parameters": max clock skew −5 minutes.
+var nsMaxPastAge = 5 * time.Minute
+
+// nsMaxFutureAge is the maximum acceptable forward skew of the DateTime block
+// in a New Session message. NS messages timestamped more than nsMaxFutureAge
+// into the future are rejected to limit the replay window.
+//
+// Default is 2 minutes per ratchet.md §"Parameters": max clock skew +2 minutes.
+var nsMaxFutureAge = 2 * time.Minute
 
 // validateNSDateTimeFreshness parses the decrypted NS payload, locates the
 // required DateTime block (first block per ratchet.md §1b), and verifies that
-// its timestamp is within nsMaxAge of the current time.
+// its timestamp is within the asymmetric freshness window:
+//   - Past: at most nsMaxPastAge ago (default 5 minutes)
+//   - Future: at most nsMaxFutureAge ahead (default 2 minutes)
 //
-// A stale timestamp indicates either a replay of an old session or a severe
-// clock skew; both must be rejected to prevent an attacker from resetting an
-// active live session by replaying a captured NS message.
+// Spec ref: ratchet.md §"Parameters" — max clock skew: −5 minutes to +2 minutes.
+//
+// A stale or excessively future timestamp indicates either a replay of an old
+// session or a severe clock skew; both must be rejected to prevent an attacker
+// from resetting an active live session by replaying a captured NS message.
 func validateNSDateTimeFreshness(payload []byte) error {
 	blocks, err := ParsePayload(payload)
 	if err != nil {
@@ -50,18 +60,34 @@ func validateNSDateTimeFreshness(payload []byte) error {
 	if err != nil {
 		return oops.Wrapf(err, "NS DateTime block is malformed")
 	}
-	age := nowFunc().Sub(msgTime)
-	if age < 0 {
-		age = -age // treat future timestamps symmetrically
-	}
-	if age > nsMaxAge {
+	elapsed := nowFunc().Sub(msgTime)
+	if elapsed > nsMaxPastAge {
 		return oops.Errorf(
-			"NS DateTime block fails freshness check: age=%v max=%v (replay or severe clock skew)",
-			age, nsMaxAge,
+			"NS DateTime block fails freshness check: message is %v old, max past age is %v (stale or replay)",
+			elapsed, nsMaxPastAge,
+		)
+	}
+	if elapsed < -nsMaxFutureAge {
+		return oops.Errorf(
+			"NS DateTime block fails freshness check: message is %v in the future, max future skew is %v",
+			-elapsed, nsMaxFutureAge,
 		)
 	}
 	return nil
 }
+
+// nsReplayCacheTTL is the time-to-live for NS replay cache entries.
+// Set to nsMaxPastAge + nsMaxFutureAge + 1 minute margin to cover the full
+// freshness window plus clock skew tolerance.
+var nsReplayCacheTTL = nsMaxPastAge + nsMaxFutureAge + time.Minute
+
+// nsReplayCacheMaxSize is the maximum number of NS ephemeral keys tracked
+// before forced eviction. This prevents memory exhaustion under attack.
+const nsReplayCacheMaxSize = 50000
+
+// nsReplayCacheCleanupInterval controls how often expired NS replay entries
+// are evicted.
+const nsReplayCacheCleanupInterval = 30 * time.Second
 
 // SessionManager manages ECIES-X25519-AEAD-Ratchet sessions for garlic encryption.
 // It maintains session state for ongoing encrypted communication with remote
@@ -86,6 +112,13 @@ type SessionManager struct {
 	sessionTimeout  time.Duration
 	ctx             context.Context
 	cancel          context.CancelFunc
+
+	// nsReplayCache tracks recently-seen NS ephemeral keys (first 32 bytes of the
+	// NS message) to prevent replay attacks within the freshness window.
+	// Spec ref: ratchet.md §"DateTime" — "Bob must implement a Bloom filter or
+	// other mechanism to prevent replay attacks, if the time is valid."
+	nsReplayCache map[[32]byte]time.Time
+	nsReplayDone  chan struct{}
 }
 
 // NewSessionManager creates a new session manager with the given private key.
@@ -105,7 +138,7 @@ func NewSessionManager(privateKey [32]byte) (*SessionManager, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	return &SessionManager{
+	sm := &SessionManager{
 		sessions:        make(map[[32]byte]*Session),
 		tagIndex:        make(map[[8]byte]*Session),
 		nsrTagIndex:     make(map[[8]byte]*Session),
@@ -115,7 +148,12 @@ func NewSessionManager(privateKey [32]byte) (*SessionManager, error) {
 		sessionTimeout:  10 * time.Minute,
 		ctx:             ctx,
 		cancel:          cancel,
-	}, nil
+		nsReplayCache:   make(map[[32]byte]time.Time),
+		nsReplayDone:    make(chan struct{}),
+	}
+	go sm.nsReplayCleanupLoop()
+
+	return sm, nil
 }
 
 // GenerateSessionManager creates a session manager with a freshly generated key pair.
@@ -261,6 +299,16 @@ func (sm *SessionManager) encryptExistingSession(
 		)
 	}
 
+	// Spec §"Notes" after §1g: Bob must receive an ES message from Alice before
+	// sending ES messages. This ensures the initiator has processed the NSR and
+	// can decrypt ES from the responder. The flag is set after EncryptNewSessionReply
+	// and cleared when the first inbound ES is decrypted for this session.
+	if !session.isInitiator && session.awaitingFirstES {
+		return nil, oops.Errorf(
+			"spec violation (ratchet.md §Notes): responder must receive an ES message from initiator before sending ES",
+		)
+	}
+
 	messageKey, sessionTag, err := advanceRatchets(session)
 	if err != nil {
 		return nil, err
@@ -386,6 +434,20 @@ func (sm *SessionManager) decryptNewSession(msg []byte) ([]byte, *[32]byte, erro
 	// replayed to reset the active session keyed on the initiator's static key.
 	if err := validateNSDateTimeFreshness(plaintext); err != nil {
 		return nil, nil, oops.Wrapf(err, "New Session message rejected")
+	}
+
+	// Spec §"DateTime": "Bob must implement a Bloom filter or other mechanism
+	// to prevent replay attacks, if the time is valid."
+	// Check the NS ephemeral key (first 32 bytes) against the replay cache.
+	if len(msg) >= 32 {
+		var ephKey [32]byte
+		copy(ephKey[:], msg[:32])
+		if sm.checkNSReplay(ephKey) {
+			return nil, nil, oops.Errorf(
+				"NS replay detected: ephemeral key %x has been seen within the freshness window",
+				ephKey[:8],
+			)
+		}
 	}
 
 	if err := sm.initializeInboundRatchetState(initiatorStaticPub, keys, hs); err != nil {
@@ -621,6 +683,7 @@ func (sm *SessionManager) EncryptNewSessionReply(
 		sm.mu.Unlock()
 		return nil, oops.Wrapf(applyErr, "failed to apply NSR keys to responder session ratchets")
 	}
+	session.awaitingFirstES = true
 	session.LastUsed = time.Now()
 	session.mu.Unlock()
 	sm.mu.Unlock()
@@ -728,6 +791,16 @@ func (sm *SessionManager) decryptExistingSession(
 		session.recvWindowBase++
 	}
 
+	// GAP-3: Clear the responder's awaitingFirstES flag upon successfully
+	// decrypting the first inbound ES message from the initiator.
+	if !session.isInitiator && session.awaitingFirstES {
+		session.awaitingFirstES = false
+		log.WithFields(map[string]interface{}{
+			"at":      "decryptExistingSession",
+			"counter": usedCounter,
+		}).Debug("First inbound ES received; responder may now send ES")
+	}
+
 	session.LastUsed = time.Now()
 	return plaintext, sessionTag, nil
 }
@@ -743,6 +816,14 @@ func (sm *SessionManager) decryptExistingSession(
 //     Per ratchet.md §"Message Numbers", on receiving a MessageNumber block the
 //     recipient should trim pre-derived keys beyond PN from the previous tag set
 //     to bound memory.
+//
+//   - BlockAckRequest: the peer is requesting acknowledgment. An Ack block is
+//     queued for inclusion in the next outgoing ES message.
+//     Spec ref: ratchet.md §"Ack Request".
+//
+//   - BlockAck: the peer is acknowledging previously received messages. The
+//     ack entries are stored on the session for caller inspection.
+//     Spec ref: ratchet.md §"Ack".
 //
 // This function is called from DecryptGarlicMessage after decryptExistingSession
 // returns successfully, with neither sm.mu nor session.mu held.
@@ -773,8 +854,66 @@ func (sm *SessionManager) processDecryptedESBlocks(session *Session, plaintext [
 				continue
 			}
 			trimRecvWindowByPN(session, pn)
+
+		case BlockAckRequest:
+			sm.processAckRequest(session)
+
+		case BlockAck:
+			sm.processAck(session, block)
 		}
 	}
+}
+
+// processAckRequest queues an Ack block for the next outgoing ES message.
+// The ack acknowledges the current recv window state: it reports the recv key ID
+// and the highest consumed message counter.
+//
+// Spec ref: ratchet.md §"Ack Request" — on receiving request, queue an Ack response.
+func (sm *SessionManager) processAckRequest(session *Session) {
+	session.mu.Lock()
+	defer session.mu.Unlock()
+
+	// Build an Ack that reports our recvKeyID and the highest consumed counter
+	// (recvWindowBase - 1, since recvWindowBase is the next expected counter).
+	highestConsumed := uint16(0)
+	if session.recvWindowBase > 1 {
+		base := session.recvWindowBase - 1
+		if base > uint32(MaxMessageNumber) {
+			base = uint32(MaxMessageNumber)
+		}
+		highestConsumed = uint16(base)
+	}
+	ackBlock := NewAckBlock([]AckEntry{{
+		TagSetID: session.recvKeyID,
+		N:        highestConsumed,
+	}})
+	session.pendingAcks = append(session.pendingAcks, ackBlock)
+
+	log.WithFields(map[string]interface{}{
+		"at":        "processAckRequest",
+		"recv_key":  session.recvKeyID,
+		"highest_n": highestConsumed,
+	}).Debug("Queued Ack block in response to AckRequest")
+}
+
+// processAck records Ack entries received from the peer.
+//
+// Spec ref: ratchet.md §"Ack" — acknowledgment of received messages.
+func (sm *SessionManager) processAck(session *Session, block PayloadBlock) {
+	acks, err := block.Acks()
+	if err != nil {
+		log.WithError(err).Warn("Malformed Ack block in ES payload")
+		return
+	}
+
+	session.mu.Lock()
+	session.lastAckedEntries = acks
+	session.mu.Unlock()
+
+	log.WithFields(map[string]interface{}{
+		"at":    "processAck",
+		"count": len(acks),
+	}).Debug("Received Ack block from peer")
 }
 
 // removeSessionByPointer locates a session in sm.sessions by pointer equality
@@ -956,7 +1095,7 @@ func (sm *SessionManager) removeTagFromPendingList(tag [8]byte, session *Session
 // tagReplenishThreshold is the minimum number of pending tags remaining after
 // which replenishment is triggered. Checked after releasing sm.mu so that the
 // HKDF derivation does not block the global write lock.
-const tagReplenishThreshold = 5
+const tagReplenishThreshold = tagWindowSize / 2
 
 // replenishTagWindowOutsideLock generates new session tags and installs them
 // without holding sm.mu during the cryptographic (HKDF) work.
@@ -1162,14 +1301,25 @@ func (sm *SessionManager) CleanupExpiredSessions() int {
 	removed := 0
 
 	for hash, session := range sm.sessions {
-		if now.Sub(session.LastUsed) > sm.sessionTimeout {
+		session.mu.Lock()
+		expired := now.Sub(session.LastUsed) > sm.sessionTimeout
+		var tags [][8]byte
+		var nsrTag *[8]byte
+		if expired {
+			tags = make([][8]byte, len(session.pendingTags))
+			copy(tags, session.pendingTags)
+			nsrTag = session.nsrTag
+		}
+		session.mu.Unlock()
+
+		if expired {
 			delete(sm.sessions, hash)
-			for _, tag := range session.pendingTags {
+			for _, tag := range tags {
 				delete(sm.tagIndex, tag)
 				delete(sm.tagCounterIndex, tag)
 			}
-			if session.nsrTag != nil {
-				delete(sm.nsrTagIndex, *session.nsrTag)
+			if nsrTag != nil {
+				delete(sm.nsrTagIndex, *nsrTag)
 			}
 			removed++
 		}
@@ -1204,6 +1354,14 @@ func (sm *SessionManager) GetPublicKey() [32]byte {
 func (sm *SessionManager) Close() error {
 	sm.cancel()
 
+	// Stop the NS replay cache cleanup goroutine.
+	select {
+	case <-sm.nsReplayDone:
+		// Already closed.
+	default:
+		close(sm.nsReplayDone)
+	}
+
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
@@ -1219,6 +1377,9 @@ func (sm *SessionManager) Close() error {
 	}
 	for k := range sm.nsrTagIndex {
 		delete(sm.nsrTagIndex, k)
+	}
+	for k := range sm.nsReplayCache {
+		delete(sm.nsReplayCache, k)
 	}
 
 	// Zero the private key material
@@ -1264,4 +1425,91 @@ func (sm *SessionManager) StartCleanupLoop(ctx context.Context) {
 		"at":       "SessionManager.StartCleanupLoop",
 		"interval": "2m",
 	}).Debug("Started garlic session cleanup loop")
+}
+
+// checkNSReplay checks whether the NS ephemeral key has been seen before.
+// If the key is new, it is added to the cache and false is returned (not a replay).
+// If the key has been seen within nsReplayCacheTTL, true is returned (replay).
+//
+// Spec ref: ratchet.md §"DateTime" — "Bob must implement a Bloom filter or
+// other mechanism to prevent replay attacks, if the time is valid."
+func (sm *SessionManager) checkNSReplay(ephemeralKey [32]byte) bool {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	now := nowFunc()
+
+	if firstSeen, exists := sm.nsReplayCache[ephemeralKey]; exists {
+		if now.Sub(firstSeen) < nsReplayCacheTTL {
+			return true // replay detected
+		}
+		// Entry expired — treat as new.
+	}
+
+	if len(sm.nsReplayCache) >= nsReplayCacheMaxSize {
+		sm.evictOldestNSReplayEntriesLocked()
+	}
+
+	sm.nsReplayCache[ephemeralKey] = now
+	return false
+}
+
+// evictOldestNSReplayEntriesLocked removes the oldest 10% of NS replay cache
+// entries. Must be called with sm.mu held for writing.
+func (sm *SessionManager) evictOldestNSReplayEntriesLocked() {
+	evictCount := len(sm.nsReplayCache) / 10
+	if evictCount < 1 {
+		evictCount = 1
+	}
+
+	cutoff := nowFunc().Add(-nsReplayCacheTTL / 2)
+	evicted := 0
+	for key, firstSeen := range sm.nsReplayCache {
+		if evicted >= evictCount {
+			break
+		}
+		if firstSeen.Before(cutoff) {
+			delete(sm.nsReplayCache, key)
+			evicted++
+		}
+	}
+
+	// If not enough expired entries, delete any entries to stay under limit.
+	for key := range sm.nsReplayCache {
+		if evicted >= evictCount {
+			break
+		}
+		delete(sm.nsReplayCache, key)
+		evicted++
+	}
+}
+
+// nsReplayCleanupLoop periodically evicts expired entries from the NS replay cache.
+func (sm *SessionManager) nsReplayCleanupLoop() {
+	ticker := time.NewTicker(nsReplayCacheCleanupInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-sm.nsReplayDone:
+			return
+		case <-sm.ctx.Done():
+			return
+		case <-ticker.C:
+			sm.evictExpiredNSReplayEntries()
+		}
+	}
+}
+
+// evictExpiredNSReplayEntries removes all NS replay entries older than nsReplayCacheTTL.
+func (sm *SessionManager) evictExpiredNSReplayEntries() {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	cutoff := nowFunc().Add(-nsReplayCacheTTL)
+	for key, firstSeen := range sm.nsReplayCache {
+		if firstSeen.Before(cutoff) {
+			delete(sm.nsReplayCache, key)
+		}
+	}
 }

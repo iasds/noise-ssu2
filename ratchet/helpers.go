@@ -35,7 +35,8 @@ const (
 	hkdfInfoTagAndKeyGenKeys = "TagAndKeyGenKeys"
 
 	// tagWindowSize is the number of pre-generated tags per session.
-	tagWindowSize = 10
+	// Spec ref: ratchet.md §"Parameters" — ES tagset 0 size: tsmin=24.
+	tagWindowSize = 24
 
 	// MaxMessageNumber is the maximum AEAD message number per the spec.
 	// When reached, the session must be ratcheted. Spec ref: ratchet.md
@@ -43,10 +44,10 @@ const (
 	MaxMessageNumber = 65535
 
 	// recvWindowSize is the number of ES message counters we pre-derive keys for
-	// and accept out-of-order.  The I2P spec mandates ≤128; we use 64 (fits a
-	// uint64 if a bitset were used, but we use a map for simplicity).
+	// and accept out-of-order.  The I2P spec mandates ≤128; we use 128 to match
+	// the spec's maximum and handle bursty traffic.
 	// Spec ref: ratchet.md §"Existing Session" receive window note.
-	recvWindowSize = 64
+	recvWindowSize = 128
 )
 
 // deriveDirectionalKeys derives distinct send and receive keys from a base key
@@ -361,35 +362,40 @@ func trimRecvWindowByPN(session *Session, pn uint16) {
 	}
 }
 
-// prependPendingNextKeys checks for queued NextKey blocks on the session and,
-// if any exist, serializes them and prepends them to the caller's plaintext
-// payload. This ensures that DH ratchet key rotation signals are included
-// inside the AEAD-encrypted Existing Session message, as required by
-// ratchet.md §"Next DH Ratchet Public Key".
+// prependPendingNextKeys checks for queued NextKey and Ack blocks on the session
+// and, if any exist, serializes them and prepends them to the caller's plaintext
+// payload. This ensures that DH ratchet key rotation signals and acknowledgments
+// are included inside the AEAD-encrypted Existing Session message.
 //
-// If no NextKey blocks are pending, the original plaintext is returned unmodified
+// NextKey: ratchet.md §"Next DH Ratchet Public Key"
+// Ack: ratchet.md §"Ack" — queued by processAckRequest in response to AckRequest.
+//
+// If no control blocks are pending, the original plaintext is returned unmodified
 // (zero-copy fast path).
 //
 // Must be called with session.mu held.
 func prependPendingNextKeys(session *Session, plaintext []byte) ([]byte, error) {
-	pendingBlocks := session.GetPendingNextKeys()
+	nextKeyBlocks := session.GetPendingNextKeys()
+	ackBlocks := session.GetPendingAcks()
+
+	pendingBlocks := append(nextKeyBlocks, ackBlocks...)
 	if len(pendingBlocks) == 0 {
 		return plaintext, nil
 	}
 
-	// Calculate the total size needed for NextKey block headers + data.
-	nextKeySize := 0
+	// Calculate the total size needed for control block headers + data.
+	controlSize := 0
 	for _, block := range pendingBlocks {
-		nextKeySize += block.SerializeSize()
+		controlSize += block.SerializeSize()
 	}
 
-	// Build a combined payload: [NextKey blocks...] + [original plaintext].
-	combined := make([]byte, nextKeySize+len(plaintext))
+	// Build a combined payload: [control blocks...] + [original plaintext].
+	combined := make([]byte, controlSize+len(plaintext))
 	offset := 0
 	for _, block := range pendingBlocks {
 		n, err := block.Serialize(combined[offset:])
 		if err != nil {
-			return nil, oops.Wrapf(err, "failed to serialize NextKey block (keyID in data)")
+			return nil, oops.Wrapf(err, "failed to serialize control block (type %d)", block.Type)
 		}
 		offset += n
 	}
@@ -397,11 +403,12 @@ func prependPendingNextKeys(session *Session, plaintext []byte) ([]byte, error) 
 
 	log.WithFields(map[string]interface{}{
 		"at":              "prependPendingNextKeys",
-		"next_key_blocks": len(pendingBlocks),
-		"next_key_bytes":  nextKeySize,
+		"next_key_blocks": len(nextKeyBlocks),
+		"ack_blocks":      len(ackBlocks),
+		"control_bytes":   controlSize,
 		"original_size":   len(plaintext),
 		"combined_size":   len(combined),
-	}).Debug("Prepended NextKey blocks to ES payload")
+	}).Debug("Prepended control blocks to ES payload")
 
 	return combined, nil
 }

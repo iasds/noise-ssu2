@@ -76,6 +76,21 @@ type Session struct {
 	// tag→counter mapping in SessionManager.tagCounterIndex for O(1)
 	// AEAD decryption instead of scanning the entire recv window.
 	nextRecvTagCounter uint32
+
+	// pendingAcks holds Ack blocks to include in the next outgoing ES message.
+	// These are queued when an AckRequest block is received from the peer.
+	// Spec ref: ratchet.md §"Ack" and §"Ack Request".
+	pendingAcks []PayloadBlock
+	// lastAckedEntries records the most recently received Ack entries from the peer.
+	// Callers can inspect this to confirm message delivery.
+	lastAckedEntries []AckEntry
+
+	// awaitingFirstES is set to true on the responder (Bob) after sending an NSR.
+	// The spec (ratchet.md §"Notes" after §1g) states:
+	//   "Bob must receive an ES message from Alice before sending ES messages."
+	// While this flag is true, encryptExistingSession will reject outbound ES.
+	// It is cleared when the first inbound ES message is successfully decrypted.
+	awaitingFirstES bool
 }
 
 // createSession initializes a new Session with ratchet state from derived keys.
@@ -112,8 +127,33 @@ func createSession(remotePubKey [32]byte, keys *sessionKeys, ourPrivateKey [32]b
 		recvWindowBase:     1,
 		recvFillMark:       1,
 		recvKeyCache:       make(map[uint32][32]byte),
-		pendingTags:        make([][8]byte, 0, 10),
+		pendingTags:        make([][8]byte, 0, tagWindowSize),
 		pendingNextKeys:    nil,
 		nextRecvTagCounter: 1,
 	}, nil
+}
+
+// GetPendingAcks returns any Ack blocks that should be included in the next
+// outgoing Existing Session message. The returned blocks are removed from the
+// session's pending queue.
+//
+// Spec ref: ratchet.md §"Ack" — after receiving an AckRequest block, the
+// recipient should include an Ack block in the next outgoing message.
+//
+// Must be called with session.mu held.
+func (s *Session) GetPendingAcks() []PayloadBlock {
+	if len(s.pendingAcks) == 0 {
+		return nil
+	}
+	blocks := s.pendingAcks
+	s.pendingAcks = nil
+	return blocks
+}
+
+// GetLastAckedEntries returns the most recently received Ack entries from the
+// peer. This allows callers to confirm which messages the peer has received.
+//
+// Must be called with session.mu held.
+func (s *Session) GetLastAckedEntries() []AckEntry {
+	return s.lastAckedEntries
 }
