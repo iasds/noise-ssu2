@@ -41,7 +41,7 @@ func main() {
 	}
 
 	// Parse keys for the selected pattern
-	staticKey, remoteKey, err := parseClientKeys(args)
+	staticKey, remoteKey, err := shared.ParseKeys(args)
 	if err != nil {
 		log.Fatalf("❌ Key parsing failed: %v", err)
 	}
@@ -58,36 +58,6 @@ func dispatchMode(args *shared.CommonArgs, staticKey, remoteKey []byte) {
 		fmt.Println("❌ Echo client requires -client address")
 		shared.PrintUsage("echoclient", "Noise Protocol echo client supporting all patterns")
 	}
-}
-
-// logKeyIfVerbose prints key info when verbose mode is enabled
-func logKeyIfVerbose(args *shared.CommonArgs, label string, key []byte) {
-	if args.Verbose {
-		fmt.Printf("🔑 Client using %s key: %s\n", label, shared.KeyToHex(key))
-	}
-}
-
-// parseClientKeys handles key parsing for client configuration
-func parseClientKeys(args *shared.CommonArgs) (staticKey, remoteKey []byte, err error) {
-	needsLocal, needsRemote := shared.GetPatternRequirements(args.Pattern)
-
-	if needsLocal {
-		staticKey, err = shared.ParseKeyFromHex(args.StaticKey)
-		if err != nil {
-			return nil, nil, err
-		}
-		logKeyIfVerbose(args, "static", staticKey)
-	}
-
-	if needsRemote {
-		remoteKey, err = shared.ParseKeyFromHex(args.RemoteKey)
-		if err != nil {
-			return nil, nil, err
-		}
-		logKeyIfVerbose(args, "remote", remoteKey)
-	}
-
-	return staticKey, remoteKey, nil
 }
 
 // runEchoClient connects to echo server and performs interactive communication

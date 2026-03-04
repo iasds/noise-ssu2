@@ -2,7 +2,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"net"
@@ -52,128 +51,19 @@ func main() {
 
 // runTransportDemo demonstrates transport wrapping with server and client
 func runTransportDemo(args *shared.CommonArgs) {
-	fmt.Printf("🎭 Running transport demo with server and client\n")
-
-	// Parse keys for demo
-	staticKey, _, err := shared.ParseKeys(args)
-	if err != nil {
-		log.Fatalf("Failed to parse keys for demo: %v", err)
-	}
-
-	// Start server in background
-	go runTransportServer(args, staticKey)
-	time.Sleep(200 * time.Millisecond) // Wait for server to start
-
-	// Run client to connect to server
-	clientArgs := *args
-	clientArgs.ClientAddr = args.ServerAddr
-	clientArgs.ServerAddr = "" // Clear server mode for client
-	runTransportClient(&clientArgs, staticKey)
+	shared.RunDemo2(args, "transport", runTransportServer, runTransportClient)
 }
 
 // runTransportServer runs a server demonstrating transport wrapping
 func runTransportServer(args *shared.CommonArgs, staticKey []byte) {
-	fmt.Printf("🚀 Starting transport server on %s with pattern %s\n", args.ServerAddr, args.Pattern)
-
-	// Create server configuration
-	config := noise.NewListenerConfig(args.Pattern).
-		WithHandshakeTimeout(args.HandshakeTimeout).
-		WithReadTimeout(args.ReadTimeout).
-		WithWriteTimeout(args.WriteTimeout)
-
-	// Add static key if provided
-	if staticKey != nil {
-		config = config.WithStaticKey(staticKey)
-	}
-
-	// Start server
-	listener, err := noise.ListenNoise("tcp", args.ServerAddr, config)
-	if err != nil {
-		log.Fatalf("Failed to start transport server: %v", err)
-	}
-	defer listener.Close()
-
-	fmt.Printf("✓ Transport server listening on: %s\n", listener.Addr())
-
-	// Accept connections and demonstrate transport wrapping
-	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			log.Printf("Accept failed: %v", err)
-			continue
-		}
-		go handleTransportConnection(conn)
-	}
+	shared.RunServer(args, staticKey, "transport", func(conn net.Conn) {
+		shared.HandleConnection(conn, "Transport", demonstrateTransportServer)
+	})
 }
 
 // runTransportClient runs a client demonstrating transport wrapping
 func runTransportClient(args *shared.CommonArgs, staticKey []byte) {
-	fmt.Printf("📱 Starting transport client connecting to %s\n", args.ClientAddr)
-
-	// Create client configuration
-	config := noise.NewConnConfig(args.Pattern, true). // initiator = true
-								WithHandshakeTimeout(args.HandshakeTimeout).
-								WithReadTimeout(args.ReadTimeout).
-								WithWriteTimeout(args.WriteTimeout)
-
-	// Add static key if provided
-	if staticKey != nil {
-		config = config.WithStaticKey(staticKey)
-	}
-
-	// Connect to server
-	conn, err := noise.DialNoise("tcp", args.ClientAddr, config)
-	if err != nil {
-		log.Fatalf("Failed to connect to server: %v", err)
-	}
-	defer conn.Close()
-
-	fmt.Printf("✓ Connected to server: %s\n", conn.RemoteAddr())
-
-	// Demonstrate transport functionality
-	demonstrateTransportClient(conn)
-}
-
-// handleTransportConnection handles a connection and demonstrates transport features
-func handleTransportConnection(conn net.Conn) {
-	defer conn.Close()
-
-	clientAddr := conn.RemoteAddr().String()
-	fmt.Printf("📝 New connection from: %s\n", clientAddr)
-
-	// Check if this is a Noise connection to access transport features
-	if noiseConn, ok := conn.(*noise.NoiseConn); ok {
-		fmt.Printf("🔐 Starting handshake with %s...\n", clientAddr)
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-
-		err := noiseConn.Handshake(ctx)
-		if err != nil {
-			log.Printf("Handshake failed with %s: %v", clientAddr, err)
-			return
-		}
-		fmt.Printf("✅ Handshake completed with %s\n", clientAddr)
-
-		// Demonstrate transport features
-		demonstrateTransportServer(noiseConn)
-	}
-
-	// Handle communication
-	buffer := make([]byte, 1024)
-	for {
-		n, err := conn.Read(buffer)
-		if err != nil {
-			fmt.Printf("Client %s disconnected\n", clientAddr)
-			return
-		}
-
-		message := string(buffer[:n])
-		fmt.Printf("📨 Received from %s: %s\n", clientAddr, message)
-
-		// Echo back with transport info
-		response := fmt.Sprintf("Transport echo: %s", message)
-		conn.Write([]byte(response))
-	}
+	shared.RunClient(args, staticKey, nil, "transport", demonstrateTransportClient)
 }
 
 // demonstrateTransportServer shows server-side transport features

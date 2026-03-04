@@ -39,7 +39,7 @@ func main() {
 	}
 
 	// Parse keys for the selected pattern
-	staticKey, _, err := parseServerKeys(args)
+	staticKey, _, err := shared.ParseKeys(args)
 	if err != nil {
 		log.Fatalf("❌ Key parsing failed: %v", err)
 	}
@@ -53,64 +53,11 @@ func main() {
 	}
 }
 
-// parseServerKeys handles key parsing for server configuration
-func parseServerKeys(args *shared.CommonArgs) (staticKey, _ []byte, err error) {
-	needsLocal, _ := shared.GetPatternRequirements(args.Pattern)
-
-	// Parse or generate static key if needed
-	if needsLocal {
-		staticKey, err = shared.ParseKeyFromHex(args.StaticKey)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		if args.Verbose {
-			fmt.Printf("🔑 Server using static key: %s\n", shared.KeyToHex(staticKey))
-		}
-	}
-
-	return staticKey, nil, nil
-}
-
 // runEchoServer starts an echo server with complete Noise handshake
 func runEchoServer(args *shared.CommonArgs, staticKey []byte) {
-	fmt.Printf("🚀 Starting Noise echo server on %s with pattern %s\n", args.ServerAddr, args.Pattern)
-
-	// Create server configuration (responder)
-	config := noise.NewListenerConfig(args.Pattern).
-		WithHandshakeTimeout(args.HandshakeTimeout).
-		WithReadTimeout(args.ReadTimeout).
-		WithWriteTimeout(args.WriteTimeout)
-
-	// Add static key if required
-	if staticKey != nil {
-		config = config.WithStaticKey(staticKey)
-		if args.Verbose {
-			fmt.Printf("🔑 Server using static key: %s\n", shared.KeyToHex(staticKey))
-		}
-	}
-
-	// Start the server using ListenNoise for automatic transport wrapping
-	listener, err := noise.ListenNoise("tcp", args.ServerAddr, config)
-	if err != nil {
-		log.Fatalf("Failed to start echo server: %v", err)
-	}
-	defer listener.Close()
-
-	fmt.Printf("✓ Echo server listening on: %s\n", listener.Addr())
-	fmt.Println("Waiting for connections... (Press Ctrl+C to stop)")
-
-	// Accept connections in a loop
-	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			log.Printf("Accept failed: %v", err)
-			continue
-		}
-
-		// Handle each connection in its own goroutine
-		go handleEchoConnection(conn, args)
-	}
+	shared.RunServer(args, staticKey, "echo", func(conn net.Conn) {
+		handleEchoConnection(conn, args)
+	})
 }
 
 // performServerHandshake performs the Noise handshake for a server connection
