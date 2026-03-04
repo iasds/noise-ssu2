@@ -14,7 +14,6 @@ package ratchet
 import (
 	"fmt"
 
-	"github.com/go-i2p/crypto/ratchet"
 	"github.com/samber/oops"
 )
 
@@ -66,15 +65,10 @@ func (s *Session) HasPendingNextKeys() bool {
 //
 // Spec ref: ratchet.md §"DH Ratchet Message Flow".
 func (sm *SessionManager) ProcessReceivedNextKey(sessionTag [8]byte, info NextKeyInfo) error {
-	sm.mu.RLock()
-	session, exists := sm.tagIndex[sessionTag]
-	sm.mu.RUnlock()
-
-	if !exists {
-		return oops.Errorf("no session found for tag %x", sessionTag)
+	session, err := sm.lookupLockedSession(sessionTag)
+	if err != nil {
+		return err
 	}
-
-	session.mu.Lock()
 	defer session.mu.Unlock()
 
 	if info.KeyPresent {
@@ -168,18 +162,10 @@ func (sm *SessionManager) applyIncomingDHKey(session *Session, remotePubKey [32]
 		return oops.Wrapf(err, "failed to update remote DH public key")
 	}
 
-	_, receivingChainKey, err := session.DHRatchet.PerformRatchet()
-	if err != nil {
-		return oops.Wrapf(err, "failed to perform receiving DH ratchet")
+	if err := applyRecvRatchetKeys(session); err != nil {
+		return err
 	}
 
-	tagKey, symKey, err := deriveTagAndSymKeysFromChainKey(receivingChainKey)
-	if err != nil {
-		return oops.Wrapf(err, "failed to derive receiving tag and symmetric keys after DH ratchet")
-	}
-
-	session.RecvSymmetricRatchet = ratchet.NewSymmetricRatchet(symKey)
-	session.RecvTagRatchet = ratchet.NewTagRatchet(tagKey)
 	session.RemotePublicKey = remotePubKey
 
 	return nil

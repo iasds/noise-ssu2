@@ -958,33 +958,19 @@ func (sm *SessionManager) removeSessionByPointer(session *Session) {
 // ProcessIncomingDHRatchet processes a DH ratchet key received from a peer.
 // The session is found by tag lookup using the sessionTag parameter.
 func (sm *SessionManager) ProcessIncomingDHRatchet(sessionTag [8]byte, newRemotePubKey [32]byte) error {
-	sm.mu.RLock()
-	session, exists := sm.tagIndex[sessionTag]
-	sm.mu.RUnlock()
-
-	if !exists {
-		return oops.Errorf("no session found for tag %x", sessionTag)
+	session, err := sm.lookupLockedSession(sessionTag)
+	if err != nil {
+		return err
 	}
-
-	session.mu.Lock()
 	defer session.mu.Unlock()
 
 	if err := session.DHRatchet.UpdateKeys(newRemotePubKey[:]); err != nil {
 		return oops.Wrapf(err, "failed to update remote DH public key")
 	}
 
-	_, receivingChainKey, err := session.DHRatchet.PerformRatchet()
-	if err != nil {
-		return oops.Wrapf(err, "failed to perform receiving DH ratchet")
+	if err := applyRecvRatchetKeys(session); err != nil {
+		return err
 	}
-
-	tagKey, symKey, err := deriveTagAndSymKeysFromChainKey(receivingChainKey)
-	if err != nil {
-		return oops.Wrapf(err, "failed to derive receiving tag and symmetric keys after DH ratchet")
-	}
-
-	session.RecvSymmetricRatchet = ratchet.NewSymmetricRatchet(symKey)
-	session.RecvTagRatchet = ratchet.NewTagRatchet(tagKey)
 
 	session.RemotePublicKey = newRemotePubKey
 

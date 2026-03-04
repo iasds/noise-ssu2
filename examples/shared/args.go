@@ -192,3 +192,26 @@ func (args *CommonArgs) validateRemoteKeyRequirement(needsRemote bool) error {
 	}
 	return nil
 }
+
+// HandleDefaultAddress sets the default server address when no address is provided.
+// This consolidates the common default-address pattern used across example programs.
+func HandleDefaultAddress(args *CommonArgs, defaultAddr string) {
+	if args.ServerAddr == "" && args.ClientAddr == "" && !args.Demo && !args.Generate {
+		args.ServerAddr = defaultAddr
+	}
+}
+
+// HandleSpecialModes handles demo and generate modes, returning true if handled.
+// demoFunc is a callback that runs the example-specific demo logic. This
+// consolidates the common special-mode dispatch pattern used across example programs.
+func HandleSpecialModes(args *CommonArgs, demoFunc func(*CommonArgs)) bool {
+	if args.Demo {
+		demoFunc(args)
+		return true
+	}
+	if args.Generate {
+		RunGenerate()
+		return true
+	}
+	return false
+}

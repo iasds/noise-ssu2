@@ -20,7 +20,7 @@ func main() {
 	}
 
 	// Set default server address if none provided
-	handleDefaultAddress(args, "localhost:8080")
+	shared.HandleDefaultAddress(args, "localhost:8080")
 
 	// Validate arguments
 	if err := args.ValidateArgs(); err != nil {
@@ -30,7 +30,7 @@ func main() {
 	}
 
 	// Handle special modes
-	if handleSpecialModes(args, runTransportDemo) {
+	if shared.HandleSpecialModes(args, runTransportDemo) {
 		return
 	}
 
@@ -48,26 +48,6 @@ func main() {
 	} else if args.ClientAddr != "" {
 		runTransportClient(args, staticKey)
 	}
-}
-
-// handleDefaultAddress sets the default address when none provided
-func handleDefaultAddress(args *shared.CommonArgs, defaultAddr string) {
-	if args.ServerAddr == "" && args.ClientAddr == "" && !args.Demo && !args.Generate {
-		args.ServerAddr = defaultAddr
-	}
-}
-
-// handleSpecialModes handles demo and generate modes, returning true if handled
-func handleSpecialModes(args *shared.CommonArgs, demoFunc func(*shared.CommonArgs)) bool {
-	if args.Demo {
-		demoFunc(args)
-		return true
-	}
-	if args.Generate {
-		shared.RunGenerate()
-		return true
-	}
-	return false
 }
 
 // runTransportDemo demonstrates transport wrapping with server and client

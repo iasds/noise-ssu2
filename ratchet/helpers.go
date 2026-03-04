@@ -255,18 +255,9 @@ func performDHRatchetStep(session *Session) error {
 		return oops.Wrapf(err, "failed to generate new ephemeral key pair")
 	}
 
-	sendingChainKey, _, err := session.DHRatchet.PerformRatchet()
-	if err != nil {
-		return oops.Wrapf(err, "failed to perform DH ratchet")
+	if err := applySendRatchetKeys(session); err != nil {
+		return err
 	}
-
-	tagKey, symKey, err := deriveTagAndSymKeysFromChainKey(sendingChainKey)
-	if err != nil {
-		return oops.Wrapf(err, "failed to derive keys after DH ratchet step")
-	}
-
-	session.SymmetricRatchet = ratchet.NewSymmetricRatchet(symKey)
-	session.TagRatchet = ratchet.NewTagRatchet(tagKey)
 
 	session.newEphemeralPub = &newPubKey
 
@@ -411,4 +402,63 @@ func prependPendingNextKeys(session *Session, plaintext []byte) ([]byte, error) 
 	}).Debug("Prepended control blocks to ES payload")
 
 	return combined, nil
+}
+
+// lookupLockedSession finds a session by its tag and acquires the session lock.
+// The caller MUST defer session.mu.Unlock() after a successful call. This
+// consolidates the repeated session-lookup-and-lock pattern used by
+// ProcessReceivedNextKey and ProcessIncomingDHRatchet.
+func (sm *SessionManager) lookupLockedSession(sessionTag [8]byte) (*Session, error) {
+	sm.mu.RLock()
+	session, exists := sm.tagIndex[sessionTag]
+	sm.mu.RUnlock()
+
+	if !exists {
+		return nil, oops.Errorf("no session found for tag %x", sessionTag)
+	}
+
+	session.mu.Lock()
+	return session, nil
+}
+
+// applyRecvRatchetKeys performs a DH ratchet step and applies the derived keys
+// to the session's receiving ratchet state. This consolidates the common
+// PerformRatchet + deriveTagAndSymKeysFromChainKey + assign pattern used by
+// applyIncomingDHKey and ProcessIncomingDHRatchet.
+func applyRecvRatchetKeys(session *Session) error {
+	_, receivingChainKey, err := session.DHRatchet.PerformRatchet()
+	if err != nil {
+		return oops.Wrapf(err, "failed to perform receiving DH ratchet")
+	}
+
+	tagKey, symKey, err := deriveTagAndSymKeysFromChainKey(receivingChainKey)
+	if err != nil {
+		return oops.Wrapf(err, "failed to derive receiving tag and symmetric keys after DH ratchet")
+	}
+
+	session.RecvSymmetricRatchet = ratchet.NewSymmetricRatchet(symKey)
+	session.RecvTagRatchet = ratchet.NewTagRatchet(tagKey)
+
+	return nil
+}
+
+// applySendRatchetKeys performs a DH ratchet step and applies the derived keys
+// to the session's sending ratchet state. This consolidates the common
+// PerformRatchet + deriveTagAndSymKeysFromChainKey + assign pattern used by
+// performDHRatchetStep.
+func applySendRatchetKeys(session *Session) error {
+	sendingChainKey, _, err := session.DHRatchet.PerformRatchet()
+	if err != nil {
+		return oops.Wrapf(err, "failed to perform DH ratchet")
+	}
+
+	tagKey, symKey, err := deriveTagAndSymKeysFromChainKey(sendingChainKey)
+	if err != nil {
+		return oops.Wrapf(err, "failed to derive keys after DH ratchet step")
+	}
+
+	session.SymmetricRatchet = ratchet.NewSymmetricRatchet(symKey)
+	session.TagRatchet = ratchet.NewTagRatchet(tagKey)
+
+	return nil
 }

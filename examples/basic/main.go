@@ -27,7 +27,7 @@ func main() {
 	}
 
 	// Handle special modes
-	if handleSpecialModes(args) {
+	if shared.HandleSpecialModes(args, func(_ *shared.CommonArgs) { shared.RunDemo() }) {
 		return
 	}
 
@@ -48,19 +48,6 @@ func dispatchMode(args *shared.CommonArgs, staticKey, remoteKey []byte) {
 	} else if args.ClientAddr != "" {
 		runBasicClient(args, staticKey, remoteKey)
 	}
-}
-
-// handleSpecialModes handles demo and generate modes, returning true if handled
-func handleSpecialModes(args *shared.CommonArgs) bool {
-	if args.Demo {
-		shared.RunDemo()
-		return true
-	}
-	if args.Generate {
-		shared.RunGenerate()
-		return true
-	}
-	return false
 }
 
 // logKeyIfVerbose prints key info when verbose mode is enabled

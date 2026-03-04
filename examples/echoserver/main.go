@@ -34,7 +34,7 @@ func main() {
 	}
 
 	// Handle special modes
-	if handleSpecialModes(args) {
+	if shared.HandleSpecialModes(args, func(_ *shared.CommonArgs) { shared.RunDemo() }) {
 		return
 	}
 
@@ -51,19 +51,6 @@ func main() {
 		fmt.Println("❌ Echo server requires -server address")
 		shared.PrintUsage("echoserver", "Noise Protocol echo server supporting all patterns")
 	}
-}
-
-// handleSpecialModes handles demo and generate modes, returning true if handled
-func handleSpecialModes(args *shared.CommonArgs) bool {
-	if args.Demo {
-		shared.RunDemo()
-		return true
-	}
-	if args.Generate {
-		shared.RunGenerate()
-		return true
-	}
-	return false
 }
 
 // parseServerKeys handles key parsing for server configuration

@@ -36,7 +36,7 @@ func main() {
 	}
 
 	// Handle special modes
-	if handleSpecialModes(args) {
+	if shared.HandleSpecialModes(args, func(_ *shared.CommonArgs) { shared.RunDemo() }) {
 		return
 	}
 
@@ -58,19 +58,6 @@ func dispatchMode(args *shared.CommonArgs, staticKey, remoteKey []byte) {
 		fmt.Println("❌ Echo client requires -client address")
 		shared.PrintUsage("echoclient", "Noise Protocol echo client supporting all patterns")
 	}
-}
-
-// handleSpecialModes handles demo and generate modes, returning true if handled
-func handleSpecialModes(args *shared.CommonArgs) bool {
-	if args.Demo {
-		shared.RunDemo()
-		return true
-	}
-	if args.Generate {
-		shared.RunGenerate()
-		return true
-	}
-	return false
 }
 
 // logKeyIfVerbose prints key info when verbose mode is enabled

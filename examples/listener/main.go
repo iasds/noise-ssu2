@@ -19,7 +19,7 @@ func main() {
 		log.Fatalf("❌ Failed to parse arguments: %v", err)
 	}
 
-	handleDefaultAddress(args)
+	shared.HandleDefaultAddress(args, "127.0.0.1:0")
 
 	if err := args.ValidateArgs(); err != nil {
 		fmt.Printf("❌ Invalid arguments: %v\n\n", err)
@@ -27,7 +27,7 @@ func main() {
 		return
 	}
 
-	if handleSpecialModes(args) {
+	if shared.HandleSpecialModes(args, runListenerDemo) {
 		return
 	}
 
@@ -37,26 +37,6 @@ func main() {
 	}
 
 	runListenerServer(args, staticKey)
-}
-
-// handleDefaultAddress sets a default server address if none was provided
-func handleDefaultAddress(args *shared.CommonArgs) {
-	if args.ServerAddr == "" && args.ClientAddr == "" && !args.Demo && !args.Generate {
-		args.ServerAddr = "127.0.0.1:0"
-	}
-}
-
-// handleSpecialModes handles demo and generate modes, returning true if handled
-func handleSpecialModes(args *shared.CommonArgs) bool {
-	if args.Demo {
-		runListenerDemo(args)
-		return true
-	}
-	if args.Generate {
-		shared.RunGenerate()
-		return true
-	}
-	return false
 }
 
 // createListenerConfig builds a NoiseListener config from args and an optional static key

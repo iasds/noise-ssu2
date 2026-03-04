@@ -262,21 +262,33 @@ func readNoiseIKMessage2(
 	return plaintext, nsrKeys, nil
 }
 
-// encryptNSRPayload performs the split() and payload encryption for NSR.
-// Spec ref: ratchet.md §"KDF for Payload Section Encrypted Contents".
-func encryptNSRPayload(ns *noiseIKState, payload []byte) ([]byte, *nsrSessionKeys, error) {
+// deriveNSRPayloadCipher derives the AEAD cipher and session keys for NSR payload
+// encryption or decryption by performing the split() operation and payload key
+// derivation. This consolidates the common key derivation logic shared by
+// encryptNSRPayload and decryptNSRPayload.
+func deriveNSRPayloadCipher(ns *noiseIKState) (*chacha20poly1305.AEAD, [32]byte, [32]byte, error) {
 	// split(): keydata = HKDF(chainKey, ZEROLEN, "", 64)
 	kAB, kBA := noiseHKDF2(ns.ck[:], nil)
 
-	// Derive payload encryption key: k = HKDF(k_ba, ZEROLEN, "AttachPayloadKDF", 32)
+	// Derive payload key: k = HKDF(k_ba, ZEROLEN, "AttachPayloadKDF", 32)
 	payloadKeyBytes := standardHKDF(kBA[:], nil, []byte(hkdfInfoAttachPayloadKDF), 32)
 	var payloadKey [32]byte
 	copy(payloadKey[:], payloadKeyBytes)
 
-	// Encrypt payload with AEAD
 	aead, err := chacha20poly1305.NewAEAD(payloadKey)
 	if err != nil {
-		return nil, nil, oops.Wrapf(err, "failed to create AEAD for NSR payload")
+		return nil, [32]byte{}, [32]byte{}, oops.Wrapf(err, "failed to create AEAD for NSR payload")
+	}
+
+	return aead, kAB, kBA, nil
+}
+
+// encryptNSRPayload performs the split() and payload encryption for NSR.
+// Spec ref: ratchet.md §"KDF for Payload Section Encrypted Contents".
+func encryptNSRPayload(ns *noiseIKState, payload []byte) ([]byte, *nsrSessionKeys, error) {
+	aead, kAB, kBA, err := deriveNSRPayloadCipher(ns)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	nonce := noiseNonce(0)
@@ -300,18 +312,9 @@ func decryptNSRPayload(ns *noiseIKState, encrypted []byte) ([]byte, *nsrSessionK
 		return nil, nil, oops.Errorf("NSR payload too short for auth tag: %d bytes", len(encrypted))
 	}
 
-	// split(): keydata = HKDF(chainKey, ZEROLEN, "", 64)
-	kAB, kBA := noiseHKDF2(ns.ck[:], nil)
-
-	// Derive payload decryption key: k = HKDF(k_ba, ZEROLEN, "AttachPayloadKDF", 32)
-	payloadKeyBytes := standardHKDF(kBA[:], nil, []byte(hkdfInfoAttachPayloadKDF), 32)
-	var payloadKey [32]byte
-	copy(payloadKey[:], payloadKeyBytes)
-
-	// Decrypt payload
-	aead, err := chacha20poly1305.NewAEAD(payloadKey)
+	aead, kAB, kBA, err := deriveNSRPayloadCipher(ns)
 	if err != nil {
-		return nil, nil, oops.Wrapf(err, "failed to create AEAD for NSR payload decryption")
+		return nil, nil, err
 	}
 
 	ct := encrypted[:len(encrypted)-16]

@@ -117,15 +117,18 @@ func testSuccessfulConnection(serverAddr string, config *noise.ConnConfig) {
 
 	fmt.Println("✅ Handshake with retry completed successfully!")
 
-	// Send test message
-	message := "Hello with retry!"
-	_, err = conn.Write([]byte(message))
+	sendAndReceive(conn, "Hello with retry!", "Received")
+}
+
+// sendAndReceive sends a test message on the connection and logs the response.
+// This consolidates the common send-and-echo pattern used across retry test functions.
+func sendAndReceive(conn *noise.NoiseConn, message, responseLabel string) {
+	_, err := conn.Write([]byte(message))
 	if err != nil {
 		log.Printf("Write failed: %v", err)
 		return
 	}
 
-	// Read response
 	buffer := make([]byte, 1024)
 	n, err := conn.Read(buffer)
 	if err != nil {
@@ -134,7 +137,7 @@ func testSuccessfulConnection(serverAddr string, config *noise.ConnConfig) {
 	}
 
 	response := string(buffer[:n])
-	fmt.Printf("📨 Received: %s\n", response)
+	fmt.Printf("📨 %s: %s\n", responseLabel, response)
 }
 
 // testTransportFunctions tests high-level transport functions with retry
@@ -153,23 +156,7 @@ func testTransportFunctions(serverAddr string, config *noise.ConnConfig) {
 
 	fmt.Println("✅ DialNoiseWithHandshake completed successfully!")
 
-	// Test communication
-	message := "Hello from transport function!"
-	_, err = conn.Write([]byte(message))
-	if err != nil {
-		log.Printf("Write failed: %v", err)
-		return
-	}
-
-	buffer := make([]byte, 1024)
-	n, err := conn.Read(buffer)
-	if err != nil {
-		log.Printf("Read failed: %v", err)
-		return
-	}
-
-	response := string(buffer[:n])
-	fmt.Printf("📨 Transport function response: %s\n", response)
+	sendAndReceive(conn, "Hello from transport function!", "Transport function response")
 }
 
 // testContextCancellation tests context cancellation during retry

@@ -66,28 +66,18 @@ func NewSipHashLengthModifierDirectional(name string, outKeys, inKeys [2]uint64,
 
 // ModifyOutbound obfuscates 2-byte frame lengths using SipHash.
 func (slm *SipHashLengthModifier) ModifyOutbound(phase handshake.HandshakePhase, data []byte) ([]byte, error) {
-	// Only apply to data phase (PhaseFinal and beyond, including PhaseData).
-	// Use phase < PhaseFinal so that future PhaseData (iota > PhaseFinal) is also matched.
-	if phase < handshake.PhaseFinal || len(data) != FrameLengthFieldSize {
-		return data, nil
-	}
-
-	slm.mu.Lock()
-	mask := slm.getNextOutboundMask()
-	slm.mu.Unlock()
-
-	// XOR the 2-byte length with the mask
-	length := binary.BigEndian.Uint16(data)
-	obfuscatedLength := length ^ mask
-
-	result := make([]byte, 2)
-	binary.BigEndian.PutUint16(result, obfuscatedLength)
-
-	return result, nil
+	return slm.applyMask(phase, data, slm.getNextOutboundMask)
 }
 
 // ModifyInbound removes SipHash obfuscation from frame lengths.
 func (slm *SipHashLengthModifier) ModifyInbound(phase handshake.HandshakePhase, data []byte) ([]byte, error) {
+	return slm.applyMask(phase, data, slm.getNextInboundMask)
+}
+
+// applyMask applies a SipHash mask to a 2-byte frame length field, shared by
+// both ModifyOutbound and ModifyInbound since XOR obfuscation/deobfuscation
+// uses the same transformation with direction-specific mask functions.
+func (slm *SipHashLengthModifier) applyMask(phase handshake.HandshakePhase, data []byte, maskFunc func() uint16) ([]byte, error) {
 	// Only apply to data phase (PhaseFinal and beyond, including PhaseData).
 	// Use phase < PhaseFinal so that future PhaseData (iota > PhaseFinal) is also matched.
 	if phase < handshake.PhaseFinal || len(data) != FrameLengthFieldSize {
@@ -95,55 +85,42 @@ func (slm *SipHashLengthModifier) ModifyInbound(phase handshake.HandshakePhase, 
 	}
 
 	slm.mu.Lock()
-	mask := slm.getNextInboundMask()
+	mask := maskFunc()
 	slm.mu.Unlock()
 
-	// XOR the 2-byte length with the mask (XOR is symmetric)
+	// XOR the 2-byte length with the mask (XOR is symmetric for obfuscation/deobfuscation)
 	length := binary.BigEndian.Uint16(data)
-	deobfuscatedLength := length ^ mask
+	maskedLength := length ^ mask
 
 	result := make([]byte, 2)
-	binary.BigEndian.PutUint16(result, deobfuscatedLength)
+	binary.BigEndian.PutUint16(result, maskedLength)
 
 	return result, nil
 }
 
-// getNextOutboundMask generates the next SipHash mask for outbound data.
+// computeNextMask generates the next SipHash mask using the given keys and IV.
 // Per NTCP2 spec: IV[n] = SipHash-2-4(sipk1, sipk2, IV[n-1]).
 // Uses a stack-allocated [8]byte to avoid a heap allocation on every frame.
-func (slm *SipHashLengthModifier) getNextOutboundMask() uint16 {
-	// Use the previous IV as SipHash input (8-byte little-endian).
-	// Stack-allocated array avoids the per-frame 8-byte heap allocation.
+// The IV is updated in-place for the next iteration.
+func (slm *SipHashLengthModifier) computeNextMask(keys [2]uint64, iv *uint64) uint16 {
 	var input [SipHashIVSize]byte
-	binary.LittleEndian.PutUint64(input[:], slm.outboundIV)
+	binary.LittleEndian.PutUint64(input[:], *iv)
 
-	// Calculate SipHash with outbound k1, k2 keys
-	hash := siphash.Hash(slm.outboundKeys[0], slm.outboundKeys[1], input[:])
+	hash := siphash.Hash(keys[0], keys[1], input[:])
 
-	// Update IV with the hash result for next iteration
-	slm.outboundIV = hash
+	*iv = hash
 
-	// Return first 2 bytes as mask
 	return uint16(hash & 0xFFFF)
 }
 
+// getNextOutboundMask generates the next SipHash mask for outbound data.
+func (slm *SipHashLengthModifier) getNextOutboundMask() uint16 {
+	return slm.computeNextMask(slm.outboundKeys, &slm.outboundIV)
+}
+
 // getNextInboundMask generates the next SipHash mask for inbound data.
-// Per NTCP2 spec: IV[n] = SipHash-2-4(sipk1, sipk2, IV[n-1]).
-// Uses a stack-allocated [8]byte to avoid a heap allocation on every frame.
 func (slm *SipHashLengthModifier) getNextInboundMask() uint16 {
-	// Use the previous IV as SipHash input (8-byte little-endian).
-	// Stack-allocated array avoids the per-frame 8-byte heap allocation.
-	var input [SipHashIVSize]byte
-	binary.LittleEndian.PutUint64(input[:], slm.inboundIV)
-
-	// Calculate SipHash with inbound k1, k2 keys
-	hash := siphash.Hash(slm.inboundKeys[0], slm.inboundKeys[1], input[:])
-
-	// Update IV with the hash result for next iteration
-	slm.inboundIV = hash
-
-	// Return first 2 bytes as mask
-	return uint16(hash & 0xFFFF)
+	return slm.computeNextMask(slm.inboundKeys, &slm.inboundIV)
 }
 
 // NextInboundMask generates the next SipHash mask for inbound (read) direction.
