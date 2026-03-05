@@ -44,8 +44,8 @@ const (
 // (New Session) for constructing message 2 (New Session Reply).
 // Both the initiator and responder retain this state after the NS exchange.
 type noiseHandshakeState struct {
-	h  [32]byte // handshake hash after NS message 1
-	ck [32]byte // chaining key after NS message 1
+	h  []byte // handshake hash after NS message 1
+	ck []byte // chaining key after NS message 1
 
 	// localEphPriv is the initiator's ephemeral private key, retained for the
 	// "ee" DH pattern in message 2. Only set on the initiator side.
@@ -75,16 +75,16 @@ type nsrSessionKeys struct {
 // Spec: tagsetKey = HKDF(chainKey, ZEROLEN, "SessionReplyTags", 32)
 //
 //	tagset_nsr = DH_INITIALIZE(chainKey, tagsetKey)
-func deriveNSRTagRatchet(chainKey [32]byte) (*ratchet.TagRatchet, error) {
+func deriveNSRTagRatchet(chainKey []byte) (*ratchet.TagRatchet, error) {
 	// Step 1: Derive tagsetKey
-	tagsetKey, err := kdf.StandardHKDF(chainKey[:], nil, []byte(hkdfInfoSessionReplyTags), 32)
+	tagsetKey, err := kdf.StandardHKDF(chainKey, nil, []byte(hkdfInfoSessionReplyTags), 32)
 	if err != nil {
 		return nil, oops.Wrapf(err, "failed to derive NSR tagset key")
 	}
 
 	// Step 2: DH_INITIALIZE(chainKey, tagsetKey)
 	// keydata = HKDF(chainKey, tagsetKey, "KDFDHRatchetStep", 64)
-	keydata, err := kdf.StandardHKDF(chainKey[:], tagsetKey, []byte(hkdfInfoDHRatchetStep), 64)
+	keydata, err := kdf.StandardHKDF(chainKey, tagsetKey, []byte(hkdfInfoDHRatchetStep), 64)
 	if err != nil {
 		return nil, oops.Wrapf(err, "failed to derive NSR DH ratchet step")
 	}
@@ -126,10 +126,13 @@ func writeNoiseIKMessage2(
 	}
 
 	// Continue Noise handshake from retained state
-	ns := &noiseIKState{h: hs.h, ck: hs.ck}
+	ns := &noise.SymmetricState{}
+	ns.SetCipherSuite(noise.ChaChaPoly_SHA256())
+	ns.SetHandshakeHash(hs.h)
+	ns.SetChainingKey(hs.ck)
 
 	// MixHash(tag) — bind the tag into the handshake transcript
-	ns.mixHash(tag[:])
+	ns.MixHash(tag[:])
 
 	// "e" pattern: Generate Bob's Elligator2-representable ephemeral key pair
 	ephPub, ephPrivBytes, err := elligator2.GenerateKeyPair()
@@ -140,7 +143,7 @@ func writeNoiseIKMessage2(
 	if err != nil {
 		return [8]byte{}, nil, nil, oops.Wrapf(err, "failed to Elligator2-encode NSR ephemeral key")
 	}
-	ns.mixHash(ephEncoded) // MixHash the wire representation
+	ns.MixHash(ephEncoded) // MixHash the wire representation
 
 	// "ee" pattern: DH(besk, aepk)
 	// Per I2P ratchet.md §1g, "ee" uses single-output HKDF: only ck is updated.
@@ -149,17 +152,17 @@ func writeNoiseIKMessage2(
 	if err != nil {
 		return [8]byte{}, nil, nil, oops.Wrapf(err, "failed to compute NSR DH(e, re)")
 	}
-	ns.mixKeyCKOnly(sharedEE)
+	mixKeyCKOnly(ns, sharedEE)
 
 	// "se" pattern: DH(besk, apk)
 	sharedSE, err := curve25519.SharedKey(ephPrivBytes, hs.remoteStaticPub[:])
 	if err != nil {
 		return [8]byte{}, nil, nil, oops.Wrapf(err, "failed to compute NSR DH(e, rs)")
 	}
-	ns.mixKey(sharedSE)
+	ns.MixKey(sharedSE)
 
 	// Encrypt ZEROLEN to produce the key section MAC (16 bytes)
-	keySectionMAC, err := ns.encryptAndHash([]byte{})
+	keySectionMAC, err := ns.EncryptAndHash(nil, []byte{})
 	if err != nil {
 		return [8]byte{}, nil, nil, oops.Wrapf(err, "failed to encrypt NSR key section")
 	}
@@ -204,14 +207,17 @@ func readNoiseIKMessage2(
 	copy(nsrTag[:], message[0:8])
 
 	// Continue Noise handshake from retained state
-	ns := &noiseIKState{h: hs.h, ck: hs.ck}
+	ns := &noise.SymmetricState{}
+	ns.SetCipherSuite(noise.ChaChaPoly_SHA256())
+	ns.SetHandshakeHash(hs.h)
+	ns.SetChainingKey(hs.ck)
 
 	// MixHash(tag)
-	ns.mixHash(nsrTag[:])
+	ns.MixHash(nsrTag[:])
 
 	// "e" pattern: Read Bob's Elligator2-encoded ephemeral key
 	ephEncoded := message[8:40]
-	ns.mixHash(ephEncoded)
+	ns.MixHash(ephEncoded)
 
 	ephPubBytes, err := elligator2.Decode(ephEncoded)
 	if err != nil {
@@ -225,18 +231,18 @@ func readNoiseIKMessage2(
 	if err != nil {
 		return nil, nil, oops.Wrapf(err, "failed to compute NSR DH(e, re)")
 	}
-	ns.mixKeyCKOnly(sharedEE)
+	mixKeyCKOnly(ns, sharedEE)
 
 	// "se" pattern: DH(ask, bepk)
 	sharedSE, err := curve25519.SharedKey(ourStaticPriv[:], ephPubBytes)
 	if err != nil {
 		return nil, nil, oops.Wrapf(err, "failed to compute NSR DH(s, re)")
 	}
-	ns.mixKey(sharedSE)
+	ns.MixKey(sharedSE)
 
 	// Decrypt key section MAC (verify ZEROLEN encryption)
 	keySectionMAC := message[40:56]
-	_, err = ns.decryptAndHash(keySectionMAC)
+	_, err = ns.DecryptAndHash(nil, keySectionMAC)
 	if err != nil {
 		return nil, nil, oops.Wrapf(err, "NSR key section authentication failed")
 	}
@@ -255,9 +261,9 @@ func readNoiseIKMessage2(
 // encryption or decryption by performing the split() operation and payload key
 // derivation. This consolidates the common key derivation logic shared by
 // encryptNSRPayload and decryptNSRPayload.
-func deriveNSRPayloadCipher(ns *noiseIKState) (*chacha20poly1305.AEAD, [32]byte, [32]byte, error) {
+func deriveNSRPayloadCipher(ns *noise.SymmetricState) (*chacha20poly1305.AEAD, [32]byte, [32]byte, error) {
 	// split(): keydata = HKDF(chainKey, ZEROLEN, "", 64)
-	kAB, kBA := noise.HKDF2SHA256(ns.ck[:], nil)
+	kAB, kBA := noise.HKDF2SHA256(ns.ChainingKey(), nil)
 
 	// Derive payload key: k = HKDF(k_ba, ZEROLEN, "AttachPayloadKDF", 32)
 	payloadKeyBytes, err := kdf.StandardHKDF(kBA[:], nil, []byte(hkdfInfoAttachPayloadKDF), 32)
@@ -277,29 +283,31 @@ func deriveNSRPayloadCipher(ns *noiseIKState) (*chacha20poly1305.AEAD, [32]byte,
 
 // encryptNSRPayload performs the split() and payload encryption for NSR.
 // Spec ref: ratchet.md §"KDF for Payload Section Encrypted Contents".
-func encryptNSRPayload(ns *noiseIKState, payload []byte) ([]byte, *nsrSessionKeys, error) {
+func encryptNSRPayload(ns *noise.SymmetricState, payload []byte) ([]byte, *nsrSessionKeys, error) {
 	aead, kAB, kBA, err := deriveNSRPayloadCipher(ns)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	nonce := noise.BuildNonce(0)
-	ct, tag, err := aead.Encrypt(payload, ns.h[:], nonce[:])
+	ct, tag, err := aead.Encrypt(payload, ns.HandshakeHash(), nonce[:])
 	if err != nil {
 		return nil, nil, oops.Wrapf(err, "failed to encrypt NSR payload")
 	}
 
 	encrypted := append(ct, tag[:]...)
 
+	var chainKey [32]byte
+	copy(chainKey[:], ns.ChainingKey())
 	return encrypted, &nsrSessionKeys{
-		chainKey: ns.ck,
+		chainKey: chainKey,
 		keyAB:    kAB,
 		keyBA:    kBA,
 	}, nil
 }
 
 // decryptNSRPayload performs the split() and payload decryption for NSR.
-func decryptNSRPayload(ns *noiseIKState, encrypted []byte) ([]byte, *nsrSessionKeys, error) {
+func decryptNSRPayload(ns *noise.SymmetricState, encrypted []byte) ([]byte, *nsrSessionKeys, error) {
 	if len(encrypted) < 16 {
 		return nil, nil, oops.Errorf("NSR payload too short for auth tag: %d bytes", len(encrypted))
 	}
@@ -314,13 +322,15 @@ func decryptNSRPayload(ns *noiseIKState, encrypted []byte) ([]byte, *nsrSessionK
 	copy(tag[:], encrypted[len(encrypted)-16:])
 
 	nonce := noise.BuildNonce(0)
-	plaintext, err := aead.Decrypt(ct, tag[:], ns.h[:], nonce[:])
+	plaintext, err := aead.Decrypt(ct, tag[:], ns.HandshakeHash(), nonce[:])
 	if err != nil {
 		return nil, nil, oops.Wrapf(err, "NSR payload decryption failed (authentication error)")
 	}
 
+	var chainKey [32]byte
+	copy(chainKey[:], ns.ChainingKey())
 	return plaintext, &nsrSessionKeys{
-		chainKey: ns.ck,
+		chainKey: chainKey,
 		keyAB:    kAB,
 		keyBA:    kBA,
 	}, nil

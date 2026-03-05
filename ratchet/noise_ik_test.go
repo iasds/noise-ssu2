@@ -30,13 +30,13 @@ func TestNoiseIKState_MixHash(t *testing.T) {
 	ns1 := initNoiseIK(respPub)
 	ns2 := initNoiseIK(respPub)
 
-	assert.Equal(t, ns1.h, ns2.h, "Same inputs should produce same initial state")
+	assert.Equal(t, ns1.HandshakeHash(), ns2.HandshakeHash(), "Same inputs should produce same initial state")
 
-	ns1.mixHash([]byte("test data"))
-	assert.NotEqual(t, ns1.h, ns2.h, "MixHash should change the state")
+	ns1.MixHash([]byte("test data"))
+	assert.NotEqual(t, ns1.HandshakeHash(), ns2.HandshakeHash(), "MixHash should change the state")
 
-	ns2.mixHash([]byte("test data"))
-	assert.Equal(t, ns1.h, ns2.h, "Same MixHash inputs should produce same state")
+	ns2.MixHash([]byte("test data"))
+	assert.Equal(t, ns1.HandshakeHash(), ns2.HandshakeHash(), "Same MixHash inputs should produce same state")
 }
 
 func TestNoiseIKState_MixKey(t *testing.T) {
@@ -45,18 +45,18 @@ func TestNoiseIKState_MixKey(t *testing.T) {
 	require.NoError(t, err)
 
 	ns := initNoiseIK(respPub)
-	assert.False(t, ns.hasKey, "No cipher key before MixKey")
+	assert.False(t, ns.HasKey(), "No cipher key before MixKey")
 
 	ikm := make([]byte, 32)
 	_, err = rand.Read(ikm)
 	require.NoError(t, err)
 
-	oldCK := ns.ck
-	ns.mixKey(ikm)
+	oldCK := ns.ChainingKey()
+	ns.MixKey(ikm)
 
-	assert.True(t, ns.hasKey, "MixKey should set hasKey")
-	assert.NotEqual(t, oldCK, ns.ck, "MixKey should update chaining key")
-	assert.Equal(t, uint64(0), ns.n, "MixKey should reset nonce to 0")
+	assert.True(t, ns.HasKey(), "MixKey should set hasKey")
+	assert.NotEqual(t, oldCK, ns.ChainingKey(), "MixKey should update chaining key")
+	assert.Equal(t, uint64(0), ns.Nonce(), "MixKey should reset nonce to 0")
 }
 
 // TestNoiseHKDF1_MatchesFirstOutputOfHKDF2 verifies that noise.HKDF1SHA256 produces
@@ -86,35 +86,35 @@ func TestNoiseIKState_MixKeyCKOnly(t *testing.T) {
 
 	ns := initNoiseIK(respPub)
 
-	// Set a known cipher key via mixKey so we can verify it's preserved
+	// Set a known cipher key via MixKey so we can verify it's preserved
 	ikm := make([]byte, 32)
 	_, err = rand.Read(ikm)
 	require.NoError(t, err)
-	ns.mixKey(ikm)
-	assert.True(t, ns.hasKey, "mixKey should set hasKey")
+	ns.MixKey(ikm)
+	assert.True(t, ns.HasKey(), "MixKey should set hasKey")
 
 	// Record state before mixKeyCKOnly
-	oldCK := ns.ck
-	oldK := ns.k
-	oldN := ns.n
-	oldHasKey := ns.hasKey
+	oldCK := ns.ChainingKey()
+	oldKey := ns.UnsafeKey()
+	oldN := ns.Nonce()
+	oldHasKey := ns.HasKey()
 
 	// Apply mixKeyCKOnly with new input
 	eeIKM := make([]byte, 32)
 	_, err = rand.Read(eeIKM)
 	require.NoError(t, err)
-	ns.mixKeyCKOnly(eeIKM)
+	mixKeyCKOnly(ns, eeIKM)
 
 	// ck MUST change
-	assert.NotEqual(t, oldCK, ns.ck, "mixKeyCKOnly should update chaining key")
+	assert.NotEqual(t, oldCK, ns.ChainingKey(), "mixKeyCKOnly should update chaining key")
 	// k, n, hasKey MUST NOT change
-	assert.Equal(t, oldK, ns.k, "mixKeyCKOnly must NOT update cipher key")
-	assert.Equal(t, oldN, ns.n, "mixKeyCKOnly must NOT reset nonce")
-	assert.Equal(t, oldHasKey, ns.hasKey, "mixKeyCKOnly must NOT change hasKey flag")
+	assert.Equal(t, oldKey, ns.UnsafeKey(), "mixKeyCKOnly must NOT update cipher key")
+	assert.Equal(t, oldN, ns.Nonce(), "mixKeyCKOnly must NOT reset nonce")
+	assert.Equal(t, oldHasKey, ns.HasKey(), "mixKeyCKOnly must NOT change hasKey flag")
 
 	// Verify ck matches noise.HKDF1SHA256 directly
-	expected := noise.HKDF1SHA256(oldCK[:], eeIKM)
-	assert.Equal(t, expected, ns.ck, "ck should equal noise.HKDF1SHA256(oldCK, ikm)")
+	expected := noise.HKDF1SHA256(oldCK, eeIKM)
+	assert.Equal(t, expected[:], ns.ChainingKey(), "ck should equal noise.HKDF1SHA256(oldCK, ikm)")
 }
 
 // TestNSR_EE_DoesNotSetCipherKey verifies that the "ee" step in the NSR
@@ -126,18 +126,18 @@ func TestNSR_EE_DoesNotSetCipherKey(t *testing.T) {
 	require.NoError(t, err)
 
 	ns := initNoiseIK(respPub)
-	assert.False(t, ns.hasKey, "Initial state should not have a cipher key")
+	assert.False(t, ns.HasKey(), "Initial state should not have a cipher key")
 
 	// Simulate the "ee" step using mixKeyCKOnly
 	eeIKM := make([]byte, 32)
 	_, err = rand.Read(eeIKM)
 	require.NoError(t, err)
-	ns.mixKeyCKOnly(eeIKM)
+	mixKeyCKOnly(ns, eeIKM)
 
 	// After "ee", there should be no cipher key set (hasKey remains false
 	// if it was false before — the "es" step from message 1 would have set
 	// hasKey=true, but mixKeyCKOnly must not change it)
-	assert.False(t, ns.hasKey,
+	assert.False(t, ns.HasKey(),
 		"mixKeyCKOnly (ee step) must not set hasKey; cipher key is set by the subsequent 'se' step")
 }
 
@@ -154,24 +154,24 @@ func TestNoiseIKState_EncryptDecryptAndHash(t *testing.T) {
 	ikm := make([]byte, 32)
 	_, err = rand.Read(ikm)
 	require.NoError(t, err)
-	encState.mixKey(ikm)
-	decState.mixKey(ikm)
+	encState.MixKey(ikm)
+	decState.MixKey(ikm)
 
 	// Encrypt
 	plaintext := []byte("hello noise protocol")
-	ciphertext, err := encState.encryptAndHash(plaintext)
+	ciphertext, err := encState.EncryptAndHash(nil, plaintext)
 	require.NoError(t, err)
 	assert.NotEqual(t, plaintext, ciphertext[:len(plaintext)], "Ciphertext should differ from plaintext")
 	assert.Equal(t, len(plaintext)+16, len(ciphertext), "Ciphertext should include 16-byte AEAD tag")
 
 	// Decrypt
-	decrypted, err := decState.decryptAndHash(ciphertext)
+	decrypted, err := decState.DecryptAndHash(nil, ciphertext)
 	require.NoError(t, err)
 	assert.Equal(t, plaintext, decrypted)
 
 	// States should match after symmetric operations
-	assert.Equal(t, encState.h, decState.h, "Handshake hash should match after encrypt/decrypt")
-	assert.Equal(t, encState.n, decState.n, "Nonce counters should match")
+	assert.Equal(t, encState.HandshakeHash(), decState.HandshakeHash(), "Handshake hash should match after encrypt/decrypt")
+	assert.Equal(t, encState.Nonce(), decState.Nonce(), "Nonce counters should match")
 }
 
 func TestNoiseIKState_EncryptAndHash_NoKey(t *testing.T) {
@@ -180,12 +180,12 @@ func TestNoiseIKState_EncryptAndHash_NoKey(t *testing.T) {
 	require.NoError(t, err)
 
 	ns := initNoiseIK(respPub)
-	assert.False(t, ns.hasKey)
+	assert.False(t, ns.HasKey())
 
 	data := []byte("plaintext pass-through")
-	result, err := ns.encryptAndHash(data)
+	result, err := ns.EncryptAndHash(nil, data)
 	require.NoError(t, err)
-	assert.Equal(t, data, result, "Without key, encryptAndHash should pass through")
+	assert.Equal(t, data, result, "Without key, EncryptAndHash should pass through")
 }
 
 func TestNoiseIKState_DecryptAndHash_TooShort(t *testing.T) {
@@ -197,9 +197,9 @@ func TestNoiseIKState_DecryptAndHash_TooShort(t *testing.T) {
 	ikm := make([]byte, 32)
 	_, err = rand.Read(ikm)
 	require.NoError(t, err)
-	ns.mixKey(ikm)
+	ns.MixKey(ikm)
 
-	_, err = ns.decryptAndHash(make([]byte, 10))
+	_, err = ns.DecryptAndHash(nil, make([]byte, 10))
 	assert.Error(t, err, "Should reject ciphertext shorter than 16 bytes")
 }
 
@@ -213,7 +213,7 @@ func TestNoiseIKState_ProtocolName(t *testing.T) {
 
 	expectedH := sha256.Sum256([]byte(noiseProtocolName))
 	// After MixHash(null prologue) + MixHash(Hash(respPub)), h should differ from initial
-	assert.NotEqual(t, expectedH, ns.h,
+	assert.NotEqual(t, expectedH[:], ns.HandshakeHash(),
 		"After pre-message processing, h should differ from initial hash")
 }
 
@@ -249,10 +249,10 @@ func TestInitNoiseIK_NullPrologue(t *testing.T) {
 	var expectedH [32]byte
 	copy(expectedH[:], hasher.Sum(nil))
 
-	assert.Equal(t, expectedH, ns.h,
+	assert.Equal(t, expectedH[:], ns.HandshakeHash(),
 		"initNoiseIK transcript must include MixHash(null prologue) before hs2 pre-message; "+
 			"omitting this breaks interoperability with conformant I2P routers")
-	assert.Equal(t, h0, ns.ck,
+	assert.Equal(t, h0[:], ns.ChainingKey(),
 		"chaining key must equal SHA-256(protocolName) and must not change during pre-message phase")
 }
 
@@ -266,7 +266,7 @@ func TestNoiseIKState_Hs2Modification(t *testing.T) {
 	ns1 := initNoiseIK(respPub1)
 	ns2 := initNoiseIK(respPub2)
 
-	assert.NotEqual(t, ns1.h, ns2.h,
+	assert.NotEqual(t, ns1.HandshakeHash(), ns2.HandshakeHash(),
 		"Different responder keys should produce different initial states")
 }
 
@@ -665,11 +665,11 @@ func TestDeriveNSRTagRatchet_BothSidesMatch(t *testing.T) {
 	_, err := rand.Read(chainKey[:])
 	require.NoError(t, err)
 
-	tr1, err := deriveNSRTagRatchet(chainKey)
+	tr1, err := deriveNSRTagRatchet(chainKey[:])
 	require.NoError(t, err)
 	require.NotNil(t, tr1)
 
-	tr2, err := deriveNSRTagRatchet(chainKey)
+	tr2, err := deriveNSRTagRatchet(chainKey[:])
 	require.NoError(t, err)
 	require.NotNil(t, tr2)
 
@@ -688,9 +688,9 @@ func TestDeriveNSRTagRatchet_DifferentChainKeys(t *testing.T) {
 	_, err = rand.Read(ck2[:])
 	require.NoError(t, err)
 
-	tr1, err := deriveNSRTagRatchet(ck1)
+	tr1, err := deriveNSRTagRatchet(ck1[:])
 	require.NoError(t, err)
-	tr2, err := deriveNSRTagRatchet(ck2)
+	tr2, err := deriveNSRTagRatchet(ck2[:])
 	require.NoError(t, err)
 
 	tag1, err := tr1.GenerateNextTag()
@@ -846,7 +846,10 @@ func TestEncryptDecryptNSRPayload_Roundtrip(t *testing.T) {
 	require.NoError(t, err)
 
 	// Encryption state
-	encNS := &noiseIKState{h: h, ck: ck}
+	encNS := &noise.SymmetricState{}
+	encNS.SetCipherSuite(noise.ChaChaPoly_SHA256())
+	encNS.SetHandshakeHash(h[:])
+	encNS.SetChainingKey(ck[:])
 	payload := []byte("garlic clove response data")
 	encrypted, eKeys, err := encryptNSRPayload(encNS, payload)
 	require.NoError(t, err)
@@ -854,7 +857,10 @@ func TestEncryptDecryptNSRPayload_Roundtrip(t *testing.T) {
 	assert.Equal(t, len(payload)+16, len(encrypted), "Encrypted output includes 16-byte tag")
 
 	// Decryption state (same h, ck)
-	decNS := &noiseIKState{h: h, ck: ck}
+	decNS := &noise.SymmetricState{}
+	decNS.SetCipherSuite(noise.ChaChaPoly_SHA256())
+	decNS.SetHandshakeHash(h[:])
+	decNS.SetChainingKey(ck[:])
 	decrypted, dKeys, err := decryptNSRPayload(decNS, encrypted)
 	require.NoError(t, err)
 	assert.Equal(t, payload, decrypted)

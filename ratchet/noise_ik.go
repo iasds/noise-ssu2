@@ -18,7 +18,6 @@ package ratchet
 import (
 	"crypto/sha256"
 
-	"github.com/go-i2p/crypto/chacha20poly1305"
 	"github.com/go-i2p/crypto/curve25519"
 	"github.com/go-i2p/crypto/elligator2"
 	"github.com/go-i2p/noise"
@@ -42,17 +41,6 @@ const (
 	noiseEncryptedStaticSize = 48
 )
 
-// noiseIKState implements the Noise symmetric state for the IKelg2+hs2 variant.
-// It tracks the handshake hash (h), chaining key (ck), cipher key (k), and
-// nonce counter (n) as defined in the Noise Protocol Framework §5.
-type noiseIKState struct {
-	h      [32]byte // handshake hash
-	ck     [32]byte // chaining key
-	k      [32]byte // cipher key (valid when hasKey is true)
-	n      uint64   // nonce counter (reset to 0 after each MixKey)
-	hasKey bool     // whether k holds a valid key
-}
-
 // initNoiseIK initializes the Noise symmetric state for the IKelg2+hs2 handshake.
 // The protocol name is hashed (since it exceeds 32 bytes), then the null prologue
 // is mixed in (as required by the Noise spec §5.6 and the I2P ECIES-X25519-AEAD-Ratchet
@@ -64,39 +52,23 @@ type noiseIKState struct {
 //	ck = h
 //	h = SHA-256(h || "")                 MixHash(null prologue)  — required by spec
 //	h = SHA-256(h || SHA-256(rs))        MixHash(Hash(rs))       — hs2 pre-message
-func initNoiseIK(responderStaticPub [32]byte) *noiseIKState {
-	// InitializeSymmetric: protocol name is 50 chars > HASHLEN (32), so h = SHA-256(name)
-	h := sha256.Sum256([]byte(noiseProtocolName))
-	ns := &noiseIKState{h: h, ck: h}
+func initNoiseIK(responderStaticPub [32]byte) *noise.SymmetricState {
+	ns := &noise.SymmetricState{}
+	ns.SetCipherSuite(noise.ChaChaPoly_SHA256())
+	ns.InitializeSymmetric([]byte(noiseProtocolName))
 
 	// MixHash(null prologue): h = SHA-256(h || "")
 	// The I2P ECIES-X25519-AEAD-Ratchet spec requires an explicit MixHash of the
 	// empty prologue before any pre-message processing. Omitting this step diverges
 	// from the spec transcript and breaks interoperability with conformant routers
 	// (Java I2P, i2pd) which apply this step correctly.
-	ns.mixHash([]byte{})
+	ns.MixHash([]byte{})
 
 	// Pre-message (← s) with hs2: MixHash(Hash(rs)) instead of MixHash(rs)
 	rsHash := sha256.Sum256(responderStaticPub[:])
-	ns.mixHash(rsHash[:])
+	ns.MixHash(rsHash[:])
 
 	return ns
-}
-
-// mixHash updates the handshake hash: h = SHA-256(h || data).
-func (ns *noiseIKState) mixHash(data []byte) {
-	hasher := sha256.New()
-	hasher.Write(ns.h[:])
-	hasher.Write(data)
-	copy(ns.h[:], hasher.Sum(nil))
-}
-
-// mixKey derives a new chaining key and cipher key from input key material.
-// ck, k = HKDF(ck, ikm, 2); resets nonce counter to 0.
-func (ns *noiseIKState) mixKey(ikm []byte) {
-	ns.ck, ns.k = noise.HKDF2SHA256(ns.ck[:], ikm)
-	ns.n = 0
-	ns.hasKey = true
 }
 
 // mixKeyCKOnly updates only the chaining key via a single-output HKDF.
@@ -104,70 +76,12 @@ func (ns *noiseIKState) mixKey(ikm []byte) {
 //
 //	ck = HKDF(chainKey, DH(e, re), "", 32)
 //
-// Unlike mixKey, this does NOT update the cipher key (k) or reset the nonce.
+// Unlike MixKey, this does NOT update the cipher key (k) or reset the nonce.
 // The spec mandates single-output HKDF for "ee" to prevent accidental use
 // of an intermediate cipher key between the "ee" and "se" steps.
-func (ns *noiseIKState) mixKeyCKOnly(ikm []byte) {
-	ns.ck = noise.HKDF1SHA256(ns.ck[:], ikm)
-}
-
-// encryptAndHash encrypts plaintext using the current cipher key with h as AD.
-// Returns ciphertext || tag (N + 16 bytes). Updates h with the ciphertext.
-func (ns *noiseIKState) encryptAndHash(plaintext []byte) ([]byte, error) {
-	if !ns.hasKey {
-		// No key set: pass-through (per Noise spec §5.2)
-		ns.mixHash(plaintext)
-		return plaintext, nil
-	}
-
-	aead, err := chacha20poly1305.NewAEAD(ns.k)
-	if err != nil {
-		return nil, oops.Wrapf(err, "failed to create AEAD for handshake encryption")
-	}
-
-	nonce := noise.BuildNonce(ns.n)
-	ct, tag, err := aead.Encrypt(plaintext, ns.h[:], nonce[:])
-	if err != nil {
-		return nil, oops.Wrapf(err, "handshake encryption failed")
-	}
-	ns.n++
-
-	result := append(ct, tag[:]...)
-	ns.mixHash(result)
-	return result, nil
-}
-
-// decryptAndHash decrypts ciphertext (with appended 16-byte tag) using the
-// current cipher key with h as AD. Updates h with the original ciphertext.
-func (ns *noiseIKState) decryptAndHash(ciphertext []byte) ([]byte, error) {
-	if !ns.hasKey {
-		// No key set: pass-through (per Noise spec §5.2)
-		ns.mixHash(ciphertext)
-		return ciphertext, nil
-	}
-
-	if len(ciphertext) < 16 {
-		return nil, oops.Errorf("handshake ciphertext too short for auth tag: %d bytes", len(ciphertext))
-	}
-
-	aead, err := chacha20poly1305.NewAEAD(ns.k)
-	if err != nil {
-		return nil, oops.Wrapf(err, "failed to create AEAD for handshake decryption")
-	}
-
-	ct := ciphertext[:len(ciphertext)-16]
-	var tag [16]byte
-	copy(tag[:], ciphertext[len(ciphertext)-16:])
-
-	nonce := noise.BuildNonce(ns.n)
-	plaintext, err := aead.Decrypt(ct, tag[:], ns.h[:], nonce[:])
-	if err != nil {
-		return nil, oops.Wrapf(err, "handshake decryption failed (authentication error)")
-	}
-	ns.n++
-
-	ns.mixHash(ciphertext)
-	return plaintext, nil
+func mixKeyCKOnly(ns *noise.SymmetricState, ikm []byte) {
+	ck1 := noise.HKDF1SHA256(ns.ChainingKey(), ikm)
+	ns.SetChainingKey(ck1[:])
 }
 
 // writeNoiseIKMessage1 constructs a New Session message using the Noise IK pattern
@@ -195,17 +109,17 @@ func writeNoiseIKMessage1(
 	}
 
 	// MixHash the encoded (wire) representation, not the raw key
-	ns.mixHash(ephEncoded)
+	ns.MixHash(ephEncoded)
 
 	// Token es: DH(ephemeral_private, responder_static)
 	sharedES, err := curve25519.SharedKey(ephPrivBytes, responderStaticPub[:])
 	if err != nil {
 		return nil, nil, nil, oops.Wrapf(err, "failed to compute DH(e, rs)")
 	}
-	ns.mixKey(sharedES)
+	ns.MixKey(sharedES)
 
 	// Token s: Encrypt our static public key under the current key
-	encryptedStatic, err := ns.encryptAndHash(ourStaticPub[:])
+	encryptedStatic, err := ns.EncryptAndHash(nil, ourStaticPub[:])
 	if err != nil {
 		return nil, nil, nil, oops.Wrapf(err, "failed to encrypt static public key")
 	}
@@ -215,10 +129,10 @@ func writeNoiseIKMessage1(
 	if err != nil {
 		return nil, nil, nil, oops.Wrapf(err, "failed to compute DH(s, rs)")
 	}
-	ns.mixKey(sharedSS)
+	ns.MixKey(sharedSS)
 
 	// Encrypt the garlic payload
-	encryptedPayload, err := ns.encryptAndHash(payload)
+	encryptedPayload, err := ns.EncryptAndHash(nil, payload)
 	if err != nil {
 		return nil, nil, nil, oops.Wrapf(err, "failed to encrypt payload")
 	}
@@ -231,13 +145,13 @@ func writeNoiseIKMessage1(
 
 	// Retain handshake state for New Session Reply (message 2)
 	hs := &noiseHandshakeState{
-		h:            ns.h,
-		ck:           ns.ck,
+		h:            ns.HandshakeHash(),
+		ck:           ns.ChainingKey(),
 		localEphPriv: ephPrivBytes,
 	}
 
 	// Derive session keys from the final chaining key
-	keys, err := deriveSessionKeysFromSecret(ns.ck[:])
+	keys, err := deriveSessionKeysFromSecret(ns.ChainingKey())
 	if err != nil {
 		return nil, nil, nil, oops.Wrapf(err, "failed to derive session keys from handshake")
 	}
@@ -284,27 +198,27 @@ func writeNoiseIKMessage1Unbound(
 	}
 
 	// MixHash the wire (Elligator2-encoded) representation.
-	ns.mixHash(ephEncoded)
+	ns.MixHash(ephEncoded)
 
 	// Token es: DH(ephemeral_private, responder_static). Sets k, resets n=0.
 	sharedES, err := curve25519.SharedKey(ephPrivBytes, responderStaticPub[:])
 	if err != nil {
 		return nil, nil, oops.Wrapf(err, "failed to compute DH(e, rs)")
 	}
-	ns.mixKey(sharedES) // n=0 after this
+	ns.MixKey(sharedES) // n=0 after this
 
 	// Flags section (unbound marker): EncryptAndHash(zeros32) using n=0.
 	// Plaintext is 32 zero bytes — the receiver tests the decrypted plaintext
 	// for all-zeros to identify the unbound variant. Spec §1c.
 	// After encryption ns.n advances to 1.
-	encryptedFlags, err := ns.encryptAndHash(make([]byte, 32))
+	encryptedFlags, err := ns.EncryptAndHash(nil, make([]byte, 32))
 	if err != nil {
 		return nil, nil, oops.Wrapf(err, "failed to encrypt unbound flags section")
 	}
 
 	// Encrypt payload with n=1 (no ss token, no MixKey reset).
 	// Spec §1f "KDF for Payload Section (without Alice static key)": n=1.
-	encryptedPayload, err := ns.encryptAndHash(payload)
+	encryptedPayload, err := ns.EncryptAndHash(nil, payload)
 	if err != nil {
 		return nil, nil, oops.Wrapf(err, "failed to encrypt payload")
 	}
@@ -316,7 +230,7 @@ func writeNoiseIKMessage1Unbound(
 	msg = append(msg, encryptedPayload...)
 
 	// Derive session keys from the final chaining key.
-	keys, err := deriveSessionKeysFromSecret(ns.ck[:])
+	keys, err := deriveSessionKeysFromSecret(ns.ChainingKey())
 	if err != nil {
 		return nil, nil, oops.Wrapf(err, "failed to derive session keys from unbound handshake")
 	}
@@ -357,7 +271,7 @@ func readNoiseIKMessage1(
 
 	// Token e: Read Elligator2-encoded ephemeral key.
 	ephEncoded := message[0:32]
-	ns.mixHash(ephEncoded)
+	ns.MixHash(ephEncoded)
 
 	// Decode Elligator2 representation to get the actual X25519 public key.
 	ephPubBytes, err := elligator2.Decode(ephEncoded)
@@ -372,13 +286,13 @@ func readNoiseIKMessage1(
 	if err != nil {
 		return nil, [32]byte{}, nil, nil, false, oops.Wrapf(err, "failed to compute DH(s, re)")
 	}
-	ns.mixKey(sharedES) // n=0 after this
+	ns.MixKey(sharedES) // n=0 after this
 
 	// Token s / Flags section: decrypt the 48-byte section that is either the
 	// initiator's static key (bound) or 32 zero bytes (unbound).
 	// Uses n=0; after decryption ns.n=1.
 	encryptedStatic := message[32 : 32+noiseEncryptedStaticSize]
-	initiatorStaticBytes, err := ns.decryptAndHash(encryptedStatic)
+	initiatorStaticBytes, err := ns.DecryptAndHash(nil, encryptedStatic)
 	if err != nil {
 		return nil, [32]byte{}, nil, nil, false, oops.Wrapf(err, "failed to decrypt initiator static key / flags section")
 	}
@@ -389,13 +303,13 @@ func readNoiseIKMessage1(
 		// Unbound (N-pattern): no ss token, no new MixKey.
 		// Payload is encrypted with n=1 (current nonce after flags section).
 		encryptedPayload := message[32+noiseEncryptedStaticSize:]
-		payload, payErr := ns.decryptAndHash(encryptedPayload)
+		payload, payErr := ns.DecryptAndHash(nil, encryptedPayload)
 		if payErr != nil {
 			return nil, [32]byte{}, nil, nil, true, oops.Wrapf(payErr, "failed to decrypt unbound payload")
 		}
 
 		// No handshake state — unbound sessions are non-repliable (no NSR).
-		keys, kErr := deriveSessionKeysFromSecret(ns.ck[:])
+		keys, kErr := deriveSessionKeysFromSecret(ns.ChainingKey())
 		if kErr != nil {
 			return nil, [32]byte{}, nil, nil, true, oops.Wrapf(kErr, "failed to derive session keys from unbound handshake")
 		}
@@ -411,25 +325,25 @@ func readNoiseIKMessage1(
 	if err != nil {
 		return nil, [32]byte{}, nil, nil, false, oops.Wrapf(err, "failed to compute DH(s, rs)")
 	}
-	ns.mixKey(sharedSS) // n=0 after this
+	ns.MixKey(sharedSS) // n=0 after this
 
 	// Decrypt the garlic payload (n=0 after ss MixKey).
 	encryptedPayload := message[32+noiseEncryptedStaticSize:]
-	payload, err := ns.decryptAndHash(encryptedPayload)
+	payload, err := ns.DecryptAndHash(nil, encryptedPayload)
 	if err != nil {
 		return nil, [32]byte{}, nil, nil, false, oops.Wrapf(err, "failed to decrypt payload")
 	}
 
 	// Retain handshake state for New Session Reply (message 2).
 	hs := &noiseHandshakeState{
-		h:               ns.h,
-		ck:              ns.ck,
+		h:               ns.HandshakeHash(),
+		ck:              ns.ChainingKey(),
 		remoteEphPub:    initiatorEphPub,
 		remoteStaticPub: initiatorStaticPub,
 	}
 
 	// Derive session keys from the final chaining key.
-	keys, err := deriveSessionKeysFromSecret(ns.ck[:])
+	keys, err := deriveSessionKeysFromSecret(ns.ChainingKey())
 	if err != nil {
 		return nil, [32]byte{}, nil, nil, false, oops.Wrapf(err, "failed to derive session keys from handshake")
 	}
