@@ -14,43 +14,15 @@ import (
 )
 
 func main() {
-	// Parse command line arguments
-	args, err := shared.ParseCommonArgs("pool-example")
-	if err != nil {
-		log.Fatalf("❌ Failed to parse arguments: %v", err)
-	}
-
-	// Set default server address if none provided
-	if args.ServerAddr == "" && args.ClientAddr == "" && !args.Demo && !args.Generate {
-		args.ServerAddr = "127.0.0.1:8080" // Default pool test address
-	}
-
-	// Validate arguments
-	if err := args.ValidateArgs(); err != nil {
-		fmt.Printf("❌ Invalid arguments: %v\n\n", err)
-		shared.PrintUsage("pool-example", "Connection pooling demonstration supporting all Noise patterns")
-		return
-	}
-
-	// Handle special modes
-	if args.Demo {
-		runPoolDemo(args)
-		return
-	}
-
-	if args.Generate {
-		shared.RunGenerate()
-		return
-	}
-
-	// Parse keys for the selected pattern
-	staticKey, _, err := shared.ParseKeys(args)
-	if err != nil {
-		log.Fatalf("❌ Key parsing failed: %v", err)
-	}
-
-	// Run pool demonstration
-	runPoolExample(args, staticKey)
+	shared.RunExample(
+		"pool-example",
+		"Connection pooling demonstration supporting all Noise patterns",
+		"127.0.0.1:8080",
+		"",
+		runPoolDemo,
+		runPoolExample,
+		runPoolExample,
+	)
 }
 
 // runPoolExample demonstrates connection pooling with handshakes

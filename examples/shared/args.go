@@ -31,13 +31,35 @@ type CommonArgs struct {
 	Verbose  bool
 }
 
+// RegisterNetworkFlags registers the common -server and -client flags shared
+// by both standard and NTCP2 argument parsing.
+func RegisterNetworkFlags(serverAddr, clientAddr *string, serverExample string) {
+	flag.StringVar(serverAddr, "server", "", fmt.Sprintf("Run as server on specified address (e.g., %s)", serverExample))
+	flag.StringVar(clientAddr, "client", "", "Run as client connecting to specified address")
+}
+
+// RegisterTimeoutFlags registers the common timeout flags shared by both
+// standard and NTCP2 argument parsing.
+func RegisterTimeoutFlags(handshakeTimeout, readTimeout, writeTimeout *time.Duration, defaultHandshake time.Duration, handshakeDesc string) {
+	flag.DurationVar(handshakeTimeout, "handshake-timeout", defaultHandshake, handshakeDesc)
+	flag.DurationVar(readTimeout, "read-timeout", 60*time.Second, "Read operation timeout")
+	flag.DurationVar(writeTimeout, "write-timeout", 60*time.Second, "Write operation timeout")
+}
+
+// RegisterModeFlags registers the common operation mode flags shared by both
+// standard and NTCP2 argument parsing.
+func RegisterModeFlags(demo, generate, verbose *bool, demoDesc, generateDesc string) {
+	flag.BoolVar(demo, "demo", false, demoDesc)
+	flag.BoolVar(generate, "generate", false, generateDesc)
+	flag.BoolVar(verbose, "verbose", false, "Enable verbose logging")
+}
+
 // ParseCommonArgs parses standard command-line arguments for Noise examples
 func ParseCommonArgs(appName string) (*CommonArgs, error) {
 	args := &CommonArgs{}
 
 	// Network configuration
-	flag.StringVar(&args.ServerAddr, "server", "", "Run as server on specified address (e.g., localhost:8080)")
-	flag.StringVar(&args.ClientAddr, "client", "", "Run as client connecting to specified address")
+	RegisterNetworkFlags(&args.ServerAddr, &args.ClientAddr, "localhost:8080")
 	flag.StringVar(&args.Pattern, "pattern", "NN", "Noise handshake pattern to use")
 
 	// Cryptographic material
@@ -45,14 +67,12 @@ func ParseCommonArgs(appName string) (*CommonArgs, error) {
 	flag.StringVar(&args.RemoteKey, "remote-key", "", "Remote static public key as 64-character hex string (generated if empty)")
 
 	// Timeouts
-	flag.DurationVar(&args.HandshakeTimeout, "handshake-timeout", 30*time.Second, "Handshake timeout duration")
-	flag.DurationVar(&args.ReadTimeout, "read-timeout", 60*time.Second, "Read operation timeout")
-	flag.DurationVar(&args.WriteTimeout, "write-timeout", 60*time.Second, "Write operation timeout")
+	RegisterTimeoutFlags(&args.HandshakeTimeout, &args.ReadTimeout, &args.WriteTimeout, 30*time.Second, "Handshake timeout duration")
 
 	// Operation modes
-	flag.BoolVar(&args.Demo, "demo", false, "Run demonstration mode showing configurations and patterns")
-	flag.BoolVar(&args.Generate, "generate", false, "Generate and display cryptographic keys for testing")
-	flag.BoolVar(&args.Verbose, "verbose", false, "Enable verbose logging")
+	RegisterModeFlags(&args.Demo, &args.Generate, &args.Verbose,
+		"Run demonstration mode showing configurations and patterns",
+		"Generate and display cryptographic keys for testing")
 
 	flag.Parse()
 
@@ -79,21 +99,23 @@ func PrintUsageHeader(appName, description string) {
 	fmt.Println("\nExamples:")
 }
 
+// PrintUsageExample prints a single usage example consisting of a description
+// comment and the corresponding command line, consolidating the repeated
+// description-plus-command pattern used by PrintUsage and PrintNTCP2Usage.
+func PrintUsageExample(appName, description, command string) {
+	fmt.Printf("  # %s:\n", description)
+	fmt.Printf("  %s %s\n\n", appName, command)
+}
+
 // PrintUsage displays usage information for a Noise example
 func PrintUsage(appName, description string) {
 	PrintUsageHeader(appName, description)
-	fmt.Printf("  # Generate keys for testing:\n")
-	fmt.Printf("  %s -generate\n\n", appName)
-	fmt.Printf("  # Run demo mode:\n")
-	fmt.Printf("  %s -demo\n\n", appName)
-	fmt.Printf("  # Run server with NN pattern (no keys required):\n")
-	fmt.Printf("  %s -server localhost:8080 -pattern NN\n\n", appName)
-	fmt.Printf("  # Run client with NN pattern:\n")
-	fmt.Printf("  %s -client localhost:8080 -pattern NN\n\n", appName)
-	fmt.Printf("  # Run server with XX pattern (keys required):\n")
-	fmt.Printf("  %s -server localhost:8080 -pattern XX -static-key <64-char-hex>\n\n", appName)
-	fmt.Printf("  # Run client with XX pattern:\n")
-	fmt.Printf("  %s -client localhost:8080 -pattern XX -static-key <64-char-hex>\n\n", appName)
+	PrintUsageExample(appName, "Generate keys for testing", "-generate")
+	PrintUsageExample(appName, "Run demo mode", "-demo")
+	PrintUsageExample(appName, "Run server with NN pattern (no keys required)", "-server localhost:8080 -pattern NN")
+	PrintUsageExample(appName, "Run client with NN pattern", "-client localhost:8080 -pattern NN")
+	PrintUsageExample(appName, "Run server with XX pattern (keys required)", "-server localhost:8080 -pattern XX -static-key <64-char-hex>")
+	PrintUsageExample(appName, "Run client with XX pattern", "-client localhost:8080 -pattern XX -static-key <64-char-hex>")
 	fmt.Println("Supported Patterns:")
 	for _, pattern := range SupportedPatterns {
 		needsLocal, needsRemote := GetPatternRequirements(pattern)

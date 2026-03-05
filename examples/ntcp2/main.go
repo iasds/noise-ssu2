@@ -11,46 +11,23 @@ import (
 )
 
 func main() {
-	// Parse NTCP2-specific command line arguments
-	args, err := shared.ParseNTCP2Args("ntcp2-demo")
-	if err != nil {
-		log.Fatalf("❌ Failed to parse arguments: %v", err)
-	}
-
-	// Validate arguments
-	if err := args.ValidateArgs(); err != nil {
-		fmt.Printf("❌ Invalid arguments: %v\n\n", err)
-		shared.PrintNTCP2Usage("ntcp2-demo", "NTCP2 addressing and connection demonstration")
-		return
-	}
-
-	// Handle special modes
-	if args.Demo {
-		shared.RunNTCP2Demo()
-		demonstrateNTCP2Addressing()
-		return
-	}
-
-	if args.Generate {
-		shared.RunNTCP2Generate()
-		return
-	}
-
-	// Parse NTCP2 keys and material
-	routerHash, remoteRouterHash, destHash, staticKey, err := shared.ParseNTCP2Keys(args)
-	if err != nil {
-		log.Fatalf("❌ Key parsing failed: %v", err)
-	}
-
-	// Run NTCP2 demonstration
-	if args.ServerAddr != "" || args.ClientAddr != "" {
-		fmt.Println("🚧 NTCP2 server/client functionality coming in future examples")
-		fmt.Println("This example demonstrates NTCP2 addressing only")
-		fmt.Println()
-	}
-
-	// Demonstrate NTCP2 addressing with parsed material
-	demonstrateNTCP2AddressingWithKeys(routerHash, remoteRouterHash, destHash, staticKey)
+	shared.RunNTCP2Example(
+		"ntcp2-demo",
+		"NTCP2 addressing and connection demonstration",
+		"",
+		func(args *shared.NTCP2Args) {
+			shared.RunNTCP2Demo()
+			demonstrateNTCP2Addressing()
+		},
+		func(args *shared.NTCP2Args, routerHash, remoteRouterHash, destHash, staticKey []byte) {
+			if args.ServerAddr != "" || args.ClientAddr != "" {
+				fmt.Println("🚧 NTCP2 server/client functionality coming in future examples")
+				fmt.Println("This example demonstrates NTCP2 addressing only")
+				fmt.Println()
+			}
+			demonstrateNTCP2AddressingWithKeys(routerHash, remoteRouterHash, destHash, staticKey)
+		},
+	)
 }
 
 // demonstrateNTCP2Addressing shows basic NTCP2 addressing examples

@@ -4,6 +4,7 @@ package shared
 import (
 	"flag"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/go-i2p/go-noise/examples/shared"
@@ -45,8 +46,7 @@ func ParseNTCP2Args(appName string) (*NTCP2Args, error) {
 	args := &NTCP2Args{}
 
 	// Network configuration
-	flag.StringVar(&args.ServerAddr, "server", "", "Run as server on specified address (e.g., localhost:7654)")
-	flag.StringVar(&args.ClientAddr, "client", "", "Run as client connecting to specified address")
+	shared.RegisterNetworkFlags(&args.ServerAddr, &args.ClientAddr, "localhost:7654")
 
 	// NTCP2-specific material (all 64-character hex strings for 32-byte values)
 	flag.StringVar(&args.RouterHash, "router-hash", "", "Local router hash as 64-character hex string (generated if empty)")
@@ -57,9 +57,7 @@ func ParseNTCP2Args(appName string) (*NTCP2Args, error) {
 	flag.StringVar(&args.StaticKey, "static-key", "", "Static private key as 64-character hex string (generated if empty)")
 
 	// Timeouts
-	flag.DurationVar(&args.HandshakeTimeout, "handshake-timeout", 45*time.Second, "NTCP2 handshake timeout")
-	flag.DurationVar(&args.ReadTimeout, "read-timeout", 60*time.Second, "Read operation timeout")
-	flag.DurationVar(&args.WriteTimeout, "write-timeout", 60*time.Second, "Write operation timeout")
+	shared.RegisterTimeoutFlags(&args.HandshakeTimeout, &args.ReadTimeout, &args.WriteTimeout, 45*time.Second, "NTCP2 handshake timeout")
 
 	// NTCP2 features
 	flag.BoolVar(&args.EnableAESObfuscation, "aes-obfuscation", true, "Enable AES obfuscation modifier")
@@ -67,9 +65,9 @@ func ParseNTCP2Args(appName string) (*NTCP2Args, error) {
 	flag.IntVar(&args.MaxFrameSize, "max-frame-size", 16384, "Maximum frame size in bytes")
 
 	// Operation modes
-	flag.BoolVar(&args.Demo, "demo", false, "Run demonstration mode showing NTCP2 configurations")
-	flag.BoolVar(&args.Generate, "generate", false, "Generate and display NTCP2 cryptographic material")
-	flag.BoolVar(&args.Verbose, "verbose", false, "Enable verbose logging")
+	shared.RegisterModeFlags(&args.Demo, &args.Generate, &args.Verbose,
+		"Run demonstration mode showing NTCP2 configurations",
+		"Generate and display NTCP2 cryptographic material")
 
 	flag.Parse()
 
@@ -79,15 +77,58 @@ func ParseNTCP2Args(appName string) (*NTCP2Args, error) {
 // PrintNTCP2Usage displays usage information for an NTCP2 example
 func PrintNTCP2Usage(appName, description string) {
 	shared.PrintUsageHeader(appName, description)
-	fmt.Printf("  # Generate NTCP2 material for testing:\n")
-	fmt.Printf("  %s -generate\n\n", appName)
-	fmt.Printf("  # Run demo mode:\n")
-	fmt.Printf("  %s -demo\n\n", appName)
-	fmt.Printf("  # Run NTCP2 server:\n")
-	fmt.Printf("  %s -server localhost:7654 -router-hash <64-char-hex>\n\n", appName)
-	fmt.Printf("  # Run NTCP2 client:\n")
-	fmt.Printf("  %s -client localhost:7654 -router-hash <64-char-hex> -remote-router-hash <64-char-hex>\n\n", appName)
+	shared.PrintUsageExample(appName, "Generate NTCP2 material for testing", "-generate")
+	shared.PrintUsageExample(appName, "Run demo mode", "-demo")
+	shared.PrintUsageExample(appName, "Run NTCP2 server", "-server localhost:7654 -router-hash <64-char-hex>")
+	shared.PrintUsageExample(appName, "Run NTCP2 client", "-client localhost:7654 -router-hash <64-char-hex> -remote-router-hash <64-char-hex>")
 	fmt.Println("Note: NTCP2 uses Noise_XK_25519_AESGCM_SHA256 pattern exclusively")
+}
+
+// HandleNTCP2DefaultAddress sets the default server address for an NTCP2 example
+// when no address is provided. This consolidates the common default-address
+// pattern used across NTCP2 example programs.
+func HandleNTCP2DefaultAddress(args *NTCP2Args, defaultAddr string) {
+	if defaultAddr != "" && args.ServerAddr == "" && args.ClientAddr == "" && !args.Demo && !args.Generate {
+		args.ServerAddr = defaultAddr
+	}
+}
+
+// RunNTCP2Example runs a standard NTCP2 example program with common argument
+// parsing, validation, and mode dispatch. This consolidates the main()
+// boilerplate duplicated across ntcp2, ntcp2-config, and ntcp2-listener examples.
+func RunNTCP2Example(appName, description, defaultAddr string,
+	demoFunc func(*NTCP2Args),
+	runFunc func(*NTCP2Args, []byte, []byte, []byte, []byte)) {
+
+	args, err := ParseNTCP2Args(appName)
+	if err != nil {
+		log.Fatalf("❌ Failed to parse arguments: %v", err)
+	}
+
+	HandleNTCP2DefaultAddress(args, defaultAddr)
+
+	if err := args.ValidateArgs(); err != nil {
+		fmt.Printf("❌ Invalid arguments: %v\n\n", err)
+		PrintNTCP2Usage(appName, description)
+		return
+	}
+
+	if args.Demo {
+		demoFunc(args)
+		return
+	}
+
+	if args.Generate {
+		RunNTCP2Generate()
+		return
+	}
+
+	routerHash, remoteRouterHash, destHash, staticKey, err := ParseNTCP2Keys(args)
+	if err != nil {
+		log.Fatalf("❌ Key parsing failed: %v", err)
+	}
+
+	runFunc(args, routerHash, remoteRouterHash, destHash, staticKey)
 }
 
 // ValidateArgs performs validation on parsed NTCP2 arguments

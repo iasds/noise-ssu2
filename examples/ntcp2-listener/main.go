@@ -15,43 +15,15 @@ import (
 )
 
 func main() {
-	// Parse NTCP2-specific command line arguments
-	args, err := ntcp2shared.ParseNTCP2Args("ntcp2-listener")
-	if err != nil {
-		log.Fatalf("❌ Failed to parse arguments: %v", err)
-	}
-
-	// Set default server address if none provided
-	if args.ServerAddr == "" && args.ClientAddr == "" && !args.Demo && !args.Generate {
-		args.ServerAddr = "127.0.0.1:0" // Default NTCP2 listener address
-	}
-
-	// Validate arguments
-	if err := args.ValidateArgs(); err != nil {
-		fmt.Printf("❌ Invalid arguments: %v\n\n", err)
-		ntcp2shared.PrintNTCP2Usage("ntcp2-listener", "NTCP2Listener demonstration for I2P transport")
-		return
-	}
-
-	// Handle special modes
-	if args.Demo {
-		runNTCP2ListenerDemo(args)
-		return
-	}
-
-	if args.Generate {
-		ntcp2shared.RunNTCP2Generate()
-		return
-	}
-
-	// Parse NTCP2 keys and material
-	routerHash, _, _, staticKey, err := ntcp2shared.ParseNTCP2Keys(args)
-	if err != nil {
-		log.Fatalf("❌ Key parsing failed: %v", err)
-	}
-
-	// Run NTCP2 listener demonstration
-	runNTCP2Listener(args, routerHash, staticKey)
+	ntcp2shared.RunNTCP2Example(
+		"ntcp2-listener",
+		"NTCP2Listener demonstration for I2P transport",
+		"127.0.0.1:0",
+		runNTCP2ListenerDemo,
+		func(args *ntcp2shared.NTCP2Args, routerHash, _, _, staticKey []byte) {
+			runNTCP2Listener(args, routerHash, staticKey)
+		},
+	)
 }
 
 // createDemoConfig creates and displays an NTCP2 config for demo purposes

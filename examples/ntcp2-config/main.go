@@ -14,38 +14,15 @@ import (
 )
 
 func main() {
-	// Parse NTCP2-specific command line arguments
-	args, err := ntcp2shared.ParseNTCP2Args("ntcp2-config")
-	if err != nil {
-		log.Fatalf("❌ Failed to parse arguments: %v", err)
-	}
-
-	// Validate arguments
-	if err := args.ValidateArgs(); err != nil {
-		fmt.Printf("❌ Invalid arguments: %v\n\n", err)
-		ntcp2shared.PrintNTCP2Usage("ntcp2-config", "NTCP2Config builder pattern demonstration")
-		return
-	}
-
-	// Handle special modes
-	if args.Demo {
-		runNTCP2ConfigDemo(args)
-		return
-	}
-
-	if args.Generate {
-		ntcp2shared.RunNTCP2Generate()
-		return
-	}
-
-	// Parse NTCP2 keys and material
-	routerHash, remoteRouterHash, destHash, staticKey, err := ntcp2shared.ParseNTCP2Keys(args)
-	if err != nil {
-		log.Fatalf("❌ Key parsing failed: %v", err)
-	}
-
-	// Run NTCP2 configuration demonstration
-	runNTCP2ConfigurationDemo(routerHash, remoteRouterHash, destHash, staticKey, args)
+	ntcp2shared.RunNTCP2Example(
+		"ntcp2-config",
+		"NTCP2Config builder pattern demonstration",
+		"",
+		runNTCP2ConfigDemo,
+		func(args *ntcp2shared.NTCP2Args, routerHash, remoteRouterHash, destHash, staticKey []byte) {
+			runNTCP2ConfigurationDemo(routerHash, remoteRouterHash, destHash, staticKey, args)
+		},
+	)
 }
 
 // runNTCP2ConfigDemo demonstrates NTCP2 configuration with demo mode
@@ -95,35 +72,39 @@ func runNTCP2ConfigurationDemo(routerHash, remoteRouterHash, destHash, staticKey
 	}
 }
 
+// createAndDisplayBasicConfig creates an NTCP2Config for the given role and
+// prints its common properties (pattern and role name), consolidating the
+// repeated create-and-display pattern used for responder and initiator configs.
+func createAndDisplayBasicConfig(routerHash []byte, isInitiator bool, roleName string) *ntcp2.NTCP2Config {
+	config, err := ntcp2.NewNTCP2Config(routerHash, isInitiator)
+	if err != nil {
+		fmt.Printf("❌ Failed to create %s config: %v\n", roleName, err)
+		return nil
+	}
+	fmt.Printf("%s Config:\n", roleName)
+	fmt.Printf("  Pattern: %s\n", config.Pattern)
+	fmt.Printf("  Role: %s\n", roleName)
+	return config
+}
+
 // demonstrateBasicConfigurations shows basic NTCP2 configuration examples
 func demonstrateBasicConfigurations(routerHash []byte) {
 	fmt.Println("\n1. Basic Configuration Examples:")
 	fmt.Println("===============================")
 
-	// Basic responder configuration
-	responderConfig, err := ntcp2.NewNTCP2Config(routerHash, false) // false = responder
-	if err != nil {
-		fmt.Printf("❌ Failed to create responder config: %v\n", err)
+	responder := createAndDisplayBasicConfig(routerHash, false, "Responder")
+	if responder == nil {
 		return
 	}
+	fmt.Printf("  AES Obfuscation: %t\n", responder.EnableAESObfuscation)
+	fmt.Printf("  SipHash Length: %t\n", responder.EnableSipHashLength)
 
-	fmt.Printf("Responder Config:\n")
-	fmt.Printf("  Pattern: %s\n", responderConfig.Pattern)
-	fmt.Printf("  Role: Responder\n")
-	fmt.Printf("  AES Obfuscation: %t\n", responderConfig.EnableAESObfuscation)
-	fmt.Printf("  SipHash Length: %t\n", responderConfig.EnableSipHashLength)
-
-	// Basic initiator configuration
-	initiatorConfig, err := ntcp2.NewNTCP2Config(routerHash, true) // true = initiator
-	if err != nil {
-		fmt.Printf("❌ Failed to create initiator config: %v\n", err)
+	fmt.Println()
+	initiator := createAndDisplayBasicConfig(routerHash, true, "Initiator")
+	if initiator == nil {
 		return
 	}
-
-	fmt.Printf("\nInitiator Config:\n")
-	fmt.Printf("  Pattern: %s\n", initiatorConfig.Pattern)
-	fmt.Printf("  Role: Initiator\n")
-	fmt.Printf("  Max Frame Size: %d bytes\n", initiatorConfig.MaxFrameSize)
+	fmt.Printf("  Max Frame Size: %d bytes\n", initiator.MaxFrameSize)
 }
 
 // demonstrateAdvancedConfigurations shows advanced builder pattern usage

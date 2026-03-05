@@ -2,6 +2,7 @@ package noise
 
 import (
 	"context"
+	"io"
 	"net"
 	"sync"
 	"time"
@@ -88,56 +89,56 @@ func registerShutdown(target shutdownRegisterer) {
 	}
 }
 
+// openAndWrapTransport validates parameters, opens a network resource, wraps it
+// in a Noise layer, and registers it for global shutdown. It consolidates the
+// shared validate-open-wrap-cleanup-register pattern used by DialNoise and
+// ListenNoise, eliminating the structural duplication between them.
+func openAndWrapTransport[R shutdownRegisterer](
+	validate func() error,
+	open func() (io.Closer, error),
+	wrap func(io.Closer) (R, error),
+) (R, error) {
+	var zero R
+	if err := validate(); err != nil {
+		return zero, err
+	}
+	resource, err := open()
+	if err != nil {
+		return zero, err
+	}
+	result, err := wrap(resource)
+	if err != nil {
+		resource.Close()
+		return zero, err
+	}
+	registerShutdown(result)
+	return result, nil
+}
+
 // DialNoise creates a connection to the given address and wraps it with NoiseConn.
 // This is a convenience function that combines net.Dial and NewNoiseConn.
 // For more control over the underlying connection, use net.Dial followed by NewNoiseConn.
 func DialNoise(network, addr string, config *ConnConfig) (*NoiseConn, error) {
-	if err := validateDialParams(network, addr, config); err != nil {
-		return nil, err
-	}
-
-	conn, err := net.Dial(network, addr)
-	if err != nil {
-		return nil, wrapTransportError("DIAL_FAILED", network, addr,
-			"failed to dial %s://%s", err, network, addr)
-	}
-
-	noiseConn, err := NewNoiseConn(conn, config)
-	if err != nil {
-		conn.Close()
-		return nil, wrapTransportError("NOISE_CONN_FAILED", network, addr,
-			"failed to create noise connection", err)
-	}
-
-	registerShutdown(noiseConn)
-
-	return noiseConn, nil
+	return openAndWrapTransport(
+		func() error { return validateDialParams(network, addr, config) },
+		func() (io.Closer, error) { return createNewConn(network, addr) },
+		func(c io.Closer) (*NoiseConn, error) {
+			return createNoiseConn(c.(net.Conn), config, network, addr)
+		},
+	)
 }
 
 // ListenNoise creates a listener on the given address and wraps it with NoiseListener.
 // This is a convenience function that combines net.Listen and NewNoiseListener.
 // For more control over the underlying listener, use net.Listen followed by NewNoiseListener.
 func ListenNoise(network, addr string, config *ListenerConfig) (*NoiseListener, error) {
-	if err := validateListenParams(network, addr, config); err != nil {
-		return nil, err
-	}
-
-	listener, err := net.Listen(network, addr)
-	if err != nil {
-		return nil, wrapTransportError("LISTEN_FAILED", network, addr,
-			"failed to listen on %s://%s", err, network, addr)
-	}
-
-	noiseListener, err := NewNoiseListener(listener, config)
-	if err != nil {
-		listener.Close()
-		return nil, wrapTransportError("NOISE_LISTENER_FAILED", network, addr,
-			"failed to create noise listener", err)
-	}
-
-	registerShutdown(noiseListener)
-
-	return noiseListener, nil
+	return openAndWrapTransport(
+		func() error { return validateListenParams(network, addr, config) },
+		func() (io.Closer, error) { return createNewListener(network, addr) },
+		func(c io.Closer) (*NoiseListener, error) {
+			return createNoiseListener(c.(net.Listener), config, network, addr)
+		},
+	)
 }
 
 // WrapConn wraps an existing net.Conn with NoiseConn.
@@ -275,6 +276,28 @@ func createNoiseConn(conn net.Conn, config *ConnConfig, network, addr string) (*
 			Wrapf(err, "failed to create noise connection")
 	}
 	return noiseConn, nil
+}
+
+// createNewListener establishes a new network listener on the specified address.
+// Returns an error with detailed context if the listen call fails.
+func createNewListener(network, addr string) (net.Listener, error) {
+	listener, err := net.Listen(network, addr)
+	if err != nil {
+		return nil, wrapTransportError("LISTEN_FAILED", network, addr,
+			"failed to listen on %s://%s", err, network, addr)
+	}
+	return listener, nil
+}
+
+// createNoiseListener wraps a network listener with NoiseListener configuration.
+// Returns an error with detailed context if NoiseListener creation fails.
+func createNoiseListener(listener net.Listener, config *ListenerConfig, network, addr string) (*NoiseListener, error) {
+	noiseListener, err := NewNoiseListener(listener, config)
+	if err != nil {
+		return nil, wrapTransportError("NOISE_LISTENER_FAILED", network, addr,
+			"failed to create noise listener", err)
+	}
+	return noiseListener, nil
 }
 
 // putOnCloseWrapper wraps a freshly-dialed net.Conn so that its Close() call
