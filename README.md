@@ -14,11 +14,12 @@ This package MAY use any of the following libraries, and SHOULD use them where p
 
  - [go-i2p/noise](https://github.com/go-i2p/noise): Noise handshake implementations
  - [go-i2p/crypto](https://github.com/go-i2p/crypto): Cryptographic primitives only
+ - [go-i2p/common](https://github.com/go-i2p/common): I2P Common datastructures
 
 This package MUST NOT use any of the following libraries.
 
- - [go-i2p/common](https://github.com/go-i2p/common): I2P Common datastructures
  - [go-i2p/go-i2p](https://github.com/go-i2p/go-i2p): I2P router implementation
+ - I2P Common datastructures are not allowed in the root, unmodified noise directory.
 
 ## Features
 
