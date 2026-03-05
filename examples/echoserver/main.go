@@ -15,42 +15,15 @@ import (
 )
 
 func main() {
-	// Parse command line arguments
-	args, err := shared.ParseCommonArgs("echoserver")
-	if err != nil {
-		log.Fatalf("❌ Failed to parse arguments: %v", err)
-	}
-
-	// Override some defaults for server mode
-	if args.ServerAddr == "" && args.ClientAddr == "" && !args.Demo && !args.Generate {
-		args.ServerAddr = "localhost:8080" // Default server address
-	}
-
-	// Validate arguments
-	if err := args.ValidateArgs(); err != nil {
-		fmt.Printf("❌ Invalid arguments: %v\n\n", err)
-		shared.PrintUsage("echoserver", "Noise Protocol echo server supporting all patterns")
-		return
-	}
-
-	// Handle special modes
-	if shared.HandleSpecialModes(args, func(_ *shared.CommonArgs) { shared.RunDemo() }) {
-		return
-	}
-
-	// Parse keys for the selected pattern
-	staticKey, _, err := shared.ParseKeys(args)
-	if err != nil {
-		log.Fatalf("❌ Key parsing failed: %v", err)
-	}
-
-	// Run server
-	if args.ServerAddr != "" {
-		runEchoServer(args, staticKey)
-	} else {
-		fmt.Println("❌ Echo server requires -server address")
-		shared.PrintUsage("echoserver", "Noise Protocol echo server supporting all patterns")
-	}
+	shared.RunExample(
+		"echoserver",
+		"Noise Protocol echo server supporting all patterns",
+		"localhost:8080",
+		"",
+		func(_ *shared.CommonArgs) { shared.RunDemo() },
+		runEchoServer,
+		nil,
+	)
 }
 
 // runEchoServer starts an echo server with complete Noise handshake
