@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 
 	"github.com/go-i2p/crypto/hmac"
+	"github.com/go-i2p/go-noise/internal"
 	"github.com/samber/oops"
 )
 
@@ -84,20 +85,12 @@ func DeriveSipHashKeys(askMaster, handshakeHash []byte) (
 	// "overwrite ask_master in memory, no longer needed"
 	// "overwrite sip_master in memory, no longer needed"
 	// "overwrite the temp_key in memory, no longer needed"
-	zeroBytes(hData)
-	zeroBytes(tempKey[:])
-	zeroBytes(sipMaster[:])
-	zeroBytes(fullAB[:])
-	zeroBytes(step5Data)
-	zeroBytes(fullBA[:])
+	internal.SecureZero(hData)
+	internal.SecureZero(tempKey[:])
+	internal.SecureZero(sipMaster[:])
+	internal.SecureZero(fullAB[:])
+	internal.SecureZero(step5Data)
+	internal.SecureZero(fullBA[:])
 
 	return sipKeysAB, sipIVAB, sipKeysBA, sipIVBA, nil
-}
-
-// zeroBytes zeroes all bytes in the slice to prevent sensitive data from
-// lingering in memory.
-func zeroBytes(b []byte) {
-	for i := range b {
-		b[i] = 0
-	}
 }
