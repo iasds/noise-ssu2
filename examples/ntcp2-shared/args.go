@@ -374,15 +374,17 @@ func RunNTCP2Generate() {
 
 // demonstrateNTCP2Pattern shows NTCP2's use of the IK pattern
 func demonstrateNTCP2Pattern() {
-	fmt.Println("🔐 NTCP2 Noise Protocol Pattern:")
-	fmt.Println("=================================")
-	fmt.Println("NTCP2 exclusively uses: Noise_XK_25519_AESGCM_SHA256")
-	fmt.Println("  • XK Pattern: Initiator sends static key, knows responder's static key")
-	fmt.Println("  • Curve25519: Elliptic curve for key exchange")
-	fmt.Println("  • AESGCM: Authenticated encryption")
-	fmt.Println("  • SHA256: Hash function")
-	fmt.Println("  • Requirements: Local static key + Remote router hash")
-	fmt.Println()
+	shared.PrintLines(
+		"🔐 NTCP2 Noise Protocol Pattern:",
+		"=================================",
+		"NTCP2 exclusively uses: Noise_XK_25519_AESGCM_SHA256",
+		"  • XK Pattern: Initiator sends static key, knows responder's static key",
+		"  • Curve25519: Elliptic curve for key exchange",
+		"  • AESGCM: Authenticated encryption",
+		"  • SHA256: Hash function",
+		"  • Requirements: Local static key + Remote router hash",
+		"",
+	)
 }
 
 // demonstrateNTCP2Addressing shows NTCP2 addressing capabilities
@@ -408,24 +410,24 @@ func demonstrateNTCP2Addressing() {
 
 // demonstrateNTCP2Configuration shows NTCP2 configuration options
 func demonstrateNTCP2Configuration() {
-	fmt.Println("⚙️  NTCP2 Configuration Options:")
-	fmt.Println("===============================")
-
-	fmt.Println("Core Configuration:")
-	fmt.Println("  • Router Hash: 32-byte identifier for local I2P router")
-	fmt.Println("  • Static Key: 32-byte Curve25519 private key")
-	fmt.Println("  • Remote Router Hash: 32-byte identifier for remote router")
-	fmt.Println()
-
-	fmt.Println("NTCP2-Specific Features:")
-	fmt.Println("  • AES Obfuscation: Additional encryption layer")
-	fmt.Println("  • SipHash Length: Length field obfuscation")
-	fmt.Println("  • Frame Padding: Variable-size frame padding")
-	fmt.Println("  • Max Frame Size: Configurable frame size limit")
-	fmt.Println()
-
-	fmt.Println("Timeouts:")
-	fmt.Println("  • Handshake: 45 seconds (I2P standard)")
-	fmt.Println("  • Read/Write: 60 seconds")
-	fmt.Println()
+	shared.PrintLines(
+		"⚙️  NTCP2 Configuration Options:",
+		"===============================",
+		"",
+		"Core Configuration:",
+		"  • Router Hash: 32-byte identifier for local I2P router",
+		"  • Static Key: 32-byte Curve25519 private key",
+		"  • Remote Router Hash: 32-byte identifier for remote router",
+		"",
+		"NTCP2-Specific Features:",
+		"  • AES Obfuscation: Additional encryption layer",
+		"  • SipHash Length: Length field obfuscation",
+		"  • Frame Padding: Variable-size frame padding",
+		"  • Max Frame Size: Configurable frame size limit",
+		"",
+		"Timeouts:",
+		"  • Handshake: 45 seconds (I2P standard)",
+		"  • Read/Write: 60 seconds",
+		"",
+	)
 }

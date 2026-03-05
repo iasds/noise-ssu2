@@ -46,15 +46,16 @@ func runShutdownDemo(args *shared.CommonArgs) {
 		fmt.Printf("✓ No static key required for pattern %s\n", args.Pattern)
 	}
 
-	fmt.Println("\n🎯 Shutdown Features Demonstrated:")
-	fmt.Println("  • Argument parsing with shared.ParseCommonArgs")
-	fmt.Println("  • Pattern validation for all 15 Noise patterns")
-	fmt.Println("  • Key generation and validation")
-	fmt.Println("  • Builder pattern configuration")
-	fmt.Println("  • Signal-based graceful shutdown")
-	fmt.Println("  • Context-based connection management")
-
-	fmt.Println("\n✅ Use -server or -client mode for actual functionality")
+	shared.PrintLines(
+		"\n🎯 Shutdown Features Demonstrated:",
+		"  • Argument parsing with shared.ParseCommonArgs",
+		"  • Pattern validation for all 15 Noise patterns",
+		"  • Key generation and validation",
+		"  • Builder pattern configuration",
+		"  • Signal-based graceful shutdown",
+		"  • Context-based connection management",
+		"\n✅ Use -server or -client mode for actual functionality",
+	)
 }
 
 // runShutdownServer demonstrates server with graceful shutdown capability

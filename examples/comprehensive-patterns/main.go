@@ -5,6 +5,7 @@ import (
 	"log"
 
 	"github.com/go-i2p/go-noise"
+	"github.com/go-i2p/go-noise/examples/shared"
 )
 
 // patternInfo describes a Noise protocol pattern for testing
@@ -36,12 +37,14 @@ func printPatternSummary(successCount, total int) {
 		successCount, total, float64(successCount)/float64(total)*100)
 
 	if successCount == total {
-		fmt.Println("🚀 COMPLETE: Full Noise Protocol specification coverage achieved!")
-		fmt.Println("\nSupported pattern categories:")
-		fmt.Println("  • One-way patterns (N, K, X)")
-		fmt.Println("  • Two-message interactive patterns (NN, NK, NX, XN, XK, KN, KK, IN, IK, IX)")
-		fmt.Println("  • Three-message patterns (XX, KX)")
-		fmt.Println("\nAll patterns support both full specification names (e.g., 'Noise_XX_25519_AESGCM_SHA256') and short names (e.g., 'XX').")
+		shared.PrintLines(
+			"🚀 COMPLETE: Full Noise Protocol specification coverage achieved!",
+			"\nSupported pattern categories:",
+			"  • One-way patterns (N, K, X)",
+			"  • Two-message interactive patterns (NN, NK, NX, XN, XK, KN, KK, IN, IK, IX)",
+			"  • Three-message patterns (XX, KX)",
+			"\nAll patterns support both full specification names (e.g., 'Noise_XX_25519_AESGCM_SHA256') and short names (e.g., 'XX').",
+		)
 	} else {
 		log.Printf("Warning: Only %d out of %d patterns are supported", successCount, total)
 	}

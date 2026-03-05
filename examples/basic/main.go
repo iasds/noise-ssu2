@@ -111,13 +111,15 @@ func demonstrateNoiseAddressing() {
 
 // printConnectionExample prints a commented example of NoiseConn usage.
 func printConnectionExample() {
-	fmt.Println("\n// Note: Actual connection creation would require a real net.Conn")
-	fmt.Println("// and proper logger setup, which is commented out due to logger issues")
-	fmt.Println("//")
-	fmt.Println("// Example of creating a NoiseConn (requires working logger):")
-	fmt.Println("// tcpConn, err := net.Dial(\"tcp\", \"localhost:8080\")")
-	fmt.Println("// noiseConn, err := noise.NewNoiseConn(tcpConn, configXX)")
-	fmt.Println("// err := noiseConn.Handshake(ctx)")
+	shared.PrintLines(
+		"\n// Note: Actual connection creation would require a real net.Conn",
+		"// and proper logger setup, which is commented out due to logger issues",
+		"//",
+		"// Example of creating a NoiseConn (requires working logger):",
+		"// tcpConn, err := net.Dial(\"tcp\", \"localhost:8080\")",
+		"// noiseConn, err := noise.NewNoiseConn(tcpConn, configXX)",
+		"// err := noiseConn.Handshake(ctx)",
+	)
 }
 
 // runBasicServer starts a basic Noise server with complete handshake
