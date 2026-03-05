@@ -1,11 +1,11 @@
 package handshake
 
 import (
-	"crypto/rand"
 	"encoding/binary"
 	"math"
 	"math/big"
 
+	"github.com/go-i2p/crypto/rand"
 	"github.com/samber/oops"
 )
 
@@ -88,11 +88,11 @@ func (pm *PaddingModifier) ModifyOutbound(phase HandshakePhase, data []byte) ([]
 			Errorf("data exceeds 4-byte length prefix capacity")
 	}
 
-	// Calculate padding size using crypto/rand for traffic analysis resistance
+	// Calculate padding size using go-i2p/crypto/rand for traffic analysis resistance
 	paddingSize := pm.minPadding
 	if pm.maxPadding > pm.minPadding {
 		paddingRange := pm.maxPadding - pm.minPadding + 1
-		n, err := rand.Int(rand.Reader, big.NewInt(int64(paddingRange)))
+		n, err := rand.ReadBigInt(big.NewInt(int64(paddingRange)))
 		if err != nil {
 			return nil, oops.
 				Code("PADDING_RANDOM_ERROR").
