@@ -13,7 +13,7 @@
         <a href="index.html">go-i2p/go-noise</a>
       </h2>
       <div class="repo-meta">
-        📝 123 commits
+        📝 165 commits
          • 📜 License
       </div>
     </div>
@@ -50,23 +50,23 @@
         
           <li><a href="docs/DOC.html">noise</a></li>
         
-          <li><a href="docs/ntcp2/DOC.html">ntcp2</a></li>
-        
           <li><a href="docs/examples/ntcp2/DOC.html">ntcp2</a></li>
+        
+          <li><a href="docs/ntcp2/DOC.html">ntcp2</a></li>
         
           <li><a href="docs/examples/ntcp2-config/DOC.html">ntcp2-config</a></li>
         
           <li><a href="docs/examples/ntcp2-listener/DOC.html">ntcp2-listener</a></li>
         
-          <li><a href="docs/examples/pool/DOC.html">pool</a></li>
-        
           <li><a href="docs/pool/DOC.html">pool</a></li>
+        
+          <li><a href="docs/examples/pool/DOC.html">pool</a></li>
         
           <li><a href="docs/examples/retry/DOC.html">retry</a></li>
         
-          <li><a href="docs/examples/shared/DOC.html">shared</a></li>
-        
           <li><a href="docs/examples/ntcp2-shared/DOC.html">shared</a></li>
+        
+          <li><a href="docs/examples/shared/DOC.html">shared</a></li>
         
           <li><a href="docs/examples/shutdown/DOC.html">shutdown</a></li>
         
@@ -90,12 +90,12 @@
       <div class="repo-stats">
         
         <div class="repo-stat">
-          <span>📝</span> <span>123 commits</span>
+          <span>📝</span> <span>165 commits</span>
         </div>
         
         
         <div class="repo-stat">
-          <span>📅</span> <span>Last updated: February 25, 2026</span>
+          <span>📅</span> <span>Last updated: March 5, 2026</span>
         </div>
         
         
@@ -114,6 +114,31 @@
           <h1 id="go-noise">go-noise</h1>
 
 <p>A wrapper library around the flynn/noise package that provides <code>net.Conn</code>, <code>net.Listener</code>, and <code>net.Addr</code> interfaces for the Noise Protocol Framework. Designed for implementing I2P&rsquo;s NTCP2 and SSU2 transport protocols with extensible handshake modification capabilities.</p>
+
+<h2 id="notes-on-scope">Notes on scope:</h2>
+
+<p>go-i2p theoretically has strictly scoped packages for low-level operations.
+This package is intended to be the package where specific modifications are applied to Noise protocol handshakes.
+It is currently slightly jumbled with <code>go-i2p/crypto</code> on the lower levels, and <code>go-i2p/go-i2p</code> on the upper levels.</p>
+
+<ul>
+<li><a href="https://github.com/go-i2p/go-noise" target="_blank">go-i2p/go-noise</a>: Noise handshake modifications and router interface</li>
+</ul>
+
+<p>This package MAY use any of the following libraries, and SHOULD use them where possible.</p>
+
+<ul>
+<li><a href="https://github.com/go-i2p/noise" target="_blank">go-i2p/noise</a>: Noise handshake implementations</li>
+<li><a href="https://github.com/go-i2p/crypto" target="_blank">go-i2p/crypto</a>: Cryptographic primitives only</li>
+<li><a href="https://github.com/go-i2p/common" target="_blank">go-i2p/common</a>: I2P Common datastructures</li>
+</ul>
+
+<p>This package MUST NOT use any of the following libraries.</p>
+
+<ul>
+<li><a href="https://github.com/go-i2p/go-i2p" target="_blank">go-i2p/go-i2p</a>: I2P router implementation</li>
+<li>I2P Common datastructures are not allowed in the root, unmodified noise directory.</li>
+</ul>
 
 <h2 id="features">Features</h2>
 
@@ -365,7 +390,7 @@ detection (<code>ReplayCache</code>), and KDF utilities.</p>
                 eyedeekay
               </div>
               <div class="contributor-commits">
-                123 commits
+                165 commits
               </div>
             </div>
           </div>
@@ -377,7 +402,7 @@ detection (<code>ReplayCache</code>), and KDF utilities.</p>
     </main>
     
     <footer class="page-footer">
-      <p>Generated on 2026-03-05 21:40:06 • <a href="https://github.com/go-i2p/go-noise" target="_blank">View on GitHub</a></p>
+      <p>Generated on 2026-03-05 22:34:23 • <a href="https://github.com/go-i2p/go-noise" target="_blank">View on GitHub</a></p>
     </footer>
   </div>
 </body>

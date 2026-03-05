@@ -13,7 +13,7 @@
         <a href="../index.html">go-i2p/go-noise</a>
       </h2>
       <div class="repo-meta">
-        📝 123 commits
+        📝 165 commits
          • 📜 License
       </div>
     </div>
@@ -50,23 +50,23 @@
         
           <li><a href="../docs/DOC.html" >noise</a></li>
         
-          <li><a href="../docs/ntcp2/DOC.html" >ntcp2</a></li>
-        
           <li><a href="../docs/examples/ntcp2/DOC.html" >ntcp2</a></li>
+        
+          <li><a href="../docs/ntcp2/DOC.html" >ntcp2</a></li>
         
           <li><a href="../docs/examples/ntcp2-config/DOC.html" >ntcp2-config</a></li>
         
           <li><a href="../docs/examples/ntcp2-listener/DOC.html" >ntcp2-listener</a></li>
         
-          <li><a href="../docs/examples/pool/DOC.html" >pool</a></li>
-        
           <li><a href="../docs/pool/DOC.html" >pool</a></li>
+        
+          <li><a href="../docs/examples/pool/DOC.html" >pool</a></li>
         
           <li><a href="../docs/examples/retry/DOC.html" >retry</a></li>
         
-          <li><a href="../docs/examples/shared/DOC.html" >shared</a></li>
-        
           <li><a href="../docs/examples/ntcp2-shared/DOC.html" >shared</a></li>
+        
+          <li><a href="../docs/examples/shared/DOC.html" >shared</a></li>
         
           <li><a href="../docs/examples/shutdown/DOC.html" >shutdown</a></li>
         
@@ -105,14 +105,16 @@
 <pre><code class="language-go">func RandomBytes(n int) ([]byte, error)
 </code></pre>
 
-<p>RandomBytes generates cryptographically secure random bytes</p>
+<p>RandomBytes generates cryptographically secure random bytes. Returns an error if
+n is negative. If n is zero, returns an empty slice.</p>
 
 <h4 id="func-securezero">func  SecureZero</h4>
 
 <pre><code class="language-go">func SecureZero(b []byte)
 </code></pre>
 
-<p>SecureZero securely zeroes out the given byte slice</p>
+<p>SecureZero zeroes out the given byte slice (best-effort; not guaranteed resistant
+to dead-store elimination by the compiler)</p>
 
 <h4 id="func-validatekeysize">func  ValidateKeySize</h4>
 
@@ -150,15 +152,13 @@
 <h4 id="type-connectionmetrics">type ConnectionMetrics</h4>
 
 <pre><code class="language-go">type ConnectionMetrics struct {
-	HandshakeStarted time.Time
-	HandshakeEnded   time.Time
-	BytesRead        int64
-	BytesWritten     int64
-	Created          time.Time
+	Created time.Time
 }
 </code></pre>
 
-<p>ConnectionMetrics holds connection performance metrics</p>
+<p>ConnectionMetrics holds connection performance metrics. Mutable fields are
+unexported and accessed only through thread-safe methods. Created is exported
+because it is immutable after construction.</p>
 
 <h4 id="func-newconnectionmetrics">func  NewConnectionMetrics</h4>
 
@@ -186,7 +186,8 @@
 <pre><code class="language-go">func (m *ConnectionMetrics) GetStats() (bytesRead, bytesWritten int64, duration time.Duration)
 </code></pre>
 
-<p>GetStats returns current connection statistics</p>
+<p>GetStats returns current connection statistics. All fields are read within a
+single lock acquisition to avoid nested RLock calls on the same goroutine.</p>
 
 <h4 id="func-connectionmetrics-handshakeduration">func (*ConnectionMetrics) HandshakeDuration</h4>
 
@@ -219,7 +220,7 @@
     </main>
     
     <footer class="page-footer">
-      <p>Generated on 2026-03-05 21:40:06 • <a href="https://github.com/go-i2p/go-noise" target="_blank">View on GitHub</a></p>
+      <p>Generated on 2026-03-05 22:34:23 • <a href="https://github.com/go-i2p/go-noise" target="_blank">View on GitHub</a></p>
     </footer>
   </div>
 </body>
