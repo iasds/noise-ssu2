@@ -62,6 +62,32 @@ func GracefulShutdown() error {
 	return nil
 }
 
+// shutdownRegisterer is implemented by types that support global shutdown management.
+type shutdownRegisterer interface {
+	SetShutdownManager(*ShutdownManager)
+}
+
+// wrapTransportError creates a contextual error with transport metadata.
+// This consolidates the repeated oops error wrapping pattern used by
+// DialNoise and ListenNoise.
+func wrapTransportError(code, network, addr, msg string, err error, args ...interface{}) error {
+	return oops.
+		Code(code).
+		In("transport").
+		With("network", network).
+		With("address", addr).
+		Wrapf(err, msg, args...)
+}
+
+// registerShutdown registers a shutdownRegisterer with the global shutdown
+// manager if one is configured. This consolidates the shutdown registration
+// pattern shared by DialNoise and ListenNoise.
+func registerShutdown(target shutdownRegisterer) {
+	if globalShutdownManager != nil {
+		target.SetShutdownManager(globalShutdownManager)
+	}
+}
+
 // DialNoise creates a connection to the given address and wraps it with NoiseConn.
 // This is a convenience function that combines net.Dial and NewNoiseConn.
 // For more control over the underlying connection, use net.Dial followed by NewNoiseConn.
@@ -72,30 +98,18 @@ func DialNoise(network, addr string, config *ConnConfig) (*NoiseConn, error) {
 
 	conn, err := net.Dial(network, addr)
 	if err != nil {
-		return nil, oops.
-			Code("DIAL_FAILED").
-			In("transport").
-			With("network", network).
-			With("address", addr).
-			Wrapf(err, "failed to dial %s://%s", network, addr)
+		return nil, wrapTransportError("DIAL_FAILED", network, addr,
+			"failed to dial %s://%s", err, network, addr)
 	}
 
 	noiseConn, err := NewNoiseConn(conn, config)
 	if err != nil {
-		// Close the underlying connection if NoiseConn creation fails
 		conn.Close()
-		return nil, oops.
-			Code("NOISE_CONN_FAILED").
-			In("transport").
-			With("network", network).
-			With("address", addr).
-			Wrapf(err, "failed to create noise connection")
+		return nil, wrapTransportError("NOISE_CONN_FAILED", network, addr,
+			"failed to create noise connection", err)
 	}
 
-	// Register with global shutdown manager
-	if globalShutdownManager != nil {
-		noiseConn.SetShutdownManager(globalShutdownManager)
-	}
+	registerShutdown(noiseConn)
 
 	return noiseConn, nil
 }
@@ -110,30 +124,18 @@ func ListenNoise(network, addr string, config *ListenerConfig) (*NoiseListener, 
 
 	listener, err := net.Listen(network, addr)
 	if err != nil {
-		return nil, oops.
-			Code("LISTEN_FAILED").
-			In("transport").
-			With("network", network).
-			With("address", addr).
-			Wrapf(err, "failed to listen on %s://%s", network, addr)
+		return nil, wrapTransportError("LISTEN_FAILED", network, addr,
+			"failed to listen on %s://%s", err, network, addr)
 	}
 
 	noiseListener, err := NewNoiseListener(listener, config)
 	if err != nil {
-		// Close the underlying listener if NoiseListener creation fails
 		listener.Close()
-		return nil, oops.
-			Code("NOISE_LISTENER_FAILED").
-			In("transport").
-			With("network", network).
-			With("address", addr).
-			Wrapf(err, "failed to create noise listener")
+		return nil, wrapTransportError("NOISE_LISTENER_FAILED", network, addr,
+			"failed to create noise listener", err)
 	}
 
-	// Register with global shutdown manager
-	if globalShutdownManager != nil {
-		noiseListener.SetShutdownManager(globalShutdownManager)
-	}
+	registerShutdown(noiseListener)
 
 	return noiseListener, nil
 }

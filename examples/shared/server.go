@@ -138,6 +138,120 @@ func RunDemo2(args *CommonArgs, label string, serverFunc, clientFunc func(*Commo
 	clientFunc(&clientArgs, staticKey)
 }
 
+// RunExample runs a standard example program with common argument parsing,
+// validation, and mode dispatch. This consolidates the main() boilerplate
+// duplicated across listener, shutdown, state, and transport examples.
+// Pass an empty banner to skip the startup message. Pass nil for clientFunc
+// if the example only runs in server mode.
+func RunExample(appName, description, defaultAddr, banner string,
+	demoFunc func(*CommonArgs),
+	serverFunc func(*CommonArgs, []byte),
+	clientFunc func(*CommonArgs, []byte)) {
+
+	args, err := ParseCommonArgs(appName)
+	if err != nil {
+		log.Fatalf("❌ Failed to parse arguments: %v", err)
+	}
+
+	HandleDefaultAddress(args, defaultAddr)
+
+	if err := args.ValidateArgs(); err != nil {
+		fmt.Printf("❌ Invalid arguments: %v\n\n", err)
+		PrintUsage(appName, description)
+		return
+	}
+
+	if HandleSpecialModes(args, demoFunc) {
+		return
+	}
+
+	staticKey, _, err := ParseKeys(args)
+	if err != nil {
+		log.Fatalf("❌ Key parsing failed: %v", err)
+	}
+
+	if banner != "" {
+		fmt.Printf(banner+"\n", args.Pattern)
+	}
+
+	dispatchMode(args, staticKey, serverFunc, clientFunc)
+}
+
+// dispatchMode runs the server or client function based on parsed arguments.
+func dispatchMode(args *CommonArgs, staticKey []byte,
+	serverFunc func(*CommonArgs, []byte),
+	clientFunc func(*CommonArgs, []byte)) {
+
+	if args.ServerAddr != "" {
+		serverFunc(args, staticKey)
+	} else if clientFunc != nil && args.ClientAddr != "" {
+		clientFunc(args, staticKey)
+	}
+}
+
+// SendAndDisplay sends a series of messages on a NoiseConn and displays
+// responses with a pause between each. This consolidates the common
+// send-receive loop duplicated across the state and transport examples.
+func SendAndDisplay(conn *noise.NoiseConn, messages []string) {
+	for i, msg := range messages {
+		fmt.Printf("\n📤 Sending message %d: %s\n", i+1, msg)
+
+		_, err := conn.Write([]byte(msg))
+		if err != nil {
+			log.Printf("Failed to send message: %v", err)
+			continue
+		}
+
+		buffer := make([]byte, 1024)
+		n, err := conn.Read(buffer)
+		if err != nil {
+			log.Printf("Failed to read response: %v", err)
+			continue
+		}
+
+		response := string(buffer[:n])
+		fmt.Printf("📨 Received response: %s\n", response)
+
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
+// SendAndReceive sends a message on a NoiseConn and prints the response.
+// This consolidates the common send-and-echo pattern duplicated across
+// the listener and retry examples.
+func SendAndReceive(conn *noise.NoiseConn, message, responseLabel string) {
+	_, err := conn.Write([]byte(message))
+	if err != nil {
+		log.Printf("Write failed: %v", err)
+		return
+	}
+
+	buffer := make([]byte, 1024)
+	n, err := conn.Read(buffer)
+	if err != nil {
+		log.Printf("Read failed: %v", err)
+		return
+	}
+
+	response := string(buffer[:n])
+	fmt.Printf("📨 %s: %s\n", responseLabel, response)
+}
+
+// EchoOnce reads one message from a net.Conn and writes back an echo response.
+// This consolidates the simple echo handler duplicated across pool and retry
+// server examples.
+func EchoOnce(conn net.Conn) {
+	buffer := make([]byte, 1024)
+	n, err := conn.Read(buffer)
+	if err != nil {
+		return
+	}
+
+	message := string(buffer[:n])
+	response := fmt.Sprintf("Echo: %s", message)
+	conn.Write([]byte(response))
+}
+
 // capitalize returns the string with the first letter uppercased.
 func capitalize(s string) string {
 	if len(s) == 0 {

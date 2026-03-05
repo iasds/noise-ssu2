@@ -78,12 +78,7 @@ func ParseNTCP2Args(appName string) (*NTCP2Args, error) {
 
 // PrintNTCP2Usage displays usage information for an NTCP2 example
 func PrintNTCP2Usage(appName, description string) {
-	fmt.Printf("%s - %s\n\n", appName, description)
-	fmt.Println("Usage:")
-	fmt.Printf("  %s [options]\n\n", appName)
-	fmt.Println("Options:")
-	flag.PrintDefaults()
-	fmt.Println("\nExamples:")
+	shared.PrintUsageHeader(appName, description)
 	fmt.Printf("  # Generate NTCP2 material for testing:\n")
 	fmt.Printf("  %s -generate\n\n", appName)
 	fmt.Printf("  # Run demo mode:\n")

@@ -67,14 +67,21 @@ func ParseCommonArgs(appName string) (*CommonArgs, error) {
 	return args, nil
 }
 
-// PrintUsage displays usage information for a Noise example
-func PrintUsage(appName, description string) {
+// PrintUsageHeader prints the common header portion of usage output shared
+// between PrintUsage and PrintNTCP2Usage. It displays the app name, description,
+// usage syntax, available options, and the "Examples:" label.
+func PrintUsageHeader(appName, description string) {
 	fmt.Printf("%s - %s\n\n", appName, description)
 	fmt.Println("Usage:")
 	fmt.Printf("  %s [options]\n\n", appName)
 	fmt.Println("Options:")
 	flag.PrintDefaults()
 	fmt.Println("\nExamples:")
+}
+
+// PrintUsage displays usage information for a Noise example
+func PrintUsage(appName, description string) {
+	PrintUsageHeader(appName, description)
 	fmt.Printf("  # Generate keys for testing:\n")
 	fmt.Printf("  %s -generate\n\n", appName)
 	fmt.Printf("  # Run demo mode:\n")

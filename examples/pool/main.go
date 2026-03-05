@@ -264,15 +264,7 @@ func handlePoolEchoConnection(conn net.Conn) {
 	}
 
 	// Simple echo
-	buffer := make([]byte, 1024)
-	n, err := conn.Read(buffer)
-	if err != nil {
-		return
-	}
-
-	message := string(buffer[:n])
-	response := fmt.Sprintf("Echo: %s", message)
-	conn.Write([]byte(response))
+	shared.EchoOnce(conn)
 }
 
 // runPoolDemo demonstrates the connection pool functionality

@@ -121,23 +121,9 @@ func testSuccessfulConnection(serverAddr string, config *noise.ConnConfig) {
 }
 
 // sendAndReceive sends a test message on the connection and logs the response.
-// This consolidates the common send-and-echo pattern used across retry test functions.
+// This is a thin wrapper around shared.SendAndReceive for local use.
 func sendAndReceive(conn *noise.NoiseConn, message, responseLabel string) {
-	_, err := conn.Write([]byte(message))
-	if err != nil {
-		log.Printf("Write failed: %v", err)
-		return
-	}
-
-	buffer := make([]byte, 1024)
-	n, err := conn.Read(buffer)
-	if err != nil {
-		log.Printf("Read failed: %v", err)
-		return
-	}
-
-	response := string(buffer[:n])
-	fmt.Printf("📨 %s: %s\n", responseLabel, response)
+	shared.SendAndReceive(conn, message, responseLabel)
 }
 
 // testTransportFunctions tests high-level transport functions with retry
@@ -305,13 +291,5 @@ func handleRetryTestConnection(conn net.Conn) {
 	}
 
 	// Simple echo
-	buffer := make([]byte, 1024)
-	n, err := conn.Read(buffer)
-	if err != nil {
-		return
-	}
-
-	message := string(buffer[:n])
-	response := fmt.Sprintf("Echo: %s", message)
-	conn.Write([]byte(response))
+	shared.EchoOnce(conn)
 }

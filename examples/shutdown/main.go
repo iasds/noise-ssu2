@@ -17,41 +17,15 @@ import (
 )
 
 func main() {
-	// Parse command line arguments
-	args, err := shared.ParseCommonArgs("shutdown-example")
-	if err != nil {
-		log.Fatalf("❌ Failed to parse arguments: %v", err)
-	}
-
-	// Set default server address if none provided
-	shared.HandleDefaultAddress(args, "localhost:8080")
-
-	// Validate arguments
-	if err := args.ValidateArgs(); err != nil {
-		fmt.Printf("❌ Invalid arguments: %v\n\n", err)
-		shared.PrintUsage("shutdown-example", "Graceful shutdown demonstration supporting all Noise patterns")
-		return
-	}
-
-	// Handle special modes
-	if shared.HandleSpecialModes(args, runShutdownDemo) {
-		return
-	}
-
-	// Parse keys for the selected pattern
-	staticKey, _, err := shared.ParseKeys(args)
-	if err != nil {
-		log.Fatalf("❌ Key parsing failed: %v", err)
-	}
-
-	fmt.Printf("🛑 Graceful Shutdown Example with pattern %s\n", args.Pattern)
-
-	// Run based on mode
-	if args.ServerAddr != "" {
-		runShutdownServer(args, staticKey)
-	} else if args.ClientAddr != "" {
-		runShutdownClient(args, staticKey)
-	}
+	shared.RunExample(
+		"shutdown-example",
+		"Graceful shutdown demonstration supporting all Noise patterns",
+		"localhost:8080",
+		"🛑 Graceful Shutdown Example with pattern %s",
+		runShutdownDemo,
+		runShutdownServer,
+		runShutdownClient,
+	)
 }
 
 // runShutdownDemo demonstrates graceful shutdown with server and clients

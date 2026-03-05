@@ -14,29 +14,15 @@ import (
 )
 
 func main() {
-	args, err := shared.ParseCommonArgs("noise-listener")
-	if err != nil {
-		log.Fatalf("❌ Failed to parse arguments: %v", err)
-	}
-
-	shared.HandleDefaultAddress(args, "127.0.0.1:0")
-
-	if err := args.ValidateArgs(); err != nil {
-		fmt.Printf("❌ Invalid arguments: %v\n\n", err)
-		shared.PrintUsage("noise-listener", "NoiseListener demonstration supporting all Noise patterns")
-		return
-	}
-
-	if shared.HandleSpecialModes(args, runListenerDemo) {
-		return
-	}
-
-	staticKey, _, err := shared.ParseKeys(args)
-	if err != nil {
-		log.Fatalf("❌ Key parsing failed: %v", err)
-	}
-
-	runListenerServer(args, staticKey)
+	shared.RunExample(
+		"noise-listener",
+		"NoiseListener demonstration supporting all Noise patterns",
+		"127.0.0.1:0",
+		"",
+		runListenerDemo,
+		runListenerServer,
+		nil,
+	)
 }
 
 // createListenerConfig builds a NoiseListener config from args and an optional static key
@@ -244,21 +230,7 @@ func connectSimulatedClient(serverAddr, pattern string, serverKey []byte) (*nois
 func testSimulatedClientEcho(conn *noise.NoiseConn) {
 	testMessage := "Hello from simulated client!"
 	fmt.Printf("📤 Sending: %s\n", testMessage)
-	_, err := conn.Write([]byte(testMessage))
-	if err != nil {
-		fmt.Printf("Failed to send message: %v\n", err)
-		return
-	}
-
-	buffer := make([]byte, 1024)
-	n, err := conn.Read(buffer)
-	if err != nil {
-		fmt.Printf("Failed to read response: %v\n", err)
-		return
-	}
-
-	response := string(buffer[:n])
-	fmt.Printf("📨 Received response: %s\n", response)
+	shared.SendAndReceive(conn, testMessage, "Received response")
 	fmt.Println("✅ Client simulation completed successfully!")
 }
 
