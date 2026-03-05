@@ -1,8 +1,9 @@
 package ntcp2
 
 import (
-	"sync"
 	"time"
+
+	"github.com/go-i2p/go-noise/internal/replaycache"
 )
 
 // ClockSkewTolerance is the maximum allowed difference between local and
@@ -40,10 +41,7 @@ const (
 //
 // ReplayCache implements the ReplayDetector interface.
 type ReplayCache struct {
-	mu        sync.RWMutex
-	entries   map[[32]byte]time.Time // ephemeral key → first-seen time
-	done      chan struct{}          // signals the cleanup goroutine to stop
-	closeOnce sync.Once              // ensures Close is idempotent (no double-close panic)
+	cache *replaycache.TTLCache
 }
 
 // compile-time interface check
@@ -52,12 +50,13 @@ var _ ReplayDetector = (*ReplayCache)(nil)
 // NewReplayCache creates a new replay cache and starts a background cleanup
 // goroutine. Call Close() when the cache is no longer needed.
 func NewReplayCache() *ReplayCache {
-	rc := &ReplayCache{
-		entries: make(map[[32]byte]time.Time),
-		done:    make(chan struct{}),
+	return &ReplayCache{
+		cache: replaycache.New(replaycache.Config{
+			TTL:             replayCacheTTL,
+			MaxSize:         replayCacheMaxSize,
+			CleanupInterval: replayCacheCleanupInterval,
+		}),
 	}
-	go rc.cleanupLoop()
-	return rc
 }
 
 // CheckAndAdd checks whether an ephemeral key has been seen before.
@@ -66,108 +65,16 @@ func NewReplayCache() *ReplayCache {
 //
 // This is the primary method called by the listener before processing message 1.
 func (rc *ReplayCache) CheckAndAdd(ephemeralKey [32]byte) bool {
-	rc.mu.Lock()
-	defer rc.mu.Unlock()
-
-	now := time.Now()
-
-	// Check if this key has been seen before and is still within the TTL
-	if firstSeen, exists := rc.entries[ephemeralKey]; exists {
-		if now.Sub(firstSeen) < replayCacheTTL {
-			// Replay detected — key was seen recently
-			return true
-		}
-		// Entry expired — treat as new
-	}
-
-	// Force eviction if we've hit the size limit
-	if len(rc.entries) >= replayCacheMaxSize {
-		rc.evictOldest()
-	}
-
-	// Record this ephemeral key
-	rc.entries[ephemeralKey] = now
-	return false
+	return rc.cache.CheckAndAdd(ephemeralKey)
 }
 
 // Size returns the current number of entries in the cache.
 func (rc *ReplayCache) Size() int {
-	rc.mu.RLock()
-	defer rc.mu.RUnlock()
-	return len(rc.entries)
+	return rc.cache.Size()
 }
 
 // Close stops the background cleanup goroutine and releases resources.
 // Close is idempotent — calling it more than once is safe and will not panic.
 func (rc *ReplayCache) Close() {
-	rc.closeOnce.Do(func() { close(rc.done) })
-}
-
-// cleanupLoop periodically evicts expired entries from the cache.
-func (rc *ReplayCache) cleanupLoop() {
-	ticker := time.NewTicker(replayCacheCleanupInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-rc.done:
-			return
-		case <-ticker.C:
-			rc.evictExpired()
-		}
-	}
-}
-
-// evictExpired removes all entries older than replayCacheTTL.
-func (rc *ReplayCache) evictExpired() {
-	rc.mu.Lock()
-	defer rc.mu.Unlock()
-
-	cutoff := time.Now().Add(-replayCacheTTL)
-	for key, firstSeen := range rc.entries {
-		if firstSeen.Before(cutoff) {
-			delete(rc.entries, key)
-		}
-	}
-}
-
-// evictOldest removes the oldest 10% of entries when the cache is full.
-// Must be called with mu held.
-func (rc *ReplayCache) evictOldest() {
-	evictCount := len(rc.entries) / 10
-	if evictCount < 1 {
-		evictCount = 1
-	}
-
-	// Find the oldest entries
-	type entry struct {
-		key  [32]byte
-		time time.Time
-	}
-
-	// Simple approach: just delete entries that are older than the median.
-	// For a cache under attack, any eviction strategy works since we're
-	// just preventing OOM — the TTL handles correctness.
-	cutoff := time.Now().Add(-replayCacheTTL / 2)
-	evicted := 0
-	for key, firstSeen := range rc.entries {
-		if evicted >= evictCount {
-			break
-		}
-		if firstSeen.Before(cutoff) {
-			delete(rc.entries, key)
-			evicted++
-		}
-	}
-
-	// If we couldn't evict enough old entries, just delete any entries
-	if evicted < evictCount {
-		for key := range rc.entries {
-			if evicted >= evictCount {
-				break
-			}
-			delete(rc.entries, key)
-			evicted++
-		}
-	}
+	rc.cache.Close()
 }

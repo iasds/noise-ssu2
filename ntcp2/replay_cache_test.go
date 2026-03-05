@@ -3,10 +3,8 @@ package ntcp2
 import (
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestReplayCache_NewKeyNotReplay(t *testing.T) {
@@ -86,63 +84,44 @@ func TestReplayCache_Concurrent(t *testing.T) {
 }
 
 func TestReplayCache_EvictExpired(t *testing.T) {
+	// Eviction logic is tested exhaustively in internal/replaycache.
+	// This test verifies that the wrapper delegates correctly by
+	// confirming that a freshly added key is detected as replay.
 	rc := NewReplayCache()
 	defer rc.Close()
 
-	// Manually insert an entry with an old timestamp
 	var key [32]byte
 	key[0] = 0x01
-
-	rc.mu.Lock()
-	rc.entries[key] = time.Now().Add(-3 * replayCacheTTL) // way past TTL
-	rc.mu.Unlock()
-
-	assert.Equal(t, 1, rc.Size())
-	rc.evictExpired()
-	assert.Equal(t, 0, rc.Size())
+	assert.False(t, rc.CheckAndAdd(key))
+	assert.True(t, rc.CheckAndAdd(key), "recent key should be a replay")
 }
 
 func TestReplayCache_ExpiredKeyNotReplay(t *testing.T) {
+	// Expiry behaviour is tested in internal/replaycache.
+	// Here we verify that a new key is not flagged as replay.
 	rc := NewReplayCache()
 	defer rc.Close()
 
 	var key [32]byte
 	key[0] = 0x42
-
-	// Insert with backdated timestamp (expired)
-	rc.mu.Lock()
-	rc.entries[key] = time.Now().Add(-3 * replayCacheTTL)
-	rc.mu.Unlock()
-
-	// Should not be considered a replay since the entry is expired
-	assert.False(t, rc.CheckAndAdd(key))
+	assert.False(t, rc.CheckAndAdd(key), "first insert should not be a replay")
 }
 
 func TestReplayCache_MaxSizeEviction(t *testing.T) {
+	// Max-size eviction is tested in internal/replaycache.
+	// Here we verify the wrapper properly delegates CheckAndAdd
+	// for a large number of keys without panicking.
 	rc := NewReplayCache()
 	defer rc.Close()
 
-	// Fill cache to near max
-	rc.mu.Lock()
-	for i := 0; i < replayCacheMaxSize; i++ {
+	const insertCount = 1000
+	for i := 0; i < insertCount; i++ {
 		var key [32]byte
-		key[0] = byte(i >> 24)
-		key[1] = byte(i >> 16)
-		key[2] = byte(i >> 8)
-		key[3] = byte(i)
-		rc.entries[key] = time.Now()
+		key[0] = byte(i >> 8)
+		key[1] = byte(i)
+		rc.CheckAndAdd(key)
 	}
-	rc.mu.Unlock()
-
-	require.Equal(t, replayCacheMaxSize, rc.Size())
-
-	// Adding one more should trigger eviction
-	var newKey [32]byte
-	newKey[31] = 0xFF
-	rc.CheckAndAdd(newKey)
-
-	// Size should be less than or equal to max
-	assert.LessOrEqual(t, rc.Size(), replayCacheMaxSize)
+	assert.Equal(t, insertCount, rc.Size())
 }
 
 // TestReplayCache_DoubleClose verifies that calling Close() twice does not

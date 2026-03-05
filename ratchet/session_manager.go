@@ -10,6 +10,7 @@ import (
 	"github.com/go-i2p/crypto/ecies"
 	"github.com/go-i2p/crypto/ratchet"
 	"github.com/go-i2p/crypto/types"
+	"github.com/go-i2p/go-noise/internal/replaycache"
 	"github.com/samber/oops"
 )
 
@@ -117,8 +118,7 @@ type SessionManager struct {
 	// NS message) to prevent replay attacks within the freshness window.
 	// Spec ref: ratchet.md §"DateTime" — "Bob must implement a Bloom filter or
 	// other mechanism to prevent replay attacks, if the time is valid."
-	nsReplayCache map[[32]byte]time.Time
-	nsReplayDone  chan struct{}
+	nsReplayCache *replaycache.TTLCache
 }
 
 // NewSessionManager creates a new session manager with the given private key.
@@ -148,10 +148,13 @@ func NewSessionManager(privateKey [32]byte) (*SessionManager, error) {
 		sessionTimeout:  10 * time.Minute,
 		ctx:             ctx,
 		cancel:          cancel,
-		nsReplayCache:   make(map[[32]byte]time.Time),
-		nsReplayDone:    make(chan struct{}),
+		nsReplayCache: replaycache.New(replaycache.Config{
+			TTL:             nsReplayCacheTTL,
+			MaxSize:         nsReplayCacheMaxSize,
+			CleanupInterval: nsReplayCacheCleanupInterval,
+			NowFunc:         nowFunc,
+		}),
 	}
-	go sm.nsReplayCleanupLoop()
 
 	return sm, nil
 }
@@ -442,7 +445,7 @@ func (sm *SessionManager) decryptNewSession(msg []byte) ([]byte, *[32]byte, erro
 	if len(msg) >= 32 {
 		var ephKey [32]byte
 		copy(ephKey[:], msg[:32])
-		if sm.checkNSReplay(ephKey) {
+		if sm.nsReplayCache.CheckAndAdd(ephKey) {
 			return nil, nil, oops.Errorf(
 				"NS replay detected: ephemeral key %x has been seen within the freshness window",
 				ephKey[:8],
@@ -1341,12 +1344,7 @@ func (sm *SessionManager) Close() error {
 	sm.cancel()
 
 	// Stop the NS replay cache cleanup goroutine.
-	select {
-	case <-sm.nsReplayDone:
-		// Already closed.
-	default:
-		close(sm.nsReplayDone)
-	}
+	sm.nsReplayCache.Close()
 
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -1364,9 +1362,7 @@ func (sm *SessionManager) Close() error {
 	for k := range sm.nsrTagIndex {
 		delete(sm.nsrTagIndex, k)
 	}
-	for k := range sm.nsReplayCache {
-		delete(sm.nsReplayCache, k)
-	}
+	sm.nsReplayCache.Reset()
 
 	// Zero the private key material
 	for i := range sm.ourPrivateKey {
@@ -1411,91 +1407,4 @@ func (sm *SessionManager) StartCleanupLoop(ctx context.Context) {
 		"at":       "SessionManager.StartCleanupLoop",
 		"interval": "2m",
 	}).Debug("Started garlic session cleanup loop")
-}
-
-// checkNSReplay checks whether the NS ephemeral key has been seen before.
-// If the key is new, it is added to the cache and false is returned (not a replay).
-// If the key has been seen within nsReplayCacheTTL, true is returned (replay).
-//
-// Spec ref: ratchet.md §"DateTime" — "Bob must implement a Bloom filter or
-// other mechanism to prevent replay attacks, if the time is valid."
-func (sm *SessionManager) checkNSReplay(ephemeralKey [32]byte) bool {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-
-	now := nowFunc()
-
-	if firstSeen, exists := sm.nsReplayCache[ephemeralKey]; exists {
-		if now.Sub(firstSeen) < nsReplayCacheTTL {
-			return true // replay detected
-		}
-		// Entry expired — treat as new.
-	}
-
-	if len(sm.nsReplayCache) >= nsReplayCacheMaxSize {
-		sm.evictOldestNSReplayEntriesLocked()
-	}
-
-	sm.nsReplayCache[ephemeralKey] = now
-	return false
-}
-
-// evictOldestNSReplayEntriesLocked removes the oldest 10% of NS replay cache
-// entries. Must be called with sm.mu held for writing.
-func (sm *SessionManager) evictOldestNSReplayEntriesLocked() {
-	evictCount := len(sm.nsReplayCache) / 10
-	if evictCount < 1 {
-		evictCount = 1
-	}
-
-	cutoff := nowFunc().Add(-nsReplayCacheTTL / 2)
-	evicted := 0
-	for key, firstSeen := range sm.nsReplayCache {
-		if evicted >= evictCount {
-			break
-		}
-		if firstSeen.Before(cutoff) {
-			delete(sm.nsReplayCache, key)
-			evicted++
-		}
-	}
-
-	// If not enough expired entries, delete any entries to stay under limit.
-	for key := range sm.nsReplayCache {
-		if evicted >= evictCount {
-			break
-		}
-		delete(sm.nsReplayCache, key)
-		evicted++
-	}
-}
-
-// nsReplayCleanupLoop periodically evicts expired entries from the NS replay cache.
-func (sm *SessionManager) nsReplayCleanupLoop() {
-	ticker := time.NewTicker(nsReplayCacheCleanupInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-sm.nsReplayDone:
-			return
-		case <-sm.ctx.Done():
-			return
-		case <-ticker.C:
-			sm.evictExpiredNSReplayEntries()
-		}
-	}
-}
-
-// evictExpiredNSReplayEntries removes all NS replay entries older than nsReplayCacheTTL.
-func (sm *SessionManager) evictExpiredNSReplayEntries() {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-
-	cutoff := nowFunc().Add(-nsReplayCacheTTL)
-	for key, firstSeen := range sm.nsReplayCache {
-		if firstSeen.Before(cutoff) {
-			delete(sm.nsReplayCache, key)
-		}
-	}
 }
