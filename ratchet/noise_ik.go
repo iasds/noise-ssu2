@@ -16,14 +16,13 @@ package ratchet
 //	[Elligator2(ephemeral_pub)(32)] + [EncryptAndHash(static_pub)(48)] + [EncryptAndHash(payload)(N+16)]
 
 import (
-	"crypto/hmac"
 	"crypto/sha256"
-	"encoding/binary"
 
 	"github.com/go-i2p/crypto/chacha20poly1305"
+	"github.com/go-i2p/crypto/curve25519"
 	"github.com/go-i2p/crypto/elligator2"
+	"github.com/go-i2p/noise"
 	"github.com/samber/oops"
-	"go.step.sm/crypto/x25519"
 )
 
 const (
@@ -95,7 +94,7 @@ func (ns *noiseIKState) mixHash(data []byte) {
 // mixKey derives a new chaining key and cipher key from input key material.
 // ck, k = HKDF(ck, ikm, 2); resets nonce counter to 0.
 func (ns *noiseIKState) mixKey(ikm []byte) {
-	ns.ck, ns.k = noiseHKDF2(ns.ck[:], ikm)
+	ns.ck, ns.k = noise.HKDF2SHA256(ns.ck[:], ikm)
 	ns.n = 0
 	ns.hasKey = true
 }
@@ -109,7 +108,7 @@ func (ns *noiseIKState) mixKey(ikm []byte) {
 // The spec mandates single-output HKDF for "ee" to prevent accidental use
 // of an intermediate cipher key between the "ee" and "se" steps.
 func (ns *noiseIKState) mixKeyCKOnly(ikm []byte) {
-	ns.ck = noiseHKDF1(ns.ck[:], ikm)
+	ns.ck = noise.HKDF1SHA256(ns.ck[:], ikm)
 }
 
 // encryptAndHash encrypts plaintext using the current cipher key with h as AD.
@@ -126,8 +125,8 @@ func (ns *noiseIKState) encryptAndHash(plaintext []byte) ([]byte, error) {
 		return nil, oops.Wrapf(err, "failed to create AEAD for handshake encryption")
 	}
 
-	nonce := noiseNonce(ns.n)
-	ct, tag, err := aead.Encrypt(plaintext, ns.h[:], nonce)
+	nonce := noise.BuildNonce(ns.n)
+	ct, tag, err := aead.Encrypt(plaintext, ns.h[:], nonce[:])
 	if err != nil {
 		return nil, oops.Wrapf(err, "handshake encryption failed")
 	}
@@ -160,8 +159,8 @@ func (ns *noiseIKState) decryptAndHash(ciphertext []byte) ([]byte, error) {
 	var tag [16]byte
 	copy(tag[:], ciphertext[len(ciphertext)-16:])
 
-	nonce := noiseNonce(ns.n)
-	plaintext, err := aead.Decrypt(ct, tag[:], ns.h[:], nonce)
+	nonce := noise.BuildNonce(ns.n)
+	plaintext, err := aead.Decrypt(ct, tag[:], ns.h[:], nonce[:])
 	if err != nil {
 		return nil, oops.Wrapf(err, "handshake decryption failed (authentication error)")
 	}
@@ -169,49 +168,6 @@ func (ns *noiseIKState) decryptAndHash(ciphertext []byte) ([]byte, error) {
 
 	ns.mixHash(ciphertext)
 	return plaintext, nil
-}
-
-// noiseNonce constructs a 12-byte Noise nonce: [0,0,0,0 || LE64(counter)].
-func noiseNonce(counter uint64) []byte {
-	nonce := make([]byte, 12)
-	binary.LittleEndian.PutUint64(nonce[4:], counter)
-	return nonce
-}
-
-// noiseHKDF1 computes HKDF with 1 output as defined by the Noise spec §4.3.
-// Returns a single 32-byte output (the new chaining key).
-// Per I2P ratchet.md §1g, the "ee" handshake token uses a single-output HKDF:
-//
-//	ck = HKDF(chainKey, sharedSecret, "", 32)
-//
-// This updates only the chaining key, not the cipher key.
-func noiseHKDF1(chainingKey, inputKeyMaterial []byte) [32]byte {
-	tempKey := hmacSHA256(chainingKey, inputKeyMaterial)
-	output1 := hmacSHA256(tempKey[:], []byte{0x01})
-	return output1
-}
-
-// noiseHKDF2 computes HKDF with 2 outputs as defined by the Noise spec §4.3.
-// Returns (output1, output2) each 32 bytes.
-func noiseHKDF2(chainingKey, inputKeyMaterial []byte) ([32]byte, [32]byte) {
-	tempKey := hmacSHA256(chainingKey, inputKeyMaterial)
-	output1 := hmacSHA256(tempKey[:], []byte{0x01})
-
-	input2 := make([]byte, 33)
-	copy(input2[:32], output1[:])
-	input2[32] = 0x02
-	output2 := hmacSHA256(tempKey[:], input2)
-
-	return output1, output2
-}
-
-// hmacSHA256 computes HMAC-SHA256(key, data).
-func hmacSHA256(key, data []byte) [32]byte {
-	mac := hmac.New(sha256.New, key)
-	mac.Write(data)
-	var result [32]byte
-	copy(result[:], mac.Sum(nil))
-	return result
 }
 
 // writeNoiseIKMessage1 constructs a New Session message using the Noise IK pattern
@@ -242,8 +198,7 @@ func writeNoiseIKMessage1(
 	ns.mixHash(ephEncoded)
 
 	// Token es: DH(ephemeral_private, responder_static)
-	ephPriv := x25519.PrivateKey(ephPrivBytes)
-	sharedES, err := ephPriv.SharedKey(x25519.PublicKey(responderStaticPub[:]))
+	sharedES, err := curve25519.SharedKey(ephPrivBytes, responderStaticPub[:])
 	if err != nil {
 		return nil, nil, nil, oops.Wrapf(err, "failed to compute DH(e, rs)")
 	}
@@ -256,8 +211,7 @@ func writeNoiseIKMessage1(
 	}
 
 	// Token ss: DH(our_static_private, responder_static)
-	ourPriv := x25519.PrivateKey(ourStaticPriv[:])
-	sharedSS, err := ourPriv.SharedKey(x25519.PublicKey(responderStaticPub[:]))
+	sharedSS, err := curve25519.SharedKey(ourStaticPriv[:], responderStaticPub[:])
 	if err != nil {
 		return nil, nil, nil, oops.Wrapf(err, "failed to compute DH(s, rs)")
 	}
@@ -333,8 +287,7 @@ func writeNoiseIKMessage1Unbound(
 	ns.mixHash(ephEncoded)
 
 	// Token es: DH(ephemeral_private, responder_static). Sets k, resets n=0.
-	ephPriv := x25519.PrivateKey(ephPrivBytes)
-	sharedES, err := ephPriv.SharedKey(x25519.PublicKey(responderStaticPub[:]))
+	sharedES, err := curve25519.SharedKey(ephPrivBytes, responderStaticPub[:])
 	if err != nil {
 		return nil, nil, oops.Wrapf(err, "failed to compute DH(e, rs)")
 	}
@@ -415,8 +368,7 @@ func readNoiseIKMessage1(
 	copy(initiatorEphPub[:], ephPubBytes)
 
 	// Token es: DH(our_static_private, ephemeral). Sets k, resets n=0.
-	ourPriv := x25519.PrivateKey(ourStaticPriv[:])
-	sharedES, err := ourPriv.SharedKey(x25519.PublicKey(ephPubBytes))
+	sharedES, err := curve25519.SharedKey(ourStaticPriv[:], ephPubBytes)
 	if err != nil {
 		return nil, [32]byte{}, nil, nil, false, oops.Wrapf(err, "failed to compute DH(s, re)")
 	}
@@ -455,7 +407,7 @@ func readNoiseIKMessage1(
 	copy(initiatorStaticPub[:], initiatorStaticBytes)
 
 	// Token ss: DH(our_static_private, initiator_static). Resets n=0.
-	sharedSS, err := ourPriv.SharedKey(x25519.PublicKey(initiatorStaticPub[:]))
+	sharedSS, err := curve25519.SharedKey(ourStaticPriv[:], initiatorStaticPub[:])
 	if err != nil {
 		return nil, [32]byte{}, nil, nil, false, oops.Wrapf(err, "failed to compute DH(s, rs)")
 	}

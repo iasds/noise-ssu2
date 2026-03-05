@@ -14,10 +14,12 @@ package ratchet
 
 import (
 	"github.com/go-i2p/crypto/chacha20poly1305"
+	"github.com/go-i2p/crypto/curve25519"
 	"github.com/go-i2p/crypto/elligator2"
+	"github.com/go-i2p/crypto/kdf"
 	"github.com/go-i2p/crypto/ratchet"
+	"github.com/go-i2p/noise"
 	"github.com/samber/oops"
-	"go.step.sm/crypto/x25519"
 )
 
 const (
@@ -66,25 +68,6 @@ type nsrSessionKeys struct {
 	keyBA    [32]byte // responder → initiator direction key
 }
 
-// standardHKDF performs RFC 5869 HKDF-SHA256 with the I2P spec parameter order:
-// HKDF(salt, ikm, info, length). This is used for spec-defined key derivations
-// that require explicit salt and IKM (unlike Noise's builtin HKDF which has no info).
-func standardHKDF(salt, ikm, info []byte, length int) []byte {
-	prk := hmacSHA256(salt, ikm)
-	var result []byte
-	var prev []byte
-	for i := byte(1); len(result) < length; i++ {
-		input := make([]byte, 0, len(prev)+len(info)+1)
-		input = append(input, prev...)
-		input = append(input, info...)
-		input = append(input, i)
-		t := hmacSHA256(prk[:], input)
-		result = append(result, t[:]...)
-		prev = t[:]
-	}
-	return result[:length]
-}
-
 // deriveNSRTagRatchet creates a TagRatchet for NSR session tags.
 // Both initiator and responder call this with the same chainKey from the NS exchange
 // to generate/recognize NSR tags.
@@ -94,16 +77,25 @@ func standardHKDF(salt, ikm, info []byte, length int) []byte {
 //	tagset_nsr = DH_INITIALIZE(chainKey, tagsetKey)
 func deriveNSRTagRatchet(chainKey [32]byte) (*ratchet.TagRatchet, error) {
 	// Step 1: Derive tagsetKey
-	tagsetKey := standardHKDF(chainKey[:], nil, []byte(hkdfInfoSessionReplyTags), 32)
+	tagsetKey, err := kdf.StandardHKDF(chainKey[:], nil, []byte(hkdfInfoSessionReplyTags), 32)
+	if err != nil {
+		return nil, oops.Wrapf(err, "failed to derive NSR tagset key")
+	}
 
 	// Step 2: DH_INITIALIZE(chainKey, tagsetKey)
 	// keydata = HKDF(chainKey, tagsetKey, "KDFDHRatchetStep", 64)
-	keydata := standardHKDF(chainKey[:], tagsetKey, []byte(hkdfInfoDHRatchetStep), 64)
+	keydata, err := kdf.StandardHKDF(chainKey[:], tagsetKey, []byte(hkdfInfoDHRatchetStep), 64)
+	if err != nil {
+		return nil, oops.Wrapf(err, "failed to derive NSR DH ratchet step")
+	}
 	var ck [32]byte
 	copy(ck[:], keydata[32:64])
 
 	// keydata2 = HKDF(ck, ZEROLEN, "TagAndKeyGenKeys", 64)
-	keydata2 := standardHKDF(ck[:], nil, []byte(hkdfInfoTagAndKeyGenKeys), 64)
+	keydata2, err := kdf.StandardHKDF(ck[:], nil, []byte(hkdfInfoTagAndKeyGenKeys), 64)
+	if err != nil {
+		return nil, oops.Wrapf(err, "failed to derive NSR tag and key gen keys")
+	}
 	var nsrTagKey [32]byte
 	copy(nsrTagKey[:], keydata2[0:32])
 
@@ -153,15 +145,14 @@ func writeNoiseIKMessage2(
 	// "ee" pattern: DH(besk, aepk)
 	// Per I2P ratchet.md §1g, "ee" uses single-output HKDF: only ck is updated.
 	// The cipher key (k) is not modified until the subsequent "se" step.
-	ephPriv := x25519.PrivateKey(ephPrivBytes)
-	sharedEE, err := ephPriv.SharedKey(x25519.PublicKey(hs.remoteEphPub[:]))
+	sharedEE, err := curve25519.SharedKey(ephPrivBytes, hs.remoteEphPub[:])
 	if err != nil {
 		return [8]byte{}, nil, nil, oops.Wrapf(err, "failed to compute NSR DH(e, re)")
 	}
 	ns.mixKeyCKOnly(sharedEE)
 
 	// "se" pattern: DH(besk, apk)
-	sharedSE, err := ephPriv.SharedKey(x25519.PublicKey(hs.remoteStaticPub[:]))
+	sharedSE, err := curve25519.SharedKey(ephPrivBytes, hs.remoteStaticPub[:])
 	if err != nil {
 		return [8]byte{}, nil, nil, oops.Wrapf(err, "failed to compute NSR DH(e, rs)")
 	}
@@ -230,16 +221,14 @@ func readNoiseIKMessage2(
 	// "ee" pattern: DH(aesk, bepk)
 	// Per I2P ratchet.md §1g, "ee" uses single-output HKDF: only ck is updated.
 	// The cipher key (k) is not modified until the subsequent "se" step.
-	ephPriv := x25519.PrivateKey(hs.localEphPriv)
-	sharedEE, err := ephPriv.SharedKey(x25519.PublicKey(ephPubBytes))
+	sharedEE, err := curve25519.SharedKey(hs.localEphPriv, ephPubBytes)
 	if err != nil {
 		return nil, nil, oops.Wrapf(err, "failed to compute NSR DH(e, re)")
 	}
 	ns.mixKeyCKOnly(sharedEE)
 
 	// "se" pattern: DH(ask, bepk)
-	ourPriv := x25519.PrivateKey(ourStaticPriv[:])
-	sharedSE, err := ourPriv.SharedKey(x25519.PublicKey(ephPubBytes))
+	sharedSE, err := curve25519.SharedKey(ourStaticPriv[:], ephPubBytes)
 	if err != nil {
 		return nil, nil, oops.Wrapf(err, "failed to compute NSR DH(s, re)")
 	}
@@ -268,10 +257,13 @@ func readNoiseIKMessage2(
 // encryptNSRPayload and decryptNSRPayload.
 func deriveNSRPayloadCipher(ns *noiseIKState) (*chacha20poly1305.AEAD, [32]byte, [32]byte, error) {
 	// split(): keydata = HKDF(chainKey, ZEROLEN, "", 64)
-	kAB, kBA := noiseHKDF2(ns.ck[:], nil)
+	kAB, kBA := noise.HKDF2SHA256(ns.ck[:], nil)
 
 	// Derive payload key: k = HKDF(k_ba, ZEROLEN, "AttachPayloadKDF", 32)
-	payloadKeyBytes := standardHKDF(kBA[:], nil, []byte(hkdfInfoAttachPayloadKDF), 32)
+	payloadKeyBytes, err := kdf.StandardHKDF(kBA[:], nil, []byte(hkdfInfoAttachPayloadKDF), 32)
+	if err != nil {
+		return nil, [32]byte{}, [32]byte{}, oops.Wrapf(err, "failed to derive NSR payload key")
+	}
 	var payloadKey [32]byte
 	copy(payloadKey[:], payloadKeyBytes)
 
@@ -291,8 +283,8 @@ func encryptNSRPayload(ns *noiseIKState, payload []byte) ([]byte, *nsrSessionKey
 		return nil, nil, err
 	}
 
-	nonce := noiseNonce(0)
-	ct, tag, err := aead.Encrypt(payload, ns.h[:], nonce)
+	nonce := noise.BuildNonce(0)
+	ct, tag, err := aead.Encrypt(payload, ns.h[:], nonce[:])
 	if err != nil {
 		return nil, nil, oops.Wrapf(err, "failed to encrypt NSR payload")
 	}
@@ -321,8 +313,8 @@ func decryptNSRPayload(ns *noiseIKState, encrypted []byte) ([]byte, *nsrSessionK
 	var tag [16]byte
 	copy(tag[:], encrypted[len(encrypted)-16:])
 
-	nonce := noiseNonce(0)
-	plaintext, err := aead.Decrypt(ct, tag[:], ns.h[:], nonce)
+	nonce := noise.BuildNonce(0)
+	plaintext, err := aead.Decrypt(ct, tag[:], ns.h[:], nonce[:])
 	if err != nil {
 		return nil, nil, oops.Wrapf(err, "NSR payload decryption failed (authentication error)")
 	}

@@ -4,7 +4,10 @@ import (
 	"crypto/sha256"
 	"testing"
 
+	"github.com/go-i2p/crypto/hmac"
+	"github.com/go-i2p/crypto/kdf"
 	"github.com/go-i2p/crypto/rand"
+	"github.com/go-i2p/noise"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -56,8 +59,8 @@ func TestNoiseIKState_MixKey(t *testing.T) {
 	assert.Equal(t, uint64(0), ns.n, "MixKey should reset nonce to 0")
 }
 
-// TestNoiseHKDF1_MatchesFirstOutputOfHKDF2 verifies that noiseHKDF1 produces
-// the same value as the first output of noiseHKDF2. This ensures the "ee"
+// TestNoiseHKDF1_MatchesFirstOutputOfHKDF2 verifies that noise.HKDF1SHA256 produces
+// the same value as the first output of noise.HKDF2SHA256. This ensures the "ee"
 // single-output HKDF and the standard 2-output HKDF agree on the chaining key.
 func TestNoiseHKDF1_MatchesFirstOutputOfHKDF2(t *testing.T) {
 	ck := make([]byte, 32)
@@ -67,9 +70,9 @@ func TestNoiseHKDF1_MatchesFirstOutputOfHKDF2(t *testing.T) {
 	_, err = rand.Read(ikm)
 	require.NoError(t, err)
 
-	output1 := noiseHKDF1(ck, ikm)
-	first, _ := noiseHKDF2(ck, ikm)
-	assert.Equal(t, first, output1, "noiseHKDF1 should produce the same output as the first output of noiseHKDF2")
+	output1 := noise.HKDF1SHA256(ck, ikm)
+	first, _ := noise.HKDF2SHA256(ck, ikm)
+	assert.Equal(t, first, output1, "HKDF1SHA256 should produce the same output as the first output of HKDF2SHA256")
 }
 
 // TestNoiseIKState_MixKeyCKOnly verifies that mixKeyCKOnly updates only the
@@ -109,9 +112,9 @@ func TestNoiseIKState_MixKeyCKOnly(t *testing.T) {
 	assert.Equal(t, oldN, ns.n, "mixKeyCKOnly must NOT reset nonce")
 	assert.Equal(t, oldHasKey, ns.hasKey, "mixKeyCKOnly must NOT change hasKey flag")
 
-	// Verify ck matches noiseHKDF1 directly
-	expected := noiseHKDF1(oldCK[:], eeIKM)
-	assert.Equal(t, expected, ns.ck, "ck should equal noiseHKDF1(oldCK, ikm)")
+	// Verify ck matches noise.HKDF1SHA256 directly
+	expected := noise.HKDF1SHA256(oldCK[:], eeIKM)
+	assert.Equal(t, expected, ns.ck, "ck should equal noise.HKDF1SHA256(oldCK, ikm)")
 }
 
 // TestNSR_EE_DoesNotSetCipherKey verifies that the "ee" step in the NSR
@@ -567,8 +570,8 @@ func TestNoiseHKDF2_Deterministic(t *testing.T) {
 	_, err = rand.Read(ikm)
 	require.NoError(t, err)
 
-	o1a, o2a := noiseHKDF2(ck, ikm)
-	o1b, o2b := noiseHKDF2(ck, ikm)
+	o1a, o2a := noise.HKDF2SHA256(ck, ikm)
+	o1b, o2b := noise.HKDF2SHA256(ck, ikm)
 
 	assert.Equal(t, o1a, o1b)
 	assert.Equal(t, o2a, o2b)
@@ -576,11 +579,11 @@ func TestNoiseHKDF2_Deterministic(t *testing.T) {
 }
 
 func TestNoiseNonce(t *testing.T) {
-	nonce := noiseNonce(0)
+	nonce := noise.BuildNonce(0)
 	assert.Equal(t, 12, len(nonce))
-	assert.Equal(t, make([]byte, 12), nonce, "Nonce 0 should be all zeros")
+	assert.Equal(t, [12]byte{}, nonce, "Nonce 0 should be all zeros")
 
-	nonce = noiseNonce(1)
+	nonce = noise.BuildNonce(1)
 	assert.Equal(t, byte(1), nonce[4], "Counter should be at offset 4 (LE)")
 	assert.Equal(t, byte(0), nonce[0], "First 4 bytes should be zero padding")
 }
@@ -589,16 +592,16 @@ func TestHmacSHA256_KnownOutput(t *testing.T) {
 	key := []byte("test key")
 	data := []byte("test data")
 
-	result1 := hmacSHA256(key, data)
-	result2 := hmacSHA256(key, data)
+	result1 := hmac.HMACSHA256(key, data)
+	result2 := hmac.HMACSHA256(key, data)
 	assert.Equal(t, result1, result2, "HMAC-SHA256 should be deterministic")
 
-	result3 := hmacSHA256(key, []byte("different data"))
+	result3 := hmac.HMACSHA256(key, []byte("different data"))
 	assert.NotEqual(t, result1, result3, "Different data should produce different HMAC")
 }
 
 // ============================================================================
-// standardHKDF
+// kdf.StandardHKDF
 // ============================================================================
 
 func TestStandardHKDF_Deterministic(t *testing.T) {
@@ -609,8 +612,10 @@ func TestStandardHKDF_Deterministic(t *testing.T) {
 	_, err = rand.Read(ikm)
 	require.NoError(t, err)
 
-	out1 := standardHKDF(salt, ikm, []byte("test_info"), 64)
-	out2 := standardHKDF(salt, ikm, []byte("test_info"), 64)
+	out1, err := kdf.StandardHKDF(salt, ikm, []byte("test_info"), 64)
+	require.NoError(t, err)
+	out2, err := kdf.StandardHKDF(salt, ikm, []byte("test_info"), 64)
+	require.NoError(t, err)
 	assert.Equal(t, out1, out2, "Same inputs should produce identical HKDF output")
 	assert.Equal(t, 64, len(out1))
 }
@@ -623,11 +628,14 @@ func TestStandardHKDF_DifferentInputs(t *testing.T) {
 	_, err = rand.Read(ikm)
 	require.NoError(t, err)
 
-	out1 := standardHKDF(salt, ikm, []byte("info_a"), 32)
-	out2 := standardHKDF(salt, ikm, []byte("info_b"), 32)
+	out1, err := kdf.StandardHKDF(salt, ikm, []byte("info_a"), 32)
+	require.NoError(t, err)
+	out2, err := kdf.StandardHKDF(salt, ikm, []byte("info_b"), 32)
+	require.NoError(t, err)
 	assert.NotEqual(t, out1, out2, "Different info strings should produce different output")
 
-	out3 := standardHKDF(salt, nil, []byte("info_a"), 32)
+	out3, err := kdf.StandardHKDF(salt, nil, []byte("info_a"), 32)
+	require.NoError(t, err)
 	assert.NotEqual(t, out1, out3, "Different IKM should produce different output")
 }
 
@@ -636,8 +644,10 @@ func TestStandardHKDF_VariableLengths(t *testing.T) {
 	_, err := rand.Read(salt)
 	require.NoError(t, err)
 
-	out32 := standardHKDF(salt, nil, []byte("test"), 32)
-	out64 := standardHKDF(salt, nil, []byte("test"), 64)
+	out32, err := kdf.StandardHKDF(salt, nil, []byte("test"), 32)
+	require.NoError(t, err)
+	out64, err := kdf.StandardHKDF(salt, nil, []byte("test"), 64)
+	require.NoError(t, err)
 	assert.Equal(t, 32, len(out32))
 	assert.Equal(t, 64, len(out64))
 	// First 32 bytes of 64-byte output should match the 32-byte output

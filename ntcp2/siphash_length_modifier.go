@@ -4,7 +4,7 @@ import (
 	"encoding/binary"
 	"sync"
 
-	"github.com/dchest/siphash"
+	"github.com/go-i2p/crypto/siphash"
 	"github.com/go-i2p/go-noise/handshake"
 )
 

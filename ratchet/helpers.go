@@ -6,6 +6,7 @@ import (
 	"github.com/go-i2p/crypto/chacha20poly1305"
 	"github.com/go-i2p/crypto/kdf"
 	"github.com/go-i2p/crypto/ratchet"
+	"github.com/go-i2p/noise"
 	"github.com/samber/oops"
 )
 
@@ -105,9 +106,9 @@ func encryptWithSessionKey(messageKey [32]byte, plaintext []byte, sessionTag [8]
 		return nil, [16]byte{}, oops.Wrapf(err, "failed to create AEAD")
 	}
 
-	nonce := noiseNonce(uint64(messageNumber))
+	nonce := noise.BuildNonce(uint64(messageNumber))
 
-	ciphertext, tag, err = aead.Encrypt(plaintext, sessionTag[:], nonce)
+	ciphertext, tag, err = aead.Encrypt(plaintext, sessionTag[:], nonce[:])
 	if err != nil {
 		return nil, [16]byte{}, oops.Wrapf(err, "failed to encrypt existing session message")
 	}
@@ -123,9 +124,9 @@ func decryptWithSessionTag(messageKey [32]byte, ciphertext []byte, tag [16]byte,
 		return nil, oops.Wrapf(err, "failed to create AEAD")
 	}
 
-	nonce := noiseNonce(uint64(messageNumber))
+	nonce := noise.BuildNonce(uint64(messageNumber))
 
-	plaintext, err := aead.Decrypt(ciphertext, tag[:], sessionTag[:], nonce)
+	plaintext, err := aead.Decrypt(ciphertext, tag[:], sessionTag[:], nonce[:])
 	if err != nil {
 		return nil, oops.Wrapf(err, "decryption failed (authentication error)")
 	}

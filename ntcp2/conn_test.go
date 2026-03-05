@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dchest/siphash"
+	"github.com/go-i2p/crypto/siphash"
 	noise "github.com/go-i2p/go-noise"
 	"github.com/go-i2p/go-noise/handshake"
 	"github.com/stretchr/testify/assert"

@@ -8,7 +8,7 @@ import (
 
 	"github.com/go-i2p/crypto/aes"
 
-	"github.com/dchest/siphash"
+	"github.com/go-i2p/crypto/siphash"
 	"github.com/go-i2p/go-noise/handshake"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

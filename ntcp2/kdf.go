@@ -1,7 +1,6 @@
 package ntcp2
 
 import (
-	"crypto/sha256"
 	"encoding/binary"
 
 	"github.com/go-i2p/crypto/hmac"
@@ -56,16 +55,16 @@ func DeriveSipHashKeys(askMaster, handshakeHash []byte) (
 	hData := make([]byte, len(handshakeHash)+len("siphash"))
 	copy(hData, handshakeHash)
 	copy(hData[len(handshakeHash):], "siphash")
-	tempKey := hmacSHA256(askMaster, hData)
+	tempKey := hmac.HMACSHA256(askMaster, hData)
 
 	// Step 2: sip_master = HMAC-SHA256(key=temp_key, data=byte(0x01))
-	sipMaster := hmacSHA256(tempKey, []byte{0x01})
+	sipMaster := hmac.HMACSHA256(tempKey[:], []byte{0x01})
 
 	// Step 3: temp_key = HMAC-SHA256(key=sip_master, data=zerolen)
-	tempKey = hmacSHA256(sipMaster, []byte{})
+	tempKey = hmac.HMACSHA256(sipMaster[:], []byte{})
 
 	// Step 4: sipkeys_ab = HMAC-SHA256(key=temp_key, data=byte(0x01))[0:24]
-	fullAB := hmacSHA256(tempKey, []byte{0x01})
+	fullAB := hmac.HMACSHA256(tempKey[:], []byte{0x01})
 	sipKeysAB[0] = binary.LittleEndian.Uint64(fullAB[0:8])
 	sipKeysAB[1] = binary.LittleEndian.Uint64(fullAB[8:16])
 	sipIVAB = binary.LittleEndian.Uint64(fullAB[16:24])
@@ -76,7 +75,7 @@ func DeriveSipHashKeys(askMaster, handshakeHash []byte) (
 	step5Data := make([]byte, sipKeysLen+1)
 	copy(step5Data, fullAB[:sipKeysLen])
 	step5Data[sipKeysLen] = 0x02
-	fullBA := hmacSHA256(tempKey, step5Data)
+	fullBA := hmac.HMACSHA256(tempKey[:], step5Data)
 	sipKeysBA[0] = binary.LittleEndian.Uint64(fullBA[0:8])
 	sipKeysBA[1] = binary.LittleEndian.Uint64(fullBA[8:16])
 	sipIVBA = binary.LittleEndian.Uint64(fullBA[16:24])
@@ -86,11 +85,11 @@ func DeriveSipHashKeys(askMaster, handshakeHash []byte) (
 	// "overwrite sip_master in memory, no longer needed"
 	// "overwrite the temp_key in memory, no longer needed"
 	zeroBytes(hData)
-	zeroBytes(tempKey)
-	zeroBytes(sipMaster)
-	zeroBytes(fullAB)
+	zeroBytes(tempKey[:])
+	zeroBytes(sipMaster[:])
+	zeroBytes(fullAB[:])
 	zeroBytes(step5Data)
-	zeroBytes(fullBA)
+	zeroBytes(fullBA[:])
 
 	return sipKeysAB, sipIVAB, sipKeysBA, sipIVBA, nil
 }
@@ -101,11 +100,4 @@ func zeroBytes(b []byte) {
 	for i := range b {
 		b[i] = 0
 	}
-}
-
-// hmacSHA256 computes HMAC-SHA256(key, data) and returns the 32-byte result.
-func hmacSHA256(key, data []byte) []byte {
-	mac := hmac.New(sha256.New, key)
-	mac.Write(data) //nolint:errcheck // hmac.Write never returns an error
-	return mac.Sum(nil)
 }
