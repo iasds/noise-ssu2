@@ -11,6 +11,41 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// testNTCP2Listener holds a fully-wired NTCP2 listener backed by a real
+// TCP listener, with random router‐hash and config.
+type testNTCP2Listener struct {
+	listener   *NTCP2Listener
+	tcpAddr    net.Addr
+	routerHash []byte
+}
+
+// newTestNTCP2Listener creates a real TCP listener on localhost, generates a
+// random router‐hash, and wraps both in an NTCP2Listener. The TCP and NTCP2
+// listeners are registered with t.Cleanup.
+func newTestNTCP2Listener(t *testing.T) testNTCP2Listener {
+	t.Helper()
+	tcpLn, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { tcpLn.Close() })
+
+	routerHash := make([]byte, 32)
+	_, err = rand.Read(routerHash)
+	require.NoError(t, err)
+
+	config, err := NewNTCP2Config(routerHash, false)
+	require.NoError(t, err)
+
+	ln, err := NewNTCP2Listener(tcpLn, config)
+	require.NoError(t, err)
+	t.Cleanup(func() { ln.Close() })
+
+	return testNTCP2Listener{
+		listener:   ln,
+		tcpAddr:    tcpLn.Addr(),
+		routerHash: routerHash,
+	}
+}
+
 // pipedNTCP2Conn holds all the pieces created by newPipedNTCP2Conn, so
 // callers can access the raw pipe ends and the SipHash modifier, if set.
 type pipedNTCP2Conn struct {

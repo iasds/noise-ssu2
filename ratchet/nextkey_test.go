@@ -47,18 +47,7 @@ func newLinkedSessionFixture(t *testing.T) linkedSessionFixture {
 // ============================================================================
 
 func TestSession_InitialNextKeyState(t *testing.T) {
-	var pubKey, privKey [32]byte
-	_, err := rand.Read(pubKey[:])
-	require.NoError(t, err)
-	_, err = rand.Read(privKey[:])
-	require.NoError(t, err)
-
-	keys := &sessionKeys{}
-	_, _ = rand.Read(keys.rootKey[:])
-	_, _ = rand.Read(keys.tagKey[:])
-
-	session, err := createSession(pubKey, keys, privKey, true)
-	require.NoError(t, err)
+	session := createTestSession(t, true)
 
 	sendKeyID, recvKeyID, awaiting := session.NextKeyState()
 	assert.Equal(t, uint16(0), sendKeyID, "Initial sendKeyID should be 0")
@@ -69,18 +58,9 @@ func TestSession_InitialNextKeyState(t *testing.T) {
 }
 
 func TestSession_IncrementSendKeyID(t *testing.T) {
-	var pubKey, privKey [32]byte
-	_, _ = rand.Read(pubKey[:])
-	_, _ = rand.Read(privKey[:])
+	session := createTestSession(t, true)
 
-	keys := &sessionKeys{}
-	_, _ = rand.Read(keys.rootKey[:])
-	_, _ = rand.Read(keys.tagKey[:])
-
-	session, err := createSession(pubKey, keys, privKey, true)
-	require.NoError(t, err)
-
-	err = session.IncrementSendKeyID()
+	err := session.IncrementSendKeyID()
 	require.NoError(t, err)
 
 	sendKeyID, _, _ := session.NextKeyState()
@@ -88,19 +68,10 @@ func TestSession_IncrementSendKeyID(t *testing.T) {
 }
 
 func TestSession_IncrementSendKeyID_MaxReached(t *testing.T) {
-	var pubKey, privKey [32]byte
-	_, _ = rand.Read(pubKey[:])
-	_, _ = rand.Read(privKey[:])
-
-	keys := &sessionKeys{}
-	_, _ = rand.Read(keys.rootKey[:])
-	_, _ = rand.Read(keys.tagKey[:])
-
-	session, err := createSession(pubKey, keys, privKey, true)
-	require.NoError(t, err)
+	session := createTestSession(t, true)
 	session.sendKeyID = MaxKeyID
 
-	err = session.IncrementSendKeyID()
+	err := session.IncrementSendKeyID()
 	assert.Error(t, err, "Should error when key ID at maximum")
 	assert.Contains(t, err.Error(), "maximum")
 }
@@ -110,19 +81,10 @@ func TestSession_IncrementSendKeyID_MaxReached(t *testing.T) {
 // ============================================================================
 
 func TestPerformDHRatchetStep_QueuesNextKey(t *testing.T) {
-	var pubKey, privKey [32]byte
-	_, _ = rand.Read(pubKey[:])
-	_, _ = rand.Read(privKey[:])
-
-	keys := &sessionKeys{}
-	_, _ = rand.Read(keys.rootKey[:])
-	_, _ = rand.Read(keys.tagKey[:])
-
-	session, err := createSession(pubKey, keys, privKey, true)
-	require.NoError(t, err)
+	session := createTestSession(t, true)
 
 	// Perform a DH ratchet step — this should queue a NextKey block.
-	err = performDHRatchetStep(session)
+	err := performDHRatchetStep(session)
 	require.NoError(t, err)
 
 	assert.True(t, session.HasPendingNextKeys(), "Should have pending NextKey after DH rotation")
@@ -146,19 +108,10 @@ func TestPerformDHRatchetStep_QueuesNextKey(t *testing.T) {
 }
 
 func TestPerformDHRatchetStep_ConsecutiveRotations(t *testing.T) {
-	var pubKey, privKey [32]byte
-	_, _ = rand.Read(pubKey[:])
-	_, _ = rand.Read(privKey[:])
-
-	keys := &sessionKeys{}
-	_, _ = rand.Read(keys.rootKey[:])
-	_, _ = rand.Read(keys.tagKey[:])
-
-	session, err := createSession(pubKey, keys, privKey, true)
-	require.NoError(t, err)
+	session := createTestSession(t, true)
 
 	// Two consecutive DH ratchets should each queue a NextKey block.
-	err = performDHRatchetStep(session)
+	err := performDHRatchetStep(session)
 	require.NoError(t, err)
 	err = performDHRatchetStep(session)
 	require.NoError(t, err)
@@ -371,17 +324,7 @@ func TestProcessIncomingDHRatchet_MultipleRotations(t *testing.T) {
 
 func TestNextKeyExchange_FullFlow(t *testing.T) {
 	sender, receiver := createLinkedManagers(t)
-
-	var destHash [32]byte
-	copy(destHash[:], receiver.ourPublicKey[:])
-
-	// 1. Establish initial session with NS then NSR.
-	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, mustBuildNSPayload(t, []byte("init")))
-	require.NoError(t, err)
-	_, _, nkNSHash, err := receiver.DecryptGarlicMessage(enc)
-	require.NoError(t, err)
-	require.NotNil(t, nkNSHash)
-	mustCompleteNSR(t, sender, receiver, *nkNSHash)
+	destHash := mustBootstrapSession(t, sender, receiver)
 
 	// Send a baseline ES message BEFORE DH ratchet to measure payload size.
 	baselinePayload := []byte("baseline-msg")
@@ -533,20 +476,11 @@ func TestGetPublicKey_DifferentManagers(t *testing.T) {
 // Spec ref: ratchet.md §"Key and Tag Set IDs" — tag set ID advances when
 // the sender issues a new forward key.
 func TestPerformDHRatchetStep_IncrementsSendKeyID(t *testing.T) {
-	var pubKey, privKey [32]byte
-	_, _ = rand.Read(pubKey[:])
-	_, _ = rand.Read(privKey[:])
-
-	keys := &sessionKeys{}
-	_, _ = rand.Read(keys.rootKey[:])
-	_, _ = rand.Read(keys.tagKey[:])
-
-	session, err := createSession(pubKey, keys, privKey, true)
-	require.NoError(t, err)
+	session := createTestSession(t, true)
 
 	assert.Equal(t, uint16(0), session.sendKeyID, "sendKeyID must start at 0")
 
-	err = performDHRatchetStep(session)
+	err := performDHRatchetStep(session)
 	require.NoError(t, err)
 
 	assert.Equal(t, uint16(1), session.sendKeyID,
@@ -566,19 +500,10 @@ func TestPerformDHRatchetStep_IncrementsSendKeyID(t *testing.T) {
 // consecutive DH ratchet steps produce NextKey blocks with monotonically
 // increasing key IDs (0, 1, 2, …) and that sendKeyID tracks correctly.
 func TestPerformDHRatchetStep_ConsecutiveRotations_KeyIDsAdvance(t *testing.T) {
-	var pubKey, privKey [32]byte
-	_, _ = rand.Read(pubKey[:])
-	_, _ = rand.Read(privKey[:])
-
-	keys := &sessionKeys{}
-	_, _ = rand.Read(keys.rootKey[:])
-	_, _ = rand.Read(keys.tagKey[:])
-
-	session, err := createSession(pubKey, keys, privKey, true)
-	require.NoError(t, err)
+	session := createTestSession(t, true)
 
 	for i := 0; i < 3; i++ {
-		err = performDHRatchetStep(session)
+		err := performDHRatchetStep(session)
 		require.NoError(t, err, "step %d should succeed", i)
 	}
 
@@ -599,19 +524,10 @@ func TestPerformDHRatchetStep_ConsecutiveRotations_KeyIDsAdvance(t *testing.T) {
 // step is refused when sendKeyID has reached MaxKeyID, preventing key-set ID
 // overflow. Spec ref: ratchet.md §"Key and Tag Set IDs".
 func TestPerformDHRatchetStep_MaxKeyID_ReturnsError(t *testing.T) {
-	var pubKey, privKey [32]byte
-	_, _ = rand.Read(pubKey[:])
-	_, _ = rand.Read(privKey[:])
-
-	keys := &sessionKeys{}
-	_, _ = rand.Read(keys.rootKey[:])
-	_, _ = rand.Read(keys.tagKey[:])
-
-	session, err := createSession(pubKey, keys, privKey, true)
-	require.NoError(t, err)
+	session := createTestSession(t, true)
 	session.sendKeyID = MaxKeyID
 
-	err = performDHRatchetStep(session)
+	err := performDHRatchetStep(session)
 	assert.Error(t, err, "performDHRatchetStep must error when sendKeyID is at MaxKeyID")
 	assert.Contains(t, err.Error(), "maximum")
 	assert.Equal(t, uint16(MaxKeyID), session.sendKeyID,
@@ -690,21 +606,12 @@ func TestGenerateReverseNextKey_IncrementsSendKeyID(t *testing.T) {
 //
 // All three keyIDs must be distinct, preventing peer-side confusion.
 func TestForwardAndReverse_NoKeyIDCollision(t *testing.T) {
-	var pubKey, privKey [32]byte
-	_, _ = rand.Read(pubKey[:])
-	_, _ = rand.Read(privKey[:])
-
-	keys := &sessionKeys{}
-	_, _ = rand.Read(keys.rootKey[:])
-	_, _ = rand.Read(keys.tagKey[:])
-
-	session, err := createSession(pubKey, keys, privKey, true)
-	require.NoError(t, err)
+	session := createTestSession(t, true)
 
 	sm := createTestSessionManager(t)
 
 	// Step 1: Forward rotation.
-	err = performDHRatchetStep(session)
+	err := performDHRatchetStep(session)
 	require.NoError(t, err)
 	forwardBlocks := session.GetPendingNextKeys()
 	require.Len(t, forwardBlocks, 1)
@@ -763,16 +670,7 @@ func TestForwardAndReverse_NoKeyIDCollision(t *testing.T) {
 // The sendKeyID=MaxKeyID trick forces performDHRatchetStep to error without
 // needing to mock the DH ratchet or break heap state.
 func TestAttemptDHRatchetRotation_FailOnce_ContinuesSymRatchet(t *testing.T) {
-	var pubKey, privKey [32]byte
-	_, _ = rand.Read(pubKey[:])
-	_, _ = rand.Read(privKey[:])
-
-	keys := &sessionKeys{}
-	_, _ = rand.Read(keys.rootKey[:])
-	_, _ = rand.Read(keys.tagKey[:])
-
-	session, err := createSession(pubKey, keys, privKey, true)
-	require.NoError(t, err)
+	session := createTestSession(t, true)
 
 	// One increment will bring dhRatchetCounter to DHRatchetInterval, triggering
 	// the ratchet‐step attempt.
@@ -795,16 +693,7 @@ func TestAttemptDHRatchetRotation_FailOnce_ContinuesSymRatchet(t *testing.T) {
 // the caller can tear down the session rather than silently forfeiting forward
 // secrecy indefinitely.
 func TestAttemptDHRatchetRotation_MaxConsecutiveFailures_ReturnsError(t *testing.T) {
-	var pubKey, privKey [32]byte
-	_, _ = rand.Read(pubKey[:])
-	_, _ = rand.Read(privKey[:])
-
-	keys := &sessionKeys{}
-	_, _ = rand.Read(keys.rootKey[:])
-	_, _ = rand.Read(keys.tagKey[:])
-
-	session, err := createSession(pubKey, keys, privKey, true)
-	require.NoError(t, err)
+	session := createTestSession(t, true)
 
 	// Pre-fill so one more failure crosses the threshold.
 	session.dhRatchetCounter = DHRatchetInterval - 1
@@ -824,16 +713,7 @@ func TestAttemptDHRatchetRotation_MaxConsecutiveFailures_ReturnsError(t *testing
 // DH ratchet step is attempted and nil is returned immediately.
 // This covers the fast path that runs for the vast majority of messages.
 func TestAttemptDHRatchetRotation_BelowInterval_NoRatchetAttempted(t *testing.T) {
-	var pubKey, privKey [32]byte
-	_, _ = rand.Read(pubKey[:])
-	_, _ = rand.Read(privKey[:])
-
-	keys := &sessionKeys{}
-	_, _ = rand.Read(keys.rootKey[:])
-	_, _ = rand.Read(keys.tagKey[:])
-
-	session, err := createSession(pubKey, keys, privKey, true)
-	require.NoError(t, err)
+	session := createTestSession(t, true)
 
 	// Counter starts at 0; first increment → 1, which is < DHRatchetInterval (50).
 	initialKeyID := session.sendKeyID
@@ -882,15 +762,7 @@ func lookupSessionByAnyTag(t testing.TB, sm *SessionManager) *Session {
 // TestPrependPendingNextKeys_NoPending verifies the zero-copy fast path:
 // when no NextKey blocks are pending, the original plaintext slice is returned.
 func TestPrependPendingNextKeys_NoPending(t *testing.T) {
-	var pubKey, privKey [32]byte
-	_, _ = rand.Read(pubKey[:])
-	_, _ = rand.Read(privKey[:])
-	keys := &sessionKeys{}
-	_, _ = rand.Read(keys.rootKey[:])
-	_, _ = rand.Read(keys.tagKey[:])
-
-	session, err := createSession(pubKey, keys, privKey, true)
-	require.NoError(t, err)
+	session := createTestSession(t, true)
 
 	original := []byte("hello world")
 	result, err := prependPendingNextKeys(session, original)
@@ -902,15 +774,7 @@ func TestPrependPendingNextKeys_NoPending(t *testing.T) {
 // are serialized and prepended to the plaintext. The resulting payload should
 // parse into the NextKey block(s) followed by the original data.
 func TestPrependPendingNextKeys_WithBlocks(t *testing.T) {
-	var pubKey, privKey [32]byte
-	_, _ = rand.Read(pubKey[:])
-	_, _ = rand.Read(privKey[:])
-	keys := &sessionKeys{}
-	_, _ = rand.Read(keys.rootKey[:])
-	_, _ = rand.Read(keys.tagKey[:])
-
-	session, err := createSession(pubKey, keys, privKey, true)
-	require.NoError(t, err)
+	session := createTestSession(t, true)
 
 	// Queue a forward NextKey block manually.
 	var testPub [32]byte

@@ -19,25 +19,11 @@ import (
 // TestNTCP2ConfigBuilderMethods, TestNTCP2ConfigComprehensiveValidation, etc.
 
 func TestNewNTCP2Listener(t *testing.T) {
-	// Create TCP listener for testing
-	tcpListener, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	defer tcpListener.Close()
+	tl := newTestNTCP2Listener(t)
 
-	routerHash := make([]byte, 32)
-	_, err = rand.Read(routerHash)
-	require.NoError(t, err)
-
-	config, err := NewNTCP2Config(routerHash, false)
-	require.NoError(t, err)
-
-	listener, err := NewNTCP2Listener(tcpListener, config)
-	require.NoError(t, err)
-	defer listener.Close()
-
-	assert.NotNil(t, listener)
-	assert.NotNil(t, listener.Addr())
-	assert.Equal(t, "ntcp2", listener.Addr().Network())
+	assert.NotNil(t, tl.listener)
+	assert.NotNil(t, tl.listener.Addr())
+	assert.Equal(t, "ntcp2", tl.listener.Addr().Network())
 }
 
 func TestNewNTCP2ListenerErrors(t *testing.T) {
@@ -100,93 +86,47 @@ func TestNewNTCP2ListenerErrors(t *testing.T) {
 }
 
 func TestNTCP2ListenerAddr(t *testing.T) {
-	tcpListener, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	defer tcpListener.Close()
+	tl := newTestNTCP2Listener(t)
 
-	routerHash := make([]byte, 32)
-	_, err = rand.Read(routerHash)
-	require.NoError(t, err)
-
-	config, err := NewNTCP2Config(routerHash, false)
-	require.NoError(t, err)
-
-	listener, err := NewNTCP2Listener(tcpListener, config)
-	require.NoError(t, err)
-	defer listener.Close()
-
-	addr := listener.Addr()
+	addr := tl.listener.Addr()
 	assert.NotNil(t, addr)
 	assert.Equal(t, "ntcp2", addr.Network())
 
 	// Should be NTCP2Addr
 	ntcp2Addr, ok := addr.(*NTCP2Addr)
 	assert.True(t, ok)
-	assert.Equal(t, routerHash, ntcp2Addr.routerHash)
+	assert.Equal(t, tl.routerHash, ntcp2Addr.routerHash)
 	assert.Equal(t, "responder", ntcp2Addr.role)
 }
 
 func TestNTCP2ListenerClose(t *testing.T) {
-	tcpListener, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-
-	routerHash := make([]byte, 32)
-	_, err = rand.Read(routerHash)
-	require.NoError(t, err)
-
-	config, err := NewNTCP2Config(routerHash, false)
-	require.NoError(t, err)
-
-	listener, err := NewNTCP2Listener(tcpListener, config)
-	require.NoError(t, err)
+	tl := newTestNTCP2Listener(t)
 
 	// Close should work
-	err = listener.Close()
+	err := tl.listener.Close()
 	assert.NoError(t, err)
 
 	// Second close should also work (idempotent)
-	err = listener.Close()
+	err = tl.listener.Close()
 	assert.NoError(t, err)
 }
 
 func TestNTCP2ListenerAcceptAfterClose(t *testing.T) {
-	tcpListener, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-
-	routerHash := make([]byte, 32)
-	_, err = rand.Read(routerHash)
-	require.NoError(t, err)
-
-	config, err := NewNTCP2Config(routerHash, false)
-	require.NoError(t, err)
-
-	listener, err := NewNTCP2Listener(tcpListener, config)
-	require.NoError(t, err)
+	tl := newTestNTCP2Listener(t)
 
 	// Close the listener
-	err = listener.Close()
+	err := tl.listener.Close()
 	require.NoError(t, err)
 
 	// Accept should return error
-	conn, err := listener.Accept()
+	conn, err := tl.listener.Accept()
 	assert.Error(t, err)
 	assert.Nil(t, conn)
 	assert.Contains(t, err.Error(), "ntcp2 listener is closed")
 }
 
 func TestNTCP2ListenerConcurrentClose(t *testing.T) {
-	tcpListener, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-
-	routerHash := make([]byte, 32)
-	_, err = rand.Read(routerHash)
-	require.NoError(t, err)
-
-	config, err := NewNTCP2Config(routerHash, false)
-	require.NoError(t, err)
-
-	listener, err := NewNTCP2Listener(tcpListener, config)
-	require.NoError(t, err)
+	tl := newTestNTCP2Listener(t)
 
 	// Test concurrent close operations
 	var wg sync.WaitGroup
@@ -196,14 +136,14 @@ func TestNTCP2ListenerConcurrentClose(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			listener.Close()
+			tl.listener.Close()
 		}()
 	}
 
 	wg.Wait()
 
 	// Listener should be closed
-	conn, err := listener.Accept()
+	conn, err := tl.listener.Accept()
 	assert.Error(t, err)
 	assert.Nil(t, conn)
 }

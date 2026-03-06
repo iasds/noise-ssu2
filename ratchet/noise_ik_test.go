@@ -16,6 +16,41 @@ import (
 // Noise IK Handshake State
 // ============================================================================
 
+// noiseIKHandshakePair holds both sides of a Noise IK handshake after message 1
+// has been written and read, ready for message 2 (NSR).
+type noiseIKHandshakePair struct {
+	initiator *SessionManager
+	responder *SessionManager
+	iHS       *noiseHandshakeState
+	rHS       *noiseHandshakeState
+}
+
+// setupNoiseIKHandshake creates an initiator and responder, writes and reads
+// Noise IK message 1 ("ns"), and returns the handshake states for message 2.
+func setupNoiseIKHandshake(t testing.TB) noiseIKHandshakePair {
+	t.Helper()
+	initiator := createTestSessionManager(t)
+	responder := createTestSessionManager(t)
+
+	msg1, _, iHS, err := writeNoiseIKMessage1(
+		initiator.ourPrivateKey, initiator.ourPublicKey,
+		responder.ourPublicKey, []byte("ns"),
+	)
+	require.NoError(t, err)
+
+	_, _, _, rHS, _, err := readNoiseIKMessage1(
+		responder.ourPrivateKey, responder.ourPublicKey, msg1,
+	)
+	require.NoError(t, err)
+
+	return noiseIKHandshakePair{
+		initiator: initiator,
+		responder: responder,
+		iHS:       iHS,
+		rHS:       rHS,
+	}
+}
+
 // hashPubKey computes SHA-256(pubKey) to create a session hash, matching
 // how session_manager.go uses types.SHA256 for session lookup keys.
 func hashPubKey(pub [32]byte) [32]byte {
@@ -748,27 +783,15 @@ func TestWriteReadNoiseIKMessage2_Roundtrip(t *testing.T) {
 }
 
 func TestWriteReadNoiseIKMessage2_EmptyPayload(t *testing.T) {
-	initiator := createTestSessionManager(t)
-	responder := createTestSessionManager(t)
+	hp := setupNoiseIKHandshake(t)
 
-	msg1, _, iHS, err := writeNoiseIKMessage1(
-		initiator.ourPrivateKey, initiator.ourPublicKey,
-		responder.ourPublicKey, []byte("ns"),
-	)
-	require.NoError(t, err)
-
-	_, _, _, rHS, _, err := readNoiseIKMessage1(
-		responder.ourPrivateKey, responder.ourPublicKey, msg1,
-	)
-	require.NoError(t, err)
-
-	_, nsrWire, _, err := writeNoiseIKMessage2(rHS, []byte{})
+	_, nsrWire, _, err := writeNoiseIKMessage2(hp.rHS, []byte{})
 	require.NoError(t, err)
 
 	// Minimum NSR size: 8 + 32 + 16 + 16 = 72
 	assert.Equal(t, nsrMinMessageSize, len(nsrWire))
 
-	decrypted, _, err := readNoiseIKMessage2(iHS, initiator.ourPrivateKey, nsrWire)
+	decrypted, _, err := readNoiseIKMessage2(hp.iHS, hp.initiator.ourPrivateKey, nsrWire)
 	require.NoError(t, err)
 	assert.Empty(t, decrypted)
 }
@@ -784,44 +807,21 @@ func TestReadNoiseIKMessage2_TooShort(t *testing.T) {
 }
 
 func TestReadNoiseIKMessage2_TamperedMessage(t *testing.T) {
-	initiator := createTestSessionManager(t)
-	responder := createTestSessionManager(t)
+	hp := setupNoiseIKHandshake(t)
 
-	msg1, _, iHS, err := writeNoiseIKMessage1(
-		initiator.ourPrivateKey, initiator.ourPublicKey,
-		responder.ourPublicKey, []byte("ns"),
-	)
-	require.NoError(t, err)
-
-	_, _, _, rHS, _, err := readNoiseIKMessage1(
-		responder.ourPrivateKey, responder.ourPublicKey, msg1,
-	)
-	require.NoError(t, err)
-
-	_, nsrWire, _, err := writeNoiseIKMessage2(rHS, []byte("nsr payload"))
+	_, nsrWire, _, err := writeNoiseIKMessage2(hp.rHS, []byte("nsr payload"))
 	require.NoError(t, err)
 
 	// Tamper with the key section MAC
 	nsrWire[42] ^= 0xFF
 
-	_, _, err = readNoiseIKMessage2(iHS, initiator.ourPrivateKey, nsrWire)
+	_, _, err = readNoiseIKMessage2(hp.iHS, hp.initiator.ourPrivateKey, nsrWire)
 	assert.Error(t, err, "Tampered NSR should fail authentication")
 }
 
 func TestWriteNoiseIKMessage2_NonDeterministic(t *testing.T) {
-	initiator := createTestSessionManager(t)
-	responder := createTestSessionManager(t)
-
-	msg1, _, _, err := writeNoiseIKMessage1(
-		initiator.ourPrivateKey, initiator.ourPublicKey,
-		responder.ourPublicKey, []byte("ns"),
-	)
-	require.NoError(t, err)
-
-	_, _, _, rHS, _, err := readNoiseIKMessage1(
-		responder.ourPrivateKey, responder.ourPublicKey, msg1,
-	)
-	require.NoError(t, err)
+	hp := setupNoiseIKHandshake(t)
+	rHS := hp.rHS
 
 	// Write two NSR messages from same state — different ephemeral keys each time
 	_, wire1, _, err := writeNoiseIKMessage2(rHS, []byte("nsr"))

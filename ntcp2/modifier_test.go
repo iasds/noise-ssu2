@@ -14,6 +14,32 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// assertSipHashRoundTrip verifies that sender.ModifyOutbound → receiver.ModifyInbound
+// produces the original length for `count` iterations starting at `baseLen` with
+// the given step. msgFmt is a format string receiving (index, original, got).
+func assertSipHashRoundTrip(
+	t testing.TB,
+	sender, receiver handshake.HandshakeModifier,
+	count int, baseLen, step int,
+	msgFmt string,
+) {
+	t.Helper()
+	for i := 0; i < count; i++ {
+		original := uint16(baseLen + i*step)
+		data := make([]byte, 2)
+		binary.BigEndian.PutUint16(data, original)
+
+		obfuscated, err := sender.ModifyOutbound(handshake.PhaseFinal, data)
+		require.NoError(t, err)
+
+		recovered, err := receiver.ModifyInbound(handshake.PhaseFinal, obfuscated)
+		require.NoError(t, err)
+
+		got := binary.BigEndian.Uint16(recovered)
+		assert.Equal(t, original, got, msgFmt, i, original, got)
+	}
+}
+
 func TestAESObfuscationModifier_Creation(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -902,21 +928,8 @@ func TestAudit_SipHashOutboundInbound_Symmetric(t *testing.T) {
 
 	mod := NewSipHashLengthModifier("sym_test", sipKeys, initialIV)
 
-	for i := 0; i < 10; i++ {
-		original := uint16(100 + i*50)
-		data := make([]byte, 2)
-		binary.BigEndian.PutUint16(data, original)
-
-		obfuscated, err := mod.ModifyOutbound(handshake.PhaseFinal, data)
-		require.NoError(t, err)
-
-		recovered, err := mod.ModifyInbound(handshake.PhaseFinal, obfuscated)
-		require.NoError(t, err)
-
-		got := binary.BigEndian.Uint16(recovered)
-		assert.Equal(t, original, got,
-			"Round-trip at step %d failed: original=%d, got=%d", i, original, got)
-	}
+	assertSipHashRoundTrip(t, mod, mod, 10, 100, 50,
+		"Round-trip at step %d failed: original=%d, got=%d")
 }
 
 func TestAudit_Quality_32BitModulus(t *testing.T) {
@@ -1030,40 +1043,14 @@ func TestAudit_SipHashDirectional_RoundTrip(t *testing.T) {
 	initiator := NewSipHashLengthModifierDirectional("alice", keysAB, keysBA, ivAB, ivBA)
 	responder := NewSipHashLengthModifierDirectional("bob", keysBA, keysAB, ivBA, ivAB)
 
-	for i := 0; i < 50; i++ {
-		originalLen := uint16(100 + i*7)
-		data := make([]byte, 2)
-		binary.BigEndian.PutUint16(data, originalLen)
-
-		obfuscated, err := initiator.ModifyOutbound(handshake.PhaseFinal, data)
-		require.NoError(t, err)
-
-		recovered, err := responder.ModifyInbound(handshake.PhaseFinal, obfuscated)
-		require.NoError(t, err)
-
-		got := binary.BigEndian.Uint16(recovered)
-		assert.Equal(t, originalLen, got,
-			"Directional round-trip failed at frame %d: original=%d, got=%d", i, originalLen, got)
-	}
+	assertSipHashRoundTrip(t, initiator, responder, 50, 100, 7,
+		"Directional round-trip failed at frame %d: original=%d, got=%d")
 
 	responder2 := NewSipHashLengthModifierDirectional("bob2", keysBA, keysAB, ivBA, ivAB)
 	initiator2 := NewSipHashLengthModifierDirectional("alice2", keysAB, keysBA, ivAB, ivBA)
 
-	for i := 0; i < 50; i++ {
-		originalLen := uint16(200 + i*3)
-		data := make([]byte, 2)
-		binary.BigEndian.PutUint16(data, originalLen)
-
-		obfuscated, err := responder2.ModifyOutbound(handshake.PhaseFinal, data)
-		require.NoError(t, err)
-
-		recovered, err := initiator2.ModifyInbound(handshake.PhaseFinal, obfuscated)
-		require.NoError(t, err)
-
-		got := binary.BigEndian.Uint16(recovered)
-		assert.Equal(t, originalLen, got,
-			"Reverse round-trip failed at frame %d: original=%d, got=%d", i, originalLen, got)
-	}
+	assertSipHashRoundTrip(t, responder2, initiator2, 50, 200, 3,
+		"Reverse round-trip failed at frame %d: original=%d, got=%d")
 }
 
 func TestAudit_SipHashDirectional_KeysMatter(t *testing.T) {
