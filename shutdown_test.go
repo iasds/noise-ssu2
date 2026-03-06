@@ -91,57 +91,57 @@ func TestGlobalShutdownFunctions(t *testing.T) {
 func TestNoiseConnShutdownManagerIntegration(t *testing.T) {
 	sm := NewShutdownManager(5 * time.Second)
 
-	// Create a real NoiseConn for testing
 	mockConn := &mockNetConn{}
 	config := NewConnConfig("NN", true)
-
 	noiseConn, err := NewNoiseConn(mockConn, config)
 	require.NoError(t, err)
 
-	// Set shutdown manager
 	noiseConn.SetShutdownManager(sm)
+	assertShutdownRegistered(t, sm, noiseConn, true)
 
-	// Verify registration
-	sm.mu.RLock()
-	assert.Contains(t, sm.connections, noiseConn)
-	sm.mu.RUnlock()
-
-	// Close connection
 	err = noiseConn.Close()
 	assert.NoError(t, err)
-
-	// Verify unregistration
-	sm.mu.RLock()
-	assert.NotContains(t, sm.connections, noiseConn)
-	sm.mu.RUnlock()
+	assertShutdownRegistered(t, sm, noiseConn, false)
 }
 
 func TestNoiseListenerShutdownManagerIntegration(t *testing.T) {
 	sm := NewShutdownManager(5 * time.Second)
 
-	// Create a real NoiseListener for testing
-	mockListener := &mockListener{
+	ml := &mockListener{
 		addr: &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 8080},
 	}
 	config := NewListenerConfig("NN")
-
-	noiseListener, err := NewNoiseListener(mockListener, config)
+	noiseListener, err := NewNoiseListener(ml, config)
 	require.NoError(t, err)
 
-	// Set shutdown manager
 	noiseListener.SetShutdownManager(sm)
+	assertShutdownRegistered(t, sm, noiseListener, true)
 
-	// Verify registration
-	sm.mu.RLock()
-	assert.Contains(t, sm.listeners, noiseListener)
-	sm.mu.RUnlock()
-
-	// Close listener
 	err = noiseListener.Close()
 	assert.NoError(t, err)
+	assertShutdownRegistered(t, sm, noiseListener, false)
+}
 
-	// Verify unregistration
+// assertShutdownRegistered checks whether a resource (conn or listener) is
+// present in (or absent from) the shutdown manager's tracked set.
+func assertShutdownRegistered(t *testing.T, sm *ShutdownManager, resource interface{}, expected bool) {
+	t.Helper()
 	sm.mu.RLock()
-	assert.NotContains(t, sm.listeners, noiseListener)
-	sm.mu.RUnlock()
+	defer sm.mu.RUnlock()
+	switch v := resource.(type) {
+	case *NoiseConn:
+		if expected {
+			assert.Contains(t, sm.connections, v)
+		} else {
+			assert.NotContains(t, sm.connections, v)
+		}
+	case *NoiseListener:
+		if expected {
+			assert.Contains(t, sm.listeners, v)
+		} else {
+			assert.NotContains(t, sm.listeners, v)
+		}
+	default:
+		t.Fatalf("unsupported resource type: %T", resource)
+	}
 }

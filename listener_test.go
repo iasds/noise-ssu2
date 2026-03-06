@@ -14,6 +14,34 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// newTestNoiseListenerFromTCP creates a NoiseListener backed by a real TCP listener
+// with a random static key and the given pattern. Caller must close the returned listener.
+func newTestNoiseListenerFromTCP(t *testing.T, pattern string) *NoiseListener {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	staticKey := make([]byte, 32)
+	_, err = rand.Read(staticKey)
+	require.NoError(t, err)
+	config := NewListenerConfig(pattern).WithStaticKey(staticKey)
+	noiseListener, err := NewNoiseListener(listener, config)
+	require.NoError(t, err)
+	return noiseListener
+}
+
+// newTestNoiseListenerFromMock creates a NoiseListener backed by a mockListener
+// with a random static key and the given pattern.
+func newTestNoiseListenerFromMock(t *testing.T, pattern string, ml *mockListener) *NoiseListener {
+	t.Helper()
+	staticKey := make([]byte, 32)
+	_, err := rand.Read(staticKey)
+	require.NoError(t, err)
+	config := NewListenerConfig(pattern).WithStaticKey(staticKey)
+	noiseListener, err := NewNoiseListener(ml, config)
+	require.NoError(t, err)
+	return noiseListener
+}
+
 func TestNewListenerConfig(t *testing.T) {
 	config := NewListenerConfig("XX")
 
@@ -210,17 +238,7 @@ func TestNewNoiseListener(t *testing.T) {
 }
 
 func TestNoiseListenerAddr(t *testing.T) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	defer listener.Close()
-
-	staticKey := make([]byte, 32)
-	_, err = rand.Read(staticKey)
-	require.NoError(t, err)
-
-	config := NewListenerConfig("XX").WithStaticKey(staticKey)
-	noiseListener, err := NewNoiseListener(listener, config)
-	require.NoError(t, err)
+	noiseListener := newTestNoiseListenerFromTCP(t, "XX")
 	defer noiseListener.Close()
 
 	addr := noiseListener.Addr()
@@ -230,23 +248,14 @@ func TestNoiseListenerAddr(t *testing.T) {
 	assert.Equal(t, "noise+tcp", noiseAddr.Network())
 	assert.Contains(t, noiseAddr.String(), "XX")
 	assert.Contains(t, noiseAddr.String(), "responder")
-	assert.Contains(t, noiseAddr.String(), listener.Addr().String())
+	assert.Contains(t, noiseAddr.String(), "127.0.0.1")
 }
 
 func TestNoiseListenerClose(t *testing.T) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-
-	staticKey := make([]byte, 32)
-	_, err = rand.Read(staticKey)
-	require.NoError(t, err)
-
-	config := NewListenerConfig("XX").WithStaticKey(staticKey)
-	noiseListener, err := NewNoiseListener(listener, config)
-	require.NoError(t, err)
+	noiseListener := newTestNoiseListenerFromTCP(t, "XX")
 
 	// Close should succeed
-	err = noiseListener.Close()
+	err := noiseListener.Close()
 	assert.NoError(t, err)
 
 	// Second close should also succeed (idempotent)
@@ -260,19 +269,10 @@ func TestNoiseListenerClose(t *testing.T) {
 }
 
 func TestNoiseListenerAcceptAfterClose(t *testing.T) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-
-	staticKey := make([]byte, 32)
-	_, err = rand.Read(staticKey)
-	require.NoError(t, err)
-
-	config := NewListenerConfig("XX").WithStaticKey(staticKey)
-	noiseListener, err := NewNoiseListener(listener, config)
-	require.NoError(t, err)
+	noiseListener := newTestNoiseListenerFromTCP(t, "XX")
 
 	// Close the listener
-	err = noiseListener.Close()
+	err := noiseListener.Close()
 	require.NoError(t, err)
 
 	// Accept should return error
@@ -319,20 +319,13 @@ func (ml *mockListener) Addr() net.Addr {
 
 func TestNoiseListenerAcceptError(t *testing.T) {
 	addr := &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 8080}
-	mockListener := &mockListener{
+	ml := &mockListener{
 		addr: addr,
 		acceptFunc: func() (net.Conn, error) {
 			return nil, assert.AnError
 		},
 	}
-
-	staticKey := make([]byte, 32)
-	_, err := rand.Read(staticKey)
-	require.NoError(t, err)
-
-	config := NewListenerConfig("XX").WithStaticKey(staticKey)
-	noiseListener, err := NewNoiseListener(mockListener, config)
-	require.NoError(t, err)
+	noiseListener := newTestNoiseListenerFromMock(t, "XX", ml)
 	defer noiseListener.Close()
 
 	conn, err := noiseListener.Accept()
@@ -342,16 +335,7 @@ func TestNoiseListenerAcceptError(t *testing.T) {
 }
 
 func TestNoiseListenerConcurrentOperations(t *testing.T) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-
-	staticKey := make([]byte, 32)
-	_, err = rand.Read(staticKey)
-	require.NoError(t, err)
-
-	config := NewListenerConfig("XX").WithStaticKey(staticKey)
-	noiseListener, err := NewNoiseListener(listener, config)
-	require.NoError(t, err)
+	noiseListener := newTestNoiseListenerFromTCP(t, "XX")
 
 	// Test concurrent close operations
 	var wg sync.WaitGroup
@@ -375,17 +359,7 @@ func TestNoiseListenerConcurrentOperations(t *testing.T) {
 
 func TestNoiseListenerNetworkInterface(t *testing.T) {
 	// Verify NoiseListener implements net.Listener interface
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	defer listener.Close()
-
-	staticKey := make([]byte, 32)
-	_, err = rand.Read(staticKey)
-	require.NoError(t, err)
-
-	config := NewListenerConfig("XX").WithStaticKey(staticKey)
-	noiseListener, err := NewNoiseListener(listener, config)
-	require.NoError(t, err)
+	noiseListener := newTestNoiseListenerFromTCP(t, "XX")
 	defer noiseListener.Close()
 
 	// Verify it implements net.Listener
@@ -404,7 +378,7 @@ func TestNoiseListenerNetworkInterface(t *testing.T) {
 		noiseListener.Close()
 	}()
 
-	_, err = noiseListener.Accept()
+	_, err := noiseListener.Accept()
 	// Should get an error due to timeout/close, but that's expected
 	assert.Error(t, err)
 }
@@ -672,16 +646,7 @@ func TestNoiseListenerAcceptNoModifiers(t *testing.T) {
 // --- Test isClosed() is thread-safe ---
 
 func TestNoiseListenerIsClosedThreadSafe(t *testing.T) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-
-	staticKey := make([]byte, 32)
-	_, err = rand.Read(staticKey)
-	require.NoError(t, err)
-
-	config := NewListenerConfig("XX").WithStaticKey(staticKey)
-	noiseListener, err := NewNoiseListener(listener, config)
-	require.NoError(t, err)
+	noiseListener := newTestNoiseListenerFromTCP(t, "XX")
 
 	// Concurrent readers calling isClosed() while a writer calls Close()
 	// should not deadlock or panic.
@@ -723,17 +688,7 @@ func TestNoiseListenerIsClosedThreadSafe(t *testing.T) {
 // --- Test concurrent Accept without acceptMutex serialization ---
 
 func TestNoiseListenerConcurrentAccepts(t *testing.T) {
-	// Create a real TCP listener
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-
-	staticKey := make([]byte, 32)
-	_, err = rand.Read(staticKey)
-	require.NoError(t, err)
-
-	config := NewListenerConfig("XX").WithStaticKey(staticKey)
-	noiseListener, err := NewNoiseListener(listener, config)
-	require.NoError(t, err)
+	noiseListener := newTestNoiseListenerFromTCP(t, "XX")
 	defer noiseListener.Close()
 
 	const numAcceptors = 3
@@ -758,9 +713,10 @@ func TestNoiseListenerConcurrentAccepts(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// Connect clients
+	listenAddr := noiseListener.Addr().(*NoiseAddr).Underlying().String()
 	for i := 0; i < numConnections; i++ {
 		go func() {
-			conn, err := net.Dial("tcp", listener.Addr().String())
+			conn, err := net.Dial("tcp", listenAddr)
 			if err == nil {
 				defer conn.Close()
 				time.Sleep(200 * time.Millisecond)

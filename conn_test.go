@@ -321,26 +321,31 @@ func TestNoiseConnAddresses(t *testing.T) {
 }
 
 func TestNoiseConnDeadlines(t *testing.T) {
-	conn, _ := newTestNoiseConn(t, "XX", true)
-
-	deadline := time.Now().Add(time.Hour)
-
-	// Test SetDeadline
-	err := conn.SetDeadline(deadline)
-	if err != nil {
-		t.Errorf("SetDeadline should not error: %v", err)
+	tests := []struct {
+		name    string
+		pattern string
+	}{
+		{"basic deadlines", "XX"},
+		{"deadline errors passthrough", "XX"},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			conn, _ := newTestNoiseConn(t, tt.pattern, true)
+			deadline := time.Now().Add(time.Hour)
 
-	// Test SetReadDeadline
-	err = conn.SetReadDeadline(deadline)
-	if err != nil {
-		t.Errorf("SetReadDeadline should not error: %v", err)
-	}
-
-	// Test SetWriteDeadline
-	err = conn.SetWriteDeadline(deadline)
-	if err != nil {
-		t.Errorf("SetWriteDeadline should not error: %v", err)
+			err := conn.SetDeadline(deadline)
+			if err != nil {
+				t.Errorf("SetDeadline should not error: %v", err)
+			}
+			err = conn.SetReadDeadline(deadline)
+			if err != nil {
+				t.Errorf("SetReadDeadline should not error: %v", err)
+			}
+			err = conn.SetWriteDeadline(deadline)
+			if err != nil {
+				t.Errorf("SetWriteDeadline should not error: %v", err)
+			}
+		})
 	}
 }
 
@@ -562,29 +567,6 @@ func TestNoiseConnConcurrentClose(t *testing.T) {
 
 	if successCount == 0 {
 		t.Errorf("At least one close operation should succeed")
-	}
-}
-
-func TestNoiseConnDeadlineErrors(t *testing.T) {
-	conn, _ := newTestNoiseConn(t, "XX", true)
-
-	deadline := time.Now().Add(time.Hour)
-
-	// These should pass through to the underlying connection
-	// Our mock implementation returns nil, so these should succeed
-	err := conn.SetDeadline(deadline)
-	if err != nil {
-		t.Errorf("SetDeadline should not error: %v", err)
-	}
-
-	err = conn.SetReadDeadline(deadline)
-	if err != nil {
-		t.Errorf("SetReadDeadline should not error: %v", err)
-	}
-
-	err = conn.SetWriteDeadline(deadline)
-	if err != nil {
-		t.Errorf("SetWriteDeadline should not error: %v", err)
 	}
 }
 
@@ -1197,69 +1179,80 @@ func TestGetModifierChain_NoModifiers(t *testing.T) {
 
 // TestGetModifierChain_WithModifier checks non-nil chain is returned when a modifier is configured.
 func TestGetModifierChain_WithModifier(t *testing.T) {
-	localAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8001"}
-	remoteAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8002"}
-	mod := &trackingModifier{}
-	cfg := NewConnConfig("NN", true).WithModifiers(mod)
-	nc, err := NewNoiseConn(newMockNetConn(localAddr, remoteAddr), cfg)
-	require.NoError(t, err)
+	nc, _ := newTestNoiseConnWithModifier(t)
 	require.NotNil(t, nc.GetModifierChain(), "expected non-nil modifier chain")
 }
 
 // TestApplyOutboundModifier_NoChain verifies passthrough when no chain is configured.
-func TestApplyOutboundModifier_NoChain(t *testing.T) {
-	nc, _ := newTestNoiseConn(t, "NN", true)
-	data := []byte("hello")
-	got, err := nc.applyOutboundModifier(data)
-	require.NoError(t, err)
-	require.Equal(t, data, got, "passthrough expected with no modifier chain")
+func TestApplyModifier_NoChain(t *testing.T) {
+	tests := []struct {
+		name string
+		fn   func(nc *NoiseConn, data []byte) ([]byte, error)
+	}{
+		{"outbound", (*NoiseConn).applyOutboundModifier},
+		{"inbound", (*NoiseConn).applyInboundModifier},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			nc, _ := newTestNoiseConn(t, "NN", true)
+			data := []byte("hello")
+			got, err := tt.fn(nc, data)
+			require.NoError(t, err)
+			require.Equal(t, data, got, "passthrough expected with no modifier chain")
+		})
+	}
 }
 
-// TestApplyInboundModifier_NoChain verifies passthrough when no chain is configured.
-func TestApplyInboundModifier_NoChain(t *testing.T) {
-	nc, _ := newTestNoiseConn(t, "NN", true)
-	data := []byte("hello")
-	got, err := nc.applyInboundModifier(data)
-	require.NoError(t, err)
-	require.Equal(t, data, got, "passthrough expected with no modifier chain")
-}
-
-// TestApplyOutboundModifier_InvokesPhaseData verifies ModifyOutbound is called with PhaseData.
-func TestApplyOutboundModifier_InvokesPhaseData(t *testing.T) {
+// newTestNoiseConnWithModifier creates a NoiseConn with a tracking modifier for modifier tests.
+func newTestNoiseConnWithModifier(t *testing.T) (*NoiseConn, *trackingModifier) {
+	t.Helper()
 	localAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8001"}
 	remoteAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8002"}
 	mod := &trackingModifier{}
 	cfg := NewConnConfig("NN", true).WithModifiers(mod)
 	nc, err := NewNoiseConn(newMockNetConn(localAddr, remoteAddr), cfg)
 	require.NoError(t, err)
-
-	data := []byte("outbound payload")
-	_, err = nc.applyOutboundModifier(data)
-	require.NoError(t, err)
-
-	mod.mu.Lock()
-	defer mod.mu.Unlock()
-	require.Len(t, mod.outboundCalls, 1, "expected one outbound call")
-	assert.Equal(t, handshake.PhaseData, mod.outboundCalls[0].phase, "expected PhaseData")
-	assert.Equal(t, data, mod.outboundCalls[0].data, "expected original data")
+	return nc, mod
 }
 
-// TestApplyInboundModifier_InvokesPhaseData verifies ModifyInbound is called with PhaseData.
-func TestApplyInboundModifier_InvokesPhaseData(t *testing.T) {
-	localAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8001"}
-	remoteAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8002"}
-	mod := &trackingModifier{}
-	cfg := NewConnConfig("NN", true).WithModifiers(mod)
-	nc, err := NewNoiseConn(newMockNetConn(localAddr, remoteAddr), cfg)
-	require.NoError(t, err)
+// TestApplyModifier_InvokesPhaseData verifies ModifyOutbound/ModifyInbound is called with PhaseData.
+func TestApplyModifier_InvokesPhaseData(t *testing.T) {
+	tests := []struct {
+		name     string
+		payload  string
+		apply    func(nc *NoiseConn, data []byte) ([]byte, error)
+		getCalls func(mod *trackingModifier) []callRecord
+	}{
+		{
+			name:    "outbound",
+			payload: "outbound payload",
+			apply:   (*NoiseConn).applyOutboundModifier,
+			getCalls: func(mod *trackingModifier) []callRecord {
+				return mod.outboundCalls
+			},
+		},
+		{
+			name:    "inbound",
+			payload: "inbound payload",
+			apply:   (*NoiseConn).applyInboundModifier,
+			getCalls: func(mod *trackingModifier) []callRecord {
+				return mod.inboundCalls
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			nc, mod := newTestNoiseConnWithModifier(t)
+			data := []byte(tt.payload)
+			_, err := tt.apply(nc, data)
+			require.NoError(t, err)
 
-	data := []byte("inbound payload")
-	_, err = nc.applyInboundModifier(data)
-	require.NoError(t, err)
-
-	mod.mu.Lock()
-	defer mod.mu.Unlock()
-	require.Len(t, mod.inboundCalls, 1, "expected one inbound call")
-	assert.Equal(t, handshake.PhaseData, mod.inboundCalls[0].phase, "expected PhaseData")
-	assert.Equal(t, data, mod.inboundCalls[0].data, "expected original data")
+			mod.mu.Lock()
+			defer mod.mu.Unlock()
+			calls := tt.getCalls(mod)
+			require.Len(t, calls, 1, "expected one %s call", tt.name)
+			assert.Equal(t, handshake.PhaseData, calls[0].phase, "expected PhaseData")
+			assert.Equal(t, data, calls[0].data, "expected original data")
+		})
+	}
 }

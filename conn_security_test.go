@@ -59,82 +59,94 @@ func setupNNHandshake(t *testing.T) (initiator, responder *NoiseConn) {
 // Encrypt / Decrypt tests
 // ===========================================================================
 
-// TestEncrypt_BeforeHandshake verifies Encrypt fails when the handshake
-// has not been completed.
-func TestEncrypt_BeforeHandshake(t *testing.T) {
-	conn, err := createTestConnection()
-	require.NoError(t, err)
-	defer conn.Close()
+// TestCryptoOp_BeforeHandshake verifies Encrypt and Decrypt fail when
+// the handshake has not been completed.
+func TestCryptoOp_BeforeHandshake(t *testing.T) {
+	tests := []struct {
+		name      string
+		op        string
+		input     []byte
+		errSubstr string
+	}{
+		{"Encrypt", "encrypt", []byte("hello"), "handshake not completed"},
+		{"Decrypt", "decrypt", []byte("ciphertext"), "handshake not completed"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			conn, err := createTestConnection()
+			require.NoError(t, err)
+			defer conn.Close()
 
-	_, err = conn.Encrypt([]byte("hello"))
-	require.Error(t, err, "Encrypt should fail before handshake")
-	assert.Contains(t, err.Error(), "handshake not completed")
+			if tt.op == "encrypt" {
+				_, err = conn.Encrypt(tt.input)
+			} else {
+				_, err = conn.Decrypt(tt.input)
+			}
+			require.Error(t, err, "%s should fail before handshake", tt.name)
+			assert.Contains(t, err.Error(), tt.errSubstr)
+		})
+	}
 }
 
-// TestDecrypt_BeforeHandshake verifies Decrypt fails when the handshake
-// has not been completed.
-func TestDecrypt_BeforeHandshake(t *testing.T) {
-	conn, err := createTestConnection()
-	require.NoError(t, err)
-	defer conn.Close()
+// TestCryptoOp_AfterClose verifies Encrypt and Decrypt fail on a
+// closed connection.
+func TestCryptoOp_AfterClose(t *testing.T) {
+	tests := []struct {
+		name      string
+		op        string
+		input     []byte
+		errSubstr string
+	}{
+		{"Encrypt", "encrypt", []byte("hello"), "closed"},
+		{"Decrypt", "decrypt", []byte("ciphertext"), "closed"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			conn, err := createTestConnection()
+			require.NoError(t, err)
+			conn.Close()
 
-	_, err = conn.Decrypt([]byte("ciphertext"))
-	require.Error(t, err, "Decrypt should fail before handshake")
-	assert.Contains(t, err.Error(), "handshake not completed")
+			if tt.op == "encrypt" {
+				_, err = conn.Encrypt(tt.input)
+			} else {
+				_, err = conn.Decrypt(tt.input)
+			}
+			require.Error(t, err, "%s should fail after close", tt.name)
+			assert.Contains(t, err.Error(), tt.errSubstr)
+		})
+	}
 }
 
-// TestEncrypt_AfterClose verifies Encrypt fails on a closed connection.
-func TestEncrypt_AfterClose(t *testing.T) {
-	conn, err := createTestConnection()
-	require.NoError(t, err)
+// TestCryptoOp_NilCipherState verifies Encrypt/Decrypt fail when the
+// connection is in established state but has no cipher state.
+func TestCryptoOp_NilCipherState(t *testing.T) {
+	tests := []struct {
+		name      string
+		op        string
+		input     []byte
+		errSubstr string
+	}{
+		{"Encrypt_NilSend", "encrypt", []byte("hello"), "cipher state"},
+		{"Decrypt_NilRecv", "decrypt", []byte("ciphertext"), "cipher state"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			conn, err := createTestConnection()
+			require.NoError(t, err)
+			defer conn.Close()
 
-	conn.Close()
+			// Force established state without cipher states
+			conn.setState(internal.StateEstablished)
 
-	_, err = conn.Encrypt([]byte("hello"))
-	require.Error(t, err, "Encrypt should fail after close")
-	assert.Contains(t, err.Error(), "closed")
-}
-
-// TestDecrypt_AfterClose verifies Decrypt fails on a closed connection.
-func TestDecrypt_AfterClose(t *testing.T) {
-	conn, err := createTestConnection()
-	require.NoError(t, err)
-
-	conn.Close()
-
-	_, err = conn.Decrypt([]byte("ciphertext"))
-	require.Error(t, err, "Decrypt should fail after close")
-	assert.Contains(t, err.Error(), "closed")
-}
-
-// TestEncrypt_NilSendCipherState verifies Encrypt fails when the connection
-// is in established state but has no send cipher state.
-func TestEncrypt_NilSendCipherState(t *testing.T) {
-	conn, err := createTestConnection()
-	require.NoError(t, err)
-	defer conn.Close()
-
-	// Force established state without cipher states
-	conn.setState(internal.StateEstablished)
-
-	_, err = conn.Encrypt([]byte("hello"))
-	require.Error(t, err, "Encrypt should fail with nil send cipher state")
-	assert.Contains(t, err.Error(), "cipher state")
-}
-
-// TestDecrypt_NilRecvCipherState verifies Decrypt fails when the connection
-// is in established state but has no recv cipher state.
-func TestDecrypt_NilRecvCipherState(t *testing.T) {
-	conn, err := createTestConnection()
-	require.NoError(t, err)
-	defer conn.Close()
-
-	// Force established state without cipher states
-	conn.setState(internal.StateEstablished)
-
-	_, err = conn.Decrypt([]byte("ciphertext"))
-	require.Error(t, err, "Decrypt should fail with nil recv cipher state")
-	assert.Contains(t, err.Error(), "cipher state")
+			if tt.op == "encrypt" {
+				_, err = conn.Encrypt(tt.input)
+			} else {
+				_, err = conn.Decrypt(tt.input)
+			}
+			require.Error(t, err, "%s should fail with nil cipher state", tt.name)
+			assert.Contains(t, err.Error(), tt.errSubstr)
+		})
+	}
 }
 
 // TestEncryptDecrypt_RoundTrip verifies that Encrypt on the initiator
@@ -221,40 +233,67 @@ func TestDecrypt_TamperedCiphertext(t *testing.T) {
 // Rekey tests
 // ===========================================================================
 
-// TestRekey_BeforeHandshake verifies Rekey fails on a non-established connection.
-func TestRekey_BeforeHandshake(t *testing.T) {
-	conn, err := createTestConnection()
-	require.NoError(t, err)
-	defer conn.Close()
+// TestRekey_ErrorStates verifies Rekey fails in various non-established states.
+func TestRekey_ErrorStates(t *testing.T) {
+	tests := []struct {
+		name      string
+		setup     func(t *testing.T) *NoiseConn
+		errSubstr string
+	}{
+		{
+			name: "before handshake",
+			setup: func(t *testing.T) *NoiseConn {
+				t.Helper()
+				conn, err := createTestConnection()
+				require.NoError(t, err)
+				return conn
+			},
+			errSubstr: "not in established state",
+		},
+		{
+			name: "nil cipher state",
+			setup: func(t *testing.T) *NoiseConn {
+				t.Helper()
+				conn, err := createTestConnection()
+				require.NoError(t, err)
+				conn.setState(internal.StateEstablished)
+				return conn
+			},
+			errSubstr: "cipher states not available",
+		},
+		{
+			name: "after close",
+			setup: func(t *testing.T) *NoiseConn {
+				t.Helper()
+				conn, err := createTestConnection()
+				require.NoError(t, err)
+				conn.Close()
+				return conn
+			},
+			errSubstr: "not in established state",
+		},
+		{
+			name: "handshaking state",
+			setup: func(t *testing.T) *NoiseConn {
+				t.Helper()
+				conn, err := createTestConnection()
+				require.NoError(t, err)
+				conn.setState(internal.StateHandshaking)
+				return conn
+			},
+			errSubstr: "not in established state",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			conn := tt.setup(t)
+			defer conn.Close()
 
-	err = conn.Rekey()
-	require.Error(t, err, "Rekey should fail before handshake")
-	assert.Contains(t, err.Error(), "not in established state")
-}
-
-// TestRekey_NilCipherState verifies Rekey fails when cipher states are nil
-// even if the connection is in established state.
-func TestRekey_NilCipherState(t *testing.T) {
-	conn, err := createTestConnection()
-	require.NoError(t, err)
-	defer conn.Close()
-
-	conn.setState(internal.StateEstablished)
-
-	err = conn.Rekey()
-	require.Error(t, err, "Rekey should fail with nil cipher states")
-	assert.Contains(t, err.Error(), "cipher states not available")
-}
-
-// TestRekey_AfterClose verifies Rekey fails on a closed connection.
-func TestRekey_AfterClose(t *testing.T) {
-	conn, err := createTestConnection()
-	require.NoError(t, err)
-	conn.Close()
-
-	err = conn.Rekey()
-	require.Error(t, err, "Rekey should fail after close")
-	assert.Contains(t, err.Error(), "not in established state")
+			err := conn.Rekey()
+			require.Error(t, err, "Rekey should fail: %s", tt.name)
+			assert.Contains(t, err.Error(), tt.errSubstr)
+		})
+	}
 }
 
 // TestRekey_Success verifies that Rekey succeeds on an established connection
@@ -283,20 +322,6 @@ func TestRekey_Success(t *testing.T) {
 	pt, err = server.Decrypt(ct)
 	require.NoError(t, err)
 	assert.Equal(t, postRekeyMsg, pt, "data should round-trip after rekey")
-}
-
-// TestRekey_HandshakingState verifies Rekey fails on a connection in
-// the handshaking state.
-func TestRekey_HandshakingState(t *testing.T) {
-	conn, err := createTestConnection()
-	require.NoError(t, err)
-	defer conn.Close()
-
-	conn.setState(internal.StateHandshaking)
-
-	err = conn.Rekey()
-	require.Error(t, err, "Rekey should fail in handshaking state")
-	assert.Contains(t, err.Error(), "not in established state")
 }
 
 // ===========================================================================
