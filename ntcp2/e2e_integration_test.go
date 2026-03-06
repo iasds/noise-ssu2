@@ -205,39 +205,16 @@ func TestE2E_SipHashMaskSequenceSynchronization(t *testing.T) {
 // PostHandshakeHook correctly derives SipHash keys and stores them
 // on the NTCP2Config for later propagation to the NTCP2Conn.
 func TestE2E_PostHandshakeHook_DerivesCorrectKeys(t *testing.T) {
-	routerHash := make([]byte, 32)
-	_, err := rand.Read(routerHash)
-	require.NoError(t, err)
+	m := newTestCryptoMaterial(t)
 
-	obfuscationIV := make([]byte, 16)
-	_, err = rand.Read(obfuscationIV)
-	require.NoError(t, err)
+	// Create initiator config using the helper
+	initiatorConfig := newTestInitiatorConfigFrom(t, m)
 
-	staticKey := make([]byte, 32)
-	_, err = rand.Read(staticKey)
+	responderConfig, err := NewNTCP2Config(m.routerHash, false)
 	require.NoError(t, err)
-
-	remoteHash := make([]byte, 32)
-	_, err = rand.Read(remoteHash)
+	responderConfig, err = responderConfig.WithStaticKey(m.staticKey)
 	require.NoError(t, err)
-
-	// Create initiator and responder configs
-	initiatorConfig, err := NewNTCP2Config(routerHash, true)
-	require.NoError(t, err)
-	initiatorConfig, err = initiatorConfig.WithStaticKey(staticKey)
-	require.NoError(t, err)
-	initiatorConfig, err = initiatorConfig.WithRemoteRouterHash(remoteHash)
-	require.NoError(t, err)
-	initiatorConfig, err = initiatorConfig.WithRemoteStaticKey(generateRandomBytes(32))
-	require.NoError(t, err)
-	initiatorConfig, err = initiatorConfig.WithAESObfuscation(true, obfuscationIV)
-	require.NoError(t, err)
-
-	responderConfig, err := NewNTCP2Config(routerHash, false)
-	require.NoError(t, err)
-	responderConfig, err = responderConfig.WithStaticKey(staticKey)
-	require.NoError(t, err)
-	responderConfig, err = responderConfig.WithAESObfuscation(true, obfuscationIV)
+	responderConfig, err = responderConfig.WithAESObfuscation(true, m.obfuscationIV)
 	require.NoError(t, err)
 
 	// Convert to ConnConfig (which sets up PostHandshakeHook and ASK labels)
@@ -299,32 +276,7 @@ func TestE2E_PropagateSipHash_CopiesModifierToConn(t *testing.T) {
 // obfuscation modifier is correctly created and added to the ConnConfig
 // when AES obfuscation is enabled.
 func TestE2E_AESObfuscationModifier_Creation(t *testing.T) {
-	routerHash := make([]byte, 32)
-	_, err := rand.Read(routerHash)
-	require.NoError(t, err)
-
-	staticKey := make([]byte, 32)
-	_, err = rand.Read(staticKey)
-	require.NoError(t, err)
-
-	remoteHash := make([]byte, 32)
-	_, err = rand.Read(remoteHash)
-	require.NoError(t, err)
-
-	obfuscationIV := make([]byte, 16)
-	_, err = rand.Read(obfuscationIV)
-	require.NoError(t, err)
-
-	config, err := NewNTCP2Config(routerHash, true)
-	require.NoError(t, err)
-	config, err = config.WithStaticKey(staticKey)
-	require.NoError(t, err)
-	config, err = config.WithRemoteRouterHash(remoteHash)
-	require.NoError(t, err)
-	config, err = config.WithRemoteStaticKey(generateRandomBytes(32))
-	require.NoError(t, err)
-	config, err = config.WithAESObfuscation(true, obfuscationIV)
-	require.NoError(t, err)
+	config, _ := newTestInitiatorConfig(t)
 
 	connConfig, err := config.ToConnConfig()
 	require.NoError(t, err)

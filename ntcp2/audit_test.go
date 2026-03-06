@@ -7,10 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-i2p/crypto/rand"
-
 	noise "github.com/go-i2p/go-noise"
-	upstreamnoise "github.com/go-i2p/noise"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -196,42 +193,11 @@ func TestNTCP2Listener_ConcurrentAccepts(t *testing.T) {
 // method by performing a full XK handshake between a dialing initiator and
 // an NTCP2Listener that calls AcceptWithHandshake.
 func TestAcceptWithHandshake_FullE2E(t *testing.T) {
-	cs := upstreamnoise.NewCipherSuite(
-		upstreamnoise.DH25519,
-		upstreamnoise.CipherChaChaPoly,
-		upstreamnoise.HashSHA256,
-	)
-
-	// Generate keypairs
-	initiatorKP, err := cs.GenerateKeypair(rand.Reader)
-	require.NoError(t, err)
-	responderKP, err := cs.GenerateKeypair(rand.Reader)
-	require.NoError(t, err)
-
-	initiatorHash := make([]byte, RouterHashSize)
-	copy(initiatorHash, "initiator-hash-32-bytes-long!!!!")
-	responderHash := make([]byte, RouterHashSize)
-	copy(responderHash, "responder-hash-32-bytes-long!!!!")
-
-	// Responder config
-	responderConfig, err := NewNTCP2Config(responderHash, false)
-	require.NoError(t, err)
-	responderConfig, err = responderConfig.WithStaticKey(responderKP.Private)
-	require.NoError(t, err)
-	responderConfig, err = responderConfig.WithAESObfuscation(false, nil)
-	require.NoError(t, err)
-
-	// Initiator config
-	initiatorConfig, err := NewNTCP2Config(initiatorHash, true)
-	require.NoError(t, err)
-	initiatorConfig, err = initiatorConfig.WithStaticKey(initiatorKP.Private)
-	require.NoError(t, err)
-	initiatorConfig, err = initiatorConfig.WithRemoteRouterHash(responderHash)
-	require.NoError(t, err)
-	initiatorConfig, err = initiatorConfig.WithRemoteStaticKey(responderKP.Public)
-	require.NoError(t, err)
-	initiatorConfig, err = initiatorConfig.WithAESObfuscation(false, nil)
-	require.NoError(t, err)
+	p := newTestXKConfigPair(t)
+	responderConfig := p.responderConfig
+	initiatorConfig := p.initiatorConfig
+	initiatorHash := p.initiatorHash
+	responderHash := p.responderHash
 
 	// Start TCP listener
 	tcpLn, err := net.Listen("tcp", "127.0.0.1:0")

@@ -58,29 +58,15 @@ func TestNewNTCP2ConfigWithInitiator(t *testing.T) {
 }
 
 func TestNTCP2ConfigBuilderMethods(t *testing.T) {
-	routerHash := make([]byte, 32)
-	_, err := rand.Read(routerHash)
-	require.NoError(t, err)
+	m := newTestCryptoMaterial(t)
 
-	staticKey := make([]byte, 32)
-	_, err = rand.Read(staticKey)
-	require.NoError(t, err)
-
-	remoteHash := make([]byte, 32)
-	_, err = rand.Read(remoteHash)
-	require.NoError(t, err)
-
-	obfuscationIV := make([]byte, 16)
-	_, err = rand.Read(obfuscationIV)
-	require.NoError(t, err)
-
-	config, err := NewNTCP2Config(routerHash, true)
+	config, err := NewNTCP2Config(m.routerHash, true)
 	require.NoError(t, err)
 
 	// Test all builder methods
-	config, err = config.WithStaticKey(staticKey)
+	config, err = config.WithStaticKey(m.staticKey)
 	require.NoError(t, err)
-	config, err = config.WithRemoteRouterHash(remoteHash)
+	config, err = config.WithRemoteRouterHash(m.remoteHash)
 	require.NoError(t, err)
 	config = config.
 		WithPattern("XK").
@@ -89,22 +75,22 @@ func TestNTCP2ConfigBuilderMethods(t *testing.T) {
 		WithWriteTimeout(15 * time.Second).
 		WithHandshakeRetries(5).
 		WithRetryBackoff(2 * time.Second)
-	config, err = config.WithAESObfuscation(true, obfuscationIV)
+	config, err = config.WithAESObfuscation(true, m.obfuscationIV)
 	require.NoError(t, err)
 	config = config.
 		WithSipHashLength(true, 0x123456789ABCDEF0, 0xFEDCBA9876543210).
 		WithFrameSettings(32768, false, 16, 128)
 
 	assert.Equal(t, "XK", config.Pattern)
-	assert.Equal(t, staticKey, config.StaticKey)
-	assert.Equal(t, remoteHash, config.RemoteRouterHash)
+	assert.Equal(t, m.staticKey, config.StaticKey)
+	assert.Equal(t, m.remoteHash, config.RemoteRouterHash)
 	assert.Equal(t, 45*time.Second, config.HandshakeTimeout)
 	assert.Equal(t, 10*time.Second, config.ReadTimeout)
 	assert.Equal(t, 15*time.Second, config.WriteTimeout)
 	assert.Equal(t, 5, config.HandshakeRetries)
 	assert.Equal(t, 2*time.Second, config.RetryBackoff)
 	assert.Equal(t, true, config.EnableAESObfuscation)
-	assert.Equal(t, obfuscationIV, config.ObfuscationIV)
+	assert.Equal(t, m.obfuscationIV, config.ObfuscationIV)
 	assert.Equal(t, true, config.EnableSipHashLength)
 	assert.Equal(t, uint64(0x123456789ABCDEF0), config.SipHashKeys[0])
 	assert.Equal(t, uint64(0xFEDCBA9876543210), config.SipHashKeys[1])
@@ -282,33 +268,7 @@ func TestNTCP2ConfigComprehensiveValidation(t *testing.T) {
 }
 
 func TestNTCP2ConfigToConnConfig(t *testing.T) {
-	routerHash := make([]byte, 32)
-	_, err := rand.Read(routerHash)
-	require.NoError(t, err)
-
-	staticKey := make([]byte, 32)
-	_, err = rand.Read(staticKey)
-	require.NoError(t, err)
-
-	remoteHash := make([]byte, 32)
-	_, err = rand.Read(remoteHash)
-	require.NoError(t, err)
-
-	obfuscationIV := make([]byte, 16)
-	_, err = rand.Read(obfuscationIV)
-	require.NoError(t, err)
-
-	ntcp2Config, err := NewNTCP2Config(routerHash, true)
-	require.NoError(t, err)
-
-	ntcp2Config, err = ntcp2Config.WithStaticKey(staticKey)
-	require.NoError(t, err)
-	ntcp2Config, err = ntcp2Config.WithRemoteRouterHash(remoteHash)
-	require.NoError(t, err)
-	ntcp2Config, err = ntcp2Config.WithRemoteStaticKey(generateRandomBytes(32))
-	require.NoError(t, err)
-	ntcp2Config, err = ntcp2Config.WithAESObfuscation(true, obfuscationIV)
-	require.NoError(t, err)
+	ntcp2Config, m := newTestInitiatorConfig(t)
 	ntcp2Config = ntcp2Config.
 		WithHandshakeTimeout(45 * time.Second).
 		WithReadTimeout(10 * time.Second).
@@ -322,7 +282,7 @@ func TestNTCP2ConfigToConnConfig(t *testing.T) {
 	// Verify basic config translation
 	assert.Equal(t, "XK", connConfig.Pattern)
 	assert.Equal(t, true, connConfig.Initiator)
-	assert.Equal(t, staticKey, connConfig.StaticKey)
+	assert.Equal(t, m.staticKey, connConfig.StaticKey)
 	assert.Equal(t, 45*time.Second, connConfig.HandshakeTimeout)
 	assert.Equal(t, 10*time.Second, connConfig.ReadTimeout)
 	assert.Equal(t, 15*time.Second, connConfig.WriteTimeout)

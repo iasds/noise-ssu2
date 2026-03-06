@@ -350,43 +350,11 @@ func TestXKHandshake_NTCP2_CloseAfterHandshake(t *testing.T) {
 func setupHandshakedPair(t *testing.T) (initiator, responder *NTCP2Conn) {
 	t.Helper()
 
-	cs := upstreamnoise.NewCipherSuite(
-		upstreamnoise.DH25519,
-		upstreamnoise.CipherChaChaPoly,
-		upstreamnoise.HashSHA256,
-	)
-
-	initiatorKP, err := cs.GenerateKeypair(rand.Reader)
-	require.NoError(t, err)
-
-	responderKP, err := cs.GenerateKeypair(rand.Reader)
-	require.NoError(t, err)
-
-	initiatorHash := make([]byte, RouterHashSize)
-	copy(initiatorHash, "initiator-hash-32-bytes-long!!!!")
-
-	responderHash := make([]byte, RouterHashSize)
-	copy(responderHash, "responder-hash-32-bytes-long!!!!")
-
-	// Responder config
-	responderConfig, err := NewNTCP2Config(responderHash, false)
-	require.NoError(t, err)
-	responderConfig, err = responderConfig.WithStaticKey(responderKP.Private)
-	require.NoError(t, err)
-	responderConfig, err = responderConfig.WithAESObfuscation(false, nil)
-	require.NoError(t, err)
-
-	// Initiator config
-	initiatorConfig, err := NewNTCP2Config(initiatorHash, true)
-	require.NoError(t, err)
-	initiatorConfig, err = initiatorConfig.WithStaticKey(initiatorKP.Private)
-	require.NoError(t, err)
-	initiatorConfig, err = initiatorConfig.WithRemoteRouterHash(responderHash)
-	require.NoError(t, err)
-	initiatorConfig, err = initiatorConfig.WithRemoteStaticKey(responderKP.Public)
-	require.NoError(t, err)
-	initiatorConfig, err = initiatorConfig.WithAESObfuscation(false, nil)
-	require.NoError(t, err)
+	p := newTestXKConfigPair(t)
+	initiatorConfig := p.initiatorConfig
+	responderConfig := p.responderConfig
+	initiatorHash := p.initiatorHash
+	responderHash := p.responderHash
 
 	// TCP listener
 	ln, err := net.Listen("tcp", "127.0.0.1:0")

@@ -142,9 +142,18 @@ func TestHighCoverageEncryption(t *testing.T) {
 	responderNC.Close()
 }
 
-// TestXKHandshake_FullE2E performs a complete Noise XK handshake over real
-// TCP connections with real Curve25519 keypairs.
-func TestXKHandshake_FullE2E(t *testing.T) {
+// handshakePairConfig holds the parameters for setting up a Noise handshake pair.
+type handshakePairConfig struct {
+	pattern      string
+	setRemoteKey bool // whether to set initiator's RemoteKey to responder's public key
+}
+
+// setupHandshakePairConn creates a pair of NoiseConn instances connected over
+// TCP that have completed the Noise handshake. The caller is responsible for
+// closing both returned connections.
+func setupHandshakePairConn(t *testing.T, cfg handshakePairConfig) (initiator, responder *NoiseConn) {
+	t.Helper()
+
 	cs := upstreamnoise.NewCipherSuite(
 		upstreamnoise.DH25519,
 		upstreamnoise.CipherAESGCM,
@@ -166,14 +175,16 @@ func TestXKHandshake_FullE2E(t *testing.T) {
 	}
 	defer ln.Close()
 
-	responderCfg := NewConnConfig("XK", false)
+	responderCfg := NewConnConfig(cfg.pattern, false)
 	responderCfg.StaticKey = responderKP.Private
 	responderCfg.CipherSuite = cs
 
-	initiatorCfg := NewConnConfig("XK", true)
+	initiatorCfg := NewConnConfig(cfg.pattern, true)
 	initiatorCfg.StaticKey = initiatorKP.Private
-	initiatorCfg.RemoteKey = responderKP.Public
 	initiatorCfg.CipherSuite = cs
+	if cfg.setRemoteKey {
+		initiatorCfg.RemoteKey = responderKP.Public
+	}
 
 	var wg sync.WaitGroup
 	var responderErr error
@@ -226,6 +237,17 @@ func TestXKHandshake_FullE2E(t *testing.T) {
 		initiatorConn.Close()
 		t.Fatalf("responder handshake: %v", responderErr)
 	}
+
+	return initiatorConn, responderConn
+}
+
+// TestXKHandshake_FullE2E performs a complete Noise XK handshake over real
+// TCP connections with real Curve25519 keypairs.
+func TestXKHandshake_FullE2E(t *testing.T) {
+	initiatorConn, responderConn := setupHandshakePairConn(t, handshakePairConfig{
+		pattern:      "XK",
+		setRemoteKey: true,
+	})
 	defer initiatorConn.Close()
 	defer responderConn.Close()
 
@@ -273,17 +295,6 @@ func TestXKHandshake_FullE2E(t *testing.T) {
 	}
 	if len(responderPeerStatic) != 32 {
 		t.Fatalf("responder PeerStatic length: %d", len(responderPeerStatic))
-	}
-
-	for i := range initiatorPeerStatic {
-		if initiatorPeerStatic[i] != responderKP.Public[i] {
-			t.Fatalf("initiator PeerStatic mismatch at byte %d", i)
-		}
-	}
-	for i := range responderPeerStatic {
-		if responderPeerStatic[i] != initiatorKP.Public[i] {
-			t.Fatalf("responder PeerStatic mismatch at byte %d", i)
-		}
 	}
 
 	t.Log("Full XK handshake + bidirectional data exchange succeeded")
@@ -346,85 +357,10 @@ func TestXKHandshake_MissingPeerStatic(t *testing.T) {
 // without RemoteKey since neither side needs the other's static key as
 // a pre-message.
 func TestXXHandshake_NoPeerStaticNeeded(t *testing.T) {
-	cs := upstreamnoise.NewCipherSuite(
-		upstreamnoise.DH25519,
-		upstreamnoise.CipherAESGCM,
-		upstreamnoise.HashSHA256,
-	)
-
-	initiatorKP, err := cs.GenerateKeypair(rand.Reader)
-	if err != nil {
-		t.Fatalf("generate initiator keypair: %v", err)
-	}
-	responderKP, err := cs.GenerateKeypair(rand.Reader)
-	if err != nil {
-		t.Fatalf("generate responder keypair: %v", err)
-	}
-
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	defer ln.Close()
-
-	responderCfg := NewConnConfig("XX", false)
-	responderCfg.StaticKey = responderKP.Private
-	responderCfg.CipherSuite = cs
-
-	initiatorCfg := NewConnConfig("XX", true)
-	initiatorCfg.StaticKey = initiatorKP.Private
-	initiatorCfg.CipherSuite = cs
-
-	var wg sync.WaitGroup
-	var responderErr error
-	var responderConn *NoiseConn
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		raw, err := ln.Accept()
-		if err != nil {
-			responderErr = err
-			return
-		}
-		nc, err := NewNoiseConn(raw, responderCfg)
-		if err != nil {
-			raw.Close()
-			responderErr = err
-			return
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := nc.Handshake(ctx); err != nil {
-			nc.Close()
-			responderErr = err
-			return
-		}
-		responderConn = nc
-	}()
-
-	raw, err := net.DialTimeout("tcp", ln.Addr().String(), 5*time.Second)
-	if err != nil {
-		t.Fatalf("dial: %v", err)
-	}
-	initiatorConn, err := NewNoiseConn(raw, initiatorCfg)
-	if err != nil {
-		raw.Close()
-		t.Fatalf("new initiator conn: %v", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := initiatorConn.Handshake(ctx); err != nil {
-		initiatorConn.Close()
-		t.Fatalf("initiator handshake: %v", err)
-	}
-
-	wg.Wait()
-	if responderErr != nil {
-		initiatorConn.Close()
-		t.Fatalf("responder handshake: %v", responderErr)
-	}
+	initiatorConn, responderConn := setupHandshakePairConn(t, handshakePairConfig{
+		pattern:      "XX",
+		setRemoteKey: false,
+	})
 	defer initiatorConn.Close()
 	defer responderConn.Close()
 

@@ -99,6 +99,27 @@ func (m *mockNetConn) writeToReadBuf(data []byte) {
 	m.readBuf.Write(data)
 }
 
+// newTestNoiseConn creates a NoiseConn with standard mock addresses
+// and the given pattern/initiator settings. It uses the default 30s
+// handshake timeout. The underlying mockNetConn is returned for
+// additional test setup (e.g. injecting read data or errors).
+func newTestNoiseConn(t *testing.T, pattern string, initiator bool) (*NoiseConn, *mockNetConn) {
+	t.Helper()
+	localAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8001"}
+	remoteAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8002"}
+	mock := newMockNetConn(localAddr, remoteAddr)
+	config := &ConnConfig{
+		Pattern:          pattern,
+		Initiator:        initiator,
+		HandshakeTimeout: 30 * time.Second,
+	}
+	conn, err := NewNoiseConn(mock, config)
+	if err != nil {
+		t.Fatalf("Failed to create NoiseConn: %v", err)
+	}
+	return conn, mock
+}
+
 func TestNewNoiseConn(t *testing.T) {
 	localAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8001"}
 	remoteAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8002"}
@@ -214,20 +235,7 @@ func TestNewNoiseConn(t *testing.T) {
 }
 
 func TestNoiseConnReadBeforeHandshake(t *testing.T) {
-	localAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8001"}
-	remoteAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8002"}
-	mockConn := newMockNetConn(localAddr, remoteAddr)
-
-	config := &ConnConfig{
-		Pattern:          "XX",
-		Initiator:        true,
-		HandshakeTimeout: 30 * time.Second,
-	}
-
-	conn, err := NewNoiseConn(mockConn, config)
-	if err != nil {
-		t.Fatalf("Failed to create NoiseConn: %v", err)
-	}
+	conn, _ := newTestNoiseConn(t, "XX", true)
 
 	// Try to read before handshake
 	buf := make([]byte, 100)
@@ -243,20 +251,7 @@ func TestNoiseConnReadBeforeHandshake(t *testing.T) {
 }
 
 func TestNoiseConnWriteBeforeHandshake(t *testing.T) {
-	localAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8001"}
-	remoteAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8002"}
-	mockConn := newMockNetConn(localAddr, remoteAddr)
-
-	config := &ConnConfig{
-		Pattern:          "XX",
-		Initiator:        true,
-		HandshakeTimeout: 30 * time.Second,
-	}
-
-	conn, err := NewNoiseConn(mockConn, config)
-	if err != nil {
-		t.Fatalf("Failed to create NoiseConn: %v", err)
-	}
+	conn, _ := newTestNoiseConn(t, "XX", true)
 
 	// Try to write before handshake
 	data := []byte("test data")
@@ -272,23 +267,10 @@ func TestNoiseConnWriteBeforeHandshake(t *testing.T) {
 }
 
 func TestNoiseConnClose(t *testing.T) {
-	localAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8001"}
-	remoteAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8002"}
-	mockConn := newMockNetConn(localAddr, remoteAddr)
-
-	config := &ConnConfig{
-		Pattern:          "XX",
-		Initiator:        true,
-		HandshakeTimeout: 30 * time.Second,
-	}
-
-	conn, err := NewNoiseConn(mockConn, config)
-	if err != nil {
-		t.Fatalf("Failed to create NoiseConn: %v", err)
-	}
+	conn, _ := newTestNoiseConn(t, "XX", true)
 
 	// Close the connection
-	err = conn.Close()
+	err := conn.Close()
 	if err != nil {
 		t.Errorf("Unexpected error closing connection: %v", err)
 	}
@@ -314,20 +296,7 @@ func TestNoiseConnClose(t *testing.T) {
 }
 
 func TestNoiseConnAddresses(t *testing.T) {
-	localAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8001"}
-	remoteAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8002"}
-	mockConn := newMockNetConn(localAddr, remoteAddr)
-
-	config := &ConnConfig{
-		Pattern:          "XX",
-		Initiator:        true,
-		HandshakeTimeout: 30 * time.Second,
-	}
-
-	conn, err := NewNoiseConn(mockConn, config)
-	if err != nil {
-		t.Fatalf("Failed to create NoiseConn: %v", err)
-	}
+	conn, _ := newTestNoiseConn(t, "XX", true)
 
 	// Test LocalAddr
 	local := conn.LocalAddr()
@@ -352,25 +321,12 @@ func TestNoiseConnAddresses(t *testing.T) {
 }
 
 func TestNoiseConnDeadlines(t *testing.T) {
-	localAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8001"}
-	remoteAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8002"}
-	mockConn := newMockNetConn(localAddr, remoteAddr)
-
-	config := &ConnConfig{
-		Pattern:          "XX",
-		Initiator:        true,
-		HandshakeTimeout: 30 * time.Second,
-	}
-
-	conn, err := NewNoiseConn(mockConn, config)
-	if err != nil {
-		t.Fatalf("Failed to create NoiseConn: %v", err)
-	}
+	conn, _ := newTestNoiseConn(t, "XX", true)
 
 	deadline := time.Now().Add(time.Hour)
 
 	// Test SetDeadline
-	err = conn.SetDeadline(deadline)
+	err := conn.SetDeadline(deadline)
 	if err != nil {
 		t.Errorf("SetDeadline should not error: %v", err)
 	}
@@ -472,23 +428,10 @@ func TestNoiseConnInterface(t *testing.T) {
 // Test error cases and edge conditions for better coverage
 
 func TestNoiseConnReadAfterClose(t *testing.T) {
-	localAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8001"}
-	remoteAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8002"}
-	mockConn := newMockNetConn(localAddr, remoteAddr)
-
-	config := &ConnConfig{
-		Pattern:          "XX",
-		Initiator:        true,
-		HandshakeTimeout: 30 * time.Second,
-	}
-
-	conn, err := NewNoiseConn(mockConn, config)
-	if err != nil {
-		t.Fatalf("Failed to create NoiseConn: %v", err)
-	}
+	conn, _ := newTestNoiseConn(t, "XX", true)
 
 	// Close the connection first
-	err = conn.Close()
+	err := conn.Close()
 	if err != nil {
 		t.Fatalf("Failed to close connection: %v", err)
 	}
@@ -507,23 +450,10 @@ func TestNoiseConnReadAfterClose(t *testing.T) {
 }
 
 func TestNoiseConnWriteAfterClose(t *testing.T) {
-	localAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8001"}
-	remoteAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8002"}
-	mockConn := newMockNetConn(localAddr, remoteAddr)
-
-	config := &ConnConfig{
-		Pattern:          "XX",
-		Initiator:        true,
-		HandshakeTimeout: 30 * time.Second,
-	}
-
-	conn, err := NewNoiseConn(mockConn, config)
-	if err != nil {
-		t.Fatalf("Failed to create NoiseConn: %v", err)
-	}
+	conn, _ := newTestNoiseConn(t, "XX", true)
 
 	// Close the connection first
-	err = conn.Close()
+	err := conn.Close()
 	if err != nil {
 		t.Fatalf("Failed to close connection: %v", err)
 	}
@@ -604,20 +534,7 @@ func TestNoiseConnHandshakeErrorPaths(t *testing.T) {
 }
 
 func TestNoiseConnConcurrentClose(t *testing.T) {
-	localAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8001"}
-	remoteAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8002"}
-	mockConn := newMockNetConn(localAddr, remoteAddr)
-
-	config := &ConnConfig{
-		Pattern:          "XX",
-		Initiator:        true,
-		HandshakeTimeout: 30 * time.Second,
-	}
-
-	conn, err := NewNoiseConn(mockConn, config)
-	if err != nil {
-		t.Fatalf("Failed to create NoiseConn: %v", err)
-	}
+	conn, _ := newTestNoiseConn(t, "XX", true)
 
 	// Test concurrent close operations
 	var wg sync.WaitGroup
@@ -649,28 +566,13 @@ func TestNoiseConnConcurrentClose(t *testing.T) {
 }
 
 func TestNoiseConnDeadlineErrors(t *testing.T) {
-	localAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8001"}
-	remoteAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8002"}
-
-	// Create a mock that fails on deadline setting
-	mockConn := newMockNetConn(localAddr, remoteAddr)
-
-	config := &ConnConfig{
-		Pattern:          "XX",
-		Initiator:        true,
-		HandshakeTimeout: 30 * time.Second,
-	}
-
-	conn, err := NewNoiseConn(mockConn, config)
-	if err != nil {
-		t.Fatalf("Failed to create NoiseConn: %v", err)
-	}
+	conn, _ := newTestNoiseConn(t, "XX", true)
 
 	deadline := time.Now().Add(time.Hour)
 
 	// These should pass through to the underlying connection
 	// Our mock implementation returns nil, so these should succeed
-	err = conn.SetDeadline(deadline)
+	err := conn.SetDeadline(deadline)
 	if err != nil {
 		t.Errorf("SetDeadline should not error: %v", err)
 	}
@@ -690,20 +592,7 @@ func TestNoiseConnReadWriteAfterHandshake(t *testing.T) {
 	// This test would require a real handshake completion
 	// For now, we'll test the structure and error paths
 
-	localAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8001"}
-	remoteAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8002"}
-	mockConn := newMockNetConn(localAddr, remoteAddr)
-
-	config := &ConnConfig{
-		Pattern:          "XX",
-		Initiator:        true,
-		HandshakeTimeout: 30 * time.Second,
-	}
-
-	conn, err := NewNoiseConn(mockConn, config)
-	if err != nil {
-		t.Fatalf("Failed to create NoiseConn: %v", err)
-	}
+	conn, mockConn := newTestNoiseConn(t, "XX", true)
 
 	// Manually set handshake as done for testing read/write paths
 	// This is testing internal state, which isn't ideal, but necessary for coverage
@@ -716,7 +605,7 @@ func TestNoiseConnReadWriteAfterHandshake(t *testing.T) {
 	buf := make([]byte, len(testData))
 	// This will likely fail because we don't have a real cipher state,
 	// but it exercises the code path
-	_, err = conn.Read(buf)
+	_, err := conn.Read(buf)
 	if err == nil {
 		t.Logf("Read succeeded unexpectedly (cipher state not set up)")
 	} else {
@@ -787,29 +676,14 @@ func TestMockNetConnUtility(t *testing.T) {
 
 // TestNoiseConnUnderlyingErrors tests error conditions in underlying connection
 func TestNoiseConnUnderlyingErrors(t *testing.T) {
-	localAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8001"}
-	remoteAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8002"}
-
-	// Test with connection that returns errors
-	mockConn := newMockNetConn(localAddr, remoteAddr)
+	conn, mockConn := newTestNoiseConn(t, "XX", true)
 	mockConn.readErr = errors.New("read error")
 	mockConn.writeErr = errors.New("write error")
 	mockConn.closeErr = errors.New("close error")
 
-	config := &ConnConfig{
-		Pattern:          "XX",
-		Initiator:        true,
-		HandshakeTimeout: 30 * time.Second,
-	}
-
-	conn, err := NewNoiseConn(mockConn, config)
-	if err != nil {
-		t.Fatalf("Failed to create NoiseConn: %v", err)
-	}
-
 	// Test read error propagation
 	buf := make([]byte, 100)
-	_, err = conn.Read(buf)
+	_, err := conn.Read(buf)
 	if err == nil {
 		t.Errorf("Expected read error to be propagated")
 	}
@@ -829,20 +703,7 @@ func TestNoiseConnUnderlyingErrors(t *testing.T) {
 
 // TestNoiseConnCipherOperations tests cipher state operations after manual state set
 func TestNoiseConnCipherOperations(t *testing.T) {
-	localAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8001"}
-	remoteAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8002"}
-	mockConn := newMockNetConn(localAddr, remoteAddr)
-
-	config := &ConnConfig{
-		Pattern:          "XX",
-		Initiator:        true,
-		HandshakeTimeout: 30 * time.Second,
-	}
-
-	conn, err := NewNoiseConn(mockConn, config)
-	if err != nil {
-		t.Fatalf("Failed to create NoiseConn: %v", err)
-	}
+	conn, mockConn := newTestNoiseConn(t, "XX", true)
 
 	// Manually set handshake as done and set a mock cipher state
 	conn.setState(internal.StateEstablished)
@@ -872,26 +733,13 @@ func TestNoiseConnCipherOperations(t *testing.T) {
 
 // TestNoiseConnHandshakeContexts tests handshake timeout and context cancellation
 func TestNoiseConnHandshakeContexts(t *testing.T) {
-	localAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8001"}
-	remoteAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8002"}
-	mockConn := newMockNetConn(localAddr, remoteAddr)
-
-	config := &ConnConfig{
-		Pattern:          "NN",
-		Initiator:        true,
-		HandshakeTimeout: 1 * time.Second,
-	}
-
-	conn, err := NewNoiseConn(mockConn, config)
-	if err != nil {
-		t.Fatalf("Failed to create NoiseConn: %v", err)
-	}
+	conn, _ := newTestNoiseConn(t, "NN", true)
 
 	// Test with cancelled context
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
 
-	err = conn.Handshake(ctx)
+	err := conn.Handshake(ctx)
 	if err == nil {
 		t.Logf("Handshake completed despite cancelled context - this can happen in test environment")
 	} else {
@@ -910,20 +758,7 @@ func TestNoiseConnHandshakeContexts(t *testing.T) {
 
 // TestNoiseConnConcurrentHandshake tests concurrent handshake attempts
 func TestNoiseConnConcurrentHandshake(t *testing.T) {
-	localAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8001"}
-	remoteAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8002"}
-	mockConn := newMockNetConn(localAddr, remoteAddr)
-
-	config := &ConnConfig{
-		Pattern:          "NN",
-		Initiator:        true,
-		HandshakeTimeout: 1 * time.Second,
-	}
-
-	conn, err := NewNoiseConn(mockConn, config)
-	if err != nil {
-		t.Fatalf("Failed to create NoiseConn: %v", err)
-	}
+	conn, _ := newTestNoiseConn(t, "NN", true)
 
 	// Start multiple handshake attempts concurrently
 	var wg sync.WaitGroup
@@ -957,20 +792,7 @@ func TestNoiseConnConcurrentHandshake(t *testing.T) {
 
 // TestUnderlyingConnectionClose tests operations after underlying connection closes
 func TestUnderlyingConnectionClose(t *testing.T) {
-	localAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8001"}
-	remoteAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8002"}
-	mockConn := newMockNetConn(localAddr, remoteAddr)
-
-	config := &ConnConfig{
-		Pattern:          "NN",
-		Initiator:        true,
-		HandshakeTimeout: 30 * time.Second,
-	}
-
-	conn, err := NewNoiseConn(mockConn, config)
-	if err != nil {
-		t.Fatalf("Failed to create NoiseConn: %v", err)
-	}
+	conn, mockConn := newTestNoiseConn(t, "NN", true)
 
 	// Close underlying connection
 	mockConn.Close()
@@ -979,7 +801,7 @@ func TestUnderlyingConnectionClose(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
-	err = conn.Handshake(ctx)
+	err := conn.Handshake(ctx)
 	if err == nil {
 		t.Errorf("Expected handshake to fail with closed underlying connection")
 	}
@@ -1369,10 +1191,7 @@ func (m *trackingModifier) Close() error { return nil }
 
 // TestGetModifierChain_NoModifiers checks nil is returned for a config with no modifiers.
 func TestGetModifierChain_NoModifiers(t *testing.T) {
-	localAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8001"}
-	remoteAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8002"}
-	nc, err := NewNoiseConn(newMockNetConn(localAddr, remoteAddr), NewConnConfig("NN", true))
-	require.NoError(t, err)
+	nc, _ := newTestNoiseConn(t, "NN", true)
 	require.Nil(t, nc.GetModifierChain(), "expected nil modifier chain when config has no modifiers")
 }
 
@@ -1389,10 +1208,7 @@ func TestGetModifierChain_WithModifier(t *testing.T) {
 
 // TestApplyOutboundModifier_NoChain verifies passthrough when no chain is configured.
 func TestApplyOutboundModifier_NoChain(t *testing.T) {
-	localAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8001"}
-	remoteAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8002"}
-	nc, err := NewNoiseConn(newMockNetConn(localAddr, remoteAddr), NewConnConfig("NN", true))
-	require.NoError(t, err)
+	nc, _ := newTestNoiseConn(t, "NN", true)
 	data := []byte("hello")
 	got, err := nc.applyOutboundModifier(data)
 	require.NoError(t, err)
@@ -1401,10 +1217,7 @@ func TestApplyOutboundModifier_NoChain(t *testing.T) {
 
 // TestApplyInboundModifier_NoChain verifies passthrough when no chain is configured.
 func TestApplyInboundModifier_NoChain(t *testing.T) {
-	localAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8001"}
-	remoteAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8002"}
-	nc, err := NewNoiseConn(newMockNetConn(localAddr, remoteAddr), NewConnConfig("NN", true))
-	require.NoError(t, err)
+	nc, _ := newTestNoiseConn(t, "NN", true)
 	data := []byte("hello")
 	got, err := nc.applyInboundModifier(data)
 	require.NoError(t, err)
