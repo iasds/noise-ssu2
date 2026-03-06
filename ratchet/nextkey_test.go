@@ -9,6 +9,39 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// linkedSessionFixture holds a sender/receiver pair with an established NS
+// session and a valid session tag on the receiver side.
+type linkedSessionFixture struct {
+	sender   *SessionManager
+	receiver *SessionManager
+	destHash [32]byte
+	tag      [8]byte
+}
+
+// newLinkedSessionFixture creates linked managers, establishes an NS session,
+// and retrieves a usable session tag from the receiver's tag index.
+func newLinkedSessionFixture(t *testing.T) linkedSessionFixture {
+	t.Helper()
+	sender, receiver := createLinkedManagers(t)
+
+	var destHash [32]byte
+	copy(destHash[:], receiver.ourPublicKey[:])
+
+	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, mustBuildNSPayload(t, []byte("init")))
+	require.NoError(t, err)
+	_, _, _, err = receiver.DecryptGarlicMessage(enc)
+	require.NoError(t, err)
+
+	tag := getAnyTag(t, receiver)
+
+	return linkedSessionFixture{
+		sender:   sender,
+		receiver: receiver,
+		destHash: destHash,
+		tag:      tag,
+	}
+}
+
 // ============================================================================
 // Session NextKey State
 // ============================================================================
@@ -139,19 +172,7 @@ func TestPerformDHRatchetStep_ConsecutiveRotations(t *testing.T) {
 // ============================================================================
 
 func TestProcessReceivedNextKey_ForwardKey(t *testing.T) {
-	sender, receiver := createLinkedManagers(t)
-
-	var destHash [32]byte
-	copy(destHash[:], receiver.ourPublicKey[:])
-
-	// Establish a session.
-	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, mustBuildNSPayload(t, []byte("init")))
-	require.NoError(t, err)
-	_, _, _, err = receiver.DecryptGarlicMessage(enc)
-	require.NoError(t, err)
-
-	// Get a valid session tag from the receiver's tag index.
-	sessionTag := getAnyTag(t, receiver)
+	f := newLinkedSessionFixture(t)
 
 	// Simulate a forward NextKey from the sender.
 	var newKey [32]byte
@@ -165,22 +186,12 @@ func TestProcessReceivedNextKey_ForwardKey(t *testing.T) {
 		PublicKey:      newKey,
 	}
 
-	err = receiver.ProcessReceivedNextKey(sessionTag, info)
+	err := f.receiver.ProcessReceivedNextKey(f.tag, info)
 	require.NoError(t, err, "Processing forward NextKey should succeed")
 }
 
 func TestProcessReceivedNextKey_ForwardKeyRequestsReverse(t *testing.T) {
-	sender, receiver := createLinkedManagers(t)
-
-	var destHash [32]byte
-	copy(destHash[:], receiver.ourPublicKey[:])
-
-	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, mustBuildNSPayload(t, []byte("init")))
-	require.NoError(t, err)
-	_, _, _, err = receiver.DecryptGarlicMessage(enc)
-	require.NoError(t, err)
-
-	sessionTag := getAnyTag(t, receiver)
+	f := newLinkedSessionFixture(t)
 
 	var newKey [32]byte
 	_, _ = rand.Read(newKey[:])
@@ -193,11 +204,11 @@ func TestProcessReceivedNextKey_ForwardKeyRequestsReverse(t *testing.T) {
 		PublicKey:      newKey,
 	}
 
-	err = receiver.ProcessReceivedNextKey(sessionTag, info)
+	err := f.receiver.ProcessReceivedNextKey(f.tag, info)
 	require.NoError(t, err)
 
 	// The receiver should now have a pending reverse NextKey to send back.
-	session := lookupSessionByAnyTag(t, receiver)
+	session := lookupSessionByAnyTag(t, f.receiver)
 	require.NotNil(t, session)
 
 	session.mu.Lock()
@@ -212,20 +223,10 @@ func TestProcessReceivedNextKey_ForwardKeyRequestsReverse(t *testing.T) {
 // ============================================================================
 
 func TestProcessReceivedNextKey_ReverseKey(t *testing.T) {
-	sender, receiver := createLinkedManagers(t)
-
-	var destHash [32]byte
-	copy(destHash[:], receiver.ourPublicKey[:])
-
-	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, mustBuildNSPayload(t, []byte("init")))
-	require.NoError(t, err)
-	_, _, _, err = receiver.DecryptGarlicMessage(enc)
-	require.NoError(t, err)
-
-	sessionTag := getAnyTag(t, receiver)
+	f := newLinkedSessionFixture(t)
 
 	// Set awaitingReverseKey on the session to simulate having sent a forward key.
-	session := lookupSessionByAnyTag(t, receiver)
+	session := lookupSessionByAnyTag(t, f.receiver)
 	session.mu.Lock()
 	session.awaitingReverseKey = true
 	session.mu.Unlock()
@@ -241,7 +242,7 @@ func TestProcessReceivedNextKey_ReverseKey(t *testing.T) {
 		PublicKey:      reverseKey,
 	}
 
-	err = receiver.ProcessReceivedNextKey(sessionTag, info)
+	err := f.receiver.ProcessReceivedNextKey(f.tag, info)
 	require.NoError(t, err)
 
 	session.mu.Lock()
@@ -256,17 +257,7 @@ func TestProcessReceivedNextKey_ReverseKey(t *testing.T) {
 // ============================================================================
 
 func TestProcessReceivedNextKey_AckNoKey(t *testing.T) {
-	sender, receiver := createLinkedManagers(t)
-
-	var destHash [32]byte
-	copy(destHash[:], receiver.ourPublicKey[:])
-
-	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, mustBuildNSPayload(t, []byte("init")))
-	require.NoError(t, err)
-	_, _, _, err = receiver.DecryptGarlicMessage(enc)
-	require.NoError(t, err)
-
-	sessionTag := getAnyTag(t, receiver)
+	f := newLinkedSessionFixture(t)
 
 	// Ack with no key: peer acknowledges with their existing key.
 	info := NextKeyInfo{
@@ -276,7 +267,7 @@ func TestProcessReceivedNextKey_AckNoKey(t *testing.T) {
 		KeyID:          0,
 	}
 
-	err = receiver.ProcessReceivedNextKey(sessionTag, info)
+	err := f.receiver.ProcessReceivedNextKey(f.tag, info)
 	require.NoError(t, err, "Processing NextKey ack should succeed")
 }
 
@@ -305,25 +296,13 @@ func TestProcessReceivedNextKey_UnknownTag(t *testing.T) {
 // ============================================================================
 
 func TestProcessIncomingDHRatchet_Success(t *testing.T) {
-	sender, receiver := createLinkedManagers(t)
-
-	var destHash [32]byte
-	copy(destHash[:], receiver.ourPublicKey[:])
-
-	// Establish a session.
-	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, mustBuildNSPayload(t, []byte("init")))
-	require.NoError(t, err)
-	_, _, _, err = receiver.DecryptGarlicMessage(enc)
-	require.NoError(t, err)
-
-	// Get a valid session tag.
-	sessionTag := getAnyTag(t, receiver)
+	f := newLinkedSessionFixture(t)
 
 	// Generate a new DH key to simulate a peer ratchet.
 	var newPubKey [32]byte
 	_, _ = rand.Read(newPubKey[:])
 
-	err = receiver.ProcessIncomingDHRatchet(sessionTag, newPubKey)
+	err := f.receiver.ProcessIncomingDHRatchet(f.tag, newPubKey)
 	require.NoError(t, err, "ProcessIncomingDHRatchet should succeed with valid tag and key")
 }
 
@@ -342,20 +321,10 @@ func TestProcessIncomingDHRatchet_UnknownTag(t *testing.T) {
 }
 
 func TestProcessIncomingDHRatchet_UpdatesReceivingChain(t *testing.T) {
-	sender, receiver := createLinkedManagers(t)
-
-	var destHash [32]byte
-	copy(destHash[:], receiver.ourPublicKey[:])
-
-	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, mustBuildNSPayload(t, []byte("init")))
-	require.NoError(t, err)
-	_, _, _, err = receiver.DecryptGarlicMessage(enc)
-	require.NoError(t, err)
-
-	sessionTag := getAnyTag(t, receiver)
+	f := newLinkedSessionFixture(t)
 
 	// Get the original receiving ratchets.
-	session := lookupSessionByAnyTag(t, receiver)
+	session := lookupSessionByAnyTag(t, f.receiver)
 	require.NotNil(t, session)
 
 	session.mu.Lock()
@@ -366,7 +335,7 @@ func TestProcessIncomingDHRatchet_UpdatesReceivingChain(t *testing.T) {
 	// Process a DH ratchet.
 	var newPubKey [32]byte
 	_, _ = rand.Read(newPubKey[:])
-	err = receiver.ProcessIncomingDHRatchet(sessionTag, newPubKey)
+	err := f.receiver.ProcessIncomingDHRatchet(f.tag, newPubKey)
 	require.NoError(t, err)
 
 	session.mu.Lock()
@@ -381,25 +350,17 @@ func TestProcessIncomingDHRatchet_UpdatesReceivingChain(t *testing.T) {
 }
 
 func TestProcessIncomingDHRatchet_MultipleRotations(t *testing.T) {
-	sender, receiver := createLinkedManagers(t)
-
-	var destHash [32]byte
-	copy(destHash[:], receiver.ourPublicKey[:])
-
-	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, mustBuildNSPayload(t, []byte("init")))
-	require.NoError(t, err)
-	_, _, _, err = receiver.DecryptGarlicMessage(enc)
-	require.NoError(t, err)
+	f := newLinkedSessionFixture(t)
 
 	// Process multiple DH ratchets with different keys.
 	for i := 0; i < 3; i++ {
-		sessionTag := getAnyTag(t, receiver)
+		sessionTag := getAnyTag(t, f.receiver)
 
 		var newPubKey [32]byte
 		newPubKey[0] = byte(i + 1)
 		_, _ = rand.Read(newPubKey[1:])
 
-		err = receiver.ProcessIncomingDHRatchet(sessionTag, newPubKey)
+		err := f.receiver.ProcessIncomingDHRatchet(sessionTag, newPubKey)
 		require.NoError(t, err, "DH ratchet %d should succeed", i)
 	}
 }
@@ -514,20 +475,10 @@ func TestMaxKeyIDConstant(t *testing.T) {
 }
 
 func TestGenerateReverseNextKey_MaxKeyID(t *testing.T) {
-	sender, receiver := createLinkedManagers(t)
-
-	var destHash [32]byte
-	copy(destHash[:], receiver.ourPublicKey[:])
-
-	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, mustBuildNSPayload(t, []byte("init")))
-	require.NoError(t, err)
-	_, _, _, err = receiver.DecryptGarlicMessage(enc)
-	require.NoError(t, err)
-
-	sessionTag := getAnyTag(t, receiver)
+	f := newLinkedSessionFixture(t)
 
 	// Set the session's sendKeyID to MaxKeyID so reverse key generation fails.
-	session := lookupSessionByAnyTag(t, receiver)
+	session := lookupSessionByAnyTag(t, f.receiver)
 	session.mu.Lock()
 	session.sendKeyID = MaxKeyID
 	session.mu.Unlock()
@@ -543,7 +494,7 @@ func TestGenerateReverseNextKey_MaxKeyID(t *testing.T) {
 		PublicKey:      newKey,
 	}
 
-	err = receiver.ProcessReceivedNextKey(sessionTag, info)
+	err := f.receiver.ProcessReceivedNextKey(f.tag, info)
 	assert.Error(t, err, "Should error when send key ID is at maximum")
 }
 

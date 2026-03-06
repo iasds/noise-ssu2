@@ -471,39 +471,17 @@ func createTestNTCP2ConnWithAddrs(mockNoise *mockNoiseConn, localAddr, remoteAdd
 // ============================================================================
 
 func TestValidateFrameLength_ZeroAppliesProbingDelay(t *testing.T) {
-	client, server := net.Pipe()
-	defer server.Close()
+	p := newPipedNTCP2Conn(t)
 
-	config := noise.NewConnConfig("XK", true)
-	noiseConn, err := noise.NewNoiseConn(client, config)
-	require.NoError(t, err)
-	defer noiseConn.Close()
-
-	localAddr := createTestNTCP2Addr("local", "initiator")
-	remoteAddr := createTestNTCP2Addr("remote", "responder")
-	ntcp2Conn, err := NewNTCP2Conn(noiseConn, localAddr, remoteAddr)
-	require.NoError(t, err)
-
-	err = ntcp2Conn.validateFrameLength(0)
+	err := p.conn.validateFrameLength(0)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "frame length 0 below minimum 16")
 }
 
 func TestValidateFrameLength_TooSmallAppliesProbingDelay(t *testing.T) {
-	client, server := net.Pipe()
-	defer server.Close()
+	p := newPipedNTCP2Conn(t)
 
-	config := noise.NewConnConfig("XK", true)
-	noiseConn, err := noise.NewNoiseConn(client, config)
-	require.NoError(t, err)
-	defer noiseConn.Close()
-
-	localAddr := createTestNTCP2Addr("local", "initiator")
-	remoteAddr := createTestNTCP2Addr("remote", "responder")
-	ntcp2Conn, err := NewNTCP2Conn(noiseConn, localAddr, remoteAddr)
-	require.NoError(t, err)
-
-	err = ntcp2Conn.validateFrameLength(1)
+	err := p.conn.validateFrameLength(1)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "below minimum")
 }
@@ -633,34 +611,22 @@ func TestWriteFramed_MultiFrameSplit(t *testing.T) {
 }
 
 func TestReadFramed_BufferRemainder(t *testing.T) {
-	client, server := net.Pipe()
-	defer server.Close()
+	p := newPipedNTCP2Conn(t)
 
-	config := noise.NewConnConfig("XK", true)
-	noiseConn, err := noise.NewNoiseConn(client, config)
-	require.NoError(t, err)
-	defer noiseConn.Close()
+	p.conn.readMu.Lock()
+	p.conn.readBuffer = []byte("buffered-remainder-data")
+	p.conn.readMu.Unlock()
 
-	localAddr := createTestNTCP2Addr("local", "initiator")
-	remoteAddr := createTestNTCP2Addr("remote", "responder")
-	ntcp2Conn, err := NewNTCP2Conn(noiseConn, localAddr, remoteAddr)
-	require.NoError(t, err)
-
-	ntcp2Conn.readMu.Lock()
-	ntcp2Conn.readBuffer = []byte("buffered-remainder-data")
-	ntcp2Conn.readMu.Unlock()
-
-	slm := NewSipHashLengthModifier("test", [2]uint64{0x1234, 0x5678}, 0)
-	ntcp2Conn.SetLengthObfuscator(slm)
+	p.withSipHash([2]uint64{0x1234, 0x5678})
 
 	smallBuf := make([]byte, 8)
-	n, err := ntcp2Conn.Read(smallBuf)
+	n, err := p.conn.Read(smallBuf)
 	assert.NoError(t, err)
 	assert.Equal(t, 8, n)
 	assert.Equal(t, "buffered", string(smallBuf[:n]))
 
 	remainBuf := make([]byte, 32)
-	n, err = ntcp2Conn.Read(remainBuf)
+	n, err = p.conn.Read(remainBuf)
 	assert.NoError(t, err)
 	assert.Equal(t, "-remainder-data", string(remainBuf[:n]))
 }
@@ -975,148 +941,76 @@ func TestAuditFix_Close_PropagatesErrorOnHealthyConn(t *testing.T) {
 }
 
 func TestAuditFix_NonceExhaustion_ReadMarksBroken(t *testing.T) {
-	client, server := net.Pipe()
-	defer server.Close()
+	p := newPipedNTCP2Conn(t)
+	p.withSipHash([2]uint64{1, 2})
 
-	config := noise.NewConnConfig("XK", true)
-	noiseConn, err := noise.NewNoiseConn(client, config)
-	require.NoError(t, err)
-	defer noiseConn.Close()
-
-	localAddr := createTestNTCP2Addr("local", "initiator")
-	remoteAddr := createTestNTCP2Addr("remote", "responder")
-	conn, err := NewNTCP2Conn(noiseConn, localAddr, remoteAddr)
-	require.NoError(t, err)
-
-	slm := NewSipHashLengthModifier("test", [2]uint64{1, 2}, 0)
-	conn.SetLengthObfuscator(slm)
-
-	conn.readNonce = MaxNonce
+	p.conn.readNonce = MaxNonce
 
 	buf := make([]byte, 64)
-	conn.readMu.Lock()
-	_, err = conn.readFramed(buf)
-	conn.readMu.Unlock()
+	p.conn.readMu.Lock()
+	_, err := p.conn.readFramed(buf)
+	p.conn.readMu.Unlock()
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "nonce exhausted")
-	assert.True(t, conn.broken.Load(), "connection must be marked broken on read nonce exhaustion")
+	assert.True(t, p.conn.broken.Load(), "connection must be marked broken on read nonce exhaustion")
 }
 
 func TestAuditFix_NonceExhaustion_WriteMarksBroken(t *testing.T) {
-	client, server := net.Pipe()
-	defer server.Close()
+	p := newPipedNTCP2Conn(t)
+	p.withSipHash([2]uint64{1, 2})
 
-	config := noise.NewConnConfig("XK", true)
-	noiseConn, err := noise.NewNoiseConn(client, config)
-	require.NoError(t, err)
-	defer noiseConn.Close()
+	p.conn.writeNonce = MaxNonce
 
-	localAddr := createTestNTCP2Addr("local", "initiator")
-	remoteAddr := createTestNTCP2Addr("remote", "responder")
-	conn, err := NewNTCP2Conn(noiseConn, localAddr, remoteAddr)
-	require.NoError(t, err)
-
-	slm := NewSipHashLengthModifier("test", [2]uint64{1, 2}, 0)
-	conn.SetLengthObfuscator(slm)
-
-	conn.writeNonce = MaxNonce
-
-	_, err = conn.writeSingleFrame([]byte("hello"))
+	_, err := p.conn.writeSingleFrame([]byte("hello"))
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "nonce exhausted")
-	assert.True(t, conn.broken.Load(), "connection must be marked broken on write nonce exhaustion")
+	assert.True(t, p.conn.broken.Load(), "connection must be marked broken on write nonce exhaustion")
 }
 
 func TestAuditFix_NonceExhaustion_PreventsSubsequentIO(t *testing.T) {
-	client, server := net.Pipe()
-	defer server.Close()
+	p := newPipedNTCP2Conn(t)
+	p.withSipHash([2]uint64{1, 2})
 
-	config := noise.NewConnConfig("XK", true)
-	noiseConn, err := noise.NewNoiseConn(client, config)
-	require.NoError(t, err)
-	defer noiseConn.Close()
-
-	localAddr := createTestNTCP2Addr("local", "initiator")
-	remoteAddr := createTestNTCP2Addr("remote", "responder")
-	conn, err := NewNTCP2Conn(noiseConn, localAddr, remoteAddr)
-	require.NoError(t, err)
-
-	slm := NewSipHashLengthModifier("test", [2]uint64{1, 2}, 0)
-	conn.SetLengthObfuscator(slm)
-
-	conn.broken.Store(true)
+	p.conn.broken.Store(true)
 
 	buf := make([]byte, 64)
-	_, readErr := conn.Read(buf)
+	_, readErr := p.conn.Read(buf)
 	assert.Error(t, readErr)
 	assert.Contains(t, readErr.Error(), "connection is broken")
 
-	_, writeErr := conn.Write([]byte("test"))
+	_, writeErr := p.conn.Write([]byte("test"))
 	assert.Error(t, writeErr)
 	assert.Contains(t, writeErr.Error(), "connection is broken")
 }
 
 func TestAuditFix_ValidateFrameLength_ZeroHandledByMinCheck(t *testing.T) {
-	client, server := net.Pipe()
-	defer server.Close()
+	p := newPipedNTCP2Conn(t)
 
-	config := noise.NewConnConfig("XK", true)
-	noiseConn, err := noise.NewNoiseConn(client, config)
-	require.NoError(t, err)
-	defer noiseConn.Close()
-
-	conn, err := NewNTCP2Conn(noiseConn,
-		createTestNTCP2Addr("local", "initiator"),
-		createTestNTCP2Addr("remote", "responder"))
-	require.NoError(t, err)
-
-	err = conn.validateFrameLength(0)
+	err := p.conn.validateFrameLength(0)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "below minimum")
 	assert.Contains(t, err.Error(), "16")
 }
 
 func TestAuditFix_ValidateFrameLength_AllBelowMin(t *testing.T) {
-	client, server := net.Pipe()
-	defer server.Close()
-
-	config := noise.NewConnConfig("XK", true)
-	noiseConn, err := noise.NewNoiseConn(client, config)
-	require.NoError(t, err)
-	defer noiseConn.Close()
-
-	conn, err := NewNTCP2Conn(noiseConn,
-		createTestNTCP2Addr("local", "initiator"),
-		createTestNTCP2Addr("remote", "responder"))
-	require.NoError(t, err)
+	p := newPipedNTCP2Conn(t)
 
 	for i := uint16(0); i < MinDataPhaseFrameSize; i++ {
-		err := conn.validateFrameLength(i)
+		err := p.conn.validateFrameLength(i)
 		assert.Error(t, err, "frameLen=%d should be rejected", i)
 	}
 
-	err = conn.validateFrameLength(MinDataPhaseFrameSize)
+	err := p.conn.validateFrameLength(MinDataPhaseFrameSize)
 	assert.NoError(t, err)
 }
 
 func TestAuditFix_ValidateFrameLength_UsesSpecMaxFrameSize(t *testing.T) {
-	client, server := net.Pipe()
-	defer server.Close()
+	p := newPipedNTCP2Conn(t)
 
-	config := noise.NewConnConfig("XK", true)
-	noiseConn, err := noise.NewNoiseConn(client, config)
-	require.NoError(t, err)
-	defer noiseConn.Close()
-
-	conn, err := NewNTCP2Conn(noiseConn,
-		createTestNTCP2Addr("local", "initiator"),
-		createTestNTCP2Addr("remote", "responder"))
-	require.NoError(t, err)
-
-	err = conn.validateFrameLength(uint16(SpecMaxFrameSize))
+	err := p.conn.validateFrameLength(uint16(SpecMaxFrameSize))
 	assert.NoError(t, err, "SpecMaxFrameSize must be accepted")
 
-	err = conn.validateFrameLength(uint16(DefaultMaxFrameSize + 1000))
+	err = p.conn.validateFrameLength(uint16(DefaultMaxFrameSize + 1000))
 	assert.NoError(t, err, "frames between DefaultMaxFrameSize and SpecMaxFrameSize must be accepted")
 }
 
@@ -1147,30 +1041,20 @@ func TestAuditFix_Close_Idempotent(t *testing.T) {
 }
 
 func TestAuditFix_HandleAEADError_SetsBroken(t *testing.T) {
-	client, server := net.Pipe()
-	defer client.Close()
+	p := newPipedNTCP2Conn(t)
 
-	config := noise.NewConnConfig("XK", true)
-	noiseConn, err := noise.NewNoiseConn(client, config)
-	require.NoError(t, err)
-
-	conn, err := NewNTCP2Conn(noiseConn,
-		createTestNTCP2Addr("local", "initiator"),
-		createTestNTCP2Addr("remote", "responder"))
-	require.NoError(t, err)
-
-	assert.False(t, conn.broken.Load())
+	assert.False(t, p.conn.broken.Load())
 
 	go func() {
-		server.Write(make([]byte, 2048))
+		p.server.Write(make([]byte, 2048))
 		time.Sleep(50 * time.Millisecond)
-		server.Close()
+		p.server.Close()
 	}()
 
-	underlying := noiseConn.Underlying()
-	conn.handleAEADError(underlying)
+	underlying := p.noise.Underlying()
+	p.conn.handleAEADError(underlying)
 
-	assert.True(t, conn.broken.Load(), "handleAEADError must set broken flag")
+	assert.True(t, p.conn.broken.Load(), "handleAEADError must set broken flag")
 }
 
 func TestAuditFix_GetMaxFrameSize_FallsBackToSpecMax(t *testing.T) {
@@ -1234,22 +1118,10 @@ func TestDirectWritePath_TakenWhenNoObfuscator(t *testing.T) {
 // TestFramedReadPath_TakenWhenObfuscatorSet verifies that the framed read
 // path is taken when a length obfuscator is set.
 func TestFramedReadPath_TakenWhenObfuscatorSet(t *testing.T) {
-	// Use a pipe so the underlying connection has actual I/O
-	client, server := net.Pipe()
-	defer client.Close()
-	defer server.Close()
-
-	config := noise.NewConnConfig("XK", true)
-	noiseConn, err := noise.NewNoiseConn(client, config)
-	require.NoError(t, err)
-
-	localAddr := createTestNTCP2Addr("local", "initiator")
-	remoteAddr := createTestNTCP2Addr("remote", "responder")
-	ntcp2Conn, err := NewNTCP2Conn(noiseConn, localAddr, remoteAddr)
-	require.NoError(t, err)
+	p := newPipedNTCP2Conn(t)
 
 	slm := NewSipHashLengthModifier("test-siphash", [2]uint64{0x1234, 0x5678}, 0)
-	ntcp2Conn.SetLengthObfuscator(slm)
+	p.conn.SetLengthObfuscator(slm)
 
 	// Write an obfuscated frame to the server side that will be read by the client
 	go func() {
@@ -1266,15 +1138,15 @@ func TestFramedReadPath_TakenWhenObfuscatorSet(t *testing.T) {
 		buf := make([]byte, 2+20)
 		binary.BigEndian.PutUint16(buf[:2], obfuscatedLen)
 		copy(buf[2:], []byte("ABCDEFGHIJKLMNOPQRST")) // fake ciphertext (will fail to decrypt)
-		server.Write(buf)
+		p.server.Write(buf)
 		// Close after writing so handleAEADError's junk read gets immediate EOF
-		server.Close()
+		p.server.Close()
 	}()
 
 	// Read should get past the length deobfuscation but fail at Decrypt
 	// (since no handshake was done, cipher state is not initialized)
 	readBuf := make([]byte, 64)
-	_, err = ntcp2Conn.Read(readBuf)
+	_, err := p.conn.Read(readBuf)
 	assert.Error(t, err)
 	// The framed path reads 2 bytes, deobfuscates, reads the frame, then tries Decrypt
 	assert.Contains(t, err.Error(), "failed to decrypt frame")
@@ -1346,23 +1218,11 @@ func TestFrameLengthObfuscation_MultipleFrames(t *testing.T) {
 
 // TestFramedRead_ZeroLengthFrame verifies that a zero-length frame is rejected.
 func TestFramedRead_ZeroLengthFrame(t *testing.T) {
-	client, server := net.Pipe()
-	defer client.Close()
-	defer server.Close()
-
-	config := noise.NewConnConfig("XK", true)
-	noiseConn, err := noise.NewNoiseConn(client, config)
-	require.NoError(t, err)
-
-	localAddr := createTestNTCP2Addr("local", "initiator")
-	remoteAddr := createTestNTCP2Addr("remote", "responder")
-	ntcp2Conn, err := NewNTCP2Conn(noiseConn, localAddr, remoteAddr)
-	require.NoError(t, err)
+	p := newPipedNTCP2Conn(t)
 
 	// Create a modifier and compute the mask value
 	keys := [2]uint64{0x1111, 0x2222}
-	slm := NewSipHashLengthModifier("test", keys, 0)
-	ntcp2Conn.SetLengthObfuscator(slm)
+	p.withSipHash(keys)
 
 	// Compute what mask the reader will use for the first frame
 	probe := NewSipHashLengthModifier("probe", keys, 0)
@@ -1373,48 +1233,28 @@ func TestFramedRead_ZeroLengthFrame(t *testing.T) {
 		zeroObfuscated := uint16(0) ^ mask // XOR with mask to get zero after deobfuscation
 		buf := make([]byte, 2)
 		binary.BigEndian.PutUint16(buf, zeroObfuscated)
-		server.Write(buf)
+		p.server.Write(buf)
 	}()
 
 	readBuf := make([]byte, 64)
-	_, err = ntcp2Conn.Read(readBuf)
+	_, err := p.conn.Read(readBuf)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "below minimum")
 }
 
 // TestFramedRead_FrameTooLarge verifies that frames exceeding MaxFrameSize are rejected.
 func TestFramedRead_FrameTooLarge(t *testing.T) {
-	client, server := net.Pipe()
-	defer client.Close()
-	defer server.Close()
-
-	config := noise.NewConnConfig("XK", true)
-	noiseConn, err := noise.NewNoiseConn(client, config)
-	require.NoError(t, err)
-
-	localAddr := createTestNTCP2Addr("local", "initiator")
-	remoteAddr := createTestNTCP2Addr("remote", "responder")
-	ntcp2Conn, err := NewNTCP2Conn(noiseConn, localAddr, remoteAddr)
-	require.NoError(t, err)
+	p := newPipedNTCP2Conn(t)
 
 	// Use keys that produce a specific mask
 	keys := [2]uint64{0, 0}
-	slm := NewSipHashLengthModifier("test", keys, 0)
-	ntcp2Conn.SetLengthObfuscator(slm)
+	p.withSipHash(keys)
 
 	// Compute what mask the reader will use
 	probe := NewSipHashLengthModifier("probe", keys, 0)
 	mask := probe.NextInboundMask()
 
 	go func() {
-		// Construct a length that deobfuscates to MaxFrameSize + 1
-		// This is impossible since MaxFrameSize is 65535 and uint16 max is 65535
-		// So we just need to ensure that MaxFrameSize (65535) itself is accepted
-		// Actually MaxFrameSize = 65535 = max uint16, so frame_too_large can't happen
-		// with the current constant. Let's verify the check works if we could somehow
-		// trigger it. Since uint16 max = 65535 = MaxFrameSize, the check is a guard
-		// for future constant changes.
-
 		// Instead, let's test that MaxFrameSize is exactly accepted by checking
 		// a valid length doesn't trigger the error. We'll send a valid-length frame
 		// that fails later at decryption.
@@ -1426,13 +1266,13 @@ func TestFramedRead_FrameTooLarge(t *testing.T) {
 		for i := 2; i < len(buf); i++ {
 			buf[i] = byte(i)
 		}
-		server.Write(buf)
+		p.server.Write(buf)
 		// Close after writing so handleAEADError's junk read gets immediate EOF
-		server.Close()
+		p.server.Close()
 	}()
 
 	readBuf := make([]byte, 200)
-	_, err = ntcp2Conn.Read(readBuf)
+	_, err := p.conn.Read(readBuf)
 	assert.Error(t, err)
 	// Should get past length validation and fail at decrypt
 	assert.Contains(t, err.Error(), "failed to decrypt frame")
@@ -1441,26 +1281,14 @@ func TestFramedRead_FrameTooLarge(t *testing.T) {
 // TestFramedRead_ConnectionClosedDuringLengthRead verifies graceful handling
 // when the connection closes while reading the length field.
 func TestFramedRead_ConnectionClosedDuringLengthRead(t *testing.T) {
-	client, server := net.Pipe()
-	defer client.Close()
-
-	config := noise.NewConnConfig("XK", true)
-	noiseConn, err := noise.NewNoiseConn(client, config)
-	require.NoError(t, err)
-
-	localAddr := createTestNTCP2Addr("local", "initiator")
-	remoteAddr := createTestNTCP2Addr("remote", "responder")
-	ntcp2Conn, err := NewNTCP2Conn(noiseConn, localAddr, remoteAddr)
-	require.NoError(t, err)
-
-	slm := NewSipHashLengthModifier("test", [2]uint64{1, 2}, 0)
-	ntcp2Conn.SetLengthObfuscator(slm)
+	p := newPipedNTCP2Conn(t)
+	p.withSipHash([2]uint64{1, 2})
 
 	// Close the server side immediately - reader gets EOF
-	server.Close()
+	p.server.Close()
 
 	readBuf := make([]byte, 64)
-	_, err = ntcp2Conn.Read(readBuf)
+	_, err := p.conn.Read(readBuf)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to read frame length")
 }
@@ -1468,29 +1296,17 @@ func TestFramedRead_ConnectionClosedDuringLengthRead(t *testing.T) {
 // TestFramedRead_PartialLengthRead verifies handling when only 1 of 2 bytes
 // is available for the length field.
 func TestFramedRead_PartialLengthRead(t *testing.T) {
-	client, server := net.Pipe()
-	defer client.Close()
-
-	config := noise.NewConnConfig("XK", true)
-	noiseConn, err := noise.NewNoiseConn(client, config)
-	require.NoError(t, err)
-
-	localAddr := createTestNTCP2Addr("local", "initiator")
-	remoteAddr := createTestNTCP2Addr("remote", "responder")
-	ntcp2Conn, err := NewNTCP2Conn(noiseConn, localAddr, remoteAddr)
-	require.NoError(t, err)
-
-	slm := NewSipHashLengthModifier("test", [2]uint64{1, 2}, 0)
-	ntcp2Conn.SetLengthObfuscator(slm)
+	p := newPipedNTCP2Conn(t)
+	p.withSipHash([2]uint64{1, 2})
 
 	go func() {
 		// Write only 1 byte then close
-		server.Write([]byte{0x42})
-		server.Close()
+		p.server.Write([]byte{0x42})
+		p.server.Close()
 	}()
 
 	readBuf := make([]byte, 64)
-	_, err = ntcp2Conn.Read(readBuf)
+	_, err := p.conn.Read(readBuf)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to read frame length")
 }
@@ -1498,21 +1314,10 @@ func TestFramedRead_PartialLengthRead(t *testing.T) {
 // TestFramedRead_PartialFrameRead verifies handling when the connection
 // closes mid-frame (after length, before full ciphertext).
 func TestFramedRead_PartialFrameRead(t *testing.T) {
-	client, server := net.Pipe()
-	defer client.Close()
-
-	config := noise.NewConnConfig("XK", true)
-	noiseConn, err := noise.NewNoiseConn(client, config)
-	require.NoError(t, err)
-
-	localAddr := createTestNTCP2Addr("local", "initiator")
-	remoteAddr := createTestNTCP2Addr("remote", "responder")
-	ntcp2Conn, err := NewNTCP2Conn(noiseConn, localAddr, remoteAddr)
-	require.NoError(t, err)
+	p := newPipedNTCP2Conn(t)
 
 	keys := [2]uint64{0, 0}
-	slm := NewSipHashLengthModifier("test", keys, 0)
-	ntcp2Conn.SetLengthObfuscator(slm)
+	p.withSipHash(keys)
 
 	// Compute what mask the reader will use
 	probe := NewSipHashLengthModifier("probe", keys, 0)
@@ -1523,12 +1328,12 @@ func TestFramedRead_PartialFrameRead(t *testing.T) {
 		obfuscated := uint16(100) ^ mask
 		buf := make([]byte, 2+10)
 		binary.BigEndian.PutUint16(buf[:2], obfuscated)
-		server.Write(buf)
-		server.Close()
+		p.server.Write(buf)
+		p.server.Close()
 	}()
 
 	readBuf := make([]byte, 200)
-	_, err = ntcp2Conn.Read(readBuf)
+	_, err := p.conn.Read(readBuf)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to read frame data")
 }

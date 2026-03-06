@@ -10,19 +10,13 @@ import (
 // --- Drain tests ---
 
 func TestDrain_ReturnsImmediatelyWhenNoInUse(t *testing.T) {
-	pool := newTestPool(5)
-	defer pool.Close()
+	f := setupPoolWithConn(t, "10.0.0.1:80")
 
-	// Put a connection but don't check it out.
-	conn := newMockConn("10.0.0.1:80")
-	if err := pool.Put(conn); err != nil {
-		t.Fatalf("Put: %v", err)
-	}
-
+	// Connection is idle (not checked out).
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	if err := pool.Drain(ctx); err != nil {
+	if err := f.pool.Drain(ctx); err != nil {
 		t.Fatalf("Drain should return nil when no connections are in use: %v", err)
 	}
 }
@@ -40,21 +34,10 @@ func TestDrain_ReturnsImmediatelyWhenPoolEmpty(t *testing.T) {
 }
 
 func TestDrain_WaitsForInUseConnections(t *testing.T) {
-	pool := newTestPool(5)
-	defer pool.Close()
+	f := setupPoolWithConn(t, "10.0.0.1:80")
+	f.checkout(t)
 
-	conn := newMockConn("10.0.0.1:80")
-	if err := pool.Put(conn); err != nil {
-		t.Fatalf("Put: %v", err)
-	}
-
-	// Check out the connection.
-	got := pool.Get("10.0.0.1:80")
-	if got == nil {
-		t.Fatal("Get returned nil")
-	}
-
-	stats := pool.Stats()
+	stats := f.pool.Stats()
 	if stats["in_use"] != 1 {
 		t.Fatalf("expected 1 in_use, got %d", stats["in_use"])
 	}
@@ -62,14 +45,14 @@ func TestDrain_WaitsForInUseConnections(t *testing.T) {
 	// Release after a short delay in a goroutine.
 	go func() {
 		time.Sleep(100 * time.Millisecond)
-		pool.Release("10.0.0.1:80", conn)
+		f.pool.Release(f.addr, f.conn)
 	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
 	start := time.Now()
-	if err := pool.Drain(ctx); err != nil {
+	if err := f.pool.Drain(ctx); err != nil {
 		t.Fatalf("Drain should succeed after release: %v", err)
 	}
 	elapsed := time.Since(start)
@@ -80,24 +63,13 @@ func TestDrain_WaitsForInUseConnections(t *testing.T) {
 }
 
 func TestDrain_ContextCancelled(t *testing.T) {
-	pool := newTestPool(5)
-	defer pool.Close()
-
-	conn := newMockConn("10.0.0.1:80")
-	if err := pool.Put(conn); err != nil {
-		t.Fatalf("Put: %v", err)
-	}
-
-	// Check out and never release.
-	got := pool.Get("10.0.0.1:80")
-	if got == nil {
-		t.Fatal("Get returned nil")
-	}
+	f := setupPoolWithConn(t, "10.0.0.1:80")
+	f.checkout(t) // Check out and never release.
 
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer cancel()
 
-	err := pool.Drain(ctx)
+	err := f.pool.Drain(ctx)
 	if err == nil {
 		t.Fatal("Drain should return an error when context is cancelled")
 	}
@@ -242,21 +214,10 @@ func TestSnapshot_ReturnsAllConnections(t *testing.T) {
 }
 
 func TestSnapshot_IncludesInUseConnections(t *testing.T) {
-	pool := newTestPool(5)
-	defer pool.Close()
+	f := setupPoolWithConn(t, "10.0.0.1:80")
+	f.checkout(t)
 
-	conn := newMockConn("10.0.0.1:80")
-	if err := pool.Put(conn); err != nil {
-		t.Fatalf("Put: %v", err)
-	}
-
-	// Check out the connection.
-	got := pool.Get("10.0.0.1:80")
-	if got == nil {
-		t.Fatal("Get returned nil")
-	}
-
-	snap := pool.Snapshot()
+	snap := f.pool.Snapshot()
 	if len(snap) != 1 {
 		t.Fatalf("expected 1 connection in snapshot, got %d", len(snap))
 	}
@@ -291,19 +252,13 @@ func TestSnapshot_IsShallowCopy(t *testing.T) {
 // --- PooledConn accessor tests ---
 
 func TestPooledConn_NetConn(t *testing.T) {
-	pool := newTestPool(5)
-	defer pool.Close()
+	f := setupPoolWithConn(t, "10.0.0.1:80")
 
-	conn := newMockConn("10.0.0.1:80")
-	if err := pool.Put(conn); err != nil {
-		t.Fatalf("Put: %v", err)
-	}
-
-	snap := pool.Snapshot()
+	snap := f.pool.Snapshot()
 	if len(snap) != 1 {
 		t.Fatalf("expected 1 entry, got %d", len(snap))
 	}
-	if snap[0].NetConn() != conn {
+	if snap[0].NetConn() != f.conn {
 		t.Error("NetConn() should return the original connection")
 	}
 }
@@ -327,15 +282,9 @@ func TestPooledConn_CreatedAt(t *testing.T) {
 }
 
 func TestPooledConn_LastUsedAt(t *testing.T) {
-	pool := newTestPool(5)
-	defer pool.Close()
+	f := setupPoolWithConn(t, "10.0.0.1:80")
 
-	conn := newMockConn("10.0.0.1:80")
-	if err := pool.Put(conn); err != nil {
-		t.Fatalf("Put: %v", err)
-	}
-
-	snap := pool.Snapshot()
+	snap := f.pool.Snapshot()
 	lastUsed := snap[0].LastUsedAt()
 	if lastUsed.IsZero() {
 		t.Error("LastUsedAt() should not be zero")
@@ -343,93 +292,66 @@ func TestPooledConn_LastUsedAt(t *testing.T) {
 
 	// Check out and release — lastUsed should advance.
 	time.Sleep(10 * time.Millisecond)
-	got := pool.Get("10.0.0.1:80")
-	if got == nil {
-		t.Fatal("Get returned nil")
-	}
+	got := f.checkout(t)
+	_ = got
 
-	snap2 := pool.Snapshot()
+	snap2 := f.pool.Snapshot()
 	if !snap2[0].LastUsedAt().After(lastUsed) {
 		t.Error("LastUsedAt() should advance after Get()")
 	}
 }
 
 func TestPooledConn_IsInUse(t *testing.T) {
-	pool := newTestPool(5)
-	defer pool.Close()
+	f := setupPoolWithConn(t, "10.0.0.1:80")
 
-	conn := newMockConn("10.0.0.1:80")
-	if err := pool.Put(conn); err != nil {
-		t.Fatalf("Put: %v", err)
-	}
-
-	snap := pool.Snapshot()
+	snap := f.pool.Snapshot()
 	if snap[0].IsInUse() {
 		t.Error("connection should not be in use after Put")
 	}
 
-	got := pool.Get("10.0.0.1:80")
-	if got == nil {
-		t.Fatal("Get returned nil")
-	}
+	f.checkout(t)
 
-	snap = pool.Snapshot()
+	snap = f.pool.Snapshot()
 	if !snap[0].IsInUse() {
 		t.Error("connection should be in use after Get")
 	}
 
-	pool.Release("10.0.0.1:80", conn)
+	f.pool.Release(f.addr, f.conn)
 
-	snap = pool.Snapshot()
+	snap = f.pool.Snapshot()
 	if snap[0].IsInUse() {
 		t.Error("connection should not be in use after Release")
 	}
 }
 
 func TestPooledConn_Address(t *testing.T) {
-	pool := newTestPool(5)
-	defer pool.Close()
+	f := setupPoolWithConn(t, "10.0.0.1:80")
 
-	addr := "10.0.0.1:80"
-	conn := newMockConn(addr)
-	if err := pool.Put(conn); err != nil {
-		t.Fatalf("Put: %v", err)
-	}
-
-	snap := pool.Snapshot()
-	if snap[0].Address() != addr {
-		t.Errorf("Address() = %q, want %q", snap[0].Address(), addr)
+	snap := f.pool.Snapshot()
+	if snap[0].Address() != f.addr {
+		t.Errorf("Address() = %q, want %q", snap[0].Address(), f.addr)
 	}
 }
 
 // --- Drain + Snapshot integration ---
 
 func TestDrain_ThenSnapshot_AllIdle(t *testing.T) {
-	pool := newTestPool(5)
-	defer pool.Close()
-
-	conn := newMockConn("10.0.0.1:80")
-	if err := pool.Put(conn); err != nil {
-		t.Fatalf("Put: %v", err)
-	}
-	got := pool.Get("10.0.0.1:80")
-	if got == nil {
-		t.Fatal("Get returned nil")
-	}
+	f := setupPoolWithConn(t, "10.0.0.1:80")
+	f.checkout(t)
 
 	go func() {
 		time.Sleep(50 * time.Millisecond)
-		pool.Release("10.0.0.1:80", conn)
+		f.pool.Release(f.addr, f.conn)
 	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	if err := pool.Drain(ctx); err != nil {
+	if err := f.pool.Drain(ctx); err != nil {
 		t.Fatalf("Drain: %v", err)
 	}
 
-	snap := pool.Snapshot()
+	snap := f.pool.Snapshot()
 	for _, pc := range snap {
 		if pc.IsInUse() {
 			t.Error("after Drain, no connection should be in use")

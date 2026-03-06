@@ -23,6 +23,35 @@ type testECIESMaterial struct {
 	identityHash [32]byte
 }
 
+// testReplyMaterial holds pre-generated material for reply record crypto tests.
+type testReplyMaterial struct {
+	crypto     *BuildRecordCrypto
+	replyKey   [32]byte
+	replyIV    [16]byte
+	randomData [495]byte
+	cleartext  []byte
+	encrypted  []byte
+}
+
+// newTestReplyMaterial generates random key/IV/data, computes the response
+// record hash, serializes the cleartext, and encrypts it — providing all the
+// pieces needed by the reply-record test functions.
+func newTestReplyMaterial(t *testing.T) testReplyMaterial {
+	t.Helper()
+	m := testReplyMaterial{crypto: NewBuildRecordCrypto()}
+	rand.Read(m.replyKey[:])
+	rand.Read(m.replyIV[:])
+	rand.Read(m.randomData[:])
+
+	hash := CreateBuildResponseRecordRaw(0, m.randomData)
+	m.cleartext = SerializeResponseRecord(hash, m.randomData, 0)
+
+	var err error
+	m.encrypted, err = m.crypto.EncryptReplyRecord(m.cleartext, m.replyKey, m.replyIV)
+	require.NoError(t, err)
+	return m
+}
+
 // newTestECIESMaterial generates a fresh X25519 keypair, a random 222-byte
 // cleartext, and the SHA-256 identity hash derived from the public key.
 func newTestECIESMaterial(t *testing.T) testECIESMaterial {
@@ -83,48 +112,22 @@ func TestEncryptDecryptReplyRecord(t *testing.T) {
 
 // TestEncryptReplyRecordDeterminism verifies same key/IV produces same output.
 func TestEncryptReplyRecordDeterminism(t *testing.T) {
-	crypto := NewBuildRecordCrypto()
+	m := newTestReplyMaterial(t)
 
-	var replyKey [32]byte
-	var replyIV [16]byte
-	rand.Read(replyKey[:])
-	rand.Read(replyIV[:])
-
-	var randomData [495]byte
-	rand.Read(randomData[:])
-
-	hash := CreateBuildResponseRecordRaw(0, randomData)
-	cleartext := SerializeResponseRecord(hash, randomData, 0)
-
-	encrypted1, err := crypto.EncryptReplyRecord(cleartext, replyKey, replyIV)
+	encrypted2, err := m.crypto.EncryptReplyRecord(m.cleartext, m.replyKey, m.replyIV)
 	require.NoError(t, err)
 
-	encrypted2, err := crypto.EncryptReplyRecord(cleartext, replyKey, replyIV)
-	require.NoError(t, err)
-
-	assert.True(t, bytes.Equal(encrypted1, encrypted2), "Should be deterministic")
+	assert.True(t, bytes.Equal(m.encrypted, encrypted2), "Should be deterministic")
 }
 
 // TestDecryptReplyRecordWrongKey tests decryption with wrong key fails.
 func TestDecryptReplyRecordWrongKey(t *testing.T) {
-	crypto := NewBuildRecordCrypto()
+	m := newTestReplyMaterial(t)
 
-	var replyKey, wrongKey [32]byte
-	var replyIV [16]byte
-	rand.Read(replyKey[:])
+	var wrongKey [32]byte
 	rand.Read(wrongKey[:])
-	rand.Read(replyIV[:])
 
-	var randomData [495]byte
-	rand.Read(randomData[:])
-
-	hash := CreateBuildResponseRecordRaw(0, randomData)
-	cleartext := SerializeResponseRecord(hash, randomData, 0)
-
-	encrypted, err := crypto.EncryptReplyRecord(cleartext, replyKey, replyIV)
-	require.NoError(t, err)
-
-	_, err = crypto.DecryptReplyRecord(encrypted, wrongKey, replyIV)
+	_, err := m.crypto.DecryptReplyRecord(m.encrypted, wrongKey, m.replyIV)
 	assert.Error(t, err, "Wrong key should fail")
 }
 
@@ -211,26 +214,12 @@ func TestSerializeResponseRecord(t *testing.T) {
 
 // TestChaCha20Poly1305_AuthenticationTag verifies AEAD auth tags.
 func TestChaCha20Poly1305_AuthenticationTag(t *testing.T) {
-	crypto := NewBuildRecordCrypto()
+	m := newTestReplyMaterial(t)
 
-	var replyKey [32]byte
-	var replyIV [16]byte
-	rand.Read(replyKey[:])
-	rand.Read(replyIV[:])
-
-	var randomData [495]byte
-	rand.Read(randomData[:])
-
-	hash := CreateBuildResponseRecordRaw(0, randomData)
-	cleartext := SerializeResponseRecord(hash, randomData, 0)
-
-	encrypted, err := crypto.EncryptReplyRecord(cleartext, replyKey, replyIV)
-	require.NoError(t, err)
-
-	assert.Equal(t, 544, len(encrypted))
+	assert.Equal(t, 544, len(m.encrypted))
 
 	// Auth tag is last 16 bytes and should not be all zeros
-	authTag := encrypted[528:]
+	authTag := m.encrypted[528:]
 	allZero := true
 	for _, b := range authTag {
 		if b != 0 {
@@ -243,21 +232,7 @@ func TestChaCha20Poly1305_AuthenticationTag(t *testing.T) {
 
 // TestChaCha20Poly1305_TamperDetection verifies tampering detection.
 func TestChaCha20Poly1305_TamperDetection(t *testing.T) {
-	crypto := NewBuildRecordCrypto()
-
-	var replyKey [32]byte
-	var replyIV [16]byte
-	rand.Read(replyKey[:])
-	rand.Read(replyIV[:])
-
-	var randomData [495]byte
-	rand.Read(randomData[:])
-
-	hash := CreateBuildResponseRecordRaw(0, randomData)
-	cleartext := SerializeResponseRecord(hash, randomData, 0)
-
-	encrypted, err := crypto.EncryptReplyRecord(cleartext, replyKey, replyIV)
-	require.NoError(t, err)
+	m := newTestReplyMaterial(t)
 
 	tamperCases := []struct {
 		name      string
@@ -293,8 +268,8 @@ func TestChaCha20Poly1305_TamperDetection(t *testing.T) {
 
 	for _, tc := range tamperCases {
 		t.Run(tc.name, func(t *testing.T) {
-			tampered := tc.tamperFn(encrypted)
-			_, err := crypto.DecryptReplyRecord(tampered, replyKey, replyIV)
+			tampered := tc.tamperFn(m.encrypted)
+			_, err := m.crypto.DecryptReplyRecord(tampered, m.replyKey, m.replyIV)
 			if tc.expectErr {
 				assert.Error(t, err, "Should detect tampering: %s", tc.name)
 			} else {

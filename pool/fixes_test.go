@@ -14,22 +14,11 @@ import (
 // PoolConnWrapper marks the wrapper's closed flag, preventing a subsequent
 // Close() from issuing a second release.
 func TestRelease_MarksWrapperClosed(t *testing.T) {
-	p := newTestPool(5)
-	defer p.Close()
-
-	conn := newMockConn("10.0.0.1:5000")
-	if err := p.Put(conn); err != nil {
-		t.Fatalf("Put: %v", err)
-	}
-
-	// Get returns a *PoolConnWrapper
-	wrapper := p.Get("10.0.0.1:5000")
-	if wrapper == nil {
-		t.Fatal("Get returned nil")
-	}
+	f := setupPoolWithConn(t, "10.0.0.1:5000")
+	wrapper := f.checkout(t)
 
 	// Release via the pool (passing the wrapper directly)
-	if err := p.Release("10.0.0.1:5000", wrapper); err != nil {
+	if err := f.pool.Release(f.addr, wrapper); err != nil {
 		t.Fatalf("Release: %v", err)
 	}
 
@@ -48,26 +37,16 @@ func TestRelease_MarksWrapperClosed(t *testing.T) {
 // scenario: Get -> Release(wrapper) -> wrapper.Close() must not allow a
 // second goroutine to observe the connection as idle between the two calls.
 func TestRelease_ThenClose_NoDoubleRelease(t *testing.T) {
-	p := newTestPool(5)
-	defer p.Close()
-
-	conn := newMockConn("10.0.0.2:6000")
-	if err := p.Put(conn); err != nil {
-		t.Fatalf("Put: %v", err)
-	}
-
-	wrapper := p.Get("10.0.0.2:6000")
-	if wrapper == nil {
-		t.Fatal("Get returned nil")
-	}
+	f := setupPoolWithConn(t, "10.0.0.2:6000")
+	wrapper := f.checkout(t)
 
 	// First release via pool
-	if err := p.Release("10.0.0.2:6000", wrapper); err != nil {
+	if err := f.pool.Release(f.addr, wrapper); err != nil {
 		t.Fatalf("Release: %v", err)
 	}
 
 	// Another goroutine gets the now-idle connection
-	wrapper2 := p.Get("10.0.0.2:6000")
+	wrapper2 := f.pool.Get(f.addr)
 	if wrapper2 == nil {
 		t.Fatal("second Get returned nil - connection should be idle after Release")
 	}
@@ -122,29 +101,18 @@ func TestRelease_ConcurrentWithClose_NoRace(t *testing.T) {
 // TestRelease_WithRawConn_NoWrapperMarking verifies that Release with a
 // non-wrapper conn works normally (no wrapper marking logic triggered).
 func TestRelease_WithRawConn_NoWrapperMarking(t *testing.T) {
-	p := newTestPool(5)
-	defer p.Close()
-
-	conn := newMockConn("10.0.0.4:8000")
-	if err := p.Put(conn); err != nil {
-		t.Fatalf("Put: %v", err)
-	}
-
-	// Get returns a wrapper, but we'll extract the raw conn
-	wrapper := p.Get("10.0.0.4:8000")
-	if wrapper == nil {
-		t.Fatal("Get returned nil")
-	}
+	f := setupPoolWithConn(t, "10.0.0.4:8000")
+	wrapper := f.checkout(t)
 	pcw := wrapper.(*PoolConnWrapper)
 	rawConn := pcw.Conn
 
 	// Release with the raw conn should work
-	if err := p.Release("10.0.0.4:8000", rawConn); err != nil {
+	if err := f.pool.Release(f.addr, rawConn); err != nil {
 		t.Fatalf("Release with raw conn: %v", err)
 	}
 
 	// Connection should be available again
-	wrapper2 := p.Get("10.0.0.4:8000")
+	wrapper2 := f.pool.Get(f.addr)
 	if wrapper2 == nil {
 		t.Error("connection should be available after Release")
 	}
@@ -297,18 +265,8 @@ func TestClose_InUseConnectionsNotClosed(t *testing.T) {
 // TestPoolConnWrapper_DoubleDiscard verifies that calling Discard() twice on
 // the same wrapper returns an ALREADY_CLOSED error on the second call.
 func TestPoolConnWrapper_DoubleDiscard(t *testing.T) {
-	p := newTestPool(5)
-	defer p.Close()
-
-	conn := newMockConn("10.0.0.10:6000")
-	if err := p.Put(conn); err != nil {
-		t.Fatalf("Put: %v", err)
-	}
-
-	wrapped := p.Get("10.0.0.10:6000")
-	if wrapped == nil {
-		t.Fatal("Get returned nil")
-	}
+	f := setupPoolWithConn(t, "10.0.0.10:6000")
+	wrapped := f.checkout(t)
 
 	wrapper, ok := wrapped.(*PoolConnWrapper)
 	if !ok {
@@ -320,7 +278,7 @@ func TestPoolConnWrapper_DoubleDiscard(t *testing.T) {
 		t.Fatalf("first Discard should succeed: %v", err)
 	}
 
-	if !conn.closed {
+	if !f.conn.closed {
 		t.Error("connection should be closed after Discard")
 	}
 

@@ -1,13 +1,62 @@
 package ntcp2
 
 import (
+	"net"
 	"testing"
 
 	"github.com/go-i2p/crypto/rand"
 
+	noise "github.com/go-i2p/go-noise"
 	upstreamnoise "github.com/go-i2p/noise"
 	"github.com/stretchr/testify/require"
 )
+
+// pipedNTCP2Conn holds all the pieces created by newPipedNTCP2Conn, so
+// callers can access the raw pipe ends and the SipHash modifier, if set.
+type pipedNTCP2Conn struct {
+	conn    *NTCP2Conn
+	client  net.Conn // client end of net.Pipe (used by NoiseConn)
+	server  net.Conn // server end of net.Pipe (for test writes/reads)
+	noise   *noise.NoiseConn
+	localA  *NTCP2Addr
+	remoteA *NTCP2Addr
+}
+
+// newPipedNTCP2Conn creates an *NTCP2Conn backed by a net.Pipe(), wired
+// through a NoiseConn with the XK pattern. Both pipe ends are registered
+// with t.Cleanup so callers don't need explicit defers.
+func newPipedNTCP2Conn(t *testing.T) pipedNTCP2Conn {
+	t.Helper()
+	client, server := net.Pipe()
+	t.Cleanup(func() { client.Close(); server.Close() })
+
+	config := noise.NewConnConfig("XK", true)
+	noiseConn, err := noise.NewNoiseConn(client, config)
+	require.NoError(t, err)
+	t.Cleanup(func() { noiseConn.Close() })
+
+	localAddr := createTestNTCP2Addr("local", "initiator")
+	remoteAddr := createTestNTCP2Addr("remote", "responder")
+	conn, err := NewNTCP2Conn(noiseConn, localAddr, remoteAddr)
+	require.NoError(t, err)
+
+	return pipedNTCP2Conn{
+		conn:    conn,
+		client:  client,
+		server:  server,
+		noise:   noiseConn,
+		localA:  localAddr,
+		remoteA: remoteAddr,
+	}
+}
+
+// withSipHash attaches a SipHashLengthModifier with the given keys to the
+// connection and returns the modifier (useful for mask probing).
+func (p pipedNTCP2Conn) withSipHash(keys [2]uint64) *SipHashLengthModifier {
+	slm := NewSipHashLengthModifier("test", keys, 0)
+	p.conn.SetLengthObfuscator(slm)
+	return slm
+}
 
 // testCryptoMaterial holds random byte slices commonly needed by NTCP2 tests.
 type testCryptoMaterial struct {
