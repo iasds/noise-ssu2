@@ -13,6 +13,39 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// testECIESMaterial holds pre-generated ECIES key material and a 222-byte
+// cleartext buffer for build-request encryption tests.
+type testECIESMaterial struct {
+	pubKey       []byte
+	privKey      []byte
+	pubKeyArr    [32]byte
+	cleartext    []byte
+	identityHash [32]byte
+}
+
+// newTestECIESMaterial generates a fresh X25519 keypair, a random 222-byte
+// cleartext, and the SHA-256 identity hash derived from the public key.
+func newTestECIESMaterial(t *testing.T) testECIESMaterial {
+	t.Helper()
+	pubKey, privKey, err := ecies.GenerateKeyPair()
+	require.NoError(t, err)
+
+	cleartext := make([]byte, 222)
+	rand.Read(cleartext)
+
+	identityHash := types.SHA256(pubKey)
+	var pubKeyArr [32]byte
+	copy(pubKeyArr[:], pubKey)
+
+	return testECIESMaterial{
+		pubKey:       pubKey,
+		privKey:      privKey,
+		pubKeyArr:    pubKeyArr,
+		cleartext:    cleartext,
+		identityHash: identityHash,
+	}
+}
+
 // ============================================================================
 // Reply Record Encryption Tests (ChaCha20-Poly1305)
 // ============================================================================
@@ -454,54 +487,32 @@ func TestBuildResponseRecordHashTamper(t *testing.T) {
 // TestEncryptDecryptBuildRequest tests ECIES encrypt/decrypt round-trip.
 func TestEncryptDecryptBuildRequest(t *testing.T) {
 	crypto := NewBuildRecordCrypto()
-
-	// Generate X25519 key pair
-	pubKey, privKey, err := ecies.GenerateKeyPair()
-	require.NoError(t, err)
-
-	// Create 222-byte cleartext
-	cleartext := make([]byte, 222)
-	rand.Read(cleartext)
-
-	// Compute identity hash from public key (simulating what go-i2p does)
-	identityHash := types.SHA256(pubKey)
-
-	var pubKeyArr [32]byte
-	copy(pubKeyArr[:], pubKey)
+	m := newTestECIESMaterial(t)
 
 	// Encrypt
-	encrypted, err := crypto.EncryptBuildRequest(cleartext, pubKeyArr, identityHash)
+	encrypted, err := crypto.EncryptBuildRequest(m.cleartext, m.pubKeyArr, m.identityHash)
 	require.NoError(t, err)
 
 	// Verify identity hash prefix
 	for i := 0; i < 16; i++ {
-		assert.Equal(t, identityHash[i], encrypted[i], "Identity hash prefix byte %d", i)
+		assert.Equal(t, m.identityHash[i], encrypted[i], "Identity hash prefix byte %d", i)
 	}
 
 	// Decrypt
-	decrypted, err := crypto.DecryptBuildRequest(encrypted, privKey)
+	decrypted, err := crypto.DecryptBuildRequest(encrypted, m.privKey)
 	require.NoError(t, err)
-	assert.Equal(t, cleartext, decrypted, "Round-trip should preserve cleartext")
+	assert.Equal(t, m.cleartext, decrypted, "Round-trip should preserve cleartext")
 }
 
 // TestEncryptBuildRequestNonDeterministic verifies ephemeral keys differ.
 func TestEncryptBuildRequestNonDeterministic(t *testing.T) {
 	crypto := NewBuildRecordCrypto()
+	m := newTestECIESMaterial(t)
 
-	pubKey, _, err := ecies.GenerateKeyPair()
+	encrypted1, err := crypto.EncryptBuildRequest(m.cleartext, m.pubKeyArr, m.identityHash)
 	require.NoError(t, err)
 
-	cleartext := make([]byte, 222)
-	rand.Read(cleartext)
-
-	identityHash := types.SHA256(pubKey)
-	var pubKeyArr [32]byte
-	copy(pubKeyArr[:], pubKey)
-
-	encrypted1, err := crypto.EncryptBuildRequest(cleartext, pubKeyArr, identityHash)
-	require.NoError(t, err)
-
-	encrypted2, err := crypto.EncryptBuildRequest(cleartext, pubKeyArr, identityHash)
+	encrypted2, err := crypto.EncryptBuildRequest(m.cleartext, m.pubKeyArr, m.identityHash)
 	require.NoError(t, err)
 
 	// Identity hash prefix should match
@@ -513,21 +524,12 @@ func TestEncryptBuildRequestNonDeterministic(t *testing.T) {
 // TestDecryptBuildRequestWrongKey verifies wrong key fails.
 func TestDecryptBuildRequestWrongKey(t *testing.T) {
 	crypto := NewBuildRecordCrypto()
-
-	pubKey1, _, err := ecies.GenerateKeyPair()
-	require.NoError(t, err)
+	m := newTestECIESMaterial(t)
 
 	_, privKey2, err := ecies.GenerateKeyPair()
 	require.NoError(t, err)
 
-	cleartext := make([]byte, 222)
-	rand.Read(cleartext)
-
-	identityHash := types.SHA256(pubKey1)
-	var pubKeyArr [32]byte
-	copy(pubKeyArr[:], pubKey1)
-
-	encrypted, err := crypto.EncryptBuildRequest(cleartext, pubKeyArr, identityHash)
+	encrypted, err := crypto.EncryptBuildRequest(m.cleartext, m.pubKeyArr, m.identityHash)
 	require.NoError(t, err)
 
 	_, err = crypto.DecryptBuildRequest(encrypted, privKey2)
@@ -537,22 +539,13 @@ func TestDecryptBuildRequestWrongKey(t *testing.T) {
 // TestVerifyIdentityHashRaw tests identity hash verification.
 func TestVerifyIdentityHashRaw(t *testing.T) {
 	crypto := NewBuildRecordCrypto()
+	m := newTestECIESMaterial(t)
 
-	pubKey, _, err := ecies.GenerateKeyPair()
-	require.NoError(t, err)
-
-	cleartext := make([]byte, 222)
-	rand.Read(cleartext)
-
-	identityHash := types.SHA256(pubKey)
-	var pubKeyArr [32]byte
-	copy(pubKeyArr[:], pubKey)
-
-	encrypted, err := crypto.EncryptBuildRequest(cleartext, pubKeyArr, identityHash)
+	encrypted, err := crypto.EncryptBuildRequest(m.cleartext, m.pubKeyArr, m.identityHash)
 	require.NoError(t, err)
 
 	// Should match our identity hash
-	assert.True(t, crypto.VerifyIdentityHash(encrypted, identityHash))
+	assert.True(t, crypto.VerifyIdentityHash(encrypted, m.identityHash))
 
 	// Should not match a different identity hash
 	var wrongHash [32]byte
@@ -588,15 +581,9 @@ func TestComputeIdentityHash(t *testing.T) {
 // TestEncryptBuildRequestInvalidCleartext tests bad cleartext sizes.
 func TestEncryptBuildRequestInvalidCleartext(t *testing.T) {
 	crypto := NewBuildRecordCrypto()
+	m := newTestECIESMaterial(t)
 
-	pubKey, _, err := ecies.GenerateKeyPair()
-	require.NoError(t, err)
-
-	identityHash := types.SHA256(pubKey)
-	var pubKeyArr [32]byte
-	copy(pubKeyArr[:], pubKey)
-
-	_, err = crypto.EncryptBuildRequest(make([]byte, 100), pubKeyArr, identityHash)
+	_, err := crypto.EncryptBuildRequest(make([]byte, 100), m.pubKeyArr, m.identityHash)
 	assert.Error(t, err, "Non-222 cleartext should fail")
 }
 
@@ -612,22 +599,16 @@ func TestDecryptBuildRequestInvalidKeySize(t *testing.T) {
 // TestMultipleEncryptDecryptCycles tests repeated encrypt/decrypt cycles.
 func TestMultipleEncryptDecryptCycles(t *testing.T) {
 	crypto := NewBuildRecordCrypto()
-
-	pubKey, privKey, err := ecies.GenerateKeyPair()
-	require.NoError(t, err)
-
-	identityHash := types.SHA256(pubKey)
-	var pubKeyArr [32]byte
-	copy(pubKeyArr[:], pubKey)
+	m := newTestECIESMaterial(t)
 
 	for i := 0; i < 10; i++ {
 		cleartext := make([]byte, 222)
 		rand.Read(cleartext)
 
-		encrypted, err := crypto.EncryptBuildRequest(cleartext, pubKeyArr, identityHash)
+		encrypted, err := crypto.EncryptBuildRequest(cleartext, m.pubKeyArr, m.identityHash)
 		require.NoError(t, err, "Cycle %d encrypt", i)
 
-		decrypted, err := crypto.DecryptBuildRequest(encrypted, privKey)
+		decrypted, err := crypto.DecryptBuildRequest(encrypted, m.privKey)
 		require.NoError(t, err, "Cycle %d decrypt", i)
 
 		assert.Equal(t, cleartext, decrypted, "Cycle %d round-trip", i)

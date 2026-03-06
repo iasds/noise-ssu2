@@ -6,7 +6,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 )
 
 // --- Double-release vulnerability tests ---
@@ -15,11 +14,7 @@ import (
 // PoolConnWrapper marks the wrapper's closed flag, preventing a subsequent
 // Close() from issuing a second release.
 func TestRelease_MarksWrapperClosed(t *testing.T) {
-	p := NewConnPool(&PoolConfig{
-		MaxSize: 5,
-		MaxAge:  time.Hour,
-		MaxIdle: time.Hour,
-	})
+	p := newTestPool(5)
 	defer p.Close()
 
 	conn := newMockConn("10.0.0.1:5000")
@@ -53,11 +48,7 @@ func TestRelease_MarksWrapperClosed(t *testing.T) {
 // scenario: Get -> Release(wrapper) -> wrapper.Close() must not allow a
 // second goroutine to observe the connection as idle between the two calls.
 func TestRelease_ThenClose_NoDoubleRelease(t *testing.T) {
-	p := NewConnPool(&PoolConfig{
-		MaxSize: 5,
-		MaxAge:  time.Hour,
-		MaxIdle: time.Hour,
-	})
+	p := newTestPool(5)
 	defer p.Close()
 
 	conn := newMockConn("10.0.0.2:6000")
@@ -96,11 +87,7 @@ func TestRelease_ThenClose_NoDoubleRelease(t *testing.T) {
 // TestRelease_ConcurrentWithClose_NoRace exercises the double-release fix
 // under concurrent access to catch data races.
 func TestRelease_ConcurrentWithClose_NoRace(t *testing.T) {
-	p := NewConnPool(&PoolConfig{
-		MaxSize: 10,
-		MaxAge:  time.Hour,
-		MaxIdle: time.Hour,
-	})
+	p := newTestPool(10)
 	defer p.Close()
 
 	const iterations = 100
@@ -135,11 +122,7 @@ func TestRelease_ConcurrentWithClose_NoRace(t *testing.T) {
 // TestRelease_WithRawConn_NoWrapperMarking verifies that Release with a
 // non-wrapper conn works normally (no wrapper marking logic triggered).
 func TestRelease_WithRawConn_NoWrapperMarking(t *testing.T) {
-	p := NewConnPool(&PoolConfig{
-		MaxSize: 5,
-		MaxAge:  time.Hour,
-		MaxIdle: time.Hour,
-	})
+	p := newTestPool(5)
 	defer p.Close()
 
 	conn := newMockConn("10.0.0.4:8000")
@@ -179,11 +162,7 @@ func (n *nilAddrConn) RemoteAddr() net.Addr { return nil }
 // TestPut_NilRemoteAddr verifies that Put returns an error instead of
 // panicking when the connection's RemoteAddr() returns nil.
 func TestPut_NilRemoteAddr(t *testing.T) {
-	p := NewConnPool(&PoolConfig{
-		MaxSize: 5,
-		MaxAge:  time.Hour,
-		MaxIdle: time.Hour,
-	})
+	p := newTestPool(5)
 	defer p.Close()
 
 	conn := &nilAddrConn{}
@@ -199,11 +178,7 @@ func TestPut_NilRemoteAddr(t *testing.T) {
 // TestPut_NilRemoteAddr_WrappedConn verifies the nil guard also works when
 // the connection is wrapped in a PoolConnWrapper.
 func TestPut_NilRemoteAddr_WrappedConn(t *testing.T) {
-	p := NewConnPool(&PoolConfig{
-		MaxSize: 5,
-		MaxAge:  time.Hour,
-		MaxIdle: time.Hour,
-	})
+	p := newTestPool(5)
 	defer p.Close()
 
 	inner := &nilAddrConn{}
@@ -243,11 +218,7 @@ func newFailingCloseConn(addr string, err error) *failingCloseConn {
 // TestClose_CollectsErrors verifies that ConnPool.Close() returns an
 // aggregated error containing all individual Close() failures.
 func TestClose_CollectsErrors(t *testing.T) {
-	p := NewConnPool(&PoolConfig{
-		MaxSize: 10,
-		MaxAge:  time.Hour,
-		MaxIdle: time.Hour,
-	})
+	p := newTestPool(10)
 
 	err1 := errors.New("close error 1")
 	err2 := errors.New("close error 2")
@@ -283,11 +254,7 @@ func TestClose_CollectsErrors(t *testing.T) {
 // TestClose_NoErrorsWhenAllSucceed verifies that Close() returns nil when
 // all connection closures succeed.
 func TestClose_NoErrorsWhenAllSucceed(t *testing.T) {
-	p := NewConnPool(&PoolConfig{
-		MaxSize: 5,
-		MaxAge:  time.Hour,
-		MaxIdle: time.Hour,
-	})
+	p := newTestPool(5)
 
 	if err := p.Put(newMockConn("10.0.0.5:9000")); err != nil {
 		t.Fatalf("Put: %v", err)
@@ -304,11 +271,7 @@ func TestClose_NoErrorsWhenAllSucceed(t *testing.T) {
 // TestClose_InUseConnectionsNotClosed verifies that in-use connections are
 // not closed by Close() (they will be closed when returned via Release/Discard).
 func TestClose_InUseConnectionsNotClosed(t *testing.T) {
-	p := NewConnPool(&PoolConfig{
-		MaxSize: 5,
-		MaxAge:  time.Hour,
-		MaxIdle: time.Hour,
-	})
+	p := newTestPool(5)
 
 	conn := newMockConn("10.0.0.6:9100")
 	if err := p.Put(conn); err != nil {
@@ -334,11 +297,7 @@ func TestClose_InUseConnectionsNotClosed(t *testing.T) {
 // TestPoolConnWrapper_DoubleDiscard verifies that calling Discard() twice on
 // the same wrapper returns an ALREADY_CLOSED error on the second call.
 func TestPoolConnWrapper_DoubleDiscard(t *testing.T) {
-	p := NewConnPool(&PoolConfig{
-		MaxSize: 5,
-		MaxAge:  time.Hour,
-		MaxIdle: time.Hour,
-	})
+	p := newTestPool(5)
 	defer p.Close()
 
 	conn := newMockConn("10.0.0.10:6000")
@@ -379,11 +338,7 @@ func TestPoolConnWrapper_DoubleDiscard(t *testing.T) {
 // TestClose_MixedErrors verifies Close() handles a mix of successful and
 // failing connection closures correctly.
 func TestClose_MixedErrors(t *testing.T) {
-	p := NewConnPool(&PoolConfig{
-		MaxSize: 10,
-		MaxAge:  time.Hour,
-		MaxIdle: time.Hour,
-	})
+	p := newTestPool(10)
 
 	expectedErr := errors.New("mixed close error")
 	if err := p.Put(newMockConn("10.0.0.7:9200")); err != nil {

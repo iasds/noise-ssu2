@@ -10,7 +10,7 @@ import (
 // --- Drain tests ---
 
 func TestDrain_ReturnsImmediatelyWhenNoInUse(t *testing.T) {
-	pool := NewConnPool(&PoolConfig{MaxSize: 5, MaxAge: time.Hour, MaxIdle: time.Hour})
+	pool := newTestPool(5)
 	defer pool.Close()
 
 	// Put a connection but don't check it out.
@@ -28,7 +28,7 @@ func TestDrain_ReturnsImmediatelyWhenNoInUse(t *testing.T) {
 }
 
 func TestDrain_ReturnsImmediatelyWhenPoolEmpty(t *testing.T) {
-	pool := NewConnPool(&PoolConfig{MaxSize: 5, MaxAge: time.Hour, MaxIdle: time.Hour})
+	pool := newTestPool(5)
 	defer pool.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -40,7 +40,7 @@ func TestDrain_ReturnsImmediatelyWhenPoolEmpty(t *testing.T) {
 }
 
 func TestDrain_WaitsForInUseConnections(t *testing.T) {
-	pool := NewConnPool(&PoolConfig{MaxSize: 5, MaxAge: time.Hour, MaxIdle: time.Hour})
+	pool := newTestPool(5)
 	defer pool.Close()
 
 	conn := newMockConn("10.0.0.1:80")
@@ -80,7 +80,7 @@ func TestDrain_WaitsForInUseConnections(t *testing.T) {
 }
 
 func TestDrain_ContextCancelled(t *testing.T) {
-	pool := NewConnPool(&PoolConfig{MaxSize: 5, MaxAge: time.Hour, MaxIdle: time.Hour})
+	pool := newTestPool(5)
 	defer pool.Close()
 
 	conn := newMockConn("10.0.0.1:80")
@@ -108,7 +108,7 @@ func TestDrain_ContextCancelled(t *testing.T) {
 }
 
 func TestDrain_MultipleInUseConnections(t *testing.T) {
-	pool := NewConnPool(&PoolConfig{MaxSize: 5, MaxAge: time.Hour, MaxIdle: time.Hour})
+	pool := newTestPool(5)
 	defer pool.Close()
 
 	addrs := []string{"10.0.0.1:80", "10.0.0.2:80", "10.0.0.3:80"}
@@ -158,7 +158,7 @@ func TestDrain_MultipleInUseConnections(t *testing.T) {
 // in-use connections from the map, so that Drain() can still observe and
 // wait for them.
 func TestClose_PreservesInUseForDrain(t *testing.T) {
-	pool := NewConnPool(&PoolConfig{MaxSize: 5, MaxAge: time.Hour, MaxIdle: time.Hour})
+	pool := newTestPool(5)
 
 	conn := newMockConn("10.0.0.20:80")
 	if err := pool.Put(conn); err != nil {
@@ -204,7 +204,7 @@ func TestClose_PreservesInUseForDrain(t *testing.T) {
 // --- Snapshot tests ---
 
 func TestSnapshot_EmptyPool(t *testing.T) {
-	pool := NewConnPool(&PoolConfig{MaxSize: 5, MaxAge: time.Hour, MaxIdle: time.Hour})
+	pool := newTestPool(5)
 	defer pool.Close()
 
 	snap := pool.Snapshot()
@@ -214,7 +214,7 @@ func TestSnapshot_EmptyPool(t *testing.T) {
 }
 
 func TestSnapshot_ReturnsAllConnections(t *testing.T) {
-	pool := NewConnPool(&PoolConfig{MaxSize: 5, MaxAge: time.Hour, MaxIdle: time.Hour})
+	pool := newTestPool(5)
 	defer pool.Close()
 
 	addrs := []string{"10.0.0.1:80", "10.0.0.2:80"}
@@ -242,7 +242,7 @@ func TestSnapshot_ReturnsAllConnections(t *testing.T) {
 }
 
 func TestSnapshot_IncludesInUseConnections(t *testing.T) {
-	pool := NewConnPool(&PoolConfig{MaxSize: 5, MaxAge: time.Hour, MaxIdle: time.Hour})
+	pool := newTestPool(5)
 	defer pool.Close()
 
 	conn := newMockConn("10.0.0.1:80")
@@ -266,7 +266,7 @@ func TestSnapshot_IncludesInUseConnections(t *testing.T) {
 }
 
 func TestSnapshot_IsShallowCopy(t *testing.T) {
-	pool := NewConnPool(&PoolConfig{MaxSize: 5, MaxAge: time.Hour, MaxIdle: time.Hour})
+	pool := newTestPool(5)
 	defer pool.Close()
 
 	conn := newMockConn("10.0.0.1:80")
@@ -291,7 +291,7 @@ func TestSnapshot_IsShallowCopy(t *testing.T) {
 // --- PooledConn accessor tests ---
 
 func TestPooledConn_NetConn(t *testing.T) {
-	pool := NewConnPool(&PoolConfig{MaxSize: 5, MaxAge: time.Hour, MaxIdle: time.Hour})
+	pool := newTestPool(5)
 	defer pool.Close()
 
 	conn := newMockConn("10.0.0.1:80")
@@ -310,7 +310,7 @@ func TestPooledConn_NetConn(t *testing.T) {
 
 func TestPooledConn_CreatedAt(t *testing.T) {
 	before := time.Now()
-	pool := NewConnPool(&PoolConfig{MaxSize: 5, MaxAge: time.Hour, MaxIdle: time.Hour})
+	pool := newTestPool(5)
 	defer pool.Close()
 
 	conn := newMockConn("10.0.0.1:80")
@@ -327,7 +327,7 @@ func TestPooledConn_CreatedAt(t *testing.T) {
 }
 
 func TestPooledConn_LastUsedAt(t *testing.T) {
-	pool := NewConnPool(&PoolConfig{MaxSize: 5, MaxAge: time.Hour, MaxIdle: time.Hour})
+	pool := newTestPool(5)
 	defer pool.Close()
 
 	conn := newMockConn("10.0.0.1:80")
@@ -355,7 +355,7 @@ func TestPooledConn_LastUsedAt(t *testing.T) {
 }
 
 func TestPooledConn_IsInUse(t *testing.T) {
-	pool := NewConnPool(&PoolConfig{MaxSize: 5, MaxAge: time.Hour, MaxIdle: time.Hour})
+	pool := newTestPool(5)
 	defer pool.Close()
 
 	conn := newMockConn("10.0.0.1:80")
@@ -387,7 +387,7 @@ func TestPooledConn_IsInUse(t *testing.T) {
 }
 
 func TestPooledConn_Address(t *testing.T) {
-	pool := NewConnPool(&PoolConfig{MaxSize: 5, MaxAge: time.Hour, MaxIdle: time.Hour})
+	pool := newTestPool(5)
 	defer pool.Close()
 
 	addr := "10.0.0.1:80"
@@ -405,7 +405,7 @@ func TestPooledConn_Address(t *testing.T) {
 // --- Drain + Snapshot integration ---
 
 func TestDrain_ThenSnapshot_AllIdle(t *testing.T) {
-	pool := NewConnPool(&PoolConfig{MaxSize: 5, MaxAge: time.Hour, MaxIdle: time.Hour})
+	pool := newTestPool(5)
 	defer pool.Close()
 
 	conn := newMockConn("10.0.0.1:80")

@@ -14,7 +14,7 @@ import (
 // --- GetOrDial tests ---
 
 func TestGetOrDial_ReturnsExistingConnection(t *testing.T) {
-	pool := NewConnPool(&PoolConfig{MaxSize: 5, MaxAge: time.Hour, MaxIdle: time.Hour})
+	pool := newTestPool(5)
 	defer pool.Close()
 
 	conn := newMockConn("10.0.0.1:1234")
@@ -39,7 +39,7 @@ func TestGetOrDial_ReturnsExistingConnection(t *testing.T) {
 }
 
 func TestGetOrDial_DialsWhenEmpty(t *testing.T) {
-	pool := NewConnPool(&PoolConfig{MaxSize: 5, MaxAge: time.Hour, MaxIdle: time.Hour})
+	pool := newTestPool(5)
 	defer pool.Close()
 
 	dialCalled := false
@@ -69,7 +69,7 @@ func TestGetOrDial_DialsWhenEmpty(t *testing.T) {
 }
 
 func TestGetOrDial_DialErrorPropagated(t *testing.T) {
-	pool := NewConnPool(&PoolConfig{MaxSize: 5, MaxAge: time.Hour, MaxIdle: time.Hour})
+	pool := newTestPool(5)
 	defer pool.Close()
 
 	dialErr := errors.New("connection refused")
@@ -88,7 +88,7 @@ func TestGetOrDial_DialErrorPropagated(t *testing.T) {
 }
 
 func TestGetOrDial_ContextCancelled(t *testing.T) {
-	pool := NewConnPool(&PoolConfig{MaxSize: 5, MaxAge: time.Hour, MaxIdle: time.Hour})
+	pool := newTestPool(5)
 	defer pool.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -107,7 +107,7 @@ func TestGetOrDial_ContextCancelled(t *testing.T) {
 }
 
 func TestGetOrDial_SerializesDialsPerAddress(t *testing.T) {
-	pool := NewConnPool(&PoolConfig{MaxSize: 10, MaxAge: time.Hour, MaxIdle: time.Hour})
+	pool := newTestPool(10)
 	defer pool.Close()
 
 	const addr = "10.0.0.5:2222"
@@ -151,7 +151,7 @@ func TestGetOrDial_SerializesDialsPerAddress(t *testing.T) {
 }
 
 func TestGetOrDial_DifferentAddressesDialConcurrently(t *testing.T) {
-	pool := NewConnPool(&PoolConfig{MaxSize: 5, MaxAge: time.Hour, MaxIdle: time.Hour})
+	pool := newTestPool(5)
 	defer pool.Close()
 
 	var wg sync.WaitGroup
@@ -181,7 +181,7 @@ func TestGetOrDial_DifferentAddressesDialConcurrently(t *testing.T) {
 }
 
 func TestGetOrDial_PoolClosed(t *testing.T) {
-	pool := NewConnPool(&PoolConfig{MaxSize: 5, MaxAge: time.Hour, MaxIdle: time.Hour})
+	pool := newTestPool(5)
 	pool.Close()
 
 	_, err := pool.GetOrDial(context.Background(), "10.0.0.6:3333", func(ctx context.Context) (net.Conn, error) {
@@ -196,7 +196,7 @@ func TestGetOrDial_PoolClosed(t *testing.T) {
 }
 
 func TestGetOrDial_PoolFull(t *testing.T) {
-	pool := NewConnPool(&PoolConfig{MaxSize: 1, MaxAge: time.Hour, MaxIdle: time.Hour})
+	pool := newTestPool(1)
 	defer pool.Close()
 
 	// Fill the pool for this address
@@ -224,7 +224,7 @@ func TestGetOrDial_PoolFull(t *testing.T) {
 }
 
 func TestGetOrDial_ConnectionReleasedAndReused(t *testing.T) {
-	pool := NewConnPool(&PoolConfig{MaxSize: 5, MaxAge: time.Hour, MaxIdle: time.Hour})
+	pool := newTestPool(5)
 	defer pool.Close()
 
 	const addr = "10.0.0.8:5555"

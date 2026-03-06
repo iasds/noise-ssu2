@@ -77,6 +77,34 @@ func mustBuildNSPayload(t testing.TB, data []byte) []byte {
 	return payload
 }
 
+// prepareNSRSession establishes an NS→NSR session between sender and receiver,
+// then pre-encrypts n-1 ES messages. Returns the encrypted messages array (NS at
+// index 0, ES at indices 1..n-1).
+func prepareNSRSession(t testing.TB, sender, receiver *SessionManager, n int, payload string) [][]byte {
+	t.Helper()
+
+	var destHash [32]byte
+	copy(destHash[:], receiver.ourPublicKey[:])
+
+	encrypted := make([][]byte, n)
+
+	enc0, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, mustBuildNSPayload(t, []byte(payload)))
+	require.NoError(t, err)
+	encrypted[0] = enc0
+	_, _, nsHash, err := receiver.DecryptGarlicMessage(encrypted[0])
+	require.NoError(t, err)
+	require.NotNil(t, nsHash)
+	mustCompleteNSR(t, sender, receiver, *nsHash)
+
+	for i := 1; i < n; i++ {
+		enc, encErr := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte(payload))
+		require.NoError(t, encErr)
+		encrypted[i] = enc
+	}
+
+	return encrypted
+}
+
 // ============================================================================
 // Session Manager Creation
 // ============================================================================

@@ -97,27 +97,8 @@ func TestReceiveWindow_InOrderStillWorks(t *testing.T) {
 func TestReceiveWindow_BaseAdvances(t *testing.T) {
 	sender, receiver := createLinkedManagers(t)
 
-	var destHash [32]byte
-	copy(destHash[:], receiver.ourPublicKey[:])
-
 	const n = 4
-	encrypted := make([][]byte, n)
-
-	// Encrypt NS (message 0), deliver it and complete NSR before pre-encrypting ES.
-	enc0, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, mustBuildNSPayload(t, []byte("msg")))
-	require.NoError(t, err)
-	encrypted[0] = enc0
-	_, _, baseNSHash, err := receiver.DecryptGarlicMessage(encrypted[0])
-	require.NoError(t, err)
-	require.NotNil(t, baseNSHash)
-	mustCompleteNSR(t, sender, receiver, *baseNSHash)
-
-	// Encrypt ES messages 1..n-1 with the NSR-derived ratchet.
-	for i := 1; i < n; i++ {
-		enc, encErr := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("msg"))
-		require.NoError(t, encErr)
-		encrypted[i] = enc
-	}
+	encrypted := prepareNSRSession(t, sender, receiver, n, "msg")
 
 	// Retrieve the receiver's session so we can inspect internal state.
 	var msgTag [8]byte
@@ -150,27 +131,8 @@ func TestReceiveWindow_BaseAdvances(t *testing.T) {
 func TestReceiveWindow_OutOfOrder_BaseStaysOnGap(t *testing.T) {
 	sender, receiver := createLinkedManagers(t)
 
-	var destHash [32]byte
-	copy(destHash[:], receiver.ourPublicKey[:])
-
 	const n = 4
-	encrypted := make([][]byte, n)
-
-	// Encrypt NS (message 0), deliver, complete NSR, then pre-encrypt ES messages.
-	enc0, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, mustBuildNSPayload(t, []byte("gap test")))
-	require.NoError(t, err)
-	encrypted[0] = enc0
-	_, _, gapNSHash, err := receiver.DecryptGarlicMessage(encrypted[0])
-	require.NoError(t, err)
-	require.NotNil(t, gapNSHash)
-	mustCompleteNSR(t, sender, receiver, *gapNSHash)
-
-	// Encrypt ES messages 1..n-1 with the NSR-derived ratchet.
-	for i := 1; i < n; i++ {
-		enc, encErr := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("gap test"))
-		require.NoError(t, encErr)
-		encrypted[i] = enc
-	}
+	encrypted := prepareNSRSession(t, sender, receiver, n, "gap test")
 
 	// Look up session from the tag of message 1.
 	var msgTag [8]byte
@@ -181,7 +143,7 @@ func TestReceiveWindow_OutOfOrder_BaseStaysOnGap(t *testing.T) {
 	require.NotNil(t, session)
 
 	// Deliver message 3 (ES counter 3) — skipping counters 1 and 2.
-	_, _, _, err = receiver.DecryptGarlicMessage(encrypted[3])
+	_, _, _, err := receiver.DecryptGarlicMessage(encrypted[3])
 	require.NoError(t, err)
 
 	session.mu.Lock()
