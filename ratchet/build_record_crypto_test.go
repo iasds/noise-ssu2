@@ -590,8 +590,19 @@ func TestMultipleEncryptDecryptCycles(t *testing.T) {
 	}
 }
 
-// BenchmarkEncryptReplyRecord benchmarks reply record encryption.
-func BenchmarkEncryptReplyRecord(b *testing.B) {
+// replyRecordBenchFixture holds the shared crypto material for reply record benchmarks.
+type replyRecordBenchFixture struct {
+	crypto    *BuildRecordCrypto
+	key       [32]byte
+	iv        [16]byte
+	cleartext []byte
+	encrypted []byte
+}
+
+// newReplyRecordBenchFixture creates a BuildRecordCrypto, random key/iv,
+// and a serialized response record suitable for encrypt/decrypt benchmarks.
+func newReplyRecordBenchFixture(b *testing.B) replyRecordBenchFixture {
+	b.Helper()
 	crypto := NewBuildRecordCrypto()
 
 	var key [32]byte
@@ -605,9 +616,19 @@ func BenchmarkEncryptReplyRecord(b *testing.B) {
 	hash := CreateBuildResponseRecordRaw(0, randomData)
 	cleartext := SerializeResponseRecord(hash, randomData, 0)
 
+	encrypted, err := crypto.EncryptReplyRecord(cleartext, key, iv)
+	if err != nil {
+		b.Fatal(err)
+	}
+	return replyRecordBenchFixture{crypto: crypto, key: key, iv: iv, cleartext: cleartext, encrypted: encrypted}
+}
+
+// BenchmarkEncryptReplyRecord benchmarks reply record encryption.
+func BenchmarkEncryptReplyRecord(b *testing.B) {
+	f := newReplyRecordBenchFixture(b)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := crypto.EncryptReplyRecord(cleartext, key, iv)
+		_, err := f.crypto.EncryptReplyRecord(f.cleartext, f.key, f.iv)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -616,26 +637,10 @@ func BenchmarkEncryptReplyRecord(b *testing.B) {
 
 // BenchmarkDecryptReplyRecord benchmarks reply record decryption.
 func BenchmarkDecryptReplyRecord(b *testing.B) {
-	crypto := NewBuildRecordCrypto()
-
-	var key [32]byte
-	var iv [16]byte
-	var randomData [495]byte
-
-	rand.Read(key[:])
-	rand.Read(iv[:])
-	rand.Read(randomData[:])
-
-	hash := CreateBuildResponseRecordRaw(0, randomData)
-	cleartext := SerializeResponseRecord(hash, randomData, 0)
-	encrypted, err := crypto.EncryptReplyRecord(cleartext, key, iv)
-	if err != nil {
-		b.Fatal(err)
-	}
-
+	f := newReplyRecordBenchFixture(b)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := crypto.DecryptReplyRecord(encrypted, key, iv)
+		_, err := f.crypto.DecryptReplyRecord(f.encrypted, f.key, f.iv)
 		if err != nil {
 			b.Fatal(err)
 		}

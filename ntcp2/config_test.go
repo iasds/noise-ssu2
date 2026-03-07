@@ -544,7 +544,10 @@ func TestWithAESObfuscation_WrongIVLengthReturnsError(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestSipHashModifier_NilBeforeHandshake(t *testing.T) {
+// newResponderConfigWithAES creates a responder NTCP2Config with random
+// router hash and AES obfuscation enabled, suitable for SipHash/KDF tests.
+func newResponderConfigWithAES(t *testing.T) *NTCP2Config {
+	t.Helper()
 	routerHash := make([]byte, 32)
 	_, err := rand.Read(routerHash)
 	require.NoError(t, err)
@@ -555,13 +558,17 @@ func TestSipHashModifier_NilBeforeHandshake(t *testing.T) {
 
 	config, err := NewNTCP2Config(routerHash, false)
 	require.NoError(t, err)
-
 	config, err = config.WithAESObfuscation(true, obfuscationIV)
 	require.NoError(t, err)
+	return config
+}
+
+func TestSipHashModifier_NilBeforeHandshake(t *testing.T) {
+	config := newResponderConfigWithAES(t)
 
 	assert.Nil(t, config.SipHashModifier())
 
-	_, err = config.ToConnConfig()
+	_, err := config.ToConnConfig()
 	require.NoError(t, err)
 
 	assert.Nil(t, config.SipHashModifier(),
@@ -569,18 +576,7 @@ func TestSipHashModifier_NilBeforeHandshake(t *testing.T) {
 }
 
 func TestKDF_ASKLabelConfigured(t *testing.T) {
-	routerHash := make([]byte, 32)
-	_, err := rand.Read(routerHash)
-	require.NoError(t, err)
-
-	obfuscationIV := make([]byte, 16)
-	_, err = rand.Read(obfuscationIV)
-	require.NoError(t, err)
-
-	config, err := NewNTCP2Config(routerHash, false)
-	require.NoError(t, err)
-	config, err = config.WithAESObfuscation(true, obfuscationIV)
-	require.NoError(t, err)
+	config := newResponderConfigWithAES(t)
 
 	connConfig, err := config.ToConnConfig()
 	require.NoError(t, err)
@@ -971,30 +967,33 @@ func TestClone_ValueFieldIndependence(t *testing.T) {
 	assert.Equal(t, 128, original.MaxPaddingSize)
 }
 
-// TestConfigSipHashModifier verifies that NTCP2Config stores and returns
-// the SipHash modifier after ToConnConfig() is called.
-func TestConfigSipHashModifier(t *testing.T) {
+// newSipHashTestConfig creates an initiator NTCP2Config with the keys
+// required for SipHash modifier tests (router hash, remote hash, static key,
+// remote static key, and AES obfuscation).
+func newSipHashTestConfig(t *testing.T) *NTCP2Config {
+	t.Helper()
 	routerHash := make([]byte, 32)
 	copy(routerHash, "test-router-hash-32-bytes-long!")
 
 	config, err := NewNTCP2Config(routerHash, true)
 	require.NoError(t, err)
 
-	// Set remote router hash (required for initiator)
 	config.RemoteRouterHash = make([]byte, 32)
 	copy(config.RemoteRouterHash, "remote-hash-32-bytes-long!!!!!")
-
-	// Provide a static key
 	config.StaticKey = make([]byte, 32)
 	copy(config.StaticKey, "static-key-32-bytes-long!!!!!!!")
-
-	// Provide remote static key (required for initiator XK)
 	config.RemoteStaticKey = make([]byte, 32)
 	copy(config.RemoteStaticKey, "remote-static-key-32-bytes!!!!!")
 
-	// AES obfuscation requires an explicit IV
 	config, err = config.WithAESObfuscation(true, make([]byte, 16))
 	require.NoError(t, err)
+	return config
+}
+
+// TestConfigSipHashModifier verifies that NTCP2Config stores and returns
+// the SipHash modifier after ToConnConfig() is called.
+func TestConfigSipHashModifier(t *testing.T) {
+	config := newSipHashTestConfig(t)
 
 	// Before ToConnConfig, modifier should be nil
 	assert.Nil(t, config.SipHashModifier())
@@ -1024,29 +1023,12 @@ func TestConfigSipHashModifier(t *testing.T) {
 // TestConfigSipHashModifier_Disabled verifies that the modifier is nil
 // when SipHash is disabled.
 func TestConfigSipHashModifier_Disabled(t *testing.T) {
-	routerHash := make([]byte, 32)
-	copy(routerHash, "test-router-hash-32-bytes-long!")
-
-	config, err := NewNTCP2Config(routerHash, true)
-	require.NoError(t, err)
-
-	config.RemoteRouterHash = make([]byte, 32)
-	copy(config.RemoteRouterHash, "remote-hash-32-bytes-long!!!!!")
-	config.StaticKey = make([]byte, 32)
-	copy(config.StaticKey, "static-key-32-bytes-long!!!!!!!")
-
-	// Provide remote static key (required for initiator XK)
-	config.RemoteStaticKey = make([]byte, 32)
-	copy(config.RemoteStaticKey, "remote-static-key-32-bytes!!!!!")
+	config := newSipHashTestConfig(t)
 
 	// Disable SipHash
 	config.EnableSipHashLength = false
 
-	// AES obfuscation requires an explicit IV
-	config, err = config.WithAESObfuscation(true, make([]byte, 16))
-	require.NoError(t, err)
-
-	_, err = config.ToConnConfig()
+	_, err := config.ToConnConfig()
 	require.NoError(t, err)
 
 	// Modifier should be nil

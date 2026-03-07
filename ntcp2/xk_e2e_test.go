@@ -151,37 +151,7 @@ func TestXKHandshake_NTCP2_FullE2E(t *testing.T) {
 	}()
 
 	// ── Step 7: Initiator side ────────────────────────────────────────
-	rawConn, err := net.DialTimeout("tcp", ln.Addr().String(), 5*time.Second)
-	require.NoError(t, err, "dial TCP")
-
-	connConfig, err := initiatorConfig.ToConnConfig()
-	require.NoError(t, err, "initiator ToConnConfig")
-
-	noiseConn, err := noise.NewNoiseConn(rawConn, connConfig)
-	require.NoError(t, err, "create initiator NoiseConn")
-
-	initiatorAddr, err := NewNTCP2Addr(rawConn.LocalAddr(), initiatorHash, "initiator")
-	require.NoError(t, err, "create initiator addr")
-
-	remoteAddr, err := NewNTCP2Addr(rawConn.RemoteAddr(), responderHash, "responder")
-	require.NoError(t, err, "create remote addr")
-
-	initiatorNTCP2, err := NewNTCP2Conn(noiseConn, initiatorAddr, remoteAddr)
-	require.NoError(t, err, "create initiator NTCP2Conn")
-	initiatorNTCP2.SetNTCP2Config(initiatorConfig)
-
-	// Perform XK handshake (initiator side)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	err = noiseConn.Handshake(ctx)
-	if err != nil {
-		initiatorNTCP2.Close()
-		wg.Wait()
-		t.Fatalf("initiator handshake: %v (responder err: %v)", err, responderErr)
-	}
-
-	// Propagate SipHash keys derived by PostHandshakeHook
-	initiatorNTCP2.PropagateSipHash()
+	initiatorNTCP2 := dialAndHandshakeInitiator(t, ln.Addr().String(), initiatorConfig, initiatorHash, responderHash, &wg, &responderErr)
 
 	// Wait for responder to complete handshake
 	wg.Wait()
@@ -344,6 +314,53 @@ func TestXKHandshake_NTCP2_CloseAfterHandshake(t *testing.T) {
 }
 
 // ============================================================================
+// Test helper: dials, creates NTCP2Conn, and performs initiator handshake
+// ============================================================================
+
+// dialAndHandshakeInitiator dials the given address, creates an NTCP2Conn for
+// the initiator, and performs the XK handshake. On handshake failure it waits
+// for wg and fatals with both errors. The caller must close the returned conn.
+func dialAndHandshakeInitiator(
+	t *testing.T,
+	addr string,
+	initiatorConfig *NTCP2Config,
+	initiatorHash, responderHash []byte,
+	wg *sync.WaitGroup,
+	responderErr *error,
+) *NTCP2Conn {
+	t.Helper()
+	rawConn, err := net.DialTimeout("tcp", addr, 5*time.Second)
+	require.NoError(t, err)
+
+	connConfig, err := initiatorConfig.ToConnConfig()
+	require.NoError(t, err)
+
+	noiseConn, err := noise.NewNoiseConn(rawConn, connConfig)
+	require.NoError(t, err)
+
+	iAddr, err := NewNTCP2Addr(rawConn.LocalAddr(), initiatorHash, "initiator")
+	require.NoError(t, err)
+	rAddr, err := NewNTCP2Addr(rawConn.RemoteAddr(), responderHash, "responder")
+	require.NoError(t, err)
+
+	ntcp2Conn, err := NewNTCP2Conn(noiseConn, iAddr, rAddr)
+	require.NoError(t, err)
+	ntcp2Conn.SetNTCP2Config(initiatorConfig)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err = noiseConn.Handshake(ctx)
+	if err != nil {
+		ntcp2Conn.Close()
+		wg.Wait()
+		t.Fatalf("initiator handshake: %v (responder err: %v)", err, *responderErr)
+	}
+
+	ntcp2Conn.PropagateSipHash()
+	return ntcp2Conn
+}
+
+// ============================================================================
 // Test helper: creates a fully handshaked initiator↔responder NTCP2 pair
 // ============================================================================
 
@@ -414,35 +431,7 @@ func setupHandshakedPair(t *testing.T) (initiator, responder *NTCP2Conn) {
 		responderNTCP2 = ntcp2Conn
 	}()
 
-	// Initiator side
-	rawConn, err := net.DialTimeout("tcp", ln.Addr().String(), 5*time.Second)
-	require.NoError(t, err)
-
-	connConfig, err := initiatorConfig.ToConnConfig()
-	require.NoError(t, err)
-
-	noiseConn, err := noise.NewNoiseConn(rawConn, connConfig)
-	require.NoError(t, err)
-
-	iAddr, err := NewNTCP2Addr(rawConn.LocalAddr(), initiatorHash, "initiator")
-	require.NoError(t, err)
-	rAddr, err := NewNTCP2Addr(rawConn.RemoteAddr(), responderHash, "responder")
-	require.NoError(t, err)
-
-	initiatorNTCP2, err := NewNTCP2Conn(noiseConn, iAddr, rAddr)
-	require.NoError(t, err)
-	initiatorNTCP2.SetNTCP2Config(initiatorConfig)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	err = noiseConn.Handshake(ctx)
-	if err != nil {
-		initiatorNTCP2.Close()
-		wg.Wait()
-		t.Fatalf("initiator handshake: %v (responder err: %v)", err, responderErr)
-	}
-
-	initiatorNTCP2.PropagateSipHash()
+	initiatorNTCP2 := dialAndHandshakeInitiator(t, ln.Addr().String(), initiatorConfig, initiatorHash, responderHash, &wg, &responderErr)
 
 	wg.Wait()
 	if responderErr != nil {

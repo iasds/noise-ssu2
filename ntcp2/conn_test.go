@@ -1655,40 +1655,48 @@ func TestNTCP2ApplyInboundModifier_NoChain(t *testing.T) {
 	assert.Equal(t, data, got, "passthrough expected with no modifier chain")
 }
 
-// TestNTCP2ApplyOutboundModifier_InvokesPhaseData verifies ModifyOutbound is
-// called with PhaseData when a modifier chain is configured.
-func TestNTCP2ApplyOutboundModifier_InvokesPhaseData(t *testing.T) {
-	mod := &ntcp2TrackingModifier{}
-	conn := createTestNTCP2ConnWithModifier(mod)
+// TestNTCP2ApplyModifier_InvokesPhaseData verifies that both ModifyOutbound
+// and ModifyInbound are called with PhaseData when a modifier chain is configured.
+func TestNTCP2ApplyModifier_InvokesPhaseData(t *testing.T) {
+	tests := []struct {
+		name      string
+		direction string // "outbound" or "inbound"
+		data      []byte
+	}{
+		{"Outbound", "outbound", []byte("outbound data")},
+		{"Inbound", "inbound", []byte("inbound data")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mod := &ntcp2TrackingModifier{}
+			conn := createTestNTCP2ConnWithModifier(mod)
 
-	data := []byte("outbound data")
-	_, err := conn.applyOutboundModifier(data)
-	require.NoError(t, err)
+			var err error
+			if tt.direction == "outbound" {
+				_, err = conn.applyOutboundModifier(tt.data)
+			} else {
+				_, err = conn.applyInboundModifier(tt.data)
+			}
+			require.NoError(t, err)
 
-	mod.mu.Lock()
-	defer mod.mu.Unlock()
-	require.Len(t, mod.outboundCalls, 1, "expected exactly one outbound modifier call")
-	assert.Equal(t, handshake.PhaseData, mod.outboundCalls[0].phase,
-		"framed write must invoke modifier with PhaseData")
-	assert.Equal(t, data, mod.outboundCalls[0].data, "modifier must receive original data")
-}
-
-// TestNTCP2ApplyInboundModifier_InvokesPhaseData verifies ModifyInbound is
-// called with PhaseData when a modifier chain is configured.
-func TestNTCP2ApplyInboundModifier_InvokesPhaseData(t *testing.T) {
-	mod := &ntcp2TrackingModifier{}
-	conn := createTestNTCP2ConnWithModifier(mod)
-
-	data := []byte("inbound data")
-	_, err := conn.applyInboundModifier(data)
-	require.NoError(t, err)
-
-	mod.mu.Lock()
-	defer mod.mu.Unlock()
-	require.Len(t, mod.inboundCalls, 1, "expected exactly one inbound modifier call")
-	assert.Equal(t, handshake.PhaseData, mod.inboundCalls[0].phase,
-		"framed read must invoke modifier with PhaseData")
-	assert.Equal(t, data, mod.inboundCalls[0].data, "modifier must receive original data")
+			mod.mu.Lock()
+			defer mod.mu.Unlock()
+			type call = struct {
+				phase handshake.HandshakePhase
+				data  []byte
+			}
+			var calls []call
+			if tt.direction == "outbound" {
+				calls = mod.outboundCalls
+			} else {
+				calls = mod.inboundCalls
+			}
+			require.Len(t, calls, 1, "expected exactly one modifier call")
+			assert.Equal(t, handshake.PhaseData, calls[0].phase,
+				"framed operation must invoke modifier with PhaseData")
+			assert.Equal(t, tt.data, calls[0].data, "modifier must receive original data")
+		})
+	}
 }
 
 // ============================================================================

@@ -130,26 +130,10 @@ func TestDrain_MultipleInUseConnections(t *testing.T) {
 // in-use connections from the map, so that Drain() can still observe and
 // wait for them.
 func TestClose_PreservesInUseForDrain(t *testing.T) {
-	pool := newTestPool(5)
-
-	conn := newMockConn("10.0.0.20:80")
-	if err := pool.Put(conn); err != nil {
-		t.Fatalf("Put: %v", err)
-	}
-
-	// Check out the connection.
-	got := pool.Get("10.0.0.20:80")
-	if got == nil {
-		t.Fatal("Get returned nil")
-	}
-
-	// Close the pool while the connection is in use.
-	if err := pool.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
+	f := setupClosedPoolWithInUse(t, "10.0.0.20:80")
 
 	// Stats should still show 1 in-use.
-	stats := pool.Stats()
+	stats := f.pool.Stats()
 	if stats["in_use"] != 1 {
 		t.Errorf("expected 1 in_use after Close(), got %d", stats["in_use"])
 	}
@@ -157,17 +141,17 @@ func TestClose_PreservesInUseForDrain(t *testing.T) {
 	// Drain should wait for the in-use connection.
 	go func() {
 		time.Sleep(50 * time.Millisecond)
-		got.Close() // returns conn to the closed pool, which closes it
+		f.wrapper.Close() // returns conn to the closed pool, which closes it
 	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	if err := pool.Drain(ctx); err != nil {
+	if err := f.pool.Drain(ctx); err != nil {
 		t.Fatalf("Drain should succeed after in-use connection is returned: %v", err)
 	}
 
-	stats = pool.Stats()
+	stats = f.pool.Stats()
 	if stats["in_use"] != 0 {
 		t.Errorf("expected 0 in_use after Drain, got %d", stats["in_use"])
 	}

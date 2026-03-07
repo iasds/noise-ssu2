@@ -297,17 +297,25 @@ func TestSessionManagerKeyDerivation(t *testing.T) {
 // Session Tag Lookup
 // ============================================================================
 
-func TestSessionTagLookup(t *testing.T) {
+// mustEstablishNS creates linked managers, sends an NS message from sender
+// to receiver, and returns sender, receiver, and the destination hash.
+// Unlike mustBootstrapSession, this does NOT complete the NSR step.
+func mustEstablishNS(t *testing.T) (*SessionManager, *SessionManager, [32]byte) {
+	t.Helper()
 	sender, receiver := createLinkedManagers(t)
 
 	var destHash [32]byte
 	copy(destHash[:], receiver.ourPublicKey[:])
 
-	// Create session — NS payload must begin with DateTime block.
-	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, mustBuildNSPayload(t, []byte("initial message")))
+	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, mustBuildNSPayload(t, []byte("ns-setup")))
 	require.NoError(t, err)
 	_, _, _, err = receiver.DecryptGarlicMessage(enc)
 	require.NoError(t, err)
+	return sender, receiver, destHash
+}
+
+func TestSessionTagLookup(t *testing.T) {
+	_, receiver, _ := mustEstablishNS(t)
 
 	// After New Session decryption, receiver should have tags indexed
 	receiver.mu.RLock()
@@ -1019,16 +1027,7 @@ func TestSessionManager_ImplementsGarlicSessionManager(t *testing.T) {
 // ============================================================================
 
 func TestFindSessionByTagReturnsTrue(t *testing.T) {
-	sender, receiver := createLinkedManagers(t)
-
-	var destHash [32]byte
-	copy(destHash[:], receiver.ourPublicKey[:])
-
-	// Establish a session so the receiver has tags in its index.
-	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, mustBuildNSPayload(t, []byte("setup")))
-	require.NoError(t, err)
-	_, _, _, err = receiver.DecryptGarlicMessage(enc)
-	require.NoError(t, err)
+	_, receiver, _ := mustEstablishNS(t)
 
 	// Grab a pending tag from the receiver's tag index.
 	receiver.mu.RLock()
@@ -1104,12 +1103,19 @@ func TestTagResolverInterfaceSatisfied(t *testing.T) {
 // Benchmarks
 // ============================================================================
 
-func BenchmarkNewSessionEncrypt(b *testing.B) {
+// benchManagerPair creates a sender and receiver SessionManager for benchmarks.
+func benchManagerPair(b *testing.B) (*SessionManager, *SessionManager) {
+	b.Helper()
 	privKey := [32]byte{}
 	_, _ = rand.Read(privKey[:])
 	sender, _ := NewSessionManager(privKey)
 	_, _ = rand.Read(privKey[:])
 	receiver, _ := NewSessionManager(privKey)
+	return sender, receiver
+}
+
+func BenchmarkNewSessionEncrypt(b *testing.B) {
+	sender, receiver := benchManagerPair(b)
 
 	// Build a valid NS payload once; every iteration is a new session (new destHash).
 	nsPayload, _ := BuildNSPayload(make([]byte, 512))
@@ -1124,11 +1130,7 @@ func BenchmarkNewSessionEncrypt(b *testing.B) {
 }
 
 func BenchmarkExistingSessionEncrypt(b *testing.B) {
-	privKey := [32]byte{}
-	_, _ = rand.Read(privKey[:])
-	sender, _ := NewSessionManager(privKey)
-	_, _ = rand.Read(privKey[:])
-	receiver, _ := NewSessionManager(privKey)
+	sender, receiver := benchManagerPair(b)
 
 	var destHash [32]byte
 	copy(destHash[:], receiver.ourPublicKey[:])
@@ -1149,11 +1151,7 @@ func BenchmarkExistingSessionEncrypt(b *testing.B) {
 }
 
 func BenchmarkDecryptGarlicMessage(b *testing.B) {
-	privKey := [32]byte{}
-	_, _ = rand.Read(privKey[:])
-	sender, _ := NewSessionManager(privKey)
-	_, _ = rand.Read(privKey[:])
-	receiver, _ := NewSessionManager(privKey)
+	sender, receiver := benchManagerPair(b)
 
 	var destHash [32]byte
 	copy(destHash[:], receiver.ourPublicKey[:])
@@ -1783,6 +1781,21 @@ func TestConcurrentEncryptWithCleanup(t *testing.T) {
 // Termination Block Handling
 // ============================================================================
 
+// sendTermination builds a termination payload, encrypts it from sender
+// to receiver, and decrypts it. Returns any error from decrypt.
+func sendTermination(t *testing.T, sender, receiver *SessionManager, destHash [32]byte, reason TerminationReason, extraData []byte) error {
+	t.Helper()
+	builder := ExistingSessionPayloadBuilder().
+		AddBlock(NewGarlicCloveBlock([]byte("termination-msg")))
+	builder = builder.AddBlock(NewTerminationBlock(reason, extraData))
+	termBytes, err := builder.Build()
+	require.NoError(t, err)
+	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, termBytes)
+	require.NoError(t, err)
+	_, _, _, err = receiver.DecryptGarlicMessage(enc)
+	return err
+}
+
 func TestTerminationBlock_RemovesSession(t *testing.T) {
 	sender, receiver := createLinkedManagers(t)
 	destHash := mustBootstrapSession(t, sender, receiver)
@@ -1790,20 +1803,8 @@ func TestTerminationBlock_RemovesSession(t *testing.T) {
 	assert.Equal(t, 1, sender.GetSessionCount())
 	assert.Equal(t, 1, receiver.GetSessionCount())
 
-	// Build an ES payload containing a Termination block.
-	termPayload := ExistingSessionPayloadBuilder().
-		AddBlock(NewGarlicCloveBlock([]byte("goodbye"))).
-		AddBlock(NewTerminationBlock(TerminationNormal, nil))
-	termBytes, err := termPayload.Build()
+	err := sendTermination(t, sender, receiver, destHash, TerminationNormal, nil)
 	require.NoError(t, err)
-
-	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, termBytes)
-	require.NoError(t, err)
-
-	// Receiver decrypts — should trigger session teardown.
-	plaintext, _, _, err := receiver.DecryptGarlicMessage(enc)
-	require.NoError(t, err)
-	assert.NotNil(t, plaintext)
 
 	// The session should have been removed from the receiver.
 	assert.Equal(t, 0, receiver.GetSessionCount(),
@@ -1814,17 +1815,7 @@ func TestTerminationBlock_WithReason(t *testing.T) {
 	sender, receiver := createLinkedManagers(t)
 	destHash := mustBootstrapSession(t, sender, receiver)
 
-	// Send termination with TerminationReceived reason and additional data.
-	termPayload := ExistingSessionPayloadBuilder().
-		AddBlock(NewGarlicCloveBlock([]byte("closing"))).
-		AddBlock(NewTerminationBlock(TerminationReceived, []byte("extra-info")))
-	termBytes, err := termPayload.Build()
-	require.NoError(t, err)
-
-	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, termBytes)
-	require.NoError(t, err)
-
-	_, _, _, err = receiver.DecryptGarlicMessage(enc)
+	err := sendTermination(t, sender, receiver, destHash, TerminationReceived, []byte("extra-info"))
 	require.NoError(t, err)
 
 	assert.Equal(t, 0, receiver.GetSessionCount(),
@@ -1852,15 +1843,7 @@ func TestTerminationBlock_SenderSessionUnaffected(t *testing.T) {
 	destHash := mustBootstrapSession(t, sender, receiver)
 
 	// Send a termination from sender — only receiver's session should be removed.
-	termPayload := ExistingSessionPayloadBuilder().
-		AddBlock(NewTerminationBlock(TerminationNormal, nil))
-	termBytes, err := termPayload.Build()
-	require.NoError(t, err)
-
-	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, termBytes)
-	require.NoError(t, err)
-
-	_, _, _, err = receiver.DecryptGarlicMessage(enc)
+	err := sendTermination(t, sender, receiver, destHash, TerminationNormal, nil)
 	require.NoError(t, err)
 
 	// Sender's session should be unaffected.

@@ -46,3 +46,31 @@ func (f poolConnFixture) checkout(t *testing.T) net.Conn {
 	}
 	return w
 }
+
+// closedPoolWithInUse holds a pool that has been Put→Get→Close with one
+// connection still in use.
+type closedPoolWithInUse struct {
+	pool    *ConnPool
+	conn    *mockConn
+	wrapper net.Conn // the checked-out wrapper
+}
+
+// setupClosedPoolWithInUse creates a pool, puts a mock connection, checks it
+// out, then closes the pool — leaving one connection in-use. Callers can
+// assert on the state of the pool and wrapper.
+func setupClosedPoolWithInUse(t *testing.T, addr string) closedPoolWithInUse {
+	t.Helper()
+	p := newTestPool(5)
+	c := newMockConn(addr)
+	if err := p.Put(c); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	wrapper := p.Get(addr)
+	if wrapper == nil {
+		t.Fatal("Get returned nil")
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	return closedPoolWithInUse{pool: p, conn: c, wrapper: wrapper}
+}

@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	noise "github.com/go-i2p/go-noise"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -222,29 +221,7 @@ func TestAcceptWithHandshake_FullE2E(t *testing.T) {
 	}()
 
 	// Initiator side: manual dial + handshake
-	rawConn, err := net.DialTimeout("tcp", tcpLn.Addr().String(), 5*time.Second)
-	require.NoError(t, err)
-
-	connConfig, err := initiatorConfig.ToConnConfig()
-	require.NoError(t, err)
-
-	noiseConn, err := noise.NewNoiseConn(rawConn, connConfig)
-	require.NoError(t, err)
-
-	initiatorAddr, err := NewNTCP2Addr(rawConn.LocalAddr(), initiatorHash, "initiator")
-	require.NoError(t, err)
-	remoteAddr, err := NewNTCP2Addr(rawConn.RemoteAddr(), responderHash, "responder")
-	require.NoError(t, err)
-
-	initiatorNTCP2, err := NewNTCP2Conn(noiseConn, initiatorAddr, remoteAddr)
-	require.NoError(t, err)
-	initiatorNTCP2.SetNTCP2Config(initiatorConfig)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	err = noiseConn.Handshake(ctx)
-	require.NoError(t, err, "initiator handshake")
-	initiatorNTCP2.PropagateSipHash()
+	initiatorNTCP2 := dialAndHandshakeInitiator(t, tcpLn.Addr().String(), initiatorConfig, initiatorHash, responderHash, &wg, &responderErr)
 
 	// Wait for responder
 	wg.Wait()

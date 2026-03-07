@@ -239,25 +239,10 @@ func TestClose_NoErrorsWhenAllSucceed(t *testing.T) {
 // TestClose_InUseConnectionsNotClosed verifies that in-use connections are
 // not closed by Close() (they will be closed when returned via Release/Discard).
 func TestClose_InUseConnectionsNotClosed(t *testing.T) {
-	p := newTestPool(5)
-
-	conn := newMockConn("10.0.0.6:9100")
-	if err := p.Put(conn); err != nil {
-		t.Fatalf("Put: %v", err)
-	}
-
-	// Mark as in-use via Get
-	wrapper := p.Get("10.0.0.6:9100")
-	if wrapper == nil {
-		t.Fatal("Get returned nil")
-	}
-
-	if err := p.Close(); err != nil {
-		t.Errorf("Close: %v", err)
-	}
+	f := setupClosedPoolWithInUse(t, "10.0.0.6:9100")
 
 	// The in-use connection should NOT have been closed
-	if conn.closed {
+	if f.conn.closed {
 		t.Error("in-use connection should not be closed by pool.Close()")
 	}
 }
