@@ -13,6 +13,18 @@ import (
 // Test Helpers
 // ============================================================================
 
+// mustBuildAndParse builds a payload using the provided build function, parses
+// the result, asserts the expected block count, and returns the parsed blocks.
+func mustBuildAndParse(t testing.TB, build func() ([]byte, error), expectedBlocks int) []PayloadBlock {
+	t.Helper()
+	data, err := build()
+	require.NoError(t, err, "payload build failed")
+	blocks, err := ParsePayload(data)
+	require.NoError(t, err, "payload parse failed")
+	require.Len(t, blocks, expectedBlocks)
+	return blocks
+}
+
 // mustSerializeAndParseSingle serializes a PayloadBlock, parses it back, and
 // asserts exactly one block was recovered. Returns the parsed block.
 func mustSerializeAndParseSingle(t *testing.T, b PayloadBlock) PayloadBlock {
@@ -409,13 +421,8 @@ func TestNewSessionPayloadBuilder(t *testing.T) {
 	pb := NewSessionPayloadBuilder().
 		AddBlock(NewGarlicCloveBlock([]byte("test clove")))
 
-	data, err := pb.Build()
-	require.NoError(t, err)
-
 	// Parse and verify DateTime is first
-	blocks, err := ParsePayload(data)
-	require.NoError(t, err)
-	require.Len(t, blocks, 2)
+	blocks := mustBuildAndParse(t, pb.Build, 2)
 	assert.Equal(t, BlockDateTime, blocks[0].Type)
 	assert.Equal(t, BlockGarlicClove, blocks[1].Type)
 }
@@ -443,12 +450,7 @@ func TestParsePayload_Empty(t *testing.T) {
 
 func TestParsePayload_SingleBlock(t *testing.T) {
 	pb := NewPayloadBuilder().AddBlock(NewDateTimeBlock(time.Unix(1700000000, 0)))
-	data, err := pb.Build()
-	require.NoError(t, err)
-
-	blocks, err := ParsePayload(data)
-	require.NoError(t, err)
-	require.Len(t, blocks, 1)
+	blocks := mustBuildAndParse(t, pb.Build, 1)
 	assert.Equal(t, BlockDateTime, blocks[0].Type)
 
 	parsed, err := blocks[0].DateTime()
@@ -463,12 +465,7 @@ func TestParsePayload_MultipleBlocks(t *testing.T) {
 		AddBlock(NewGarlicCloveBlock(clove)).
 		AddBlock(NewAckRequestBlock(0)).
 		AddBlock(NewPaddingBlock(4))
-	data, err := pb.Build()
-	require.NoError(t, err)
-
-	blocks, err := ParsePayload(data)
-	require.NoError(t, err)
-	require.Len(t, blocks, 4)
+	blocks := mustBuildAndParse(t, pb.Build, 4)
 	assert.Equal(t, BlockDateTime, blocks[0].Type)
 	assert.Equal(t, BlockGarlicClove, blocks[1].Type)
 	assert.Equal(t, clove, blocks[1].Data)

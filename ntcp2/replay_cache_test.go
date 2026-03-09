@@ -14,38 +14,42 @@ func twoTestKeys() (k1, k2 [32]byte) {
 	return
 }
 
-func TestReplayCache_NewKeyNotReplay(t *testing.T) {
+// newTestReplayCache creates a ReplayCache and registers cleanup via t.Cleanup.
+func newTestReplayCache(t testing.TB) *ReplayCache {
+	t.Helper()
 	rc := NewReplayCache()
-	defer rc.Close()
+	t.Cleanup(func() { rc.Close() })
+	return rc
+}
 
+// testKey returns a [32]byte with only the first byte set to b.
+func testKey(b byte) [32]byte {
 	var key [32]byte
-	key[0] = 0x42
-	assert.False(t, rc.CheckAndAdd(key), "first insert should not be a replay")
+	key[0] = b
+	return key
+}
+
+func TestReplayCache_NewKeyNotReplay(t *testing.T) {
+	rc := newTestReplayCache(t)
+	assert.False(t, rc.CheckAndAdd(testKey(0x42)), "first insert should not be a replay")
 }
 
 func TestReplayCache_DuplicateKeyIsReplay(t *testing.T) {
-	rc := NewReplayCache()
-	defer rc.Close()
-
-	var key [32]byte
-	key[0] = 0x42
-
+	rc := newTestReplayCache(t)
+	key := testKey(0x42)
 	assert.False(t, rc.CheckAndAdd(key))
 	assert.True(t, rc.CheckAndAdd(key), "second insert should be detected as replay")
 }
 
 func TestReplayCache_DifferentKeysNotReplay(t *testing.T) {
-	rc := NewReplayCache()
-	defer rc.Close()
-
+	rc := newTestReplayCache(t)
 	key1, key2 := twoTestKeys()
 	assert.False(t, rc.CheckAndAdd(key1))
 	assert.False(t, rc.CheckAndAdd(key2))
 }
 
 func TestReplayCache_Size(t *testing.T) {
-	rc := NewReplayCache()
-	defer rc.Close()
+	rc := newTestReplayCache(t)
 
 	assert.Equal(t, 0, rc.Size())
 
@@ -63,8 +67,7 @@ func TestReplayCache_Size(t *testing.T) {
 }
 
 func TestReplayCache_Concurrent(t *testing.T) {
-	rc := NewReplayCache()
-	defer rc.Close()
+	rc := newTestReplayCache(t)
 
 	const numGoroutines = 100
 	var wg sync.WaitGroup
@@ -89,11 +92,8 @@ func TestReplayCache_EvictExpired(t *testing.T) {
 	// Eviction logic is tested exhaustively in internal/replaycache.
 	// This test verifies that the wrapper delegates correctly by
 	// confirming that a freshly added key is detected as replay.
-	rc := NewReplayCache()
-	defer rc.Close()
-
-	var key [32]byte
-	key[0] = 0x01
+	rc := newTestReplayCache(t)
+	key := testKey(0x01)
 	assert.False(t, rc.CheckAndAdd(key))
 	assert.True(t, rc.CheckAndAdd(key), "recent key should be a replay")
 }
@@ -101,20 +101,15 @@ func TestReplayCache_EvictExpired(t *testing.T) {
 func TestReplayCache_ExpiredKeyNotReplay(t *testing.T) {
 	// Expiry behaviour is tested in internal/replaycache.
 	// Here we verify that a new key is not flagged as replay.
-	rc := NewReplayCache()
-	defer rc.Close()
-
-	var key [32]byte
-	key[0] = 0x42
-	assert.False(t, rc.CheckAndAdd(key), "first insert should not be a replay")
+	rc := newTestReplayCache(t)
+	assert.False(t, rc.CheckAndAdd(testKey(0x42)), "first insert should not be a replay")
 }
 
 func TestReplayCache_MaxSizeEviction(t *testing.T) {
 	// Max-size eviction is tested in internal/replaycache.
 	// Here we verify the wrapper properly delegates CheckAndAdd
 	// for a large number of keys without panicking.
-	rc := NewReplayCache()
-	defer rc.Close()
+	rc := newTestReplayCache(t)
 
 	const insertCount = 1000
 	for i := 0; i < insertCount; i++ {

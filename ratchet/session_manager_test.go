@@ -115,14 +115,7 @@ func mustCompleteNSR(t testing.TB, sender, receiver *SessionManager, sessionHash
 // After this call, sender can send Existing Session messages immediately.
 func mustBootstrapSession(t testing.TB, sender, receiver *SessionManager) [32]byte {
 	t.Helper()
-	var destHash [32]byte
-	copy(destHash[:], receiver.ourPublicKey[:])
-	nsEnc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, mustBuildNSPayload(t, []byte("bootstrap")))
-	require.NoError(t, err, "mustBootstrapSession: NS encrypt")
-	_, _, sessionHash, err := receiver.DecryptGarlicMessage(nsEnc)
-	require.NoError(t, err, "mustBootstrapSession: NS decrypt")
-	require.NotNil(t, sessionHash, "mustBootstrapSession: receiver must return sessionHash")
-	mustCompleteNSR(t, sender, receiver, *sessionHash)
+	destHash, _ := mustBootstrapSessionWithHash(t, sender, receiver)
 	return destHash
 }
 
@@ -448,9 +441,6 @@ func TestDHRatchetInterval(t *testing.T) {
 func TestDHRatchetRotation(t *testing.T) {
 	sender, receiver := createLinkedManagers(t)
 
-	var destHash [32]byte
-	copy(destHash[:], receiver.ourPublicKey[:])
-
 	// Send messages up to but not exceeding the DH ratchet interval.
 	// DH ratchet rotation happens after DHRatchetInterval messages. Once the
 	// sender rotates, it produces new tag/symmetric ratchets from the new DH
@@ -462,12 +452,7 @@ func TestDHRatchetRotation(t *testing.T) {
 	// 3) The receiver can't decrypt post-rotation (expected: mismatched keys)
 
 	// Establish session with valid NS payload before the DH ratchet loop.
-	initEnc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, mustBuildNSPayload(t, []byte("init")))
-	require.NoError(t, err, "Initial NS encrypt should succeed")
-	_, _, dhNSHash, err := receiver.DecryptGarlicMessage(initEnc)
-	require.NoError(t, err, "Initial NS decrypt should succeed")
-	require.NotNil(t, dhNSHash)
-	mustCompleteNSR(t, sender, receiver, *dhNSHash)
+	destHash := mustBootstrapSession(t, sender, receiver)
 
 	// Send DHRatchetInterval-1 ES messages successfully — the NS message above consumed
 	// one slot, so we need one fewer ES messages here to avoid triggering DH ratchet rotation

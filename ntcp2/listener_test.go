@@ -224,13 +224,7 @@ func TestNTCP2Listener_AcceptToConnConfigError(t *testing.T) {
 	config := newTestResponderConfigNoAES(t)
 
 	// Create a real listener so Accept() succeeds
-	tcpLn, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	defer tcpLn.Close()
-
-	ntcp2Ln, err := NewNTCP2Listener(tcpLn, config)
-	require.NoError(t, err)
-	defer ntcp2Ln.Close()
+	ntcp2Ln, tcpAddr := startTestNTCP2Listener(t, config)
 
 	// Corrupt the config's pattern so ToConnConfig() will fail during Accept.
 	// The listener clones config on each accept, so we corrupt the source.
@@ -238,7 +232,7 @@ func TestNTCP2Listener_AcceptToConnConfigError(t *testing.T) {
 
 	// Dial to unblock Accept
 	go func() {
-		conn, err := net.DialTimeout("tcp", tcpLn.Addr().String(), 2*time.Second)
+		conn, err := net.DialTimeout("tcp", tcpAddr.String(), 2*time.Second)
 		if err == nil {
 			conn.Close()
 		}

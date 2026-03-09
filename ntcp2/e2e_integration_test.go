@@ -276,13 +276,8 @@ func TestE2E_WithAESObfuscation_RejectsInvalidIV(t *testing.T) {
 // TestE2E_KDF_DeriveSipHashKeys_Deterministic verifies that DeriveSipHashKeys
 // produces identical output for identical inputs (deterministic derivation).
 func TestE2E_KDF_DeriveSipHashKeys_Deterministic(t *testing.T) {
-	askMaster := make([]byte, 32)
-	_, err := rand.Read(askMaster)
-	require.NoError(t, err)
-
-	h := make([]byte, 32)
-	_, err = rand.Read(h)
-	require.NoError(t, err)
+	askMaster := mustRandomBytes(t, 32)
+	h := mustRandomBytes(t, 32)
 
 	// Derive twice with same inputs
 	keysAB1, ivAB1, keysBA1, ivBA1, err := DeriveSipHashKeys(askMaster, h)

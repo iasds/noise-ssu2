@@ -368,10 +368,6 @@ func setupHandshakedPair(t *testing.T) (initiator, responder *NTCP2Conn) {
 	t.Helper()
 
 	p := newTestXKConfigPair(t)
-	initiatorConfig := p.initiatorConfig
-	responderConfig := p.responderConfig
-	initiatorHash := p.initiatorHash
-	responderHash := p.responderHash
 
 	// TCP listener
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -393,7 +389,7 @@ func setupHandshakedPair(t *testing.T) (initiator, responder *NTCP2Conn) {
 			return
 		}
 
-		perConnConfig := responderConfig.Clone()
+		perConnConfig := p.responderConfig.Clone()
 		perConnConfig.Initiator = false
 		connConfig, err := perConnConfig.ToConnConfig()
 		if err != nil {
@@ -409,8 +405,8 @@ func setupHandshakedPair(t *testing.T) (initiator, responder *NTCP2Conn) {
 			return
 		}
 
-		rAddr, _ := NewNTCP2Addr(rawConn.LocalAddr(), responderHash, "responder")
-		iAddr, _ := NewNTCP2Addr(rawConn.RemoteAddr(), initiatorHash, "initiator")
+		rAddr, _ := NewNTCP2Addr(rawConn.LocalAddr(), p.responderHash, "responder")
+		iAddr, _ := NewNTCP2Addr(rawConn.RemoteAddr(), p.initiatorHash, "initiator")
 		ntcp2Conn, err := NewNTCP2Conn(noiseConn, rAddr, iAddr)
 		if err != nil {
 			noiseConn.Close()
@@ -431,7 +427,7 @@ func setupHandshakedPair(t *testing.T) (initiator, responder *NTCP2Conn) {
 		responderNTCP2 = ntcp2Conn
 	}()
 
-	initiatorNTCP2 := dialAndHandshakeInitiator(t, ln.Addr().String(), initiatorConfig, initiatorHash, responderHash, &wg, &responderErr)
+	initiatorNTCP2 := dialAndHandshakeInitiator(t, ln.Addr().String(), p.initiatorConfig, p.initiatorHash, p.responderHash, &wg, &responderErr)
 
 	wg.Wait()
 	if responderErr != nil {

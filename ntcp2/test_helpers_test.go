@@ -15,6 +15,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// mustRandomBytes generates a random byte slice of the given size,
+// failing the test if crypto/rand returns an error.
+func mustRandomBytes(t testing.TB, size int) []byte {
+	t.Helper()
+	b := make([]byte, size)
+	_, err := rand.Read(b)
+	require.NoError(t, err)
+	return b
+}
+
 // deterministicBytes returns a byte slice of the given size where
 // each byte is (offset + index). Useful for repeatable test data.
 func deterministicBytes(size int, offset byte) []byte {
@@ -267,6 +277,23 @@ func newTestXKConfigPair(t *testing.T) testXKConfigPair {
 		initiatorHash:   initiatorHash,
 		responderHash:   responderHash,
 	}
+}
+
+// assertSipHashFrameRoundTrip writes a SipHash-obfuscated frame from writer
+
+// startTestNTCP2Listener creates a real TCP listener, wraps it in an
+// NTCP2Listener with the given config, and registers cleanup. Returns
+// the NTCP2Listener and the TCP address for dialing.
+func startTestNTCP2Listener(t *testing.T, config *NTCP2Config) (*NTCP2Listener, net.Addr) {
+	t.Helper()
+	tcpLn, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { tcpLn.Close() })
+
+	ntcp2Ln, err := NewNTCP2Listener(tcpLn, config)
+	require.NoError(t, err)
+	t.Cleanup(func() { ntcp2Ln.Close() })
+	return ntcp2Ln, tcpLn.Addr()
 }
 
 // assertSipHashFrameRoundTrip writes a SipHash-obfuscated frame from writer

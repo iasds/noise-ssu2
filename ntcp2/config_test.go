@@ -342,13 +342,8 @@ func TestNTCP2ConfigToConnConfigWithCustomModifiers(t *testing.T) {
 }
 
 func TestNTCP2ConfigBuilderDefensiveCopying(t *testing.T) {
-	routerHash := make([]byte, 32)
-	_, err := rand.Read(routerHash)
-	require.NoError(t, err)
-
-	staticKey := make([]byte, 32)
-	_, err = rand.Read(staticKey)
-	require.NoError(t, err)
+	routerHash := mustRandomBytes(t, 32)
+	staticKey := mustRandomBytes(t, 32)
 
 	config, err := NewNTCP2Config(routerHash, false)
 	require.NoError(t, err)

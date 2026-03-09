@@ -175,19 +175,9 @@ func TestNTCP2Listener_ConcurrentAccepts(t *testing.T) {
 // an NTCP2Listener that calls AcceptWithHandshake.
 func TestAcceptWithHandshake_FullE2E(t *testing.T) {
 	p := newTestXKConfigPair(t)
-	responderConfig := p.responderConfig
-	initiatorConfig := p.initiatorConfig
-	initiatorHash := p.initiatorHash
-	responderHash := p.responderHash
 
 	// Start TCP listener
-	tcpLn, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	defer tcpLn.Close()
-
-	ntcp2Ln, err := NewNTCP2Listener(tcpLn, responderConfig)
-	require.NoError(t, err)
-	defer ntcp2Ln.Close()
+	ntcp2Ln, tcpAddr := startTestNTCP2Listener(t, p.responderConfig)
 
 	// Responder goroutine using AcceptWithHandshake
 	var wg sync.WaitGroup
@@ -203,7 +193,7 @@ func TestAcceptWithHandshake_FullE2E(t *testing.T) {
 	}()
 
 	// Initiator side: manual dial + handshake
-	initiatorNTCP2 := dialAndHandshakeInitiator(t, tcpLn.Addr().String(), initiatorConfig, initiatorHash, responderHash, &wg, &responderErr)
+	initiatorNTCP2 := dialAndHandshakeInitiator(t, tcpAddr.String(), p.initiatorConfig, p.initiatorHash, p.responderHash, &wg, &responderErr)
 
 	// Wait for responder
 	wg.Wait()
@@ -220,7 +210,7 @@ func TestAcceptWithHandshake_FullE2E(t *testing.T) {
 
 	// Verify bidirectional data exchange
 	testMsg := []byte("AcceptWithHandshake works!")
-	_, err = initiatorNTCP2.Write(testMsg)
+	_, err := initiatorNTCP2.Write(testMsg)
 	require.NoError(t, err)
 
 	buf := make([]byte, 1024)
