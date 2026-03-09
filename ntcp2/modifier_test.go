@@ -89,20 +89,9 @@ func TestAESObfuscationModifier_Creation(t *testing.T) {
 
 func TestAESObfuscationModifier_Roundtrip(t *testing.T) {
 	// Create test data
-	routerHash := make([]byte, 32)
-	for i := range routerHash {
-		routerHash[i] = byte(i)
-	}
-
-	iv := make([]byte, 16)
-	for i := range iv {
-		iv[i] = byte(i + 32)
-	}
-
-	ephemeralKey := make([]byte, 32)
-	for i := range ephemeralKey {
-		ephemeralKey[i] = byte(i + 64)
-	}
+	routerHash := deterministicBytes(32, 0)
+	iv := deterministicBytes(16, 32)
+	ephemeralKey := deterministicBytes(32, 64)
 
 	modifier, err := NewAESObfuscationModifier("aes_test", routerHash, iv)
 	require.NoError(t, err)
@@ -743,28 +732,16 @@ func TestNTCP2PaddingModifier_I2PCompliance(t *testing.T) {
 // ============================================================================
 
 func TestAudit_AESStatePropagation_CrossMessage(t *testing.T) {
-	routerHash := make([]byte, 32)
-	for i := range routerHash {
-		routerHash[i] = byte(i + 1)
-	}
-	iv := make([]byte, 16)
-	for i := range iv {
-		iv[i] = byte(i + 0x80)
-	}
+	routerHash := deterministicBytes(32, 1)
+	iv := deterministicBytes(16, 0x80)
 
 	sender, err := NewAESObfuscationModifier("sender", routerHash, iv)
 	require.NoError(t, err)
 	receiver, err := NewAESObfuscationModifier("receiver", routerHash, iv)
 	require.NoError(t, err)
 
-	keyX := make([]byte, 32)
-	for i := range keyX {
-		keyX[i] = byte(i + 0x40)
-	}
-	keyY := make([]byte, 32)
-	for i := range keyY {
-		keyY[i] = byte(i + 0xC0)
-	}
+	keyX := deterministicBytes(32, 0x40)
+	keyY := deterministicBytes(32, 0xC0)
 	keyY[31] &= 0x7F
 
 	cipherX, err := sender.ModifyOutbound(handshake.PhaseInitial, keyX)
@@ -785,19 +762,9 @@ func TestAudit_AESStatePropagation_CrossMessage(t *testing.T) {
 }
 
 func TestAudit_AESState_IsLastCiphertextBlock(t *testing.T) {
-	routerHash := make([]byte, 32)
-	for i := range routerHash {
-		routerHash[i] = byte(i + 10)
-	}
-	iv := make([]byte, 16)
-	for i := range iv {
-		iv[i] = byte(i + 50)
-	}
-
-	keyX := make([]byte, 32)
-	for i := range keyX {
-		keyX[i] = byte(i + 100)
-	}
+	routerHash := deterministicBytes(32, 10)
+	iv := deterministicBytes(16, 50)
+	keyX := deterministicBytes(32, 100)
 
 	block, err := aes.NewCipher(routerHash)
 	require.NoError(t, err)
@@ -809,10 +776,7 @@ func TestAudit_AESState_IsLastCiphertextBlock(t *testing.T) {
 
 	expectedState := manualCipher[16:32]
 
-	keyY := make([]byte, 32)
-	for i := range keyY {
-		keyY[i] = byte(i + 200)
-	}
+	keyY := deterministicBytes(32, 200)
 	manualCipherY := make([]byte, 32)
 	copy(manualCipherY, keyY)
 	mode2 := cipher.NewCBCEncrypter(block, expectedState)
@@ -1079,14 +1043,8 @@ func TestAudit_SipHashDirectional_KeysMatter(t *testing.T) {
 // ============================================================================
 
 func TestFrameLengthObfuscation_DirectionalRoundTrip(t *testing.T) {
-	askMaster := make([]byte, 32)
-	for i := range askMaster {
-		askMaster[i] = byte(i)
-	}
-	handshakeHash := make([]byte, 32)
-	for i := range handshakeHash {
-		handshakeHash[i] = byte(i + 128)
-	}
+	askMaster := deterministicBytes(32, 0)
+	handshakeHash := deterministicBytes(32, 128)
 
 	keysAB, ivAB, keysBA, ivBA, err := DeriveSipHashKeys(askMaster, handshakeHash)
 	require.NoError(t, err)

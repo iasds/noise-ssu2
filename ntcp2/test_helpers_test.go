@@ -11,6 +11,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// deterministicBytes returns a byte slice of the given size where
+// each byte is (offset + index). Useful for repeatable test data.
+func deterministicBytes(size int, offset byte) []byte {
+	b := make([]byte, size)
+	for i := range b {
+		b[i] = offset + byte(i)
+	}
+	return b
+}
+
 // testNTCP2Listener holds a fully-wired NTCP2 listener backed by a real
 // TCP listener, with random router‐hash and config.
 type testNTCP2Listener struct {
@@ -135,6 +145,33 @@ func newTestInitiatorConfigFrom(t *testing.T, m testCryptoMaterial) *NTCP2Config
 	config, err = config.WithRemoteStaticKey(generateRandomBytes(32))
 	require.NoError(t, err)
 	config, err = config.WithAESObfuscation(true, m.obfuscationIV)
+	require.NoError(t, err)
+	return config
+}
+
+// newTestResponderConfigWithKey creates a responder NTCP2Config with random
+// router hash and static key, suitable for clone/listener tests.
+func newTestResponderConfigWithKey(t *testing.T) *NTCP2Config {
+	t.Helper()
+	routerHash := generateRandomBytes(32)
+	staticKey := generateRandomBytes(32)
+	config, err := NewNTCP2Config(routerHash, false)
+	require.NoError(t, err)
+	config, err = config.WithStaticKey(staticKey)
+	require.NoError(t, err)
+	return config
+}
+
+// newTestResponderConfigNoAES creates a responder NTCP2Config with a fixed
+// router hash and AES obfuscation disabled, suitable for listener tests.
+func newTestResponderConfigNoAES(t *testing.T) *NTCP2Config {
+	t.Helper()
+	routerHash := make([]byte, RouterHashSize)
+	copy(routerHash, "responder-hash-32-bytes-long!!!!")
+
+	config, err := NewNTCP2Config(routerHash, false)
+	require.NoError(t, err)
+	config, err = config.WithAESObfuscation(false, nil)
 	require.NoError(t, err)
 	return config
 }

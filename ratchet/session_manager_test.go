@@ -23,6 +23,15 @@ func generateTestKeyPair(t testing.TB) [32]byte {
 	return priv
 }
 
+// randomBytes32 returns a random 32-byte slice, failing the test on error.
+func randomBytes32(t testing.TB) []byte {
+	t.Helper()
+	b := make([]byte, 32)
+	_, err := rand.Read(b)
+	require.NoError(t, err)
+	return b
+}
+
 // createTestSessionManager creates a SessionManager for testing.
 func createTestSessionManager(t testing.TB) *SessionManager {
 	t.Helper()
@@ -78,6 +87,20 @@ func mustBuildNSPayload(t testing.TB, data []byte) []byte {
 }
 
 // createTestSession creates a Session with random keys for unit tests.
+
+// firstSession returns the first session stored in the given SessionManager.
+// Fails the test if no sessions exist.
+func firstSession(t testing.TB, sm *SessionManager) *Session {
+	t.Helper()
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	for _, s := range sm.sessions {
+		return s
+	}
+	t.Fatal("SessionManager has no sessions")
+	return nil
+}
+
 // It uses the given isInitiator flag to determine the session's role.
 func createTestSession(t testing.TB, isInitiator bool) *Session {
 	t.Helper()
@@ -1987,13 +2010,7 @@ func TestRemoveSessionByPointer_RemovesCorrectSession(t *testing.T) {
 	_ = destHash1
 
 	assert.Equal(t, 1, sm.GetSessionCount())
-	sm.mu.RLock()
-	var session *Session
-	for _, s := range sm.sessions {
-		session = s
-		break
-	}
-	sm.mu.RUnlock()
+	session := firstSession(t, sm)
 
 	sm.removeSessionByPointer(session)
 	assert.Equal(t, 0, sm.GetSessionCount(),

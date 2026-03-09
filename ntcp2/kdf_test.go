@@ -20,14 +20,8 @@ func hmacSHA256Test(key, data []byte) []byte {
 // TestAudit_KDF_UsesHMACNotHKDF verifies that DeriveSipHashKeys uses the
 // 5-step HMAC-SHA256 chain from the NTCP2 spec, not golang.org/x/crypto/hkdf.
 func TestAudit_KDF_UsesHMACNotHKDF(t *testing.T) {
-	askMaster := make([]byte, 32)
-	for i := range askMaster {
-		askMaster[i] = byte(i)
-	}
-	handshakeHash := make([]byte, 32)
-	for i := range handshakeHash {
-		handshakeHash[i] = byte(i + 64)
-	}
+	askMaster := deterministicBytes(32, 0)
+	handshakeHash := deterministicBytes(32, 64)
 
 	sipKeysAB, sipIVAB, sipKeysBA, sipIVBA, err := DeriveSipHashKeys(askMaster, handshakeHash)
 	require.NoError(t, err)

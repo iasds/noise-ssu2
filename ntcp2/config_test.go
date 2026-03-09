@@ -742,22 +742,10 @@ func TestClone_AllNilOptionalFields(t *testing.T) {
 // optional byte-slice and modifier field when all are populated. This exercises
 // all 6 non-nil branches in Clone() and confirms mutation independence.
 func TestClone_AllOptionalFieldsPopulated(t *testing.T) {
-	staticKey := make([]byte, 32)
-	for i := range staticKey {
-		staticKey[i] = byte(i + 1)
-	}
-	remoteRouterHash := make([]byte, 32)
-	for i := range remoteRouterHash {
-		remoteRouterHash[i] = byte(i + 0x20)
-	}
-	remoteStaticKey := make([]byte, 32)
-	for i := range remoteStaticKey {
-		remoteStaticKey[i] = byte(i + 0x40)
-	}
-	obfuscationIV := make([]byte, 16)
-	for i := range obfuscationIV {
-		obfuscationIV[i] = byte(i + 0x60)
-	}
+	staticKey := deterministicBytes(32, 1)
+	remoteRouterHash := deterministicBytes(32, 0x20)
+	remoteStaticKey := deterministicBytes(32, 0x40)
+	obfuscationIV := deterministicBytes(16, 0x60)
 
 	mod1 := &testModifier{name: "mod1"}
 	mod2 := &testModifier{name: "mod2"}

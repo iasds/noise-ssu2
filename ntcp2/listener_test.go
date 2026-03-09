@@ -197,13 +197,7 @@ func (e *errorListener) Addr() net.Addr            { return e.addr }
 // TestNTCP2Listener_AcceptUnderlyingError verifies that a transient error
 // from the underlying TCP listener is correctly propagated by Accept().
 func TestNTCP2Listener_AcceptUnderlyingError(t *testing.T) {
-	routerHash := make([]byte, RouterHashSize)
-	copy(routerHash, "responder-hash-32-bytes-long!!!!")
-
-	config, err := NewNTCP2Config(routerHash, false)
-	require.NoError(t, err)
-	config, err = config.WithAESObfuscation(false, nil)
-	require.NoError(t, err)
+	config := newTestResponderConfigNoAES(t)
 
 	tcpLn, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -227,13 +221,7 @@ func TestNTCP2Listener_AcceptUnderlyingError(t *testing.T) {
 // fails mid-accept (e.g., due to an invalid config mutation), the raw
 // connection is closed and the error is propagated.
 func TestNTCP2Listener_AcceptToConnConfigError(t *testing.T) {
-	routerHash := make([]byte, RouterHashSize)
-	copy(routerHash, "responder-hash-32-bytes-long!!!!")
-
-	config, err := NewNTCP2Config(routerHash, false)
-	require.NoError(t, err)
-	config, err = config.WithAESObfuscation(false, nil)
-	require.NoError(t, err)
+	config := newTestResponderConfigNoAES(t)
 
 	// Create a real listener so Accept() succeeds
 	tcpLn, err := net.Listen("tcp", "127.0.0.1:0")

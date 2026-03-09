@@ -234,14 +234,7 @@ func TestReceiveWindow_KeyCachePreFilled(t *testing.T) {
 	require.NoError(t, err)
 
 	// Pick any active session.
-	receiver.mu.RLock()
-	var sess *Session
-	for _, s := range receiver.sessions {
-		sess = s
-		break
-	}
-	receiver.mu.RUnlock()
-	require.NotNil(t, sess)
+	sess := firstSession(t, receiver)
 
 	// Fill an explicit window and check that the cache has the right keys.
 	sess.mu.Lock()
@@ -279,14 +272,7 @@ func TestRecvWindowReset_AfterNSR(t *testing.T) {
 	require.NoError(t, err)
 
 	// Retrieve the initiator's session (post-NSR).
-	var senderSess *Session
-	sender.mu.RLock()
-	for _, s := range sender.sessions {
-		senderSess = s
-		break
-	}
-	sender.mu.RUnlock()
-	require.NotNil(t, senderSess)
+	senderSess := firstSession(t, sender)
 
 	senderSess.mu.Lock()
 	base := senderSess.recvWindowBase
@@ -359,14 +345,7 @@ func TestSendTagPollution_RecvWindowStillWorks(t *testing.T) {
 
 	// Step 4: Verify alice's pendingTags is not polluted (capped at tagWindowSize,
 	// not bloated with send-direction tags).
-	alice.mu.RLock()
-	var aliceSess *Session
-	for _, s := range alice.sessions {
-		aliceSess = s
-		break
-	}
-	alice.mu.RUnlock()
-	require.NotNil(t, aliceSess, "alice must have a session after outgoing ES messages")
+	aliceSess := firstSession(t, alice)
 
 	aliceSess.mu.Lock()
 	pendingCount := len(aliceSess.pendingTags)
@@ -583,14 +562,7 @@ func TestReplenishTagWindow_FullReplenishment(t *testing.T) {
 	_ = mustBootstrapSession(t, sender, receiver)
 
 	// Locate the receiver's active session.
-	receiver.mu.RLock()
-	var sess *Session
-	for _, s := range receiver.sessions {
-		sess = s
-		break
-	}
-	receiver.mu.RUnlock()
-	require.NotNil(t, sess, "receiver must have a session after bootstrap")
+	sess := firstSession(t, receiver)
 
 	// Drain the current pendingTags so the window starts empty.
 	receiver.mu.Lock()
@@ -641,14 +613,7 @@ func TestReplenishTagWindow_PartialCollisionRetries(t *testing.T) {
 	_ = mustBootstrapSession(t, sender, receiver)
 
 	// Locate the receiver's active session.
-	receiver.mu.RLock()
-	var sess *Session
-	for _, s := range receiver.sessions {
-		sess = s
-		break
-	}
-	receiver.mu.RUnlock()
-	require.NotNil(t, sess, "receiver must have a session after bootstrap")
+	sess := firstSession(t, receiver)
 
 	// Do a first replenishment so the tag ratchet has produced a full window.
 	receiver.replenishTagWindowOutsideLock(sess)

@@ -98,12 +98,8 @@ func TestNoiseIKState_MixKey(t *testing.T) {
 // the same value as the first output of noise.HKDF2SHA256. This ensures the "ee"
 // single-output HKDF and the standard 2-output HKDF agree on the chaining key.
 func TestNoiseHKDF1_MatchesFirstOutputOfHKDF2(t *testing.T) {
-	ck := make([]byte, 32)
-	ikm := make([]byte, 32)
-	_, err := rand.Read(ck)
-	require.NoError(t, err)
-	_, err = rand.Read(ikm)
-	require.NoError(t, err)
+	ck := randomBytes32(t)
+	ikm := randomBytes32(t)
 
 	output1 := noise.HKDF1SHA256(ck, ikm)
 	first, _ := noise.HKDF2SHA256(ck, ikm)
@@ -598,12 +594,8 @@ func TestIsAllZeros(t *testing.T) {
 }
 
 func TestNoiseHKDF2_Deterministic(t *testing.T) {
-	ck := make([]byte, 32)
-	ikm := make([]byte, 32)
-	_, err := rand.Read(ck)
-	require.NoError(t, err)
-	_, err = rand.Read(ikm)
-	require.NoError(t, err)
+	ck := randomBytes32(t)
+	ikm := randomBytes32(t)
 
 	o1a, o2a := noise.HKDF2SHA256(ck, ikm)
 	o1b, o2b := noise.HKDF2SHA256(ck, ikm)
@@ -640,12 +632,8 @@ func TestHmacSHA256_KnownOutput(t *testing.T) {
 // ============================================================================
 
 func TestStandardHKDF_Deterministic(t *testing.T) {
-	salt := make([]byte, 32)
-	ikm := make([]byte, 32)
-	_, err := rand.Read(salt)
-	require.NoError(t, err)
-	_, err = rand.Read(ikm)
-	require.NoError(t, err)
+	salt := randomBytes32(t)
+	ikm := randomBytes32(t)
 
 	out1, err := kdf.StandardHKDF(salt, ikm, []byte("test_info"), 64)
 	require.NoError(t, err)
@@ -656,12 +644,8 @@ func TestStandardHKDF_Deterministic(t *testing.T) {
 }
 
 func TestStandardHKDF_DifferentInputs(t *testing.T) {
-	salt := make([]byte, 32)
-	ikm := make([]byte, 32)
-	_, err := rand.Read(salt)
-	require.NoError(t, err)
-	_, err = rand.Read(ikm)
-	require.NoError(t, err)
+	salt := randomBytes32(t)
+	ikm := randomBytes32(t)
 
 	out1, err := kdf.StandardHKDF(salt, ikm, []byte("info_a"), 32)
 	require.NoError(t, err)
@@ -675,9 +659,7 @@ func TestStandardHKDF_DifferentInputs(t *testing.T) {
 }
 
 func TestStandardHKDF_VariableLengths(t *testing.T) {
-	salt := make([]byte, 32)
-	_, err := rand.Read(salt)
-	require.NoError(t, err)
+	salt := randomBytes32(t)
 
 	out32, err := kdf.StandardHKDF(salt, nil, []byte("test"), 32)
 	require.NoError(t, err)

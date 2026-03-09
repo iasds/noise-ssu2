@@ -418,18 +418,7 @@ func TestE2E_ZeroKeyMaterial_OnClose(t *testing.T) {
 // TestE2E_ListenerConfig_PerConnectionClone verifies that each accepted
 // connection gets an independent clone of the listener's NTCP2Config.
 func TestE2E_ListenerConfig_PerConnectionClone(t *testing.T) {
-	routerHash := make([]byte, 32)
-	_, err := rand.Read(routerHash)
-	require.NoError(t, err)
-
-	staticKey := make([]byte, 32)
-	_, err = rand.Read(staticKey)
-	require.NoError(t, err)
-
-	config, err := NewNTCP2Config(routerHash, false)
-	require.NoError(t, err)
-	config, err = config.WithStaticKey(staticKey)
-	require.NoError(t, err)
+	config := newTestResponderConfigWithKey(t)
 	config = config.WithHandshakeTimeout(5 * time.Second)
 
 	// Create a TCP listener

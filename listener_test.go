@@ -42,6 +42,22 @@ func newTestNoiseListenerFromMock(t *testing.T, pattern string, ml *mockListener
 	return noiseListener
 }
 
+// pipedMockListener creates a net.Pipe, builds a mockListener whose Accept
+// returns the server end, and returns (clientConn, mockListener). Both pipe
+// ends are registered with t.Cleanup.
+func pipedMockListener(t *testing.T, addr net.Addr) (net.Conn, *mockListener) {
+	t.Helper()
+	clientConn, serverConn := net.Pipe()
+	t.Cleanup(func() { clientConn.Close(); serverConn.Close() })
+	ml := &mockListener{
+		addr: addr,
+		acceptFunc: func() (net.Conn, error) {
+			return serverConn, nil
+		},
+	}
+	return clientConn, ml
+}
+
 func TestNewListenerConfig(t *testing.T) {
 	config := NewListenerConfig("XX")
 
@@ -550,17 +566,8 @@ func TestListenerConfigBuilderChain_AllFields(t *testing.T) {
 
 func TestNoiseListenerAcceptPropagatesModifiers(t *testing.T) {
 	// Use a mock listener that returns a mock conn on Accept
-	clientConn, serverConn := net.Pipe()
-	defer clientConn.Close()
-	defer serverConn.Close()
-
 	addr := &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 9090}
-	ml := &mockListener{
-		addr: addr,
-		acceptFunc: func() (net.Conn, error) {
-			return serverConn, nil
-		},
-	}
+	_, ml := pipedMockListener(t, addr)
 
 	staticKey := make([]byte, 32)
 	_, err := rand.Read(staticKey)
@@ -610,17 +617,8 @@ func TestNoiseListenerAcceptPropagatesModifiers(t *testing.T) {
 
 func TestNoiseListenerAcceptNoModifiers(t *testing.T) {
 	// Verify Accept works correctly when no modifiers are configured (no regression)
-	clientConn, serverConn := net.Pipe()
-	defer clientConn.Close()
-	defer serverConn.Close()
-
 	addr := &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 9091}
-	ml := &mockListener{
-		addr: addr,
-		acceptFunc: func() (net.Conn, error) {
-			return serverConn, nil
-		},
-	}
+	_, ml := pipedMockListener(t, addr)
 
 	staticKey := make([]byte, 32)
 	_, err := rand.Read(staticKey)

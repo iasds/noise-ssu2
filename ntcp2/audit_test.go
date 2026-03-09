@@ -114,13 +114,7 @@ func TestNTCP2PaddingModifier_Close_Idempotent(t *testing.T) {
 // call Accept() concurrently without serialization after the acceptMutex
 // was removed. This mirrors the root package's TestNoiseListenerConcurrentAccepts.
 func TestNTCP2Listener_ConcurrentAccepts(t *testing.T) {
-	responderHash := make([]byte, RouterHashSize)
-	copy(responderHash, "responder-hash-32-bytes-long!!!!")
-
-	config, err := NewNTCP2Config(responderHash, false)
-	require.NoError(t, err)
-	config, err = config.WithAESObfuscation(false, nil)
-	require.NoError(t, err)
+	config := newTestResponderConfigNoAES(t)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -250,13 +244,7 @@ func TestAcceptWithHandshake_FullE2E(t *testing.T) {
 // TestAcceptWithHandshake_ClosedListener verifies AcceptWithHandshake
 // returns an error when the listener is already closed.
 func TestAcceptWithHandshake_ClosedListener(t *testing.T) {
-	responderHash := make([]byte, RouterHashSize)
-	copy(responderHash, "responder-hash-32-bytes-long!!!!")
-
-	config, err := NewNTCP2Config(responderHash, false)
-	require.NoError(t, err)
-	config, err = config.WithAESObfuscation(false, nil)
-	require.NoError(t, err)
+	config := newTestResponderConfigNoAES(t)
 
 	tcpLn, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
