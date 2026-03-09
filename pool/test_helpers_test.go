@@ -55,6 +55,21 @@ type closedPoolWithInUse struct {
 	wrapper net.Conn // the checked-out wrapper
 }
 
+// setupNilPoolWithWrapped creates a default (nil-config) pool, puts a mock
+// connection, and checks it out. Registers pool.Close via t.Cleanup.
+func setupNilPoolWithWrapped(t *testing.T, addr string) (*ConnPool, *mockConn, net.Conn) {
+	t.Helper()
+	pool := NewConnPool(nil)
+	t.Cleanup(func() { pool.Close() })
+	conn := newMockConn(addr)
+	pool.Put(conn)
+	wrapped := pool.Get(addr)
+	if wrapped == nil {
+		t.Fatal("Get returned nil")
+	}
+	return pool, conn, wrapped
+}
+
 // setupClosedPoolWithInUse creates a pool, puts a mock connection, checks it
 // out, then closes the pool — leaving one connection in-use. Callers can
 // assert on the state of the pool and wrapper.

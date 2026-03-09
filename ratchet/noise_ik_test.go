@@ -57,6 +57,21 @@ func hashPubKey(pub [32]byte) [32]byte {
 	return sha256.Sum256(pub[:])
 }
 
+// initNoiseIKWithMixedKey creates a Noise IK symmetric state with a random
+// responder public key and a random cipher key already mixed in.
+func initNoiseIKWithMixedKey(t *testing.T) *noise.SymmetricState {
+	t.Helper()
+	var respPub [32]byte
+	_, err := rand.Read(respPub[:])
+	require.NoError(t, err)
+	ns := initNoiseIK(respPub)
+	ikm := make([]byte, 32)
+	_, err = rand.Read(ikm)
+	require.NoError(t, err)
+	ns.MixKey(ikm)
+	return ns
+}
+
 func TestNoiseIKState_MixHash(t *testing.T) {
 	var respPub [32]byte
 	_, err := rand.Read(respPub[:])
@@ -111,18 +126,7 @@ func TestNoiseHKDF1_MatchesFirstOutputOfHKDF2(t *testing.T) {
 // hasKey flag. Per I2P ratchet.md §1g, the "ee" handshake token uses a
 // single-output HKDF that only advances the chaining key.
 func TestNoiseIKState_MixKeyCKOnly(t *testing.T) {
-	var respPub [32]byte
-	_, err := rand.Read(respPub[:])
-	require.NoError(t, err)
-
-	ns := initNoiseIK(respPub)
-
-	// Set a known cipher key via MixKey so we can verify it's preserved
-	ikm := make([]byte, 32)
-	_, err = rand.Read(ikm)
-	require.NoError(t, err)
-	ns.MixKey(ikm)
-	assert.True(t, ns.HasKey(), "MixKey should set hasKey")
+	ns := initNoiseIKWithMixedKey(t)
 
 	// Record state before mixKeyCKOnly
 	oldCK := ns.ChainingKey()
@@ -132,7 +136,7 @@ func TestNoiseIKState_MixKeyCKOnly(t *testing.T) {
 
 	// Apply mixKeyCKOnly with new input
 	eeIKM := make([]byte, 32)
-	_, err = rand.Read(eeIKM)
+	_, err := rand.Read(eeIKM)
 	require.NoError(t, err)
 	mixKeyCKOnly(ns, eeIKM)
 
@@ -220,17 +224,9 @@ func TestNoiseIKState_EncryptAndHash_NoKey(t *testing.T) {
 }
 
 func TestNoiseIKState_DecryptAndHash_TooShort(t *testing.T) {
-	var respPub [32]byte
-	_, err := rand.Read(respPub[:])
-	require.NoError(t, err)
+	ns := initNoiseIKWithMixedKey(t)
 
-	ns := initNoiseIK(respPub)
-	ikm := make([]byte, 32)
-	_, err = rand.Read(ikm)
-	require.NoError(t, err)
-	ns.MixKey(ikm)
-
-	_, err = ns.DecryptAndHash(nil, make([]byte, 10))
+	_, err := ns.DecryptAndHash(nil, make([]byte, 10))
 	assert.Error(t, err, "Should reject ciphertext shorter than 16 bytes")
 }
 

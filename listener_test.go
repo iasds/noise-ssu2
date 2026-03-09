@@ -58,6 +58,19 @@ func pipedMockListener(t *testing.T, addr net.Addr) (net.Conn, *mockListener) {
 	return clientConn, ml
 }
 
+// acceptAsNoiseConn calls Accept on the listener, asserts success, registers
+// cleanup, and returns the underlying *NoiseConn.
+func acceptAsNoiseConn(t *testing.T, nl *NoiseListener) *NoiseConn {
+	t.Helper()
+	conn, err := nl.Accept()
+	require.NoError(t, err)
+	require.NotNil(t, conn)
+	noiseConn, ok := conn.(*NoiseConn)
+	require.True(t, ok)
+	t.Cleanup(func() { noiseConn.Close() })
+	return noiseConn
+}
+
 func TestNewListenerConfig(t *testing.T) {
 	config := NewListenerConfig("XX")
 
@@ -591,13 +604,7 @@ func TestNoiseListenerAcceptPropagatesModifiers(t *testing.T) {
 	require.NoError(t, err)
 	defer noiseListener.Close()
 
-	conn, err := noiseListener.Accept()
-	require.NoError(t, err)
-	require.NotNil(t, conn)
-
-	noiseConn, ok := conn.(*NoiseConn)
-	require.True(t, ok)
-	defer noiseConn.Close()
+	noiseConn := acceptAsNoiseConn(t, noiseListener)
 
 	// Verify modifiers were propagated
 	require.Len(t, noiseConn.config.Modifiers, 1)
@@ -629,12 +636,7 @@ func TestNoiseListenerAcceptNoModifiers(t *testing.T) {
 	require.NoError(t, err)
 	defer noiseListener.Close()
 
-	conn, err := noiseListener.Accept()
-	require.NoError(t, err)
-	require.NotNil(t, conn)
-
-	noiseConn := conn.(*NoiseConn)
-	defer noiseConn.Close()
+	noiseConn := acceptAsNoiseConn(t, noiseListener)
 
 	assert.Empty(t, noiseConn.config.Modifiers)
 	assert.Nil(t, noiseConn.config.PostHandshakeHook)

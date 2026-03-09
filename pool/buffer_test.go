@@ -524,16 +524,7 @@ func TestRelease_ClosedPool_ClosesConnection(t *testing.T) {
 }
 
 func TestPoolConnWrapper_DoubleClose(t *testing.T) {
-	pool := NewConnPool(nil)
-	defer pool.Close()
-
-	conn := newMockConn("127.0.0.1:8080")
-	pool.Put(conn)
-
-	wrapped := pool.Get("127.0.0.1:8080")
-	if wrapped == nil {
-		t.Fatal("Get returned nil")
-	}
+	_, _, wrapped := setupNilPoolWithWrapped(t, "127.0.0.1:8080")
 
 	err := wrapped.Close()
 	if err != nil {
@@ -547,16 +538,7 @@ func TestPoolConnWrapper_DoubleClose(t *testing.T) {
 }
 
 func TestPoolConnWrapper_Discard(t *testing.T) {
-	pool := NewConnPool(nil)
-	defer pool.Close()
-
-	conn := newMockConn("127.0.0.1:8080")
-	pool.Put(conn)
-
-	wrapped := pool.Get("127.0.0.1:8080")
-	if wrapped == nil {
-		t.Fatal("Get returned nil")
-	}
+	pool, conn, wrapped := setupNilPoolWithWrapped(t, "127.0.0.1:8080")
 
 	wrapper, ok := wrapped.(*PoolConnWrapper)
 	if !ok {

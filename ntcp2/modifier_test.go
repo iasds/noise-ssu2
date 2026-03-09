@@ -40,6 +40,47 @@ func assertSipHashRoundTrip(
 	}
 }
 
+// assertAESRoundTrip verifies that sender.ModifyOutbound → receiver.ModifyInbound
+// recovers the original plaintext for a given handshake phase. The label is used
+// in assertion messages to identify which key/phase is being tested.
+func assertAESRoundTrip(
+	t *testing.T,
+	sender, receiver *AESObfuscationModifier,
+	phase handshake.HandshakePhase,
+	plaintext []byte,
+	label string,
+) {
+	t.Helper()
+	ciphertext, err := sender.ModifyOutbound(phase, plaintext)
+	require.NoError(t, err)
+	assert.NotEqual(t, plaintext, ciphertext, "%s must be encrypted", label)
+
+	recovered, err := receiver.ModifyInbound(phase, ciphertext)
+	require.NoError(t, err)
+	assert.Equal(t, plaintext, recovered, "Receiver must recover original %s", label)
+}
+
+// assertSipHashMaskRoundTrip verifies a single frame's SipHash length obfuscation
+// round trip: sender masks the length, receiver unmasks it, and the result matches.
+func assertSipHashMaskRoundTrip(
+	t *testing.T,
+	sender, receiver *SipHashLengthModifier,
+	originalLen uint16,
+	msgFmtArgs ...interface{},
+) {
+	t.Helper()
+	outMask := sender.NextOutboundMask()
+	obfuscated := originalLen ^ outMask
+
+	wire := make([]byte, 2)
+	binary.BigEndian.PutUint16(wire, obfuscated)
+
+	inMask := receiver.NextInboundMask()
+	recovered := binary.BigEndian.Uint16(wire) ^ inMask
+
+	assert.Equal(t, originalLen, recovered, msgFmtArgs...)
+}
+
 func TestAESObfuscationModifier_Creation(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -744,21 +785,8 @@ func TestAudit_AESStatePropagation_CrossMessage(t *testing.T) {
 	keyY := deterministicBytes(32, 0xC0)
 	keyY[31] &= 0x7F
 
-	cipherX, err := sender.ModifyOutbound(handshake.PhaseInitial, keyX)
-	require.NoError(t, err)
-	assert.NotEqual(t, keyX, cipherX, "X must be encrypted")
-
-	recoveredX, err := receiver.ModifyInbound(handshake.PhaseInitial, cipherX)
-	require.NoError(t, err)
-	assert.Equal(t, keyX, recoveredX, "Receiver must recover original X")
-
-	cipherY, err := sender.ModifyOutbound(handshake.PhaseExchange, keyY)
-	require.NoError(t, err)
-	assert.NotEqual(t, keyY, cipherY, "Y must be encrypted")
-
-	recoveredY, err := receiver.ModifyInbound(handshake.PhaseExchange, cipherY)
-	require.NoError(t, err)
-	assert.Equal(t, keyY, recoveredY, "Receiver must recover original Y using state from msg1")
+	assertAESRoundTrip(t, sender, receiver, handshake.PhaseInitial, keyX, "X")
+	assertAESRoundTrip(t, sender, receiver, handshake.PhaseExchange, keyY, "Y (using state from msg1)")
 }
 
 func TestAudit_AESState_IsLastCiphertextBlock(t *testing.T) {
@@ -1054,18 +1082,8 @@ func TestFrameLengthObfuscation_DirectionalRoundTrip(t *testing.T) {
 
 	for i := 0; i < 20; i++ {
 		originalLen := uint16(16 + i*100)
-
-		outMask := initiator.NextOutboundMask()
-		obfuscated := originalLen ^ outMask
-
-		wire := make([]byte, 2)
-		binary.BigEndian.PutUint16(wire, obfuscated)
-
-		inMask := responder.NextInboundMask()
-		recovered := binary.BigEndian.Uint16(wire) ^ inMask
-
-		assert.Equal(t, originalLen, recovered,
-			"Directional round-trip failed at frame %d", i)
+		assertSipHashMaskRoundTrip(t, initiator, responder,
+			originalLen, "Directional round-trip failed at frame %d", i)
 	}
 }
 

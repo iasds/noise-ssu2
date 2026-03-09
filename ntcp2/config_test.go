@@ -315,23 +315,17 @@ func TestNTCP2ConfigToConnConfigWithDisabledModifiers(t *testing.T) {
 }
 
 func TestNTCP2ConfigToConnConfigWithCustomModifiers(t *testing.T) {
-	routerHash := make([]byte, 32)
-	_, err := rand.Read(routerHash)
-	require.NoError(t, err)
-
-	obfuscationIV := make([]byte, 16)
-	_, err = rand.Read(obfuscationIV)
-	require.NoError(t, err)
+	m := newTestCryptoMaterial(t)
 
 	// Create custom modifiers
 	xorMod := handshake.NewXORModifier("custom-xor", []byte{0xCC, 0xDD})
 	paddingMod, err := handshake.NewPaddingModifier("custom-padding", 8, 16)
 	require.NoError(t, err)
 
-	ntcp2Config, err := NewNTCP2Config(routerHash, false)
+	ntcp2Config, err := NewNTCP2Config(m.routerHash, false)
 	require.NoError(t, err)
 
-	ntcp2Config, err = ntcp2Config.WithAESObfuscation(true, obfuscationIV)
+	ntcp2Config, err = ntcp2Config.WithAESObfuscation(true, m.obfuscationIV)
 	require.NoError(t, err)
 	ntcp2Config = ntcp2Config.
 		WithModifiers(xorMod, paddingMod)

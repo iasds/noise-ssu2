@@ -54,10 +54,10 @@ func newTestReplyMaterial(t *testing.T) testReplyMaterial {
 
 // newTestECIESMaterial generates a fresh X25519 keypair, a random 222-byte
 // cleartext, and the SHA-256 identity hash derived from the public key.
-func newTestECIESMaterial(t *testing.T) testECIESMaterial {
-	t.Helper()
+func newTestECIESMaterial(tb testing.TB) testECIESMaterial {
+	tb.Helper()
 	pubKey, privKey, err := ecies.GenerateKeyPair()
-	require.NoError(t, err)
+	require.NoError(tb, err)
 
 	cleartext := make([]byte, 222)
 	rand.Read(cleartext)
@@ -650,20 +650,11 @@ func BenchmarkDecryptReplyRecord(b *testing.B) {
 // BenchmarkEncryptBuildRequest benchmarks ECIES build request encryption.
 func BenchmarkEncryptBuildRequest(b *testing.B) {
 	crypto := NewBuildRecordCrypto()
-
-	pubKey, _, err := ecies.GenerateKeyPair()
-	require.NoError(b, err)
-
-	identityHash := types.SHA256(pubKey)
-	var pubKeyArr [32]byte
-	copy(pubKeyArr[:], pubKey)
-
-	cleartext := make([]byte, 222)
-	rand.Read(cleartext)
+	m := newTestECIESMaterial(b)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := crypto.EncryptBuildRequest(cleartext, pubKeyArr, identityHash)
+		_, err := crypto.EncryptBuildRequest(m.cleartext, m.pubKeyArr, m.identityHash)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -673,23 +664,14 @@ func BenchmarkEncryptBuildRequest(b *testing.B) {
 // BenchmarkDecryptBuildRequest benchmarks ECIES build request decryption.
 func BenchmarkDecryptBuildRequest(b *testing.B) {
 	crypto := NewBuildRecordCrypto()
+	m := newTestECIESMaterial(b)
 
-	pubKey, privKey, err := ecies.GenerateKeyPair()
-	require.NoError(b, err)
-
-	identityHash := types.SHA256(pubKey)
-	var pubKeyArr [32]byte
-	copy(pubKeyArr[:], pubKey)
-
-	cleartext := make([]byte, 222)
-	rand.Read(cleartext)
-
-	encrypted, err := crypto.EncryptBuildRequest(cleartext, pubKeyArr, identityHash)
+	encrypted, err := crypto.EncryptBuildRequest(m.cleartext, m.pubKeyArr, m.identityHash)
 	require.NoError(b, err)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := crypto.DecryptBuildRequest(encrypted, privKey)
+		_, err := crypto.DecryptBuildRequest(encrypted, m.privKey)
 		if err != nil {
 			b.Fatal(err)
 		}

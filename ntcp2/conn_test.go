@@ -1168,19 +1168,8 @@ func TestFrameLengthObfuscation_RoundTrip(t *testing.T) {
 	testLengths := []uint16{0, 1, 2, 255, 256, 1024, 16384, 65535}
 
 	for _, originalLen := range testLengths {
-		// Sender: obfuscate
-		outMask := sender.NextOutboundMask()
-		obfuscated := originalLen ^ outMask
-
-		// Put on "wire" as big-endian
-		wire := make([]byte, 2)
-		binary.BigEndian.PutUint16(wire, obfuscated)
-
-		// Receiver: deobfuscate
-		inMask := receiver.NextInboundMask()
-		recovered := binary.BigEndian.Uint16(wire) ^ inMask
-
-		assert.Equal(t, originalLen, recovered, "round-trip failed for length %d", originalLen)
+		assertSipHashMaskRoundTrip(t, sender, receiver,
+			originalLen, "round-trip failed for length %d", originalLen)
 	}
 }
 

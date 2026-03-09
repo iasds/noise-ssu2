@@ -133,6 +133,17 @@ func firstSession(t testing.TB, sm *SessionManager) *Session {
 	return nil
 }
 
+// requireSessionByHash looks up a session in sm.sessions by the given hash,
+// failing the test if no session is found.
+func requireSessionByHash(t *testing.T, sm *SessionManager, hash [32]byte) *Session {
+	t.Helper()
+	sm.mu.RLock()
+	session := sm.sessions[hash]
+	sm.mu.RUnlock()
+	require.NotNil(t, session)
+	return session
+}
+
 // It uses the given isInitiator flag to determine the session's role.
 func createTestSession(t testing.TB, isInitiator bool) *Session {
 	t.Helper()
@@ -257,55 +268,52 @@ func TestMultipleMessages(t *testing.T) {
 // Key Derivation
 // ============================================================================
 
-func TestDeriveDirectionalKeys_Distinct(t *testing.T) {
-	var baseKey [32]byte
-	_, err := rand.Read(baseKey[:])
+// randomBaseKey generates a random [32]byte key for directional key tests.
+func randomBaseKey(t *testing.T) [32]byte {
+	t.Helper()
+	var key [32]byte
+	_, err := rand.Read(key[:])
 	require.NoError(t, err)
-
-	sendKey, recvKey, err := deriveDirectionalKeys(baseKey, true)
-	require.NoError(t, err)
-	assert.NotEqual(t, sendKey, recvKey, "Send and receive keys must differ")
+	return key
 }
 
-func TestDeriveDirectionalKeys_Symmetry(t *testing.T) {
-	var baseKey [32]byte
-	_, err := rand.Read(baseKey[:])
-	require.NoError(t, err)
+func TestDeriveDirectionalKeys(t *testing.T) {
+	t.Run("Distinct", func(t *testing.T) {
+		baseKey := randomBaseKey(t)
+		sendKey, recvKey, err := deriveDirectionalKeys(baseKey, true)
+		require.NoError(t, err)
+		assert.NotEqual(t, sendKey, recvKey, "Send and receive keys must differ")
+	})
 
-	initSend, initRecv, err := deriveDirectionalKeys(baseKey, true)
-	require.NoError(t, err)
-	respSend, respRecv, err := deriveDirectionalKeys(baseKey, false)
-	require.NoError(t, err)
+	t.Run("Symmetry", func(t *testing.T) {
+		baseKey := randomBaseKey(t)
+		initSend, initRecv, err := deriveDirectionalKeys(baseKey, true)
+		require.NoError(t, err)
+		respSend, respRecv, err := deriveDirectionalKeys(baseKey, false)
+		require.NoError(t, err)
+		assert.Equal(t, initSend, respRecv, "Initiator send == Responder receive")
+		assert.Equal(t, initRecv, respSend, "Initiator receive == Responder send")
+	})
 
-	assert.Equal(t, initSend, respRecv, "Initiator send == Responder receive")
-	assert.Equal(t, initRecv, respSend, "Initiator receive == Responder send")
-}
+	t.Run("Deterministic", func(t *testing.T) {
+		baseKey := randomBaseKey(t)
+		s1, r1, err := deriveDirectionalKeys(baseKey, true)
+		require.NoError(t, err)
+		s2, r2, err := deriveDirectionalKeys(baseKey, true)
+		require.NoError(t, err)
+		assert.Equal(t, s1, s2, "Same key should produce same send key")
+		assert.Equal(t, r1, r2, "Same key should produce same recv key")
+	})
 
-func TestDeriveDirectionalKeys_Deterministic(t *testing.T) {
-	var baseKey [32]byte
-	_, err := rand.Read(baseKey[:])
-	require.NoError(t, err)
-
-	s1, r1, err := deriveDirectionalKeys(baseKey, true)
-	require.NoError(t, err)
-	s2, r2, err := deriveDirectionalKeys(baseKey, true)
-	require.NoError(t, err)
-	assert.Equal(t, s1, s2, "Same key should produce same send key")
-	assert.Equal(t, r1, r2, "Same key should produce same recv key")
-}
-
-func TestDeriveDirectionalKeys_DifferentBaseKeys(t *testing.T) {
-	var key1, key2 [32]byte
-	_, err := rand.Read(key1[:])
-	require.NoError(t, err)
-	_, err = rand.Read(key2[:])
-	require.NoError(t, err)
-
-	s1, _, err := deriveDirectionalKeys(key1, true)
-	require.NoError(t, err)
-	s2, _, err := deriveDirectionalKeys(key2, true)
-	require.NoError(t, err)
-	assert.NotEqual(t, s1, s2, "Different base keys should produce different results")
+	t.Run("DifferentBaseKeys", func(t *testing.T) {
+		key1 := randomBaseKey(t)
+		key2 := randomBaseKey(t)
+		s1, _, err := deriveDirectionalKeys(key1, true)
+		require.NoError(t, err)
+		s2, _, err := deriveDirectionalKeys(key2, true)
+		require.NoError(t, err)
+		assert.NotEqual(t, s1, s2, "Different base keys should produce different results")
+	})
 }
 
 func TestSessionManagerKeyDerivation(t *testing.T) {
@@ -604,13 +612,8 @@ func TestTagCollisionDetection(t *testing.T) {
 	assert.Equal(t, 2, sender.GetSessionCount())
 
 	// Verify that tags from different sessions point to different session objects
-	sender.mu.RLock()
-	session1 := sender.sessions[destHash1]
-	session2 := sender.sessions[destHash2]
-	sender.mu.RUnlock()
-
-	require.NotNil(t, session1)
-	require.NotNil(t, session2)
+	session1 := requireSessionByHash(t, sender, destHash1)
+	session2 := requireSessionByHash(t, sender, destHash2)
 
 	// Tags should not cross-reference
 	sender.mu.RLock()
@@ -977,10 +980,7 @@ func TestMaxMessageNumberEnforced(t *testing.T) {
 	destHash := mustBootstrapSession(t, sender, receiver)
 
 	// Artificially set message counter to MaxMessageNumber
-	sender.mu.RLock()
-	session := sender.sessions[destHash]
-	sender.mu.RUnlock()
-	require.NotNil(t, session)
+	session := requireSessionByHash(t, sender, destHash)
 
 	session.mu.Lock()
 	session.MessageCounter = MaxMessageNumber
@@ -1365,10 +1365,7 @@ func TestNSRTag_RegisteredAndConsumedOnReceipt(t *testing.T) {
 	assert.Equal(t, 0, nsrTagCountAfter, "After receiving NSR, nsrTagIndex should be empty")
 
 	// Initiator session should also have nsrTag cleared
-	initiator.mu.RLock()
-	session := initiator.sessions[destHash]
-	initiator.mu.RUnlock()
-	require.NotNil(t, session)
+	session := requireSessionByHash(t, initiator, destHash)
 
 	session.mu.Lock()
 	nsrTagPtr := session.nsrTag
@@ -1383,10 +1380,7 @@ func TestNSRKeys_RatchetsUpdatedAfterNSR(t *testing.T) {
 	initiator, responder, destHash, sessionHash := mustSendNS(t)
 
 	// Capture responder's pre-NSR send tag for comparison
-	responder.mu.RLock()
-	respSession := responder.sessions[sessionHash]
-	responder.mu.RUnlock()
-	require.NotNil(t, respSession)
+	respSession := requireSessionByHash(t, responder, sessionHash)
 
 	respSession.mu.Lock()
 	preNSRTagRatchetAddr := respSession.TagRatchet
@@ -1404,10 +1398,7 @@ func TestNSRKeys_RatchetsUpdatedAfterNSR(t *testing.T) {
 		"Responder's TagRatchet must be replaced after sending NSR")
 
 	// Initiator receives NSR — its ratchets must also be replaced
-	initiator.mu.RLock()
-	initSession := initiator.sessions[destHash]
-	initiator.mu.RUnlock()
-	require.NotNil(t, initSession)
+	initSession := requireSessionByHash(t, initiator, destHash)
 
 	initSession.mu.Lock()
 	preNSRInitTagRatchet := initSession.TagRatchet
