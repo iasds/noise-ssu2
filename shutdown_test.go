@@ -88,6 +88,21 @@ func TestGlobalShutdownFunctions(t *testing.T) {
 	SetGlobalShutdownManager(originalSM)
 }
 
+// shutdownRegistrationTest verifies the shutdown registration lifecycle:
+// SetShutdownManager → assert registered → Close → assert deregistered.
+func shutdownRegistrationTest(t *testing.T, sm *ShutdownManager, resource interface {
+	SetShutdownManager(*ShutdownManager)
+	Close() error
+}) {
+	t.Helper()
+	resource.SetShutdownManager(sm)
+	assertShutdownRegistered(t, sm, resource, true)
+
+	err := resource.Close()
+	assert.NoError(t, err)
+	assertShutdownRegistered(t, sm, resource, false)
+}
+
 func TestNoiseConnShutdownManagerIntegration(t *testing.T) {
 	sm := NewShutdownManager(5 * time.Second)
 
@@ -96,12 +111,7 @@ func TestNoiseConnShutdownManagerIntegration(t *testing.T) {
 	noiseConn, err := NewNoiseConn(mockConn, config)
 	require.NoError(t, err)
 
-	noiseConn.SetShutdownManager(sm)
-	assertShutdownRegistered(t, sm, noiseConn, true)
-
-	err = noiseConn.Close()
-	assert.NoError(t, err)
-	assertShutdownRegistered(t, sm, noiseConn, false)
+	shutdownRegistrationTest(t, sm, noiseConn)
 }
 
 func TestNoiseListenerShutdownManagerIntegration(t *testing.T) {
@@ -114,12 +124,7 @@ func TestNoiseListenerShutdownManagerIntegration(t *testing.T) {
 	noiseListener, err := NewNoiseListener(ml, config)
 	require.NoError(t, err)
 
-	noiseListener.SetShutdownManager(sm)
-	assertShutdownRegistered(t, sm, noiseListener, true)
-
-	err = noiseListener.Close()
-	assert.NoError(t, err)
-	assertShutdownRegistered(t, sm, noiseListener, false)
+	shutdownRegistrationTest(t, sm, noiseListener)
 }
 
 // assertShutdownRegistered checks whether a resource (conn or listener) is

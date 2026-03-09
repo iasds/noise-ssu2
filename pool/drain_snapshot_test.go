@@ -211,16 +211,10 @@ func TestSnapshot_IncludesInUseConnections(t *testing.T) {
 }
 
 func TestSnapshot_IsShallowCopy(t *testing.T) {
-	pool := newTestPool(5)
-	defer pool.Close()
+	f := setupPoolWithConn(t, "10.0.0.1:80")
 
-	conn := newMockConn("10.0.0.1:80")
-	if err := pool.Put(conn); err != nil {
-		t.Fatalf("Put: %v", err)
-	}
-
-	snap1 := pool.Snapshot()
-	snap2 := pool.Snapshot()
+	snap1 := f.pool.Snapshot()
+	snap2 := f.pool.Snapshot()
 
 	// Two snapshots should return separate PooledConn structs.
 	if snap1[0] == snap2[0] {
@@ -249,16 +243,10 @@ func TestPooledConn_NetConn(t *testing.T) {
 
 func TestPooledConn_CreatedAt(t *testing.T) {
 	before := time.Now()
-	pool := newTestPool(5)
-	defer pool.Close()
-
-	conn := newMockConn("10.0.0.1:80")
-	if err := pool.Put(conn); err != nil {
-		t.Fatalf("Put: %v", err)
-	}
+	f := setupPoolWithConn(t, "10.0.0.1:80")
 	after := time.Now()
 
-	snap := pool.Snapshot()
+	snap := f.pool.Snapshot()
 	created := snap[0].CreatedAt()
 	if created.Before(before) || created.After(after) {
 		t.Errorf("CreatedAt() %v should be between %v and %v", created, before, after)

@@ -99,15 +99,20 @@ func (m *mockNetConn) writeToReadBuf(data []byte) {
 	m.readBuf.Write(data)
 }
 
+// newDefaultMockConn creates a standard mockNetConn with default local/remote addresses.
+func newDefaultMockConn() *mockNetConn {
+	localAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8001"}
+	remoteAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8002"}
+	return newMockNetConn(localAddr, remoteAddr)
+}
+
 // newTestNoiseConn creates a NoiseConn with standard mock addresses
 // and the given pattern/initiator settings. It uses the default 30s
 // handshake timeout. The underlying mockNetConn is returned for
 // additional test setup (e.g. injecting read data or errors).
 func newTestNoiseConn(t *testing.T, pattern string, initiator bool) (*NoiseConn, *mockNetConn) {
 	t.Helper()
-	localAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8001"}
-	remoteAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8002"}
-	mock := newMockNetConn(localAddr, remoteAddr)
+	mock := newDefaultMockConn()
 	config := &ConnConfig{
 		Pattern:          pattern,
 		Initiator:        initiator,
@@ -889,10 +894,7 @@ func TestFullPatternNames(t *testing.T) {
 // TestUnsupportedPattern tests that unsupported patterns return proper errors
 func TestUnsupportedPattern(t *testing.T) {
 	config := NewConnConfig("INVALID_PATTERN", true)
-
-	localAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8001"}
-	remoteAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8002"}
-	mockConn := newMockNetConn(localAddr, remoteAddr)
+	mockConn := newDefaultMockConn()
 
 	_, err := NewNoiseConn(mockConn, config)
 	assert.Error(t, err, "Unsupported pattern should return an error during creation")
@@ -902,10 +904,7 @@ func TestUnsupportedPattern(t *testing.T) {
 // TestPatternMessageCountError tests that getPatternMessageCount returns an error for unknown patterns
 func TestPatternMessageCountError(t *testing.T) {
 	config := NewConnConfig("XX", true)
-
-	localAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8001"}
-	remoteAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8002"}
-	mockConn := newMockNetConn(localAddr, remoteAddr)
+	mockConn := newDefaultMockConn()
 
 	nc, err := NewNoiseConn(mockConn, config)
 	require.NoError(t, err, "Failed to create NoiseConn")

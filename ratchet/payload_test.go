@@ -71,44 +71,73 @@ func TestNewMessageNumberBlock_MaxValue(t *testing.T) {
 	assert.Equal(t, uint16(65535), pn)
 }
 
-func TestNewNextKeyBlock_WithKey(t *testing.T) {
-	var key [32]byte
-	for i := range key {
-		key[i] = byte(i)
+func TestNewNextKeyBlock(t *testing.T) {
+	var testKey [32]byte
+	for i := range testKey {
+		testKey[i] = byte(i)
 	}
-	b := NewNextKeyBlock(42, &key, false, true)
-	assert.Equal(t, BlockNextKey, b.Type)
-	assert.Len(t, b.Data, 35)
+	tests := []struct {
+		name           string
+		keyID          uint16
+		key            *[32]byte
+		reverse        bool
+		requestReverse bool
+		expectedLen    int
+		expectPresent  bool
+		expectReverse  bool
+		expectReqRev   bool
+	}{
+		{
+			name:           "WithKey",
+			keyID:          42,
+			key:            &testKey,
+			reverse:        false,
+			requestReverse: true,
+			expectedLen:    35,
+			expectPresent:  true,
+			expectReverse:  false,
+			expectReqRev:   true,
+		},
+		{
+			name:           "WithoutKey",
+			keyID:          7,
+			key:            nil,
+			reverse:        true,
+			requestReverse: false,
+			expectedLen:    3,
+			expectPresent:  false,
+			expectReverse:  true,
+			expectReqRev:   false,
+		},
+		{
+			name:           "ReverseOverridesRequestReverse",
+			keyID:          0,
+			key:            nil,
+			reverse:        true,
+			requestReverse: true,
+			expectedLen:    3,
+			expectPresent:  false,
+			expectReverse:  true,
+			expectReqRev:   false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := NewNextKeyBlock(tt.keyID, tt.key, tt.reverse, tt.requestReverse)
+			assert.Equal(t, BlockNextKey, b.Type)
+			assert.Len(t, b.Data, tt.expectedLen)
 
-	info, err := b.NextKey()
-	require.NoError(t, err)
-	assert.True(t, info.KeyPresent)
-	assert.False(t, info.Reverse)
-	assert.True(t, info.RequestReverse)
-	assert.Equal(t, uint16(42), info.KeyID)
-	assert.Equal(t, key, info.PublicKey)
-}
-
-func TestNewNextKeyBlock_WithoutKey(t *testing.T) {
-	b := NewNextKeyBlock(7, nil, true, false)
-	assert.Equal(t, BlockNextKey, b.Type)
-	assert.Len(t, b.Data, 3)
-
-	info, err := b.NextKey()
-	require.NoError(t, err)
-	assert.False(t, info.KeyPresent)
-	assert.True(t, info.Reverse)
-	assert.False(t, info.RequestReverse)
-	assert.Equal(t, uint16(7), info.KeyID)
-}
-
-func TestNewNextKeyBlock_ReverseOverridesRequestReverse(t *testing.T) {
-	// When reverse=true, requestReverse should not be set per spec
-	b := NewNextKeyBlock(0, nil, true, true)
-	info, err := b.NextKey()
-	require.NoError(t, err)
-	assert.True(t, info.Reverse)
-	assert.False(t, info.RequestReverse)
+			info, err := b.NextKey()
+			require.NoError(t, err)
+			assert.Equal(t, tt.expectPresent, info.KeyPresent)
+			assert.Equal(t, tt.expectReverse, info.Reverse)
+			assert.Equal(t, tt.expectReqRev, info.RequestReverse)
+			assert.Equal(t, tt.keyID, info.KeyID)
+			if tt.key != nil {
+				assert.Equal(t, *tt.key, info.PublicKey)
+			}
+		})
+	}
 }
 
 func TestNewAckBlock(t *testing.T) {

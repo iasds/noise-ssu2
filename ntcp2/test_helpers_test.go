@@ -149,6 +149,16 @@ func newTestCryptoMaterial(t *testing.T) testCryptoMaterial {
 	}
 }
 
+// newTestNTCP2ConfigSimple creates a basic NTCP2Config with a random router hash.
+// Use this for tests that only need a valid config without specific key material.
+func newTestNTCP2ConfigSimple(t *testing.T, initiator bool) *NTCP2Config {
+	t.Helper()
+	routerHash := generateRandomBytes(32)
+	config, err := NewNTCP2Config(routerHash, initiator)
+	require.NoError(t, err)
+	return config
+}
+
 // newTestInitiatorConfig creates a fully-configured NTCP2Config for an
 // initiator with random key material, a remote static key, and AES obfuscation.
 // Returns the config and the underlying crypto material for assertions.

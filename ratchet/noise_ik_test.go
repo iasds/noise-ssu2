@@ -89,16 +89,23 @@ func TestNoiseIKState_MixHash(t *testing.T) {
 	assert.Equal(t, ns1.HandshakeHash(), ns2.HandshakeHash(), "Same MixHash inputs should produce same state")
 }
 
-func TestNoiseIKState_MixKey(t *testing.T) {
+// initFreshNoiseIK creates a Noise IK symmetric state with a random responder
+// public key, asserts it has no cipher key, and returns the state.
+func initFreshNoiseIK(t *testing.T) *noise.SymmetricState {
+	t.Helper()
 	var respPub [32]byte
 	_, err := rand.Read(respPub[:])
 	require.NoError(t, err)
-
 	ns := initNoiseIK(respPub)
-	assert.False(t, ns.HasKey(), "No cipher key before MixKey")
+	assert.False(t, ns.HasKey(), "Initial state should not have a cipher key")
+	return ns
+}
+
+func TestNoiseIKState_MixKey(t *testing.T) {
+	ns := initFreshNoiseIK(t)
 
 	ikm := make([]byte, 32)
-	_, err = rand.Read(ikm)
+	_, err := rand.Read(ikm)
 	require.NoError(t, err)
 
 	oldCK := ns.ChainingKey()
@@ -156,16 +163,11 @@ func TestNoiseIKState_MixKeyCKOnly(t *testing.T) {
 // handshake does not set a cipher key, matching the I2P ratchet.md §1g spec.
 // The cipher key should only be set by the subsequent "se" step.
 func TestNSR_EE_DoesNotSetCipherKey(t *testing.T) {
-	var respPub [32]byte
-	_, err := rand.Read(respPub[:])
-	require.NoError(t, err)
-
-	ns := initNoiseIK(respPub)
-	assert.False(t, ns.HasKey(), "Initial state should not have a cipher key")
+	ns := initFreshNoiseIK(t)
 
 	// Simulate the "ee" step using mixKeyCKOnly
 	eeIKM := make([]byte, 32)
-	_, err = rand.Read(eeIKM)
+	_, err := rand.Read(eeIKM)
 	require.NoError(t, err)
 	mixKeyCKOnly(ns, eeIKM)
 

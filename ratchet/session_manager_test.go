@@ -1158,19 +1158,22 @@ func BenchmarkNewSessionEncrypt(b *testing.B) {
 	}
 }
 
-func BenchmarkExistingSessionEncrypt(b *testing.B) {
-	sender, receiver := benchManagerPair(b)
-
-	var destHash [32]byte
+// benchEstablishedSession creates a sender/receiver pair with an established
+// session and returns the common setup needed by most benchmarks.
+func benchEstablishedSession(b *testing.B) (sender, receiver *SessionManager, destHash [32]byte, plaintext []byte) {
+	b.Helper()
+	sender, receiver = benchManagerPair(b)
 	copy(destHash[:], receiver.ourPublicKey[:])
-
-	plaintext := make([]byte, 1024)
+	plaintext = make([]byte, 1024)
 	_, _ = rand.Read(plaintext)
-
-	// Create initial session with a valid NS payload.
 	nsPayload, _ := BuildNSPayload(make([]byte, 32))
 	enc, _ := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, nsPayload)
 	_, _, _, _ = receiver.DecryptGarlicMessage(enc)
+	return
+}
+
+func BenchmarkExistingSessionEncrypt(b *testing.B) {
+	sender, receiver, destHash, plaintext := benchEstablishedSession(b)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -1180,15 +1183,8 @@ func BenchmarkExistingSessionEncrypt(b *testing.B) {
 }
 
 func BenchmarkDecryptGarlicMessage(b *testing.B) {
-	sender, receiver := benchManagerPair(b)
+	sender, receiver, destHash, _ := benchEstablishedSession(b)
 
-	var destHash [32]byte
-	copy(destHash[:], receiver.ourPublicKey[:])
-
-	plaintext := make([]byte, 1024)
-	_, _ = rand.Read(plaintext)
-
-	// Build a valid NS payload for benchmark iterations (each iteration re-encrypts NS).
 	nsPayload, _ := BuildNSPayload(make([]byte, 32))
 
 	// Encrypt initial session message.

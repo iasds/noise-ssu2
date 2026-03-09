@@ -366,22 +366,16 @@ func TestNTCP2ConfigBuilderDefensiveCopying(t *testing.T) {
 }
 
 func TestNTCP2ConfigValidationEdgeCases(t *testing.T) {
-	routerHash := make([]byte, 32)
-	_, err := rand.Read(routerHash)
-	require.NoError(t, err)
-
 	// Test empty pattern
-	config, err := NewNTCP2Config(routerHash, false)
-	require.NoError(t, err)
+	config := newTestNTCP2ConfigSimple(t, false)
 	config.Pattern = ""
 
-	err = config.Validate()
+	err := config.Validate()
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "noise pattern is required")
 
 	// Test infinite retries (should be valid)
-	config, err = NewNTCP2Config(routerHash, false)
-	require.NoError(t, err)
+	config = newTestNTCP2ConfigSimple(t, false)
 	config.HandshakeRetries = -1
 
 	err = config.Validate()
@@ -489,14 +483,13 @@ func TestAudit_Quality_Constants(t *testing.T) {
 }
 
 func TestAudit_ConfigUsesXKPattern(t *testing.T) {
-	routerHash := make([]byte, 32)
-	config, err := NewNTCP2Config(routerHash, true)
-	require.NoError(t, err)
+	config := newTestNTCP2ConfigSimple(t, true)
 	require.NotNil(t, config)
 
 	assert.Equal(t, "XK", NTCP2Pattern)
 
 	validKey := make([]byte, 32)
+	var err error
 	config, err = config.WithStaticKey(validKey)
 	require.NoError(t, err)
 	config, err = config.WithRemoteRouterHash(make([]byte, 32))
@@ -516,16 +509,11 @@ func TestAudit_ConfigUsesXKPattern(t *testing.T) {
 // ============================================================================
 
 func TestWithAESObfuscation_WrongIVLengthReturnsError(t *testing.T) {
-	routerHash := make([]byte, 32)
-	_, err := rand.Read(routerHash)
-	require.NoError(t, err)
-
-	config, err := NewNTCP2Config(routerHash, false)
-	require.NoError(t, err)
+	config := newTestNTCP2ConfigSimple(t, false)
 	config.EnableAESObfuscation = false
 
 	wrongIV := make([]byte, 10)
-	_, err = config.WithAESObfuscation(true, wrongIV)
+	_, err := config.WithAESObfuscation(true, wrongIV)
 	assert.Error(t, err, "Wrong-length IV must return an error")
 	assert.Contains(t, err.Error(), "custom IV must be exactly")
 
@@ -542,16 +530,12 @@ func TestWithAESObfuscation_WrongIVLengthReturnsError(t *testing.T) {
 // router hash and AES obfuscation enabled, suitable for SipHash/KDF tests.
 func newResponderConfigWithAES(t *testing.T) *NTCP2Config {
 	t.Helper()
-	routerHash := make([]byte, 32)
-	_, err := rand.Read(routerHash)
-	require.NoError(t, err)
+	config := newTestNTCP2ConfigSimple(t, false)
 
 	obfuscationIV := make([]byte, 16)
-	_, err = rand.Read(obfuscationIV)
+	_, err := rand.Read(obfuscationIV)
 	require.NoError(t, err)
 
-	config, err := NewNTCP2Config(routerHash, false)
-	require.NoError(t, err)
 	config, err = config.WithAESObfuscation(true, obfuscationIV)
 	require.NoError(t, err)
 	return config

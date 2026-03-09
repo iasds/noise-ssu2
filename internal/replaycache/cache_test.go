@@ -88,16 +88,21 @@ func TestTTLCache_Concurrent(t *testing.T) {
 	assert.Greater(t, c.Size(), 0)
 }
 
+// insertExpiredKey adds an expired entry directly into the cache for testing eviction behavior.
+func insertExpiredKey(c *TTLCache, keyByte byte) [32]byte {
+	var key [32]byte
+	key[0] = keyByte
+	c.mu.Lock()
+	c.entries[key] = time.Now().Add(-3 * c.ttl)
+	c.mu.Unlock()
+	return key
+}
+
 func TestTTLCache_EvictExpired(t *testing.T) {
 	c := New(testConfig())
 	defer c.Close()
 
-	var key [32]byte
-	key[0] = 0x01
-
-	c.mu.Lock()
-	c.entries[key] = time.Now().Add(-3 * c.ttl)
-	c.mu.Unlock()
+	insertExpiredKey(c, 0x01)
 
 	assert.Equal(t, 1, c.Size())
 	c.evictExpired()
@@ -108,12 +113,7 @@ func TestTTLCache_ExpiredKeyNotReplay(t *testing.T) {
 	c := New(testConfig())
 	defer c.Close()
 
-	var key [32]byte
-	key[0] = 0x42
-
-	c.mu.Lock()
-	c.entries[key] = time.Now().Add(-3 * c.ttl)
-	c.mu.Unlock()
+	key := insertExpiredKey(c, 0x42)
 
 	assert.False(t, c.CheckAndAdd(key), "expired key should not be a replay")
 }
