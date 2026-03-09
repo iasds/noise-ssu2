@@ -254,22 +254,7 @@ func TestReceiveWindow_KeyCachePreFilled(t *testing.T) {
 // reset when the session is updated by a New Session Reply.
 func TestRecvWindowReset_AfterNSR(t *testing.T) {
 	sender, receiver := createLinkedManagers(t)
-
-	var destHash [32]byte
-	copy(destHash[:], receiver.ourPublicKey[:])
-
-	// Step 1: NS from initiator → responder.
-	nsEnc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, mustBuildNSPayload(t, []byte("ns")))
-	require.NoError(t, err)
-	_, _, sessionHash, err := receiver.DecryptGarlicMessage(nsEnc)
-	require.NoError(t, err)
-	require.NotNil(t, sessionHash)
-
-	// Step 2: NSR from responder → initiator.
-	nsrEnc, err := receiver.EncryptNewSessionReply(*sessionHash, []byte("nsr"))
-	require.NoError(t, err)
-	_, _, _, err = sender.DecryptGarlicMessage(nsrEnc)
-	require.NoError(t, err)
+	destHash := mustBootstrapSession(t, sender, receiver)
 
 	// Retrieve the initiator's session (post-NSR).
 	senderSess := firstSession(t, sender)
@@ -311,26 +296,9 @@ func TestRecvWindowReset_AfterNSR(t *testing.T) {
 //  3. Alice's pendingTags count stays bounded at tagWindowSize (no pollution).
 func TestSendTagPollution_RecvWindowStillWorks(t *testing.T) {
 	alice, bob := createLinkedManagers(t)
+	bobDestHash, sessionHash := mustBootstrapSessionWithHash(t, alice, bob)
 
-	var bobDestHash [32]byte
-	copy(bobDestHash[:], bob.ourPublicKey[:])
-
-	// Step 1: Alice sends NS to Bob. Bob learns Alice's static key.
-	nsPayload := mustBuildNSPayload(t, []byte("ns from alice"))
-	nsEnc, err := alice.EncryptGarlicMessage(bobDestHash, bob.ourPublicKey, nsPayload)
-	require.NoError(t, err)
-	_, _, sessionHash, err := bob.DecryptGarlicMessage(nsEnc)
-	require.NoError(t, err)
-	require.NotNil(t, sessionHash, "DecryptGarlicMessage must return sessionHash for NS")
-
-	// Step 2: Bob sends NSR to Alice. This completes the bidirectional handshake
-	// and initialises both alice.RecvTagRatchet and alice.pendingTags correctly.
-	nsrEnc, err := bob.EncryptNewSessionReply(*sessionHash, []byte("nsr from bob"))
-	require.NoError(t, err)
-	_, _, _, err = alice.DecryptGarlicMessage(nsrEnc)
-	require.NoError(t, err)
-
-	// Step 3: Alice sends 30 outgoing ES messages to Bob. With the old bug this
+	// Alice sends 30 outgoing ES messages to Bob. With the old bug this
 	// would fill alice's session.pendingTags with 30 send-direction tags
 	// (> tagWindowSize == 24), preventing recv-window replenishment.
 	const outgoingCount = 30
@@ -343,7 +311,7 @@ func TestSendTagPollution_RecvWindowStillWorks(t *testing.T) {
 		assert.Equal(t, payload, pt, "payload mismatch on message %d", i)
 	}
 
-	// Step 4: Verify alice's pendingTags is not polluted (capped at tagWindowSize,
+	// Verify alice's pendingTags is not polluted (capped at tagWindowSize,
 	// not bloated with send-direction tags).
 	aliceSess := firstSession(t, alice)
 
@@ -363,7 +331,7 @@ func TestSendTagPollution_RecvWindowStillWorks(t *testing.T) {
 	// is correctly maintained.
 	for i := 0; i < 3; i++ {
 		payload := []byte("bob→alice reply " + string(rune('0'+i)))
-		enc, encErr := bob.EncryptGarlicMessage(*sessionHash, alice.ourPublicKey, payload)
+		enc, encErr := bob.EncryptGarlicMessage(sessionHash, alice.ourPublicKey, payload)
 		require.NoError(t, encErr, "bob ES send %d should succeed", i)
 		pt, tag, _, decErr := alice.DecryptGarlicMessage(enc)
 		require.NoError(t, decErr, "alice ES recv %d must succeed — recv window should be intact", i)
@@ -386,23 +354,7 @@ func TestSendTagPollution_RecvWindowStillWorks(t *testing.T) {
 // Spec ref: ratchet.md §"Existing Session" — each message key is consumed once.
 func TestESReplayRejection(t *testing.T) {
 	alice, bob := createLinkedManagers(t)
-
-	var bobDestHash [32]byte
-	copy(bobDestHash[:], bob.ourPublicKey[:])
-
-	// Establish session: NS from alice → bob.
-	nsPayload := mustBuildNSPayload(t, []byte("ns"))
-	nsEnc, err := alice.EncryptGarlicMessage(bobDestHash, bob.ourPublicKey, nsPayload)
-	require.NoError(t, err)
-	_, _, sessionHash, err := bob.DecryptGarlicMessage(nsEnc)
-	require.NoError(t, err)
-	require.NotNil(t, sessionHash)
-
-	// NSR from bob → alice to complete bidirectional key setup.
-	nsrEnc, err := bob.EncryptNewSessionReply(*sessionHash, []byte("nsr"))
-	require.NoError(t, err)
-	_, _, _, err = alice.DecryptGarlicMessage(nsrEnc)
-	require.NoError(t, err)
+	bobDestHash := mustBootstrapSession(t, alice, bob)
 
 	// Alice sends one ES message to bob.
 	esEnc, err := alice.EncryptGarlicMessage(bobDestHash, bob.ourPublicKey, []byte("secret message"))

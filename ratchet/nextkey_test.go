@@ -546,20 +546,7 @@ func TestPerformDHRatchetStep_MaxKeyID_ReturnsError(t *testing.T) {
 // with the same keyID as the reverse block, confusing the peer's keyID tracking.
 func TestGenerateReverseNextKey_IncrementsSendKeyID(t *testing.T) {
 	sender, receiver := createLinkedManagers(t)
-
-	var destHash [32]byte
-	copy(destHash[:], receiver.ourPublicKey[:])
-
-	// Bootstrap a full NS→NSR session.
-	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, mustBuildNSPayload(t, []byte("init")))
-	require.NoError(t, err)
-	_, _, sessionHash, err := receiver.DecryptGarlicMessage(enc)
-	require.NoError(t, err)
-	require.NotNil(t, sessionHash)
-	nsrEnc, err := receiver.EncryptNewSessionReply(*sessionHash, []byte("nsr"))
-	require.NoError(t, err)
-	_, _, _, err = sender.DecryptGarlicMessage(nsrEnc)
-	require.NoError(t, err)
+	mustBootstrapSession(t, sender, receiver)
 
 	// Look up the receiver's session and record the initial sendKeyID.
 	session := lookupSessionByAnyTag(t, receiver)
@@ -578,7 +565,7 @@ func TestGenerateReverseNextKey_IncrementsSendKeyID(t *testing.T) {
 		KeyID:          0,
 		PublicKey:      newKey,
 	}
-	err = receiver.ProcessReceivedNextKey(sessionTag, info)
+	err := receiver.ProcessReceivedNextKey(sessionTag, info)
 	require.NoError(t, err)
 
 	// After generating the reverse key, sendKeyID must have been incremented.

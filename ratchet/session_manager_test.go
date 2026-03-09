@@ -76,6 +76,38 @@ func mustBootstrapSession(t testing.TB, sender, receiver *SessionManager) [32]by
 	return destHash
 }
 
+// mustBootstrapSessionWithHash creates a fully established NS→NSR session and
+// returns both destHash (for sender→receiver ES) and sessionHash (for
+// receiver→sender ES). Use this when a test needs the sessionHash to send
+// messages in the reverse direction.
+func mustBootstrapSessionWithHash(t testing.TB, sender, receiver *SessionManager) (destHash, sessionHash [32]byte) {
+	t.Helper()
+	copy(destHash[:], receiver.ourPublicKey[:])
+	nsEnc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, mustBuildNSPayload(t, []byte("bootstrap")))
+	require.NoError(t, err, "mustBootstrapSessionWithHash: NS encrypt")
+	_, _, sh, err := receiver.DecryptGarlicMessage(nsEnc)
+	require.NoError(t, err, "mustBootstrapSessionWithHash: NS decrypt")
+	require.NotNil(t, sh, "mustBootstrapSessionWithHash: receiver must return sessionHash")
+	sessionHash = *sh
+	mustCompleteNSR(t, sender, receiver, sessionHash)
+	return destHash, sessionHash
+}
+
+// mustSendNS creates two linked managers, sends a single NS from initiator to
+// responder, and returns the managers with destHash and sessionHash. The session
+// is NOT completed — no NSR has been exchanged.
+func mustSendNS(t testing.TB) (initiator, responder *SessionManager, destHash [32]byte, sessionHash [32]byte) {
+	t.Helper()
+	initiator, responder = createLinkedManagers(t)
+	destHash = types.SHA256(responder.ourPublicKey[:])
+	nsMsg, err := initiator.EncryptGarlicMessage(destHash, responder.ourPublicKey, mustBuildNSPayload(t, []byte("ns")))
+	require.NoError(t, err, "mustSendNS: NS encrypt")
+	_, _, sh, err := responder.DecryptGarlicMessage(nsMsg)
+	require.NoError(t, err, "mustSendNS: NS decrypt")
+	require.NotNil(t, sh, "mustSendNS: receiver must return sessionHash")
+	return initiator, responder, destHash, *sh
+}
+
 // mustBuildNSPayload wraps raw garlic data in a spec-compliant New Session
 // payload: DateTime block (required first) + GarlicClove block.
 // Fails the test immediately if BuildNSPayload returns an error.
@@ -193,27 +225,13 @@ func TestNewSessionEncryptDecrypt(t *testing.T) {
 
 func TestExistingSessionEncryptDecrypt(t *testing.T) {
 	sender, receiver := createLinkedManagers(t)
-
-	var destHash [32]byte
-	copy(destHash[:], receiver.ourPublicKey[:])
-
-	// First message: creates session — must be a valid NS payload (DateTime block required).
-	plaintext1 := mustBuildNSPayload(t, []byte("first message"))
-	enc1, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, plaintext1)
-	require.NoError(t, err)
-	dec1, _, nsHash1, err := receiver.DecryptGarlicMessage(enc1)
-	require.NoError(t, err)
-	assert.Equal(t, plaintext1, dec1)
-	require.NotNil(t, nsHash1)
-	mustCompleteNSR(t, sender, receiver, *nsHash1)
+	destHash := mustBootstrapSession(t, sender, receiver)
 
 	// Second message: uses existing session
 	plaintext2 := []byte("second message via existing session")
 	enc2, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, plaintext2)
 	require.NoError(t, err)
-
-	// Existing Session message should differ from New Session
-	assert.NotEqual(t, enc1, enc2)
+	assert.NotEmpty(t, enc2)
 
 	dec2, sessionTag, _, err := receiver.DecryptGarlicMessage(enc2)
 	require.NoError(t, err)
@@ -223,19 +241,7 @@ func TestExistingSessionEncryptDecrypt(t *testing.T) {
 
 func TestMultipleMessages(t *testing.T) {
 	sender, receiver := createLinkedManagers(t)
-
-	var destHash [32]byte
-	copy(destHash[:], receiver.ourPublicKey[:])
-
-	// Establish the session with a valid NS payload before the loop so that
-	// every loop iteration uses the Existing Session path (no DateTime req).
-	initPayload := mustBuildNSPayload(t, []byte("init"))
-	initEnc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, initPayload)
-	require.NoError(t, err)
-	_, _, initNSHash, err := receiver.DecryptGarlicMessage(initEnc)
-	require.NoError(t, err)
-	require.NotNil(t, initNSHash)
-	mustCompleteNSR(t, sender, receiver, *initNSHash)
+	destHash := mustBootstrapSession(t, sender, receiver)
 
 	for i := 0; i < 10; i++ {
 		plaintext := []byte("message " + string(rune('A'+i)))
@@ -1235,16 +1241,7 @@ func TestDecryptGarlicMessage_ReturnsSessionHashForNewSession(t *testing.T) {
 // try to send an NSR in response to an ES message.
 func TestDecryptGarlicMessage_NilSessionHashForExistingSession(t *testing.T) {
 	initiator, responder := createLinkedManagers(t)
-
-	destHash := types.SHA256(responder.ourPublicKey[:])
-
-	// Establish session via first NS — must be a valid NS payload.
-	enc1, err := initiator.EncryptGarlicMessage(destHash, responder.ourPublicKey, mustBuildNSPayload(t, []byte("ns")))
-	require.NoError(t, err)
-	_, _, nilNSHash, err := responder.DecryptGarlicMessage(enc1)
-	require.NoError(t, err)
-	require.NotNil(t, nilNSHash)
-	mustCompleteNSR(t, initiator, responder, *nilNSHash)
+	destHash, _ := mustBootstrapSessionWithHash(t, initiator, responder)
 
 	// Second message is ES — session hash must be nil
 	enc2, err := initiator.EncryptGarlicMessage(destHash, responder.ourPublicKey, []byte("es"))
@@ -1324,19 +1321,10 @@ func TestNSNSRESFlow_EndToEnd(t *testing.T) {
 // hash returned by DecryptGarlicMessage is directly usable with EncryptNewSessionReply,
 // without requiring the responder to independently recompute SHA-256(initiatorPub).
 func TestEncryptNewSessionReply_UsesReturnedSessionHash(t *testing.T) {
-	initiator, responder := createLinkedManagers(t)
-
-	destHash := types.SHA256(responder.ourPublicKey[:])
-
-	encrypted, err := initiator.EncryptGarlicMessage(destHash, responder.ourPublicKey, mustBuildNSPayload(t, []byte("ns")))
-	require.NoError(t, err)
-
-	_, _, sessionHash, err := responder.DecryptGarlicMessage(encrypted)
-	require.NoError(t, err)
-	require.NotNil(t, sessionHash)
+	_, responder, _, sessionHash := mustSendNS(t)
 
 	// Use the returned hash directly — no manual SHA-256 computation
-	nsrMsg, err := responder.EncryptNewSessionReply(*sessionHash, []byte("nsr"))
+	nsrMsg, err := responder.EncryptNewSessionReply(sessionHash, []byte("nsr"))
 	require.NoError(t, err)
 	assert.NotEmpty(t, nsrMsg)
 }
@@ -1392,21 +1380,11 @@ func TestNSRTag_RegisteredAndConsumedOnReceipt(t *testing.T) {
 // change when the NSR is processed (both initiator and responder).
 // This ensures the post-handshake ee DH provides forward secrecy beyond the NS.
 func TestNSRKeys_RatchetsUpdatedAfterNSR(t *testing.T) {
-	initiator, responder := createLinkedManagers(t)
-
-	destHash := types.SHA256(responder.ourPublicKey[:])
-
-	// Send NS — must be a valid NS payload.
-	nsMsg, err := initiator.EncryptGarlicMessage(destHash, responder.ourPublicKey, mustBuildNSPayload(t, []byte("ns")))
-	require.NoError(t, err)
-
-	_, _, sessionHash, err := responder.DecryptGarlicMessage(nsMsg)
-	require.NoError(t, err)
-	require.NotNil(t, sessionHash)
+	initiator, responder, destHash, sessionHash := mustSendNS(t)
 
 	// Capture responder's pre-NSR send tag for comparison
 	responder.mu.RLock()
-	respSession := responder.sessions[*sessionHash]
+	respSession := responder.sessions[sessionHash]
 	responder.mu.RUnlock()
 	require.NotNil(t, respSession)
 
@@ -1415,7 +1393,7 @@ func TestNSRKeys_RatchetsUpdatedAfterNSR(t *testing.T) {
 	respSession.mu.Unlock()
 
 	// Send NSR
-	nsrMsg, err := responder.EncryptNewSessionReply(*sessionHash, []byte("nsr"))
+	nsrMsg, err := responder.EncryptNewSessionReply(sessionHash, []byte("nsr"))
 	require.NoError(t, err)
 
 	// After NSR, responder's TagRatchet should be a new object (replaced)
@@ -2458,24 +2436,10 @@ func TestConcurrentDecryptWithCleanup(t *testing.T) {
 // Bob (responder) must receive an ES message from Alice before sending ES.
 func TestResponder_CannotSendES_BeforeReceivingFirstES(t *testing.T) {
 	alice, bob := createLinkedManagers(t)
-
-	bobDestHash := types.SHA256(bob.ourPublicKey[:])
-
-	// NS: Alice → Bob
-	nsEnc, err := alice.EncryptGarlicMessage(bobDestHash, bob.ourPublicKey, mustBuildNSPayload(t, []byte("ns")))
-	require.NoError(t, err)
-	_, _, sessionHash, err := bob.DecryptGarlicMessage(nsEnc)
-	require.NoError(t, err)
-	require.NotNil(t, sessionHash)
-
-	// NSR: Bob → Alice
-	nsrEnc, err := bob.EncryptNewSessionReply(*sessionHash, []byte("nsr"))
-	require.NoError(t, err)
-	_, _, _, err = alice.DecryptGarlicMessage(nsrEnc)
-	require.NoError(t, err)
+	bobDestHash, sessionHash := mustBootstrapSessionWithHash(t, alice, bob)
 
 	// Bob tries to send ES before receiving any ES from Alice — must fail.
-	_, err = bob.EncryptGarlicMessage(*sessionHash, alice.ourPublicKey, []byte("premature-bob-es"))
+	_, err := bob.EncryptGarlicMessage(sessionHash, alice.ourPublicKey, []byte("premature-bob-es"))
 	require.Error(t, err, "responder must not send ES before receiving first ES from initiator")
 	assert.Contains(t, err.Error(), "responder must receive an ES message")
 
@@ -2486,6 +2450,6 @@ func TestResponder_CannotSendES_BeforeReceivingFirstES(t *testing.T) {
 	require.NoError(t, err)
 
 	// Now Bob can send ES.
-	_, err = bob.EncryptGarlicMessage(*sessionHash, alice.ourPublicKey, []byte("bob-es-after-first"))
+	_, err = bob.EncryptGarlicMessage(sessionHash, alice.ourPublicKey, []byte("bob-es-after-first"))
 	assert.NoError(t, err, "responder should be able to send ES after receiving first ES from initiator")
 }

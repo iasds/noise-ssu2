@@ -15,18 +15,12 @@ import (
 
 // TestAESObfuscationModifier_Close verifies that Close() zeroes key material.
 func TestAESObfuscationModifier_Close(t *testing.T) {
-	routerHash := make([]byte, RouterHashSize)
-	copy(routerHash, "test-router-hash-32-bytes-long!!")
-	iv := make([]byte, IVSize)
-	copy(iv, "1234567890123456")
-
-	mod, err := NewAESObfuscationModifier("test-aes", routerHash, iv)
-	require.NoError(t, err)
+	mod := newTestAESModifier(t)
 
 	// Encrypt something so aesState is populated
 	data := make([]byte, StaticKeySize)
 	copy(data, "test-data-32-bytes-long-padding!")
-	_, err = mod.ModifyOutbound(0, data) // PhaseInitial
+	_, err := mod.ModifyOutbound(0, data) // PhaseInitial
 	require.NoError(t, err)
 	require.NotNil(t, mod.aesState, "aesState should be set after PhaseInitial encrypt")
 
@@ -49,13 +43,7 @@ func TestAESObfuscationModifier_Close(t *testing.T) {
 
 // TestAESObfuscationModifier_Close_Idempotent verifies Close can be called twice.
 func TestAESObfuscationModifier_Close_Idempotent(t *testing.T) {
-	routerHash := make([]byte, RouterHashSize)
-	copy(routerHash, "test-router-hash-32-bytes-long!!")
-	iv := make([]byte, IVSize)
-	copy(iv, "1234567890123456")
-
-	mod, err := NewAESObfuscationModifier("test-aes", routerHash, iv)
-	require.NoError(t, err)
+	mod := newTestAESModifier(t)
 
 	require.NoError(t, mod.Close())
 	require.NoError(t, mod.Close()) // second Close should not panic

@@ -1,6 +1,9 @@
 package ntcp2
 
 import (
+	"encoding/binary"
+	"fmt"
+	"io"
 	"net"
 	"testing"
 
@@ -8,6 +11,7 @@ import (
 
 	noise "github.com/go-i2p/go-noise"
 	upstreamnoise "github.com/go-i2p/noise"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -101,6 +105,29 @@ func (p pipedNTCP2Conn) withSipHash(keys [2]uint64) *SipHashLengthModifier {
 	slm := NewSipHashLengthModifier("test", keys, 0)
 	p.conn.SetLengthObfuscator(slm)
 	return slm
+}
+
+// newTestAESModifier creates an AESObfuscationModifier with fixed, deterministic
+// routerHash and IV values. Used by audit tests that verify Close() zeroing.
+func newTestAESModifier(t *testing.T) *AESObfuscationModifier {
+	t.Helper()
+	routerHash := make([]byte, RouterHashSize)
+	copy(routerHash, "test-router-hash-32-bytes-long!!")
+	iv := make([]byte, IVSize)
+	copy(iv, "1234567890123456")
+	mod, err := NewAESObfuscationModifier("test-aes", routerHash, iv)
+	require.NoError(t, err)
+	return mod
+}
+
+// createTestNTCP2ConnWithSLM creates an *NTCP2Conn backed by a mockNoiseConn
+// with a SipHashLengthModifier attached. Common setup for nonce exhaustion tests.
+func createTestNTCP2ConnWithSLM(t *testing.T) *NTCP2Conn {
+	t.Helper()
+	conn := createTestNTCP2Conn(&mockNoiseConn{})
+	slm := NewSipHashLengthModifier("test", [2]uint64{0x1234, 0x5678}, 0)
+	conn.SetLengthObfuscator(slm)
+	return conn
 }
 
 // testCryptoMaterial holds random byte slices commonly needed by NTCP2 tests.
@@ -230,4 +257,39 @@ func newTestXKConfigPair(t *testing.T) testXKConfigPair {
 		initiatorHash:   initiatorHash,
 		responderHash:   responderHash,
 	}
+}
+
+// assertSipHashFrameRoundTrip writes a SipHash-obfuscated frame from writer
+// to reader using senderSLM/receiverSLM, then verifies deobfuscation recovers
+// the original payload. direction is used in assertion messages.
+func assertSipHashFrameRoundTrip(
+	t *testing.T,
+	writer, reader net.Conn,
+	senderSLM, receiverSLM *SipHashLengthModifier,
+	payload []byte,
+	direction string,
+) {
+	t.Helper()
+
+	outMask := senderSLM.NextOutboundMask()
+	frameLen := uint16(len(payload))
+	frame := make([]byte, FrameLengthFieldSize+len(payload))
+	binary.BigEndian.PutUint16(frame[:FrameLengthFieldSize], frameLen^outMask)
+	copy(frame[FrameLengthFieldSize:], payload)
+
+	_, err := writer.Write(frame)
+	require.NoError(t, err)
+
+	lengthBuf := make([]byte, FrameLengthFieldSize)
+	_, err = io.ReadFull(reader, lengthBuf)
+	require.NoError(t, err)
+
+	inMask := receiverSLM.NextInboundMask()
+	recovered := binary.BigEndian.Uint16(lengthBuf) ^ inMask
+	assert.Equal(t, frameLen, recovered, fmt.Sprintf("%s: SipHash deobfuscation must recover original length", direction))
+
+	buf := make([]byte, recovered)
+	_, err = io.ReadFull(reader, buf)
+	require.NoError(t, err)
+	assert.Equal(t, payload, buf, fmt.Sprintf("%s: payload must survive SipHash framing round-trip", direction))
 }

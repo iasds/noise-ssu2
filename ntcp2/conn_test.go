@@ -636,9 +636,7 @@ func TestReadFramed_BufferRemainder(t *testing.T) {
 // ============================================================================
 
 func TestAuditFix_NonceExhaustion_WriteRejectsAtMaxNonce(t *testing.T) {
-	conn := createTestNTCP2Conn(&mockNoiseConn{})
-	slm := NewSipHashLengthModifier("test", [2]uint64{0x1234, 0x5678}, 0)
-	conn.SetLengthObfuscator(slm)
+	conn := createTestNTCP2ConnWithSLM(t)
 
 	conn.writeNonce = MaxNonce
 
@@ -648,9 +646,7 @@ func TestAuditFix_NonceExhaustion_WriteRejectsAtMaxNonce(t *testing.T) {
 }
 
 func TestAuditFix_NonceExhaustion_ReadRejectsAtMaxNonce(t *testing.T) {
-	conn := createTestNTCP2Conn(&mockNoiseConn{})
-	slm := NewSipHashLengthModifier("test", [2]uint64{0x1234, 0x5678}, 0)
-	conn.SetLengthObfuscator(slm)
+	conn := createTestNTCP2ConnWithSLM(t)
 
 	conn.readNonce = MaxNonce
 
@@ -881,9 +877,7 @@ func TestAuditFix_NonceExhaustionImminent_Advisory(t *testing.T) {
 }
 
 func TestAuditFix_BrokenAndNonceExhausted_BrokenTakesPriority(t *testing.T) {
-	conn := createTestNTCP2Conn(&mockNoiseConn{})
-	slm := NewSipHashLengthModifier("test", [2]uint64{0x1234, 0x5678}, 0)
-	conn.SetLengthObfuscator(slm)
+	conn := createTestNTCP2ConnWithSLM(t)
 
 	conn.broken.Store(true)
 	conn.writeNonce = MaxNonce
@@ -894,9 +888,7 @@ func TestAuditFix_BrokenAndNonceExhausted_BrokenTakesPriority(t *testing.T) {
 }
 
 func TestAuditFix_NonceExhaustionError_ContainsCode(t *testing.T) {
-	conn := createTestNTCP2Conn(&mockNoiseConn{})
-	slm := NewSipHashLengthModifier("test", [2]uint64{0x1234, 0x5678}, 0)
-	conn.SetLengthObfuscator(slm)
+	conn := createTestNTCP2ConnWithSLM(t)
 
 	conn.writeNonce = MaxNonce
 

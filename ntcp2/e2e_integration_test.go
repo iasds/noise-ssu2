@@ -1,8 +1,6 @@
 package ntcp2
 
 import (
-	"encoding/binary"
-	"io"
 	"net"
 	"sync"
 	"testing"
@@ -108,64 +106,11 @@ func TestE2E_FramedReadWrite_WithSipHash(t *testing.T) {
 	//
 	// We test by manually constructing frames with the expected SipHash masks.
 	testPayload := []byte("Hello, NTCP2 integration test!")
-
-	// Write a manually framed message from the initiator side
-	// Get the outbound mask that the initiator would use
-	initiatorMask := initiatorSLM.NextOutboundMask()
-
-	// Construct a frame: [2-byte obfuscated length][payload]
-	// In real use the payload would be AEAD-encrypted; here we test the
-	// framing and SipHash obfuscation layer.
-	frameLen := uint16(len(testPayload))
-	obfuscatedLen := frameLen ^ initiatorMask
-
-	frame := make([]byte, FrameLengthFieldSize+len(testPayload))
-	binary.BigEndian.PutUint16(frame[:FrameLengthFieldSize], obfuscatedLen)
-	copy(frame[FrameLengthFieldSize:], testPayload)
-
-	_, err = clientConn.Write(frame)
-	require.NoError(t, err)
-
-	// Read on the responder side and deobfuscate
-	lengthBuf := make([]byte, FrameLengthFieldSize)
-	_, err = io.ReadFull(serverConn, lengthBuf)
-	require.NoError(t, err)
-
-	responderMask := responderSLM.NextInboundMask()
-	recoveredLen := binary.BigEndian.Uint16(lengthBuf) ^ responderMask
-	assert.Equal(t, frameLen, recoveredLen, "SipHash deobfuscation must recover original length")
-
-	// Read the payload
-	payloadBuf := make([]byte, recoveredLen)
-	_, err = io.ReadFull(serverConn, payloadBuf)
-	require.NoError(t, err)
-	assert.Equal(t, testPayload, payloadBuf, "Payload must survive SipHash framing round-trip")
+	assertSipHashFrameRoundTrip(t, clientConn, serverConn, initiatorSLM, responderSLM, testPayload, "forward")
 
 	// Step 7: Test reverse direction (responder → initiator)
 	reversePayload := []byte("Response from responder!")
-	responderOutMask := responderSLM.NextOutboundMask()
-	reverseFrameLen := uint16(len(reversePayload))
-	reverseObfuscated := reverseFrameLen ^ responderOutMask
-
-	reverseFrame := make([]byte, FrameLengthFieldSize+len(reversePayload))
-	binary.BigEndian.PutUint16(reverseFrame[:FrameLengthFieldSize], reverseObfuscated)
-	copy(reverseFrame[FrameLengthFieldSize:], reversePayload)
-
-	_, err = serverConn.Write(reverseFrame)
-	require.NoError(t, err)
-
-	// Read on initiator side
-	_, err = io.ReadFull(clientConn, lengthBuf)
-	require.NoError(t, err)
-
-	initiatorInMask := initiatorSLM.NextInboundMask()
-	recoveredReverseLen := binary.BigEndian.Uint16(lengthBuf) ^ initiatorInMask
-	assert.Equal(t, reverseFrameLen, recoveredReverseLen, "Reverse SipHash deobfuscation must work")
-
-	reversePayloadBuf := make([]byte, recoveredReverseLen)
-	_, err = io.ReadFull(clientConn, reversePayloadBuf)
-	require.NoError(t, err)
-	assert.Equal(t, reversePayload, reversePayloadBuf, "Reverse payload must survive framing round-trip")
+	assertSipHashFrameRoundTrip(t, serverConn, clientConn, responderSLM, initiatorSLM, reversePayload, "reverse")
 }
 
 // TestE2E_SipHashMaskSequenceSynchronization verifies that multiple
