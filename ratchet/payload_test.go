@@ -10,6 +10,23 @@ import (
 )
 
 // ============================================================================
+// Test Helpers
+// ============================================================================
+
+// mustSerializeAndParseSingle serializes a PayloadBlock, parses it back, and
+// asserts exactly one block was recovered. Returns the parsed block.
+func mustSerializeAndParseSingle(t *testing.T, b PayloadBlock) PayloadBlock {
+	t.Helper()
+	buf := make([]byte, b.SerializeSize())
+	_, err := b.Serialize(buf)
+	require.NoError(t, err)
+	blocks, err := ParsePayload(buf)
+	require.NoError(t, err)
+	require.Len(t, blocks, 1)
+	return blocks[0]
+}
+
+// ============================================================================
 // Block Construction
 // ============================================================================
 
@@ -538,15 +555,9 @@ func TestRoundTrip_NextKeyReverseKey(t *testing.T) {
 	}
 	b := NewNextKeyBlock(100, &key, true, false)
 
-	buf := make([]byte, b.SerializeSize())
-	_, err := b.Serialize(buf)
-	require.NoError(t, err)
+	parsed := mustSerializeAndParseSingle(t, b)
 
-	blocks, err := ParsePayload(buf)
-	require.NoError(t, err)
-	require.Len(t, blocks, 1)
-
-	info, err := blocks[0].NextKey()
+	info, err := parsed.NextKey()
 	require.NoError(t, err)
 	assert.True(t, info.KeyPresent)
 	assert.True(t, info.Reverse)
@@ -558,15 +569,9 @@ func TestRoundTrip_TerminationWithData(t *testing.T) {
 	extra := []byte("debug: timeout after 30s")
 	b := NewTerminationBlock(TerminationReason(42), extra)
 
-	buf := make([]byte, b.SerializeSize())
-	_, err := b.Serialize(buf)
-	require.NoError(t, err)
+	parsed := mustSerializeAndParseSingle(t, b)
 
-	blocks, err := ParsePayload(buf)
-	require.NoError(t, err)
-	require.Len(t, blocks, 1)
-
-	reason, addl, err := blocks[0].TerminationInfo()
+	reason, addl, err := parsed.TerminationInfo()
 	require.NoError(t, err)
 	assert.Equal(t, TerminationReason(42), reason)
 	assert.Equal(t, extra, addl)

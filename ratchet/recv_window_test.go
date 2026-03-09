@@ -1,6 +1,7 @@
 package ratchet
 
 import (
+	"fmt"
 	"math/rand"
 	"testing"
 	"time"
@@ -8,6 +9,17 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// assertRecvWindowBase locks the session, reads recvWindowBase, unlocks, and
+// asserts the expected value. Reduces the repeated lock/read/unlock/assert
+// boilerplate throughout receive-window tests.
+func assertRecvWindowBase(t *testing.T, session *Session, expected uint32, msgAndArgs ...interface{}) {
+	t.Helper()
+	session.mu.Lock()
+	base := session.recvWindowBase
+	session.mu.Unlock()
+	assert.Equal(t, expected, base, msgAndArgs...)
+}
 
 // ============================================================================
 // Receive Window Tests (AUDIT item #8)
@@ -109,21 +121,14 @@ func TestReceiveWindow_BaseAdvances(t *testing.T) {
 	require.NotNil(t, session, "session must exist after NS")
 
 	// Deliver ES messages 1, 2, 3 in order; base should advance after each.
-	session.mu.Lock()
-	baseBefore := session.recvWindowBase
-	session.mu.Unlock()
-	assert.Equal(t, uint32(1), baseBefore, "initial recvWindowBase should be 1")
+	assertRecvWindowBase(t, session, uint32(1), "initial recvWindowBase should be 1")
 
 	for i := 1; i < n; i++ {
 		_, _, _, decErr := receiver.DecryptGarlicMessage(encrypted[i])
 		require.NoError(t, decErr, "decrypt message %d", i)
 	}
 
-	session.mu.Lock()
-	baseAfter := session.recvWindowBase
-	session.mu.Unlock()
-	// After consuming ES counters 1, 2, 3 the base should have advanced to 4.
-	assert.Equal(t, uint32(n), baseAfter, "recvWindowBase should be %d after %d ES messages", n, n-1)
+	assertRecvWindowBase(t, session, uint32(n), "recvWindowBase should be %d after %d ES messages", n, n-1)
 }
 
 // TestReceiveWindow_OutOfOrder_BaseAdvancesOnlyAfterGap verifies that the
@@ -146,30 +151,19 @@ func TestReceiveWindow_OutOfOrder_BaseStaysOnGap(t *testing.T) {
 	_, _, _, err := receiver.DecryptGarlicMessage(encrypted[3])
 	require.NoError(t, err)
 
-	session.mu.Lock()
-	baseAfterSkip := session.recvWindowBase
-	session.mu.Unlock()
-	// Base must remain at 1 because counters 1 and 2 are still pending.
-	assert.Equal(t, uint32(1), baseAfterSkip, "base must not advance past pending gap")
+	assertRecvWindowBase(t, session, uint32(1), "base must not advance past pending gap")
 
 	// Now deliver counter 1.
 	_, _, _, err = receiver.DecryptGarlicMessage(encrypted[1])
 	require.NoError(t, err)
 
-	session.mu.Lock()
-	baseAfter1 := session.recvWindowBase
-	session.mu.Unlock()
-	// Still 2 because counter 2 is pending.
-	assert.Equal(t, uint32(2), baseAfter1, "base should advance to 2 after filling counter 1")
+	assertRecvWindowBase(t, session, uint32(2), "base should advance to 2 after filling counter 1")
 
 	// Deliver counter 2 to plug the gap fully.
 	_, _, _, err = receiver.DecryptGarlicMessage(encrypted[2])
 	require.NoError(t, err)
 
-	session.mu.Lock()
-	baseFull := session.recvWindowBase
-	session.mu.Unlock()
-	assert.Equal(t, uint32(4), baseFull, "base should reach 4 after all gaps filled")
+	assertRecvWindowBase(t, session, uint32(4), "base should reach 4 after all gaps filled")
 }
 
 // TestReceiveWindow_RandomOrder tests correctness with a pseudo-random delivery
@@ -304,11 +298,7 @@ func TestSendTagPollution_RecvWindowStillWorks(t *testing.T) {
 	const outgoingCount = 30
 	for i := 0; i < outgoingCount; i++ {
 		payload := []byte("alice→bob message " + string(rune('A'+i)))
-		enc, encErr := alice.EncryptGarlicMessage(bobDestHash, bob.ourPublicKey, payload)
-		require.NoError(t, encErr, "alice ES send %d should succeed", i)
-		pt, _, _, decErr := bob.DecryptGarlicMessage(enc)
-		require.NoError(t, decErr, "bob ES recv %d should succeed", i)
-		assert.Equal(t, payload, pt, "payload mismatch on message %d", i)
+		assertESRoundTrip(t, alice, bob, bobDestHash, bob.ourPublicKey, payload, fmt.Sprintf("alice ES send %d", i))
 	}
 
 	// Verify alice's pendingTags is not polluted (capped at tagWindowSize,

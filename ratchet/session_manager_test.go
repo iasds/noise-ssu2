@@ -2,6 +2,7 @@ package ratchet
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -39,6 +40,55 @@ func createTestSessionManager(t testing.TB) *SessionManager {
 	sm, err := NewSessionManager(privKey)
 	require.NoError(t, err)
 	return sm
+}
+
+// randomKeyPair32 generates a random 32-byte key pair (pubKey, privKey) for testing.
+func randomKeyPair32(t testing.TB) (pubKey, privKey [32]byte) {
+	t.Helper()
+	_, err := rand.Read(pubKey[:])
+	require.NoError(t, err)
+	_, err = rand.Read(privKey[:])
+	require.NoError(t, err)
+	return pubKey, privKey
+}
+
+// randomSessionKeysForTest generates a sessionKeys struct with all fields
+// randomised. If fillSymKey is true, symKey is also filled (needed for
+// createSession's full initialisation path).
+func randomSessionKeysForTest(t testing.TB, fillSymKey bool) *sessionKeys {
+	t.Helper()
+	keys := &sessionKeys{}
+	_, err := rand.Read(keys.rootKey[:])
+	require.NoError(t, err)
+	_, err = rand.Read(keys.tagKey[:])
+	require.NoError(t, err)
+	if fillSymKey {
+		_, err = rand.Read(keys.symKey[:])
+		require.NoError(t, err)
+	}
+	return keys
+}
+
+// assertNSRTagIndexLen reads sm.nsrTagIndex length under RLock and asserts
+// the expected count. Reduces the repeated lock/len/unlock/assert boilerplate.
+func assertNSRTagIndexLen(t testing.TB, sm *SessionManager, expected int, msgAndArgs ...interface{}) {
+	t.Helper()
+	sm.mu.RLock()
+	count := len(sm.nsrTagIndex)
+	sm.mu.RUnlock()
+	assert.Equal(t, expected, count, msgAndArgs...)
+}
+
+// assertESRoundTrip encrypts payload from sender to receiver using destHash and
+// peerPub, decrypts on the receiver, and asserts that the round-tripped
+// plaintext matches. msgLabel is used in assertion messages for identification.
+func assertESRoundTrip(t testing.TB, sender, receiver *SessionManager, destHash [32]byte, peerPub [32]byte, payload []byte, msgLabel string) {
+	t.Helper()
+	enc, err := sender.EncryptGarlicMessage(destHash, peerPub, payload)
+	require.NoError(t, err, "%s: encrypt", msgLabel)
+	dec, _, _, err := receiver.DecryptGarlicMessage(enc)
+	require.NoError(t, err, "%s: decrypt", msgLabel)
+	assert.Equal(t, payload, dec, "%s: round-trip", msgLabel)
 }
 
 // createLinkedManagers creates two session managers that can communicate.
@@ -147,13 +197,8 @@ func requireSessionByHash(t *testing.T, sm *SessionManager, hash [32]byte) *Sess
 // It uses the given isInitiator flag to determine the session's role.
 func createTestSession(t testing.TB, isInitiator bool) *Session {
 	t.Helper()
-	var pubKey, privKey [32]byte
-	_, _ = rand.Read(pubKey[:])
-	_, _ = rand.Read(privKey[:])
-
-	keys := &sessionKeys{}
-	_, _ = rand.Read(keys.rootKey[:])
-	_, _ = rand.Read(keys.tagKey[:])
+	pubKey, privKey := randomKeyPair32(t)
+	keys := randomSessionKeysForTest(t, false)
 
 	session, err := createSession(pubKey, keys, privKey, isInitiator)
 	require.NoError(t, err)
@@ -433,19 +478,8 @@ func TestDHRatchetRotation(t *testing.T) {
 }
 
 func TestCreateSessionInitializesRatchets(t *testing.T) {
-	var pubKey, privKey [32]byte
-	_, err := rand.Read(pubKey[:])
-	require.NoError(t, err)
-	_, err = rand.Read(privKey[:])
-	require.NoError(t, err)
-
-	keys := &sessionKeys{}
-	_, err = rand.Read(keys.rootKey[:])
-	require.NoError(t, err)
-	_, err = rand.Read(keys.symKey[:])
-	require.NoError(t, err)
-	_, err = rand.Read(keys.tagKey[:])
-	require.NoError(t, err)
+	pubKey, privKey := randomKeyPair32(t)
+	keys := randomSessionKeysForTest(t, true)
 
 	session, err := createSession(pubKey, keys, privKey, true)
 	require.NoError(t, err)
@@ -461,17 +495,8 @@ func TestCreateSessionInitializesRatchets(t *testing.T) {
 }
 
 func TestCreateSession_DirectionalKeyIsolation(t *testing.T) {
-	var pubKey, privKey [32]byte
-	_, err := rand.Read(pubKey[:])
-	require.NoError(t, err)
-	_, err = rand.Read(privKey[:])
-	require.NoError(t, err)
-
-	keys := &sessionKeys{}
-	_, err = rand.Read(keys.rootKey[:])
-	require.NoError(t, err)
-	_, err = rand.Read(keys.tagKey[:])
-	require.NoError(t, err)
+	pubKey, privKey := randomKeyPair32(t)
+	keys := randomSessionKeysForTest(t, false)
 
 	initiator, err := createSession(pubKey, keys, privKey, true)
 	require.NoError(t, err)
@@ -498,11 +523,7 @@ func TestCleanupExpiredSessions(t *testing.T) {
 	_, err := rand.Read(hash[:])
 	require.NoError(t, err)
 
-	keys := &sessionKeys{}
-	_, err = rand.Read(keys.rootKey[:])
-	require.NoError(t, err)
-	_, err = rand.Read(keys.tagKey[:])
-	require.NoError(t, err)
+	keys := randomSessionKeysForTest(t, false)
 
 	var pubKey [32]byte
 	_, err = rand.Read(pubKey[:])
@@ -731,12 +752,8 @@ func TestLRUEviction(t *testing.T) {
 	assert.Equal(t, MaxGarlicSessions+1, count)
 
 	// Next storeNewSessionState should evict
-	keys := &sessionKeys{}
-	_, _ = rand.Read(keys.rootKey[:])
-	_, _ = rand.Read(keys.tagKey[:])
-	var dh, dp [32]byte
-	_, _ = rand.Read(dh[:])
-	_, _ = rand.Read(dp[:])
+	keys := randomSessionKeysForTest(t, false)
+	dh, dp := randomKeyPair32(t)
 
 	err := sm.storeNewSessionState(dh, dp, keys, nil, true)
 	require.NoError(t, err)
@@ -772,11 +789,8 @@ func TestInboundSessionEnforcesMaxGarlicSessions(t *testing.T) {
 
 	// Simulate an inbound session being created via initializeInboundRatchetState.
 	// This should evict one session before storing the new one.
-	keys := &sessionKeys{}
-	_, _ = rand.Read(keys.rootKey[:])
-	_, _ = rand.Read(keys.tagKey[:])
-	var remotePub [32]byte
-	_, _ = rand.Read(remotePub[:])
+	keys := randomSessionKeysForTest(t, false)
+	remotePub, _ := randomKeyPair32(t)
 
 	err := sm.initializeInboundRatchetState(remotePub, keys, nil)
 	require.NoError(t, err)
@@ -966,12 +980,7 @@ func TestCounterNonceDeterministic(t *testing.T) {
 	// Send 20 messages, each must decrypt with matching counter
 	for i := 0; i < 20; i++ {
 		payload := []byte("msg " + string(rune('A'+i)))
-		enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, payload)
-		require.NoError(t, err, "Encrypt message %d", i)
-
-		dec, _, _, err := receiver.DecryptGarlicMessage(enc)
-		require.NoError(t, err, "Decrypt message %d", i)
-		assert.Equal(t, payload, dec, "Message %d round-trip", i)
+		assertESRoundTrip(t, sender, receiver, destHash, receiver.ourPublicKey, payload, fmt.Sprintf("Message %d", i))
 	}
 }
 
@@ -1338,10 +1347,7 @@ func TestNSRTag_RegisteredAndConsumedOnReceipt(t *testing.T) {
 	nsMsg, err := initiator.EncryptGarlicMessage(destHash, responder.ourPublicKey, mustBuildNSPayload(t, []byte("ns")))
 	require.NoError(t, err)
 
-	initiator.mu.RLock()
-	nsrTagCount := len(initiator.nsrTagIndex)
-	initiator.mu.RUnlock()
-	assert.Equal(t, 1, nsrTagCount, "After sending NS, initiator should have one NSR tag registered")
+	assertNSRTagIndexLen(t, initiator, 1, "After sending NS, initiator should have one NSR tag registered")
 
 	// Step 2: Bob processes NS and sends NSR
 	_, _, sessionHash, err := responder.DecryptGarlicMessage(nsMsg)
@@ -1355,10 +1361,7 @@ func TestNSRTag_RegisteredAndConsumedOnReceipt(t *testing.T) {
 	_, _, _, err = initiator.DecryptGarlicMessage(nsrMsg)
 	require.NoError(t, err)
 
-	initiator.mu.RLock()
-	nsrTagCountAfter := len(initiator.nsrTagIndex)
-	initiator.mu.RUnlock()
-	assert.Equal(t, 0, nsrTagCountAfter, "After receiving NSR, nsrTagIndex should be empty")
+	assertNSRTagIndexLen(t, initiator, 0, "After receiving NSR, nsrTagIndex should be empty")
 
 	// Initiator session should also have nsrTag cleared
 	session := requireSessionByHash(t, initiator, destHash)
@@ -1565,10 +1568,7 @@ func TestEncryptUnboundGarlicMessage_IsNonRepliable(t *testing.T) {
 	_, _, _, err = receiver.DecryptGarlicMessage(ct)
 	require.NoError(t, err)
 
-	receiver.mu.RLock()
-	nsrCount := len(receiver.nsrTagIndex)
-	receiver.mu.RUnlock()
-	assert.Equal(t, 0, nsrCount, "No NSR tag should be registered for an unbound session")
+	assertNSRTagIndexLen(t, receiver, 0, "No NSR tag should be registered for an unbound session")
 }
 
 // ============================================================================

@@ -22,16 +22,7 @@ type linkedSessionFixture struct {
 // and retrieves a usable session tag from the receiver's tag index.
 func newLinkedSessionFixture(t *testing.T) linkedSessionFixture {
 	t.Helper()
-	sender, receiver := createLinkedManagers(t)
-
-	var destHash [32]byte
-	copy(destHash[:], receiver.ourPublicKey[:])
-
-	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, mustBuildNSPayload(t, []byte("init")))
-	require.NoError(t, err)
-	_, _, _, err = receiver.DecryptGarlicMessage(enc)
-	require.NoError(t, err)
-
+	sender, receiver, destHash := mustEstablishNS(t)
 	tag := getAnyTag(t, receiver)
 
 	return linkedSessionFixture{
