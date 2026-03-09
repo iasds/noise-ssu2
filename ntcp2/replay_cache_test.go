@@ -7,6 +7,13 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// twoTestKeys returns two distinct [32]byte keys for replay cache tests.
+func twoTestKeys() (k1, k2 [32]byte) {
+	k1[0] = 0x01
+	k2[0] = 0x02
+	return
+}
+
 func TestReplayCache_NewKeyNotReplay(t *testing.T) {
 	rc := NewReplayCache()
 	defer rc.Close()
@@ -31,10 +38,7 @@ func TestReplayCache_DifferentKeysNotReplay(t *testing.T) {
 	rc := NewReplayCache()
 	defer rc.Close()
 
-	var key1, key2 [32]byte
-	key1[0] = 0x01
-	key2[0] = 0x02
-
+	key1, key2 := twoTestKeys()
 	assert.False(t, rc.CheckAndAdd(key1))
 	assert.False(t, rc.CheckAndAdd(key2))
 }
@@ -45,9 +49,7 @@ func TestReplayCache_Size(t *testing.T) {
 
 	assert.Equal(t, 0, rc.Size())
 
-	var key1, key2 [32]byte
-	key1[0] = 0x01
-	key2[0] = 0x02
+	key1, key2 := twoTestKeys()
 
 	rc.CheckAndAdd(key1)
 	assert.Equal(t, 1, rc.Size())

@@ -366,30 +366,16 @@ func TestESReplayRejection(t *testing.T) {
 // Spec ref: ratchet.md §1g — "Alice must receive one of Bob's NSR messages
 // before sending Existing Session messages."
 func TestESBeforeNSRRejected(t *testing.T) {
-	alice, bob := createLinkedManagers(t)
-
-	var bobDestHash [32]byte
-	copy(bobDestHash[:], bob.ourPublicKey[:])
-
-	// Alice sends NS to bob — this creates alice's outbound session but NSR
-	// has not been received yet, so handshakeState is still non-nil.
-	nsPayload := mustBuildNSPayload(t, []byte("ns"))
-	nsEnc, err := alice.EncryptGarlicMessage(bobDestHash, bob.ourPublicKey, nsPayload)
-	require.NoError(t, err)
-
-	// Bob receives the NS (needed to create his responder session).
-	_, _, sessionHash, err := bob.DecryptGarlicMessage(nsEnc)
-	require.NoError(t, err)
-	require.NotNil(t, sessionHash)
+	alice, bob, bobDestHash, sessionHash := mustSendNS(t)
 
 	// Alice immediately tries to send an ES message before receiving NSR.
-	_, err = alice.EncryptGarlicMessage(bobDestHash, bob.ourPublicKey, []byte("premature es"))
+	_, err := alice.EncryptGarlicMessage(bobDestHash, bob.ourPublicKey, []byte("premature es"))
 	require.Error(t, err, "initiator must not be allowed to send ES before receiving NSR")
 	assert.Contains(t, err.Error(), "must receive New Session Reply",
 		"error message should explain the spec ordering constraint")
 
 	// Now bob sends NSR and alice receives it.
-	nsrEnc, err := bob.EncryptNewSessionReply(*sessionHash, []byte("nsr"))
+	nsrEnc, err := bob.EncryptNewSessionReply(sessionHash, []byte("nsr"))
 	require.NoError(t, err)
 	_, _, _, err = alice.DecryptGarlicMessage(nsrEnc)
 	require.NoError(t, err)

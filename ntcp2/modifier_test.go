@@ -264,16 +264,14 @@ func TestSipHashLengthModifier_NonDataPhase(t *testing.T) {
 	sipKeys := [2]uint64{0x0123456789ABCDEF, 0xFEDCBA9876543210}
 	modifier := NewSipHashLengthModifier("test", sipKeys, 0)
 
-	// Should not modify handshake phase data
 	testData := []byte{0x04, 0x00} // 1024 in big endian
 
-	result, err := modifier.ModifyOutbound(handshake.PhaseInitial, testData)
-	require.NoError(t, err)
-	assert.Equal(t, testData, result)
-
-	result, err = modifier.ModifyOutbound(handshake.PhaseExchange, testData)
-	require.NoError(t, err)
-	assert.Equal(t, testData, result)
+	// Should not modify handshake phase data
+	for _, phase := range []handshake.HandshakePhase{handshake.PhaseInitial, handshake.PhaseExchange} {
+		result, err := modifier.ModifyOutbound(phase, testData)
+		require.NoError(t, err)
+		assert.Equal(t, testData, result)
+	}
 }
 
 func TestNTCP2PaddingModifier_Creation(t *testing.T) {
@@ -444,29 +442,30 @@ func TestNTCP2PaddingModifier_NoPadding(t *testing.T) {
 }
 
 func TestNTCP2PaddingModifier_PhaseMatching(t *testing.T) {
-	// Test that cleartext modifier doesn't affect final phase
 	cleartextModifier, err := NewNTCP2PaddingModifierForTesting("cleartext", 4, 8, false)
 	require.NoError(t, err)
-
-	// Test that AEAD modifier doesn't affect initial phases
 	aeadModifier, err := NewNTCP2PaddingModifierForTesting("aead", 4, 8, true)
 	require.NoError(t, err)
 
 	testData := []byte("test data")
 
-	// Cleartext modifier should not affect final phase
-	result, err := cleartextModifier.ModifyOutbound(handshake.PhaseFinal, testData)
-	require.NoError(t, err)
-	assert.Equal(t, testData, result)
-
-	// AEAD modifier should not affect initial phases
-	result, err = aeadModifier.ModifyOutbound(handshake.PhaseInitial, testData)
-	require.NoError(t, err)
-	assert.Equal(t, testData, result)
-
-	result, err = aeadModifier.ModifyOutbound(handshake.PhaseExchange, testData)
-	require.NoError(t, err)
-	assert.Equal(t, testData, result)
+	// Verify modifiers do not affect phases they don't target.
+	tests := []struct {
+		name     string
+		modifier handshake.HandshakeModifier
+		phase    handshake.HandshakePhase
+	}{
+		{"cleartext ignores final", cleartextModifier, handshake.PhaseFinal},
+		{"AEAD ignores initial", aeadModifier, handshake.PhaseInitial},
+		{"AEAD ignores exchange", aeadModifier, handshake.PhaseExchange},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := tt.modifier.ModifyOutbound(tt.phase, testData)
+			require.NoError(t, err)
+			assert.Equal(t, testData, result)
+		})
+	}
 }
 
 func TestNTCP2Modifiers_Integration(t *testing.T) {

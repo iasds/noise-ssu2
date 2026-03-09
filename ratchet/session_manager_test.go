@@ -158,6 +158,18 @@ func mustSendNS(t testing.TB) (initiator, responder *SessionManager, destHash [3
 	return initiator, responder, destHash, *sh
 }
 
+// mustExchangeES encrypts an Existing Session message from sender to receiver
+// and verifies the round-trip: correct decryption and non-zero session tag.
+func mustExchangeES(t testing.TB, sender, receiver *SessionManager, destHash [32]byte, receiverPub [32]byte, payload []byte) {
+	t.Helper()
+	msg, err := sender.EncryptGarlicMessage(destHash, receiverPub, payload)
+	require.NoError(t, err)
+	dec, tag, _, err := receiver.DecryptGarlicMessage(msg)
+	require.NoError(t, err, "receiver must decrypt ES message")
+	assert.Equal(t, payload, dec)
+	assert.NotEqual(t, [8]byte{}, tag, "ES messages must have non-zero tag")
+}
+
 // mustBuildNSPayload wraps raw garlic data in a spec-compliant New Session
 // payload: DateTime block (required first) + GarlicClove block.
 // Fails the test immediately if BuildNSPayload returns an error.
@@ -1100,16 +1112,12 @@ func TestFindSessionByTagReturnsFalseForUnknown(t *testing.T) {
 }
 
 func TestFindSessionByTagReturnsFalseForExpiredSession(t *testing.T) {
-	sender, receiver := createLinkedManagers(t)
+	sender, receiver, destHash := mustEstablishNS(t)
 	receiver.sessionTimeout = 1 * time.Millisecond // very short timeout
 
-	var destHash [32]byte
-	copy(destHash[:], receiver.ourPublicKey[:])
-
-	enc, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, mustBuildNSPayload(t, []byte("expire me")))
-	require.NoError(t, err)
-	_, _, _, err = receiver.DecryptGarlicMessage(enc)
-	require.NoError(t, err)
+	// Note: NS was already sent and decrypted by mustEstablishNS.
+	_ = sender
+	_ = destHash
 
 	// Grab a pending tag.
 	receiver.mu.RLock()
@@ -1300,26 +1308,10 @@ func TestNSNSRESFlow_EndToEnd(t *testing.T) {
 	assert.Nil(t, nsrHash, "NSR messages should return nil session hash")
 
 	// ── Step 4: ES exchange using NSR-derived keys ────────────────────────
-	// Alice sends ES to Bob
-	esPayload1 := []byte("ES from Alice after NSR")
-	esMsg1, err := alice.EncryptGarlicMessage(aliceToBobHash, bob.ourPublicKey, esPayload1)
-	require.NoError(t, err)
+	mustExchangeES(t, alice, bob, aliceToBobHash, bob.ourPublicKey, []byte("ES from Alice after NSR"))
 
-	decES1, esTag1, _, err := bob.DecryptGarlicMessage(esMsg1)
-	require.NoError(t, err, "Bob must decrypt Alice's post-NSR ES message")
-	assert.Equal(t, esPayload1, decES1)
-	assert.NotEqual(t, [8]byte{}, esTag1, "ES messages must have non-zero tag")
-
-	// Bob sends ES to Alice
 	bobToAliceHash := types.SHA256(alice.ourPublicKey[:])
-	esPayload2 := []byte("ES from Bob after NSR")
-	esMsg2, err := bob.EncryptGarlicMessage(bobToAliceHash, alice.ourPublicKey, esPayload2)
-	require.NoError(t, err)
-
-	decES2, esTag2, _, err := alice.DecryptGarlicMessage(esMsg2)
-	require.NoError(t, err, "Alice must decrypt Bob's post-NSR ES message")
-	assert.Equal(t, esPayload2, decES2)
-	assert.NotEqual(t, [8]byte{}, esTag2, "ES messages must have non-zero tag")
+	mustExchangeES(t, bob, alice, bobToAliceHash, alice.ourPublicKey, []byte("ES from Bob after NSR"))
 }
 
 // TestEncryptNewSessionReply_UsesReturnedSessionHash verifies that the session

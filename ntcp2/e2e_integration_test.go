@@ -308,23 +308,14 @@ func TestE2E_NonceExhaustionImminent_Advisory(t *testing.T) {
 	assert.False(t, conn.NonceExhaustionImminent())
 
 	// Approach threshold on write side
-	conn.writeMu.Lock()
-	conn.writeNonce = NonceRekeyThreshold - 1
-	conn.writeMu.Unlock()
+	setNonces(conn, NonceRekeyThreshold-1, 0)
 	assert.False(t, conn.NonceExhaustionImminent(), "Just below threshold")
 
-	conn.writeMu.Lock()
-	conn.writeNonce = NonceRekeyThreshold
-	conn.writeMu.Unlock()
+	setNonces(conn, NonceRekeyThreshold, 0)
 	assert.True(t, conn.NonceExhaustionImminent(), "At threshold")
 
 	// Reset write, approach on read side
-	conn.writeMu.Lock()
-	conn.writeNonce = 0
-	conn.writeMu.Unlock()
-	conn.readMu.Lock()
-	conn.readNonce = NonceRekeyThreshold
-	conn.readMu.Unlock()
+	setNonces(conn, 0, NonceRekeyThreshold)
 	assert.True(t, conn.NonceExhaustionImminent(), "Read side at threshold")
 }
 

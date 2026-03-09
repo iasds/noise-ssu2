@@ -511,44 +511,39 @@ func TestAEADErrorConstants(t *testing.T) {
 		"AEADErrorMaxJunkBytes must be a power of two")
 }
 
+// setNonces sets the write and read nonces on the connection under their
+// respective locks.
+func setNonces(conn *NTCP2Conn, writeNonce, readNonce uint64) {
+	conn.writeMu.Lock()
+	conn.writeNonce = writeNonce
+	conn.writeMu.Unlock()
+	conn.readMu.Lock()
+	conn.readNonce = readNonce
+	conn.readMu.Unlock()
+}
+
 func TestNonceExhaustionImminent(t *testing.T) {
 	conn := createTestNTCP2Conn(&mockNoiseConn{})
 
 	assert.False(t, conn.NonceExhaustionImminent())
 
-	conn.writeMu.Lock()
-	conn.writeNonce = NonceRekeyThreshold
-	conn.writeMu.Unlock()
+	setNonces(conn, NonceRekeyThreshold, 0)
 	assert.True(t, conn.NonceExhaustionImminent())
 
-	conn.writeMu.Lock()
-	conn.writeNonce = 0
-	conn.writeMu.Unlock()
-	conn.readMu.Lock()
-	conn.readNonce = NonceRekeyThreshold
-	conn.readMu.Unlock()
+	setNonces(conn, 0, NonceRekeyThreshold)
 	assert.True(t, conn.NonceExhaustionImminent())
 
-	conn.readMu.Lock()
-	conn.readNonce = 0
-	conn.readMu.Unlock()
+	setNonces(conn, 0, 0)
 	assert.False(t, conn.NonceExhaustionImminent())
 }
 
 func TestNonceExhaustion_AdvisoryOnly(t *testing.T) {
 	conn := createTestNTCP2Conn(&mockNoiseConn{})
 
-	conn.writeMu.Lock()
-	conn.writeNonce = 0
-	conn.writeMu.Unlock()
-	conn.readMu.Lock()
-	conn.readNonce = 0
-	conn.readMu.Unlock()
+	setNonces(conn, 0, 0)
 	assert.False(t, conn.NonceExhaustionImminent())
 
-	conn.writeMu.Lock()
-	conn.writeNonce = NonceRekeyThreshold
-	conn.writeMu.Unlock()
+	setNonces(conn, NonceRekeyThreshold, 0)
 	assert.True(t, conn.NonceExhaustionImminent())
 }
 

@@ -25,29 +25,55 @@ type noiseIKHandshakePair struct {
 	rHS       *noiseHandshakeState
 }
 
-// setupNoiseIKHandshake creates an initiator and responder, writes and reads
-// Noise IK message 1 ("ns"), and returns the handshake states for message 2.
-func setupNoiseIKHandshake(t testing.TB) noiseIKHandshakePair {
+// ikMessage1Result holds all values returned by a writeNoiseIKMessage1 /
+// readNoiseIKMessage1 round-trip.
+type ikMessage1Result struct {
+	initiator    *SessionManager
+	responder    *SessionManager
+	iHS          *noiseHandshakeState
+	rHS          *noiseHandshakeState
+	initiatorPub [32]byte
+	isUnbound    bool
+}
+
+// mustWriteAndReadIKMessage1 creates an initiator and responder, writes an IK
+// message 1 with the given payload, reads it back, and returns all results.
+func mustWriteAndReadIKMessage1(t testing.TB, payload []byte) ikMessage1Result {
 	t.Helper()
 	initiator := createTestSessionManager(t)
 	responder := createTestSessionManager(t)
 
 	msg1, _, iHS, err := writeNoiseIKMessage1(
 		initiator.ourPrivateKey, initiator.ourPublicKey,
-		responder.ourPublicKey, []byte("ns"),
+		responder.ourPublicKey, payload,
 	)
 	require.NoError(t, err)
 
-	_, _, _, rHS, _, err := readNoiseIKMessage1(
+	_, initiatorPub, _, rHS, isUnbound, err := readNoiseIKMessage1(
 		responder.ourPrivateKey, responder.ourPublicKey, msg1,
 	)
 	require.NoError(t, err)
 
+	return ikMessage1Result{
+		initiator:    initiator,
+		responder:    responder,
+		iHS:          iHS,
+		rHS:          rHS,
+		initiatorPub: initiatorPub,
+		isUnbound:    isUnbound,
+	}
+}
+
+// setupNoiseIKHandshake creates an initiator and responder, writes and reads
+// Noise IK message 1 ("ns"), and returns the handshake states for message 2.
+func setupNoiseIKHandshake(t testing.TB) noiseIKHandshakePair {
+	t.Helper()
+	r := mustWriteAndReadIKMessage1(t, []byte("ns"))
 	return noiseIKHandshakePair{
-		initiator: initiator,
-		responder: responder,
-		iHS:       iHS,
-		rHS:       rHS,
+		initiator: r.initiator,
+		responder: r.responder,
+		iHS:       r.iHS,
+		rHS:       r.rHS,
 	}
 }
 
@@ -507,22 +533,10 @@ func TestWriteReadNoiseIKMessage1Unbound_EmptyPayload(t *testing.T) {
 // TestReadNoiseIKMessage1_Bound_IsNotUnbound verifies that a normal (bound, IK)
 // New Session message returns isUnbound=false.
 func TestReadNoiseIKMessage1_Bound_IsNotUnbound(t *testing.T) {
-	initiator := createTestSessionManager(t)
-	responder := createTestSessionManager(t)
-
-	msg, _, _, err := writeNoiseIKMessage1(
-		initiator.ourPrivateKey, initiator.ourPublicKey,
-		responder.ourPublicKey, []byte("bound message"),
-	)
-	require.NoError(t, err)
-
-	_, initiatorPub, _, hs, isUnbound, err := readNoiseIKMessage1(
-		responder.ourPrivateKey, responder.ourPublicKey, msg,
-	)
-	require.NoError(t, err)
-	assert.False(t, isUnbound, "Bound IK message should not be flagged as unbound")
-	assert.Equal(t, initiator.ourPublicKey, initiatorPub, "Bound: initiator static key recovered")
-	assert.NotNil(t, hs, "Bound: handshake state retained for NSR")
+	r := mustWriteAndReadIKMessage1(t, []byte("bound message"))
+	assert.False(t, r.isUnbound, "Bound IK message should not be flagged as unbound")
+	assert.Equal(t, r.initiator.ourPublicKey, r.initiatorPub, "Bound: initiator static key recovered")
+	assert.NotNil(t, r.rHS, "Bound: handshake state retained for NSR")
 }
 
 // TestWriteNoiseIKMessage1Unbound_NonDeterministic verifies that each unbound
@@ -629,31 +643,38 @@ func TestHmacSHA256_KnownOutput(t *testing.T) {
 // kdf.StandardHKDF
 // ============================================================================
 
-func TestStandardHKDF_Deterministic(t *testing.T) {
+func TestStandardHKDF_DeterministicAndDifferentInputs(t *testing.T) {
 	salt := randomBytes32(t)
 	ikm := randomBytes32(t)
 
-	out1, err := kdf.StandardHKDF(salt, ikm, []byte("test_info"), 64)
-	require.NoError(t, err)
-	out2, err := kdf.StandardHKDF(salt, ikm, []byte("test_info"), 64)
-	require.NoError(t, err)
-	assert.Equal(t, out1, out2, "Same inputs should produce identical HKDF output")
-	assert.Equal(t, 64, len(out1))
-}
-
-func TestStandardHKDF_DifferentInputs(t *testing.T) {
-	salt := randomBytes32(t)
-	ikm := randomBytes32(t)
-
-	out1, err := kdf.StandardHKDF(salt, ikm, []byte("info_a"), 32)
-	require.NoError(t, err)
-	out2, err := kdf.StandardHKDF(salt, ikm, []byte("info_b"), 32)
-	require.NoError(t, err)
-	assert.NotEqual(t, out1, out2, "Different info strings should produce different output")
-
-	out3, err := kdf.StandardHKDF(salt, nil, []byte("info_a"), 32)
-	require.NoError(t, err)
-	assert.NotEqual(t, out1, out3, "Different IKM should produce different output")
+	tests := []struct {
+		name      string
+		info1     string
+		info2     string
+		ikm1      []byte
+		ikm2      []byte
+		length    int
+		wantEqual bool
+		msg       string
+	}{
+		{"same inputs", "test_info", "test_info", ikm, ikm, 64, true, "Same inputs should produce identical HKDF output"},
+		{"different info", "info_a", "info_b", ikm, ikm, 32, false, "Different info strings should produce different output"},
+		{"different IKM", "info_a", "info_a", ikm, nil, 32, false, "Different IKM should produce different output"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out1, err := kdf.StandardHKDF(salt, tt.ikm1, []byte(tt.info1), tt.length)
+			require.NoError(t, err)
+			out2, err := kdf.StandardHKDF(salt, tt.ikm2, []byte(tt.info2), tt.length)
+			require.NoError(t, err)
+			if tt.wantEqual {
+				assert.Equal(t, out1, out2, tt.msg)
+				assert.Equal(t, tt.length, len(out1))
+			} else {
+				assert.NotEqual(t, out1, out2, tt.msg)
+			}
+		})
+	}
 }
 
 func TestStandardHKDF_VariableLengths(t *testing.T) {
@@ -673,6 +694,18 @@ func TestStandardHKDF_VariableLengths(t *testing.T) {
 // NSR Tag Ratchet Derivation
 // ============================================================================
 
+// mustDeriveAndTag derives an NSR tag ratchet from the given chain key and
+// generates its first tag. Fails the test on any error.
+func mustDeriveAndTag(t *testing.T, chainKey []byte) [8]byte {
+	t.Helper()
+	tr, err := deriveNSRTagRatchet(chainKey)
+	require.NoError(t, err)
+	require.NotNil(t, tr)
+	tag, err := tr.GenerateNextTag()
+	require.NoError(t, err)
+	return tag
+}
+
 func TestDeriveNSRTagRatchet_BothSidesMatch(t *testing.T) {
 	// Both initiator and responder should derive the same NSR tag ratchet
 	// from the same chain key.
@@ -680,19 +713,8 @@ func TestDeriveNSRTagRatchet_BothSidesMatch(t *testing.T) {
 	_, err := rand.Read(chainKey[:])
 	require.NoError(t, err)
 
-	tr1, err := deriveNSRTagRatchet(chainKey[:])
-	require.NoError(t, err)
-	require.NotNil(t, tr1)
-
-	tr2, err := deriveNSRTagRatchet(chainKey[:])
-	require.NoError(t, err)
-	require.NotNil(t, tr2)
-
-	// Both should generate the same first tag
-	tag1, err := tr1.GenerateNextTag()
-	require.NoError(t, err)
-	tag2, err := tr2.GenerateNextTag()
-	require.NoError(t, err)
+	tag1 := mustDeriveAndTag(t, chainKey[:])
+	tag2 := mustDeriveAndTag(t, chainKey[:])
 	assert.Equal(t, tag1, tag2, "Same chain key should produce same NSR tags")
 }
 
@@ -703,15 +725,8 @@ func TestDeriveNSRTagRatchet_DifferentChainKeys(t *testing.T) {
 	_, err = rand.Read(ck2[:])
 	require.NoError(t, err)
 
-	tr1, err := deriveNSRTagRatchet(ck1[:])
-	require.NoError(t, err)
-	tr2, err := deriveNSRTagRatchet(ck2[:])
-	require.NoError(t, err)
-
-	tag1, err := tr1.GenerateNextTag()
-	require.NoError(t, err)
-	tag2, err := tr2.GenerateNextTag()
-	require.NoError(t, err)
+	tag1 := mustDeriveAndTag(t, ck1[:])
+	tag2 := mustDeriveAndTag(t, ck2[:])
 	assert.NotEqual(t, tag1, tag2, "Different chain keys should produce different tags")
 }
 
