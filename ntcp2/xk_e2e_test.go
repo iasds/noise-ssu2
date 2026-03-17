@@ -437,3 +437,108 @@ func setupHandshakedPair(t *testing.T) (initiator, responder *NTCP2Conn) {
 
 	return initiatorNTCP2, responderNTCP2
 }
+
+// TestInboundRouterHash verifies that after a completed XK handshake the
+// responder (inbound) side exposes the initiator's static public key as the
+// remote router hash, rather than returning all zeros.
+//
+// Before the fix, the responder created a placeholder zero-hash for the
+// remote address because PeerStatic() was not yet available at Accept()
+// time. PropagatePeerStaticKey(), called after Handshake(), now copies the
+// peer's Noise static key into the remote NTCP2Addr.
+func TestInboundRouterHash(t *testing.T) {
+	cs := upstreamnoise.NewCipherSuite(
+		upstreamnoise.DH25519,
+		upstreamnoise.CipherChaChaPoly,
+		upstreamnoise.HashSHA256,
+	)
+
+	initiatorKP, err := cs.GenerateKeypair(rand.Reader)
+	require.NoError(t, err)
+	responderKP, err := cs.GenerateKeypair(rand.Reader)
+	require.NoError(t, err)
+
+	initiatorHash := make([]byte, RouterHashSize)
+	copy(initiatorHash, "initiator-hash-32-bytes-long!!!!")
+	responderHash := make([]byte, RouterHashSize)
+	copy(responderHash, "responder-hash-32-bytes-long!!!!")
+
+	// --- Responder config (listener) ---
+	responderConfig, err := NewNTCP2Config(responderHash, false)
+	require.NoError(t, err)
+	responderConfig, err = responderConfig.WithStaticKey(responderKP.Private)
+	require.NoError(t, err)
+	responderConfig, err = responderConfig.WithAESObfuscation(false, nil)
+	require.NoError(t, err)
+	// Note: responderConfig.RemoteRouterHash is nil — the listener does NOT
+	// know the initiator's identity ahead of time.
+
+	// --- Initiator config ---
+	initiatorConfig, err := NewNTCP2Config(initiatorHash, true)
+	require.NoError(t, err)
+	initiatorConfig, err = initiatorConfig.WithStaticKey(initiatorKP.Private)
+	require.NoError(t, err)
+	initiatorConfig, err = initiatorConfig.WithRemoteRouterHash(responderHash)
+	require.NoError(t, err)
+	initiatorConfig, err = initiatorConfig.WithRemoteStaticKey(responderKP.Public)
+	require.NoError(t, err)
+	initiatorConfig, err = initiatorConfig.WithAESObfuscation(false, nil)
+	require.NoError(t, err)
+
+	// --- Start NTCP2 listener ---
+	ntcp2Ln, tcpAddr := startTestNTCP2Listener(t, responderConfig)
+
+	// --- Responder goroutine: AcceptWithHandshake ---
+	var wg sync.WaitGroup
+	var responderErr error
+	var responderNTCP2 *NTCP2Conn
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		conn, err := ntcp2Ln.AcceptWithHandshake(ctx)
+		if err != nil {
+			responderErr = err
+			return
+		}
+		responderNTCP2 = conn
+	}()
+
+	// --- Initiator: dial + handshake ---
+	initiatorNTCP2 := dialAndHandshakeInitiator(t, tcpAddr.String(),
+		initiatorConfig, initiatorHash, responderHash, &wg, &responderErr)
+	wg.Wait()
+	if responderErr != nil {
+		initiatorNTCP2.Close()
+		t.Fatalf("responder: %v", responderErr)
+	}
+	defer initiatorNTCP2.Close()
+	defer responderNTCP2.Close()
+
+	// --- Assertions ---
+	// The responder's RouterHash() should be non-zero: the initiator's Noise
+	// static public key, propagated by PropagatePeerStaticKey().
+	responderRemoteHash := responderNTCP2.RouterHash()
+	require.Len(t, responderRemoteHash, RouterHashSize,
+		"responder remote router hash should be 32 bytes")
+
+	allZero := true
+	for _, b := range responderRemoteHash {
+		if b != 0 {
+			allZero = false
+			break
+		}
+	}
+	assert.False(t, allZero,
+		"responder remote router hash must not be all zeros after handshake")
+
+	// It should equal the initiator's Noise static public key.
+	assert.Equal(t, responderNTCP2.PeerStaticKey(), responderRemoteHash,
+		"responder RouterHash should equal PeerStaticKey after PropagatePeerStaticKey")
+
+	// The initiator's static public key (as raw bytes).
+	assert.Equal(t, initiatorKP.Public[:], responderRemoteHash,
+		"responder RouterHash should match the initiator's actual static public key")
+}

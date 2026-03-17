@@ -103,6 +103,22 @@ func (na *NTCP2Addr) IdentHash() [32]byte {
 	return h
 }
 
+// SetRouterHash updates the router identity hash.
+// routerHash must be exactly 32 bytes.
+// This is used to update a placeholder zero hash after the Noise handshake
+// reveals the remote peer's static key.
+func (na *NTCP2Addr) SetRouterHash(routerHash []byte) error {
+	if len(routerHash) != RouterHashSize {
+		return oops.
+			Code("INVALID_ROUTER_HASH").
+			In("ntcp2").
+			With("hash_length", len(routerHash)).
+			Errorf("router hash must be exactly %d bytes", RouterHashSize)
+	}
+	copy(na.routerHash, routerHash)
+	return nil
+}
+
 // Role returns the connection role ("initiator" or "responder").
 func (na *NTCP2Addr) Role() string {
 	return na.role

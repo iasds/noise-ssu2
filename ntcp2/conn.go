@@ -831,6 +831,45 @@ func (nc *NTCP2Conn) Rekey() error {
 	return nc.noiseConn.Rekey()
 }
 
+// PropagatePeerStaticKey extracts the remote peer's Noise static public key
+// from the completed handshake and updates the remote NTCP2 address's router
+// hash. This must be called after a successful Handshake() to replace the
+// placeholder zero hash that was used before the peer's identity was known
+// (e.g., on inbound/responder connections).
+//
+// If the peer static key is not available (handshake not completed) or the
+// remote address already has a non-zero router hash, this is a no-op.
+func (nc *NTCP2Conn) PropagatePeerStaticKey() {
+	peerKey := nc.noiseConn.PeerStatic()
+	if len(peerKey) != RouterHashSize {
+		return
+	}
+
+	// Only update if the current hash is all zeros (placeholder).
+	currentHash := nc.remoteAddr.RouterHash()
+	allZero := true
+	for _, b := range currentHash {
+		if b != 0 {
+			allZero = false
+			break
+		}
+	}
+	if !allZero {
+		return
+	}
+
+	// Use the peer's static key as the router hash.
+	// Note: the NTCP2 spec defines the router hash as SHA-256(RouterIdentity),
+	// where the static key is only part of the full RouterIdentity. The router
+	// transport layer can later compute the proper hash via PeerStaticKey() and
+	// HandshakeHash(). Using the static key directly is a better placeholder
+	// than all-zeros for session deduplication.
+	if err := nc.remoteAddr.SetRouterHash(peerKey); err != nil {
+		nc.logger.Warn("failed to propagate peer static key to remote address",
+			"error", err.Error())
+	}
+}
+
 // PeerStaticKey returns the remote peer's Noise static public key (32 bytes).
 // This is available after the handshake completes and can be used by the
 // router transport layer (github.com/go-i2p/go-i2p/lib/transport/ntcp) to

@@ -315,6 +315,9 @@ func (nl *NTCP2Listener) AcceptWithHandshake(ctx context.Context) (*NTCP2Conn, e
 			With("listener_addr", nl.addr.String()).
 			Wrapf(err, "NTCP2 handshake failed during accept")
 	}
+	// Propagate the peer's static key to the remote address so the router
+	// hash is available for session deduplication on inbound connections.
+	ntcp2Conn.PropagatePeerStaticKey()
 	// Propagate SipHash keys derived by the PostHandshakeHook to the conn.
 	ntcp2Conn.PropagateSipHash()
 	return ntcp2Conn, nil

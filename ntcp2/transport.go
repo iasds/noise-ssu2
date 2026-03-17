@@ -58,6 +58,9 @@ func DialNTCP2WithHandshakeContext(ctx context.Context, network, addr string, co
 			Wrapf(err, "NTCP2 handshake failed")
 	}
 
+	// Propagate the peer's static key to the remote address so the router
+	// hash is available for session deduplication.
+	ntcp2Conn.PropagatePeerStaticKey()
 	// Propagate SipHash keys derived by the PostHandshakeHook to the conn.
 	ntcp2Conn.PropagateSipHash()
 
