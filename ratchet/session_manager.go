@@ -735,47 +735,9 @@ func (sm *SessionManager) decryptExistingSession(
 		return nil, [8]byte{}, err
 	}
 
-	var (
-		plaintext   []byte
-		usedCounter uint32
-		found       bool
-	)
-
-	// O(1) fast path: if a counter hint is available (from tag→counter index),
-	// try that counter directly. This avoids scanning up to 64 AEAD trial
-	// decryptions per message.
-	if counterHint != nil {
-		c := *counterHint
-		if c >= session.recvWindowBase && c < windowEnd {
-			if messageKey, inCache := session.recvKeyCache[c]; inCache {
-				pt, decErr := decryptWithSessionTag(messageKey, ciphertext, tag, sessionTag, c)
-				if decErr == nil {
-					plaintext = pt
-					usedCounter = c
-					found = true
-				}
-			}
-		}
-	}
-
-	// Fallback: scan candidate counters from the window base upward if the
-	// hint was unavailable or did not decrypt successfully.
+	plaintext, usedCounter, found := tryCounterHintDecrypt(session, counterHint, ciphertext, tag, sessionTag, windowEnd)
 	if !found {
-		for counter := session.recvWindowBase; counter < windowEnd; counter++ {
-			messageKey, inCache := session.recvKeyCache[counter]
-			if !inCache {
-				// Already consumed; skip.
-				continue
-			}
-			pt, decErr := decryptWithSessionTag(messageKey, ciphertext, tag, sessionTag, counter)
-			if decErr != nil {
-				continue
-			}
-			plaintext = pt
-			usedCounter = counter
-			found = true
-			break
-		}
+		plaintext, usedCounter, found = scanWindowDecrypt(session, ciphertext, tag, sessionTag, windowEnd)
 	}
 	if !found {
 		return nil, [8]byte{}, oops.Errorf(
@@ -806,6 +768,59 @@ func (sm *SessionManager) decryptExistingSession(
 
 	session.LastUsed = time.Now()
 	return plaintext, sessionTag, nil
+}
+
+// tryCounterHintDecrypt attempts O(1) AEAD decryption using the counter hint
+// from the tag→counter index. Returns plaintext, counter used, and whether
+// decryption succeeded.
+func tryCounterHintDecrypt(
+	session *Session,
+	counterHint *uint32,
+	ciphertext []byte,
+	tag [16]byte,
+	sessionTag [8]byte,
+	windowEnd uint32,
+) ([]byte, uint32, bool) {
+	if counterHint == nil {
+		return nil, 0, false
+	}
+	c := *counterHint
+	if c < session.recvWindowBase || c >= windowEnd {
+		return nil, 0, false
+	}
+	messageKey, inCache := session.recvKeyCache[c]
+	if !inCache {
+		return nil, 0, false
+	}
+	pt, decErr := decryptWithSessionTag(messageKey, ciphertext, tag, sessionTag, c)
+	if decErr != nil {
+		return nil, 0, false
+	}
+	return pt, c, true
+}
+
+// scanWindowDecrypt performs a linear scan over the receive window, attempting
+// trial AEAD decryption with each cached key. Returns plaintext, counter used,
+// and whether decryption succeeded.
+func scanWindowDecrypt(
+	session *Session,
+	ciphertext []byte,
+	tag [16]byte,
+	sessionTag [8]byte,
+	windowEnd uint32,
+) ([]byte, uint32, bool) {
+	for counter := session.recvWindowBase; counter < windowEnd; counter++ {
+		messageKey, inCache := session.recvKeyCache[counter]
+		if !inCache {
+			continue
+		}
+		pt, decErr := decryptWithSessionTag(messageKey, ciphertext, tag, sessionTag, counter)
+		if decErr != nil {
+			continue
+		}
+		return pt, counter, true
+	}
+	return nil, 0, false
 }
 
 // processDecryptedESBlocks inspects a decrypted Existing Session payload for

@@ -145,125 +145,84 @@ func (h *DataHandler) ProcessDataPacket(packet *SSU2Packet) ([]*SSU2Block, error
 		return nil, oops.Wrapf(err, "failed to deserialize blocks from Data packet")
 	}
 
-	// Process each block - all 20 types explicitly handled
+	// Process each block
 	for _, block := range blocks {
 		h.incrementStat(&h.stats.BlocksProcessed)
-
-		switch block.Type {
-		// === Message Blocks (I2NP Data) ===
-		case BlockTypeI2NPMessage:
-			// Complete I2NP message - queue directly
-			if err := h.handleI2NPMessage(block.Data); err != nil {
-				return blocks, err
-			}
-
-		case BlockTypeFirstFragment:
-			// First fragment of large message
-			if err := h.handleFirstFragment(block.Data); err != nil {
-				return blocks, err
-			}
-
-		case BlockTypeFollowOnFragment:
-			// Subsequent fragment
-			if err := h.handleFollowOnFragment(block.Data); err != nil {
-				return blocks, err
-			}
-
-		// === Session Management Blocks ===
-		case BlockTypeTermination:
-			if err := h.handleTermination(block.Data); err != nil {
-				log.WithField("error", err).Warn("Error handling Termination block")
-			}
-
-		case BlockTypeNewToken:
-			if err := h.handleNewToken(block.Data); err != nil {
-				log.WithField("error", err).Warn("Error handling NewToken block")
-			}
-
-		// === Relay Blocks ===
-		case BlockTypeRelayRequest:
-			if err := h.handleRelayRequest(block); err != nil {
-				log.WithField("error", err).Debug("Error handling RelayRequest block")
-			}
-
-		case BlockTypeRelayResponse:
-			if err := h.handleRelayResponse(block); err != nil {
-				log.WithField("error", err).Debug("Error handling RelayResponse block")
-			}
-
-		case BlockTypeRelayIntro:
-			if err := h.handleRelayIntro(block); err != nil {
-				log.WithField("error", err).Debug("Error handling RelayIntro block")
-			}
-
-		case BlockTypeRelayTagRequest:
-			if err := h.handleRelayTagRequest(block); err != nil {
-				log.WithField("error", err).Debug("Error handling RelayTagRequest block")
-			}
-
-		case BlockTypeRelayTag:
-			if err := h.handleRelayTag(block); err != nil {
-				log.WithField("error", err).Debug("Error handling RelayTag block")
-			}
-
-		// === Peer Test Block ===
-		case BlockTypePeerTest:
-			if err := h.handlePeerTest(block); err != nil {
-				log.WithField("error", err).Debug("Error handling PeerTest block")
-			}
-
-		// === Path Validation Blocks ===
-		case BlockTypePathChallenge:
-			if err := h.handlePathChallenge(block.Data); err != nil {
-				log.WithField("error", err).Debug("Error handling PathChallenge block")
-			}
-
-		case BlockTypePathResponse:
-			if err := h.handlePathResponse(block.Data); err != nil {
-				log.WithField("error", err).Debug("Error handling PathResponse block")
-			}
-
-		// === Metadata Blocks ===
-		case BlockTypeDateTime:
-			if err := h.handleDateTime(block.Data); err != nil {
-				log.WithField("error", err).Debug("Error handling DateTime block")
-			}
-
-		case BlockTypeOptions:
-			if err := h.handleOptions(block.Data); err != nil {
-				log.WithField("error", err).Debug("Error handling Options block")
-			}
-
-		case BlockTypeRouterInfo:
-			if err := h.handleRouterInfo(block.Data); err != nil {
-				log.WithField("error", err).Debug("Error handling RouterInfo block")
-			}
-
-		case BlockTypeAddress:
-			if err := h.handleAddress(block.Data); err != nil {
-				log.WithField("error", err).Debug("Error handling Address block")
-			}
-
-		case BlockTypeACK:
-			if err := h.handleACK(block); err != nil {
-				log.WithField("error", err).Debug("Error handling ACK block")
-			}
-
-		case BlockTypePadding:
-			// Padding blocks are intentionally ignored - no processing needed
-			continue
-
-		default:
-			// Unknown block type - log warning with details
-			h.incrementStat(&h.stats.UnknownBlocks)
-			log.WithFields(map[string]interface{}{
-				"blockType":  block.Type,
-				"dataLength": len(block.Data),
-			}).Warn("Received unknown block type")
+		if err := h.processBlock(block); err != nil {
+			return blocks, err
 		}
 	}
 
 	return blocks, nil
+}
+
+// processBlock routes a single block to its appropriate handler.
+// For critical message blocks (I2NP, fragments), errors are returned.
+// For non-critical blocks, errors are logged and processing continues.
+func (h *DataHandler) processBlock(block *SSU2Block) error {
+	switch block.Type {
+	case BlockTypeI2NPMessage:
+		return h.handleI2NPMessage(block.Data)
+	case BlockTypeFirstFragment:
+		return h.handleFirstFragment(block.Data)
+	case BlockTypeFollowOnFragment:
+		return h.handleFollowOnFragment(block.Data)
+	case BlockTypePadding:
+		return nil
+	default:
+		h.dispatchNonCriticalBlock(block)
+		return nil
+	}
+}
+
+// dispatchNonCriticalBlock handles blocks where errors are logged, not propagated.
+func (h *DataHandler) dispatchNonCriticalBlock(block *SSU2Block) {
+	var err error
+	switch block.Type {
+	case BlockTypeTermination:
+		err = h.handleTermination(block.Data)
+	case BlockTypeNewToken:
+		err = h.handleNewToken(block.Data)
+	case BlockTypeRelayRequest:
+		err = h.handleRelayRequest(block)
+	case BlockTypeRelayResponse:
+		err = h.handleRelayResponse(block)
+	case BlockTypeRelayIntro:
+		err = h.handleRelayIntro(block)
+	case BlockTypeRelayTagRequest:
+		err = h.handleRelayTagRequest(block)
+	case BlockTypeRelayTag:
+		err = h.handleRelayTag(block)
+	case BlockTypePeerTest:
+		err = h.handlePeerTest(block)
+	case BlockTypePathChallenge:
+		err = h.handlePathChallenge(block.Data)
+	case BlockTypePathResponse:
+		err = h.handlePathResponse(block.Data)
+	case BlockTypeDateTime:
+		err = h.handleDateTime(block.Data)
+	case BlockTypeOptions:
+		err = h.handleOptions(block.Data)
+	case BlockTypeRouterInfo:
+		err = h.handleRouterInfo(block.Data)
+	case BlockTypeAddress:
+		err = h.handleAddress(block.Data)
+	case BlockTypeACK:
+		err = h.handleACK(block)
+	default:
+		h.incrementStat(&h.stats.UnknownBlocks)
+		log.WithFields(map[string]interface{}{
+			"blockType":  block.Type,
+			"dataLength": len(block.Data),
+		}).Warn("Received unknown block type")
+		return
+	}
+	if err != nil {
+		log.WithFields(map[string]interface{}{
+			"blockType": block.Type,
+			"error":     err,
+		}).Debug("Error handling block")
+	}
 }
 
 // handleI2NPMessage queues a complete I2NP message for delivery.

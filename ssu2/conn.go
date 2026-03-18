@@ -196,11 +196,10 @@ func NewSSU2Conn(
 		lastActivity:     time.Now(),
 	}
 
-	// Start background goroutines
-	conn.wg.Add(3)
-	go conn.sendLoop()
+	// Start recvLoop immediately (needed during handshake).
+	// sendLoop and keepaliveLoop are deferred to startDataLoops after handshake.
+	conn.wg.Add(1)
 	go conn.recvLoop()
-	go conn.keepaliveLoop()
 
 	return conn, nil
 }
@@ -267,6 +266,8 @@ func (h *SSU2Conn) handshakeInitiator(ctx context.Context) error {
 	h.state = StateEstablished
 	h.stateMutex.Unlock()
 
+	h.startDataLoops()
+
 	return nil
 }
 
@@ -313,7 +314,17 @@ func (h *SSU2Conn) handshakeResponder(ctx context.Context) error {
 	h.state = StateEstablished
 	h.stateMutex.Unlock()
 
+	h.startDataLoops()
+
 	return nil
+}
+
+// startDataLoops starts background goroutines for data transport.
+// Called after handshake completes to avoid wasting resources on failed connections.
+func (h *SSU2Conn) startDataLoops() {
+	h.wg.Add(2)
+	go h.sendLoop()
+	go h.keepaliveLoop()
 }
 
 // installCipherStates transfers transport cipher states from the handshake handler.

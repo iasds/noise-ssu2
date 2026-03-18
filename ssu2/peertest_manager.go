@@ -338,14 +338,9 @@ func (ptm *PeerTestManager) GetTest(nonce uint32) *PeerTest {
 	return &testCopy
 }
 
-// UpdateState updates the state of a peer test.
-//
-// Parameters:
-//   - nonce: Test nonce
-//   - state: New state
-//
-// Returns error if test not found.
-func (ptm *PeerTestManager) UpdateState(nonce uint32, state PeerTestState) error {
+// withTest validates a nonce, looks up the test under the mutex, and calls fn
+// with the found test. Returns an error if the nonce is zero or not found.
+func (ptm *PeerTestManager) withTest(nonce uint32, fn func(*PeerTest)) error {
 	if nonce == 0 {
 		return oops.
 			Code("INVALID_NONCE").
@@ -365,9 +360,21 @@ func (ptm *PeerTestManager) UpdateState(nonce uint32, state PeerTestState) error
 			Errorf("peer test not found")
 	}
 
-	test.State = state
-
+	fn(test)
 	return nil
+}
+
+// UpdateState updates the state of a peer test.
+//
+// Parameters:
+//   - nonce: Test nonce
+//   - state: New state
+//
+// Returns error if test not found.
+func (ptm *PeerTestManager) UpdateState(nonce uint32, state PeerTestState) error {
+	return ptm.withTest(nonce, func(test *PeerTest) {
+		test.State = state
+	})
 }
 
 // CompleteTest marks a test as complete and stores the result.
@@ -426,28 +433,9 @@ func (ptm *PeerTestManager) CompleteTest(nonce uint32, result *TestResult) error
 //
 // Returns error if test not found.
 func (ptm *PeerTestManager) FailTest(nonce uint32, reason error) error {
-	if nonce == 0 {
-		return oops.
-			Code("INVALID_NONCE").
-			In("peertest_manager").
-			Errorf("nonce cannot be zero")
-	}
-
-	ptm.mutex.Lock()
-	defer ptm.mutex.Unlock()
-
-	test, exists := ptm.tests[nonce]
-	if !exists {
-		return oops.
-			Code("TEST_NOT_FOUND").
-			In("peertest_manager").
-			With("nonce", nonce).
-			Errorf("peer test not found")
-	}
-
-	test.State = TestFailed
-
-	return nil
+	return ptm.withTest(nonce, func(test *PeerTest) {
+		test.State = TestFailed
+	})
 }
 
 // GetResult retrieves cached test result for an address.
@@ -657,34 +645,15 @@ func (ptm *PeerTestManager) CreateResponderTest(nonce uint32, aliceAddr, bobAddr
 //
 // Returns error if test not found.
 func (ptm *PeerTestManager) SetAliceAddr(nonce uint32, addr *net.UDPAddr) error {
-	if nonce == 0 {
-		return oops.
-			Code("INVALID_NONCE").
-			In("peertest_manager").
-			Errorf("nonce cannot be zero")
-	}
 	if addr == nil {
 		return oops.
 			Code("INVALID_ADDRESS").
 			In("peertest_manager").
 			Errorf("address cannot be nil")
 	}
-
-	ptm.mutex.Lock()
-	defer ptm.mutex.Unlock()
-
-	test, exists := ptm.tests[nonce]
-	if !exists {
-		return oops.
-			Code("TEST_NOT_FOUND").
-			In("peertest_manager").
-			With("nonce", nonce).
-			Errorf("peer test not found")
-	}
-
-	test.AliceAddr = addr
-
-	return nil
+	return ptm.withTest(nonce, func(test *PeerTest) {
+		test.AliceAddr = addr
+	})
 }
 
 // DetermineNATType analyzes test results to determine NAT type.
