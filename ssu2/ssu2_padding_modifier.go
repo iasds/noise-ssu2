@@ -129,6 +129,12 @@ func (spm *SSU2PaddingModifier) Name() string {
 	return spm.name
 }
 
+// Close releases resources held by the padding modifier.
+// SSU2PaddingModifier holds no sensitive key material, so this is a no-op.
+func (spm *SSU2PaddingModifier) Close() error {
+	return nil
+}
+
 // UpdatePaddingParams dynamically updates padding parameters.
 // Thread-safe for concurrent use during connection lifetime.
 func (spm *SSU2PaddingModifier) UpdatePaddingParams(minPad, maxPad int, ratio float64) error {

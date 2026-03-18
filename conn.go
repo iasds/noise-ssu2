@@ -96,6 +96,12 @@ type NoiseConn struct {
 
 	// closeMutex protects close operations
 	closeMutex sync.Mutex
+
+	// readMutex serializes Read calls to protect recvCipherState nonce
+	readMutex sync.Mutex
+
+	// writeMutex serializes Write calls to protect sendCipherState nonce
+	writeMutex sync.Mutex
 }
 
 // NewNoiseConn creates a new NoiseConn wrapping the underlying connection.
@@ -136,8 +142,8 @@ func NewNoiseConn(underlying net.Conn, config *ConnConfig) (*NoiseConn, error) {
 // If the handshake is not complete, it will return an error.
 //
 // Thread Safety: This method is safe for concurrent use. Multiple goroutines
-// can call Read simultaneously. State validation is atomic and encryption
-// operations are protected by the underlying cipher state synchronization.
+// can call Read simultaneously; calls are serialized via readMutex to protect
+// the receive cipher state nonce counter.
 func (nc *NoiseConn) Read(b []byte) (int, error) {
 	if err := nc.validateReadState(); err != nil {
 		return 0, err
@@ -146,6 +152,9 @@ func (nc *NoiseConn) Read(b []byte) (int, error) {
 	if err := nc.configureReadTimeout(); err != nil {
 		return 0, err
 	}
+
+	nc.readMutex.Lock()
+	defer nc.readMutex.Unlock()
 
 	encrypted, n, err := nc.readEncryptedData(b)
 	if err != nil {
@@ -170,12 +179,15 @@ func (nc *NoiseConn) Read(b []byte) (int, error) {
 // If the handshake is not complete, it will return an error.
 //
 // Thread Safety: This method is safe for concurrent use. Multiple goroutines
-// can call Write simultaneously. State validation is atomic and encryption
-// operations are protected by the underlying cipher state synchronization.
+// can call Write simultaneously; calls are serialized via writeMutex to protect
+// the send cipher state nonce counter.
 func (nc *NoiseConn) Write(b []byte) (int, error) {
 	if err := nc.validateWriteState(); err != nil {
 		return 0, err
 	}
+
+	nc.writeMutex.Lock()
+	defer nc.writeMutex.Unlock()
 
 	if err := nc.configureWriteTimeout(); err != nil {
 		return 0, err

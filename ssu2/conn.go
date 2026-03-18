@@ -2,6 +2,7 @@ package ssu2
 
 import (
 	"context"
+	"crypto/sha256"
 	"net"
 	"sync"
 	"time"
@@ -256,7 +257,12 @@ func (h *SSU2Conn) handshakeInitiator(ctx context.Context) error {
 		return oops.Errorf("handshake not complete after SessionCreated")
 	}
 
-	// Step 5: Transition to established state
+	// Step 5: Extract transport cipher states
+	if err := h.installCipherStates(); err != nil {
+		return oops.Wrapf(err, "failed to install cipher states")
+	}
+
+	// Step 6: Transition to established state
 	h.stateMutex.Lock()
 	h.state = StateEstablished
 	h.stateMutex.Unlock()
@@ -297,7 +303,12 @@ func (h *SSU2Conn) handshakeResponder(ctx context.Context) error {
 		return oops.Errorf("handshake not complete after SessionCreated")
 	}
 
-	// Step 5: Transition to established state
+	// Step 5: Extract transport cipher states
+	if err := h.installCipherStates(); err != nil {
+		return oops.Wrapf(err, "failed to install cipher states")
+	}
+
+	// Step 6: Transition to established state
 	h.stateMutex.Lock()
 	h.state = StateEstablished
 	h.stateMutex.Unlock()
@@ -305,8 +316,29 @@ func (h *SSU2Conn) handshakeResponder(ctx context.Context) error {
 	return nil
 }
 
+// installCipherStates transfers transport cipher states from the handshake handler.
+func (h *SSU2Conn) installCipherStates() error {
+	send, recv, err := h.handshakeHandler.GetCipherStates()
+	if err != nil {
+		return err
+	}
+	h.cipherMutex.Lock()
+	h.sendCipher = send
+	h.recvCipher = recv
+	h.cipherMutex.Unlock()
+
+	// Update router hash from peer's static key if available
+	if peerKey := h.handshakeHandler.GetRemoteStaticKey(); len(peerKey) == 32 {
+		hash := sha256.Sum256(peerKey)
+		h.ssu2Addr.UpdateRouterHash(hash[:])
+	}
+
+	return nil
+}
+
 // Read implements net.Conn.Read.
 // Reads data from the connection, reassembling I2NP messages from Data packets.
+// Blocks until data is available, the read deadline expires, or the connection closes.
 func (h *SSU2Conn) Read(b []byte) (int, error) {
 	h.stateMutex.RLock()
 	state := h.state
@@ -316,18 +348,15 @@ func (h *SSU2Conn) Read(b []byte) (int, error) {
 		return 0, oops.Errorf("connection not established: %s", state)
 	}
 
-	// Get message from data handler
-	msg := h.dataHandler.GetMessage()
-	if msg == nil {
-		// No message available, check close/deadline
-		select {
-		case <-h.closeChan:
-			return 0, oops.Errorf("connection closed")
-		case <-h.getReadDeadline():
-			return 0, oops.Errorf("read deadline exceeded")
-		default:
-			return 0, oops.Errorf("no data available")
-		}
+	// Block until a message arrives, the connection closes, or the deadline expires
+	var msg []byte
+	select {
+	case msg = <-h.dataHandler.MessageChan():
+		// Message received
+	case <-h.closeChan:
+		return 0, oops.Errorf("connection closed")
+	case <-h.getReadDeadline():
+		return 0, oops.Errorf("read deadline exceeded")
 	}
 
 	// Copy message to buffer
@@ -539,6 +568,19 @@ func (h *SSU2Conn) recvLoop() {
 				continue // Invalid packet
 			}
 
+			// Decrypt payload for data packets when cipher states are available
+			h.cipherMutex.RLock()
+			cipher := h.recvCipher
+			h.cipherMutex.RUnlock()
+
+			if cipher != nil && packet.MessageType == MessageTypeData && len(packet.Payload) > 0 {
+				decrypted, err := cipher.Decrypt(nil, nil, packet.Payload)
+				if err != nil {
+					continue // Decryption failed, drop packet
+				}
+				packet.Payload = decrypted
+			}
+
 			// Update activity time
 			h.updateActivity()
 
@@ -579,7 +621,9 @@ func (h *SSU2Conn) keepaliveLoop() {
 			// Check for timeout (5 minutes default idle timeout)
 			idleTimeout := 5 * time.Minute
 			if timeSinceActivity >= idleTimeout {
+				h.closeMutex.Lock()
 				h.closeErr = oops.Errorf("idle timeout")
+				h.closeMutex.Unlock()
 				_ = h.Close()
 				return
 			}
@@ -590,7 +634,21 @@ func (h *SSU2Conn) keepaliveLoop() {
 }
 
 // sendPacketDirect sends a packet directly to the peer.
+// For data packets in the established state, the payload is encrypted with AEAD.
 func (h *SSU2Conn) sendPacketDirect(packet *SSU2Packet) error {
+	// Encrypt payload for data packets when cipher states are available
+	h.cipherMutex.RLock()
+	cipher := h.sendCipher
+	h.cipherMutex.RUnlock()
+
+	if cipher != nil && packet.MessageType == MessageTypeData && len(packet.Payload) > 0 {
+		encrypted, err := cipher.Encrypt(nil, nil, packet.Payload)
+		if err != nil {
+			return oops.Wrapf(err, "failed to encrypt payload")
+		}
+		packet.Payload = encrypted
+	}
+
 	// Serialize packet
 	data, err := packet.Serialize()
 	if err != nil {

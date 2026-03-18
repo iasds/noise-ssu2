@@ -450,6 +450,12 @@ func (h *DataHandler) HasMessages() bool {
 	return len(h.messageQueue) > 0
 }
 
+// MessageChan returns the receive-only channel for complete I2NP messages.
+// Used by SSU2Conn.Read to block until a message is available.
+func (h *DataHandler) MessageChan() <-chan []byte {
+	return h.messageQueue
+}
+
 // CleanupExpiredFragments removes fragment sets that haven't been updated
 // within the specified timeout. Should be called periodically.
 func (h *DataHandler) CleanupExpiredFragments(timeout time.Duration) int {

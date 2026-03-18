@@ -2,6 +2,7 @@ package ssu2
 
 import (
 	"github.com/go-i2p/go-noise/handshake"
+	"github.com/go-i2p/go-noise/internal"
 	"github.com/samber/oops"
 	"golang.org/x/crypto/chacha20"
 )
@@ -188,4 +189,12 @@ func (com *ChaChaObfuscationModifier) decryptMessage1(encryptedData []byte) ([]b
 // Identical to encryptMessage2 due to XOR symmetry.
 func (com *ChaChaObfuscationModifier) decryptMessage2(data []byte) ([]byte, error) {
 	return com.encryptMessage2(data)
+}
+
+// Close releases resources and zeroes sensitive key material.
+func (com *ChaChaObfuscationModifier) Close() error {
+	internal.SecureZero(com.routerHash)
+	internal.SecureZero(com.iv)
+	internal.SecureZero(com.chachaState)
+	return nil
 }

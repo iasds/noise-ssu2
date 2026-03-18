@@ -181,9 +181,7 @@ func (pr *PacketRouter) RoutePacket(packet *SSU2Packet, remoteAddr *net.UDPAddr)
 	}
 
 	// Route packet to existing session
-	// TODO: Actual delivery to session's receive queue
-	// For now, we just validate the session exists
-	_ = conn
+	conn.processInboundPacket(packet)
 
 	return nil
 }

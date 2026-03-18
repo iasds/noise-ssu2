@@ -136,6 +136,15 @@ func (sa *SSU2Addr) copyWithModifications(modify func(*SSU2Addr)) *SSU2Addr {
 	return newAddr
 }
 
+// UpdateRouterHash replaces the router hash with the given 32-byte value.
+// This is used after the handshake completes to replace the placeholder hash
+// with one derived from the peer's authenticated static key.
+func (sa *SSU2Addr) UpdateRouterHash(hash []byte) {
+	if len(hash) == 32 {
+		copy(sa.routerHash, hash)
+	}
+}
+
 // Network returns "ssu2" to identify this as an SSU2 transport address.
 // This implements the net.Addr interface requirement.
 func (sa *SSU2Addr) Network() string {

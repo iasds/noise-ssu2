@@ -18,6 +18,7 @@ import (
 // - Uses TokenCache to validate retry tokens and prevent spoofing
 // - Implements net.Listener interface for compatibility with standard library
 // - Single UDP socket shared across all sessions (multiplexing)
+// - Worker pool limits goroutine count under traffic floods
 //
 // Thread Safety: All public methods are thread-safe.
 type SSU2Listener struct {
@@ -40,6 +41,9 @@ type SSU2Listener struct {
 	// acceptQueue buffers established connections ready to be accepted
 	acceptQueue chan *SSU2Conn
 
+	// packetQueue buffers incoming packets for worker pool processing
+	packetQueue chan incomingPacket
+
 	// router routes packets to sessions
 	router *PacketRouter
 
@@ -49,6 +53,19 @@ type SSU2Listener struct {
 	shutdownChan chan struct{}
 	wg           sync.WaitGroup
 }
+
+// incomingPacket holds a received packet and its source address for worker processing.
+type incomingPacket struct {
+	data       []byte
+	remoteAddr *net.UDPAddr
+}
+
+// packetWorkers is the number of goroutines in the packet processing pool.
+const packetWorkers = 8
+
+// packetQueueSize is the buffer size for the incoming packet channel.
+// Packets arriving when the queue is full are dropped.
+const packetQueueSize = 256
 
 // NewSSU2Listener creates a new SSU2 listener wrapping the specified packet connection.
 // The listener starts in an idle state; call Start() to begin accepting connections.
@@ -102,6 +119,7 @@ func NewSSU2Listener(underlying net.PacketConn, config *SSU2Config) (*SSU2Listen
 		sessions:     make(map[uint64]*SSU2Conn),
 		tokenCache:   NewTokenCache(60 * time.Second),
 		acceptQueue:  make(chan *SSU2Conn, 100), // Buffer 100 pending connections
+		packetQueue:  make(chan incomingPacket, packetQueueSize),
 		shutdownChan: make(chan struct{}),
 	}
 
@@ -125,6 +143,12 @@ func (l *SSU2Listener) Start() error {
 			Code("LISTENER_CLOSED").
 			In("ssu2_listener").
 			Errorf("listener is closed")
+	}
+
+	// Start packet processing worker pool
+	for i := 0; i < packetWorkers; i++ {
+		l.wg.Add(1)
+		go l.packetWorker()
 	}
 
 	// Start packet receive loop
@@ -234,15 +258,37 @@ func (l *SSU2Listener) receiveLoop() {
 				continue // Skip non-UDP addresses
 			}
 
-			// Handle packet in separate goroutine to avoid blocking
+			// Queue packet for worker pool processing; drop if full
 			packetData := make([]byte, n)
 			copy(packetData, buf[:n])
 
-			go l.handleIncomingPacket(packetData, udpAddr)
+			select {
+			case l.packetQueue <- incomingPacket{data: packetData, remoteAddr: udpAddr}:
+			default:
+				// Queue full, drop packet to prevent goroutine explosion
+			}
 
 			// Refresh deadline for next read
 			deadline = time.Now().Add(100 * time.Millisecond)
 			_ = l.underlying.SetReadDeadline(deadline)
+		}
+	}
+}
+
+// packetWorker drains the packet queue and processes packets.
+// Multiple workers run concurrently as a bounded pool.
+func (l *SSU2Listener) packetWorker() {
+	defer l.wg.Done()
+
+	for {
+		select {
+		case pkt, ok := <-l.packetQueue:
+			if !ok {
+				return
+			}
+			l.handleIncomingPacket(pkt.data, pkt.remoteAddr)
+		case <-l.shutdownChan:
+			return
 		}
 	}
 }
