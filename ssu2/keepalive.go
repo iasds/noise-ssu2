@@ -35,6 +35,9 @@ type KeepaliveManager struct {
 	// stopChan signals the keepalive goroutine to stop
 	stopChan chan struct{}
 
+	// done signals that the keepalive goroutine has exited
+	done chan struct{}
+
 	// lastSent is the timestamp of last packet sent (any packet)
 	lastSent time.Time
 
@@ -76,7 +79,6 @@ func NewKeepaliveManager(conn SendReceiver, interval, timeout time.Duration) *Ke
 		conn:     conn,
 		interval: interval,
 		timeout:  timeout,
-		stopChan: make(chan struct{}),
 		lastSent: now,
 		lastRecv: now,
 		started:  false,
@@ -99,6 +101,8 @@ func (km *KeepaliveManager) Start() {
 		return
 	}
 
+	km.stopChan = make(chan struct{})
+	km.done = make(chan struct{})
 	km.ticker = time.NewTicker(km.interval)
 	km.started = true
 
@@ -120,9 +124,18 @@ func (km *KeepaliveManager) Stop() {
 	if km.ticker != nil {
 		km.ticker.Stop()
 	}
+	close(km.stopChan)
 	km.mutex.Unlock()
 
-	close(km.stopChan)
+	// Wait for goroutine to exit before returning
+	<-km.done
+}
+
+// IsStarted returns whether the keepalive manager is currently running.
+func (km *KeepaliveManager) IsStarted() bool {
+	km.mutex.RLock()
+	defer km.mutex.RUnlock()
+	return km.started
 }
 
 // UpdateLastSent records that a packet was just sent.
@@ -182,9 +195,11 @@ func (km *KeepaliveManager) GetTimeSinceLastSent() time.Duration {
 // The keepalive packet is sent via SendKeepalive() which should send a minimal
 // DateTime block to maintain the UDP state without excessive overhead.
 func (km *KeepaliveManager) keepaliveLoop() {
+	defer close(km.done)
+	tickC := km.ticker.C
 	for {
 		select {
-		case <-km.ticker.C:
+		case <-tickC:
 			km.mutex.RLock()
 			timeSinceSent := time.Since(km.lastSent)
 			timeSinceRecv := time.Since(km.lastRecv)

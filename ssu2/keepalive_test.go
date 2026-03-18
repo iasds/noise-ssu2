@@ -44,8 +44,7 @@ func TestNewKeepaliveManager(t *testing.T) {
 	require.NotNil(t, km)
 	assert.Equal(t, 10*time.Second, km.interval)
 	assert.Equal(t, 30*time.Second, km.timeout)
-	assert.False(t, km.started)
-	assert.NotNil(t, km.stopChan)
+	assert.False(t, km.IsStarted())
 
 	// Verify initial timestamps are recent
 	now := time.Now()
@@ -70,16 +69,16 @@ func TestKeepaliveManager_StartStop(t *testing.T) {
 	km := NewKeepaliveManager(conn, 100*time.Millisecond, 300*time.Millisecond)
 
 	// Verify not started initially
-	assert.False(t, km.started)
+	assert.False(t, km.IsStarted())
 
 	// Start the manager
 	km.Start()
-	assert.True(t, km.started)
+	assert.True(t, km.IsStarted())
 	assert.NotNil(t, km.ticker)
 
 	// Starting again should be idempotent
 	km.Start()
-	assert.True(t, km.started)
+	assert.True(t, km.IsStarted())
 
 	// Stop the manager
 	km.Stop()
@@ -239,8 +238,8 @@ func TestKeepaliveManager_MultipleIntervals(t *testing.T) {
 	km.Start()
 	defer km.Stop()
 
-	// Wait for multiple intervals
-	time.Sleep(200 * time.Millisecond)
+	// Wait for multiple intervals (6x interval for reliable 3+ ticks)
+	time.Sleep(300 * time.Millisecond)
 
 	// Should have sent multiple keepalives
 	callCount := conn.getCallCount()
@@ -333,15 +332,11 @@ func TestKeepaliveManager_RepeatedStartStop(t *testing.T) {
 	// Multiple start/stop cycles
 	for i := 0; i < 5; i++ {
 		km.Start()
-		assert.True(t, km.started)
+		assert.True(t, km.IsStarted())
 
 		time.Sleep(30 * time.Millisecond)
 
 		km.Stop()
-
-		// Reset for next cycle (would need new manager in real usage)
-		km.stopChan = make(chan struct{})
-		km.started = false
 	}
 }
 

@@ -198,11 +198,12 @@ func (l *SSU2Listener) Close() error {
 	l.closed = true
 	close(l.shutdownChan)
 
-	// Close accept queue to unblock Accept() calls
-	close(l.acceptQueue)
-
-	// Wait for goroutines to finish
+	// Wait for goroutines to finish before closing channels.
+	// This prevents send-on-closed-channel panics in handleNewSession.
 	l.wg.Wait()
+
+	// Safe to close accept queue now — all senders have exited
+	close(l.acceptQueue)
 
 	// Close underlying packet connection
 	if err := l.underlying.Close(); err != nil {

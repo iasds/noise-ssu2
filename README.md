@@ -155,7 +155,7 @@ The library tracks:
 
 ## Implementation Status
 
-Core Noise and NTCP2 implementations completed. SSU2 implementation planned.
+Core Noise and NTCP2 implementations completed. SSU2 implementation in beta.
 
 ## Packages
 
@@ -228,4 +228,4 @@ MIT License
 
 ## Status
 
-**Development Status**: Core functionality and handshake modification system implemented. Connection pooling and listener features in development.
+**Development Status**: Core functionality, handshake modification system, connection pooling, and listener features implemented. SSU2 transport in beta.

@@ -347,16 +347,25 @@ func (h *SSU2Conn) installCipherStates() error {
 	return nil
 }
 
-// Read implements net.Conn.Read.
-// Reads data from the connection, reassembling I2NP messages from Data packets.
-// Blocks until data is available, the read deadline expires, or the connection closes.
-func (h *SSU2Conn) Read(b []byte) (int, error) {
+// validateReadyForIO checks that the connection is in the Established state
+// and ready for read/write operations.
+func (h *SSU2Conn) validateReadyForIO() error {
 	h.stateMutex.RLock()
 	state := h.state
 	h.stateMutex.RUnlock()
 
 	if state != StateEstablished {
-		return 0, oops.Errorf("connection not established: %s", state)
+		return oops.Errorf("connection not established: %s", state)
+	}
+	return nil
+}
+
+// Read implements net.Conn.Read.
+// Reads data from the connection, reassembling I2NP messages from Data packets.
+// Blocks until data is available, the read deadline expires, or the connection closes.
+func (h *SSU2Conn) Read(b []byte) (int, error) {
+	if err := h.validateReadyForIO(); err != nil {
+		return 0, err
 	}
 
 	// Block until a message arrives, the connection closes, or the deadline expires
@@ -382,12 +391,8 @@ func (h *SSU2Conn) Read(b []byte) (int, error) {
 // Write implements net.Conn.Write.
 // Writes data to the connection, fragmenting if needed.
 func (h *SSU2Conn) Write(b []byte) (int, error) {
-	h.stateMutex.RLock()
-	state := h.state
-	h.stateMutex.RUnlock()
-
-	if state != StateEstablished {
-		return 0, oops.Errorf("connection not established: %s", state)
+	if err := h.validateReadyForIO(); err != nil {
+		return 0, err
 	}
 
 	// Create I2NP message block
