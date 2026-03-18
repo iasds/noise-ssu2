@@ -97,12 +97,10 @@ func (com *ChaChaObfuscationModifier) Name() string {
 	return com.name
 }
 
-// encryptMessage1 encrypts message 1 using published IV.
-// Extracts helper to keep functions under 30 lines.
-func (com *ChaChaObfuscationModifier) encryptMessage1(data []byte) ([]byte, error) {
-	// Prepare nonce: 8-byte IV + 4 zero bytes (ChaCha20 requires 12-byte nonce)
+// applyChacha creates a ChaCha20 cipher from the given nonce and XORs 32 bytes of data.
+func (com *ChaChaObfuscationModifier) applyChacha(nonceSource []byte, data []byte) ([]byte, error) {
 	nonce := make([]byte, chacha20.NonceSize)
-	copy(nonce, com.iv)
+	copy(nonce, nonceSource)
 
 	cipher, err := chacha20.NewUnauthenticatedCipher(com.routerHash, nonce)
 	if err != nil {
@@ -113,10 +111,18 @@ func (com *ChaChaObfuscationModifier) encryptMessage1(data []byte) ([]byte, erro
 			Wrap(err)
 	}
 
-	// XOR data with ChaCha20 keystream
 	result := make([]byte, 32)
 	copy(result, data)
 	cipher.XORKeyStream(result, result)
+	return result, nil
+}
+
+// encryptMessage1 encrypts message 1 using published IV.
+func (com *ChaChaObfuscationModifier) encryptMessage1(data []byte) ([]byte, error) {
+	result, err := com.applyChacha(com.iv, data)
+	if err != nil {
+		return nil, err
+	}
 
 	// Save derived state for message 2 (last 8 bytes of encrypted data)
 	com.chachaState = make([]byte, 8)
@@ -126,7 +132,6 @@ func (com *ChaChaObfuscationModifier) encryptMessage1(data []byte) ([]byte, erro
 }
 
 // encryptMessage2 encrypts message 2 using derived IV from message 1.
-// Extracts helper to keep functions under 30 lines.
 func (com *ChaChaObfuscationModifier) encryptMessage2(data []byte) ([]byte, error) {
 	if com.chachaState == nil {
 		return nil, oops.
@@ -136,25 +141,7 @@ func (com *ChaChaObfuscationModifier) encryptMessage2(data []byte) ([]byte, erro
 			Errorf("ChaCha20 state not available for message 2")
 	}
 
-	// Prepare nonce using derived IV from message 1
-	nonce := make([]byte, chacha20.NonceSize)
-	copy(nonce, com.chachaState)
-
-	cipher, err := chacha20.NewUnauthenticatedCipher(com.routerHash, nonce)
-	if err != nil {
-		return nil, oops.
-			Code("CHACHA20_CIPHER_CREATION_FAILED").
-			In("ssu2").
-			With("modifier_name", com.name).
-			Wrap(err)
-	}
-
-	// XOR data with ChaCha20 keystream
-	result := make([]byte, 32)
-	copy(result, data)
-	cipher.XORKeyStream(result, result)
-
-	return result, nil
+	return com.applyChacha(com.chachaState, data)
 }
 
 // decryptMessage1 decrypts message 1 using published IV.
@@ -164,25 +151,7 @@ func (com *ChaChaObfuscationModifier) decryptMessage1(encryptedData []byte) ([]b
 	com.chachaState = make([]byte, 8)
 	copy(com.chachaState, encryptedData[24:32])
 
-	// Prepare nonce: 8-byte IV + 4 zero bytes
-	nonce := make([]byte, chacha20.NonceSize)
-	copy(nonce, com.iv)
-
-	cipher, err := chacha20.NewUnauthenticatedCipher(com.routerHash, nonce)
-	if err != nil {
-		return nil, oops.
-			Code("CHACHA20_CIPHER_CREATION_FAILED").
-			In("ssu2").
-			With("modifier_name", com.name).
-			Wrap(err)
-	}
-
-	// XOR encrypted data with ChaCha20 keystream to decrypt
-	result := make([]byte, 32)
-	copy(result, encryptedData)
-	cipher.XORKeyStream(result, result)
-
-	return result, nil
+	return com.applyChacha(com.iv, encryptedData)
 }
 
 // decryptMessage2 decrypts message 2 using derived IV from message 1.

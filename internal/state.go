@@ -1,3 +1,5 @@
+// Package internal provides shared helpers and secure utilities used across
+// go-noise sub-packages, including state management and cryptographic zeroing.
 package internal
 
 import (

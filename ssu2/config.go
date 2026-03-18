@@ -462,22 +462,8 @@ func (sc *SSU2Config) validateUDPConfiguration() error {
 
 // validatePaddingConfiguration checks padding ranges and ratios.
 func (sc *SSU2Config) validatePaddingConfiguration() error {
-	// Validate padding sizes
-	if sc.MinPaddingSize < 0 {
-		return oops.
-			Code("INVALID_MIN_PADDING").
-			In("ssu2").
-			With("min_padding", sc.MinPaddingSize).
-			Errorf("min padding size must be non-negative")
-	}
-
-	if sc.MaxPaddingSize < sc.MinPaddingSize {
-		return oops.
-			Code("INVALID_PADDING_RANGE").
-			In("ssu2").
-			With("min_padding", sc.MinPaddingSize).
-			With("max_padding", sc.MaxPaddingSize).
-			Errorf("max padding size must be >= min padding size")
+	if err := handshake.ValidatePaddingRange("ssu2", sc.MinPaddingSize, sc.MaxPaddingSize); err != nil {
+		return err
 	}
 
 	// Validate padding ratio (I2P spec allows 0.0 to 15.9375)

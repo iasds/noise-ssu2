@@ -444,21 +444,8 @@ func (nc *NTCP2Config) validateFrameConfiguration() error {
 			Errorf("max frame size %d exceeds spec maximum %d", nc.MaxFrameSize, SpecMaxFrameSize)
 	}
 
-	if nc.MinPaddingSize < 0 {
-		return oops.
-			Code("INVALID_MIN_PADDING").
-			In("ntcp2").
-			With("min_padding", nc.MinPaddingSize).
-			Errorf("min padding size must be non-negative")
-	}
-
-	if nc.MaxPaddingSize < nc.MinPaddingSize {
-		return oops.
-			Code("INVALID_PADDING_RANGE").
-			In("ntcp2").
-			With("min_padding", nc.MinPaddingSize).
-			With("max_padding", nc.MaxPaddingSize).
-			Errorf("max padding size must be >= min padding size")
+	if err := handshake.ValidatePaddingRange("ntcp2", nc.MinPaddingSize, nc.MaxPaddingSize); err != nil {
+		return err
 	}
 
 	return nil

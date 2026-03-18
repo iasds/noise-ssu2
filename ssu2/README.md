@@ -15,10 +15,11 @@ This package provides handshake modifiers and utilities for implementing the SSU
 - **SipHash Length Modifier** - Frame length obfuscation using SipHash-2-4 (100% coverage)
 - **SSU2 Address (`SSU2Addr`)** - Complete `net.Addr` implementation with connection ID and NAT traversal support (100% coverage)
 - **SSU2 Configuration (`SSU2Config`)** - Builder pattern configuration with comprehensive validation (88.4% coverage)
+- **SSU2 Connection (`SSU2Conn`)** - Full `net.Conn` implementation with XK handshake, recv loop, and error stats
+- **SSU2 Listener (`SSU2Listener`)** - `net.Listener` implementation for accepting inbound SSU2 connections
+- **SSU2 Transport** - Transport-level Dial/Listen functions for SSU2
 
-### In Development 🚧
-
-Connection layer, listener, and transport functions. See [PLAN.md](../PLAN.md) for the complete roadmap.
+> **Note:** SessionConfirmed (3rd XK message) processing routes through the Noise state machine but has not been tested against a live I2P router.
 
 ## Protocol Compliance
 

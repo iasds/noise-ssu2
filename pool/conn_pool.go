@@ -1,3 +1,5 @@
+// Package pool provides a connection pool for reusing Noise-encrypted connections
+// across multiple Dial operations, reducing handshake overhead for repeated peers.
 package pool
 
 import (
@@ -641,7 +643,7 @@ func (p *ConnPool) closeExpiredConnection(pooledConn *PooledConn) {
 // updateConnectionMap updates the pool map with valid connections.
 // When the last connection for an address is removed, the corresponding
 // per-address dial mutex is also deleted from dialMu to prevent unbounded
-// memory growth in long-running processes (BUG fix: dialMu leak).
+// memory growth in long-running processes (NOTE: dialMu cleanup).
 func (p *ConnPool) updateConnectionMap(addr string, validConns []*PooledConn) {
 	if len(validConns) == 0 {
 		delete(p.conns, addr)
