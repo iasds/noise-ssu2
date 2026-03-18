@@ -1,0 +1,323 @@
+package ssu2
+
+import (
+	"sync"
+
+	"github.com/go-i2p/logger"
+	"github.com/samber/oops"
+)
+
+// Package-level logger for ssu2
+var log = logger.GetGoI2PLogger()
+
+// BlockHandler defines the interface for processing SSU2 blocks.
+// Implementations handle specific block types or categories.
+type BlockHandler interface {
+	// HandleBlock processes a block and returns true if handled successfully.
+	// If the handler cannot process this block type, it should return false.
+	HandleBlock(block *SSU2Block) (handled bool, err error)
+
+	// SupportedTypes returns the block types this handler processes.
+	SupportedTypes() []uint8
+}
+
+// BlockHandlerFunc is a function adapter for BlockHandler.
+type BlockHandlerFunc func(block *SSU2Block) (bool, error)
+
+// BlockRouter routes SSU2 blocks to registered handlers.
+// It provides a centralized mechanism for block dispatch with logging.
+type BlockRouter struct {
+	// handlers maps block type to handler
+	handlers map[uint8]BlockHandler
+
+	// defaultHandler is called for unregistered block types
+	defaultHandler BlockHandler
+
+	// mu protects handlers map
+	mu sync.RWMutex
+
+	// stats tracks routing statistics
+	stats BlockRouterStats
+}
+
+// BlockRouterStats tracks block routing statistics.
+type BlockRouterStats struct {
+	mu sync.Mutex
+
+	// BlocksRouted tracks count per block type
+	BlocksRouted map[uint8]uint64
+
+	// UnknownBlocks counts blocks with no registered handler
+	UnknownBlocks uint64
+
+	// RoutingErrors counts handler errors
+	RoutingErrors uint64
+}
+
+// NewBlockRouter creates a new block router.
+func NewBlockRouter() *BlockRouter {
+	return &BlockRouter{
+		handlers: make(map[uint8]BlockHandler),
+		stats: BlockRouterStats{
+			BlocksRouted: make(map[uint8]uint64),
+		},
+	}
+}
+
+// RegisterHandler registers a handler for specific block types.
+// If a handler is already registered for a type, it will be replaced.
+func (r *BlockRouter) RegisterHandler(handler BlockHandler) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for _, blockType := range handler.SupportedTypes() {
+		r.handlers[blockType] = handler
+		log.WithField("blockType", blockType).Debug("Registered block handler")
+	}
+}
+
+// RegisterHandlerFunc registers a simple function handler for specific block types.
+func (r *BlockRouter) RegisterHandlerFunc(blockTypes []uint8, fn BlockHandlerFunc) {
+	handler := &funcBlockHandler{
+		fn:    fn,
+		types: blockTypes,
+	}
+	r.RegisterHandler(handler)
+}
+
+// SetDefaultHandler sets a handler for unregistered block types.
+func (r *BlockRouter) SetDefaultHandler(handler BlockHandler) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.defaultHandler = handler
+}
+
+// RouteBlock routes a block to the appropriate handler.
+// Returns an error if the handler returns an error.
+// Blocks without registered handlers are logged and skipped.
+func (r *BlockRouter) RouteBlock(block *SSU2Block) error {
+	if block == nil {
+		return oops.Errorf("cannot route nil block")
+	}
+
+	r.mu.RLock()
+	handler, exists := r.handlers[block.Type]
+	defaultHandler := r.defaultHandler
+	r.mu.RUnlock()
+
+	// Track stats
+	r.stats.mu.Lock()
+	r.stats.BlocksRouted[block.Type]++
+	r.stats.mu.Unlock()
+
+	if exists {
+		handled, err := handler.HandleBlock(block)
+		if err != nil {
+			r.stats.mu.Lock()
+			r.stats.RoutingErrors++
+			r.stats.mu.Unlock()
+			return oops.Wrapf(err, "handler error for block type %d", block.Type)
+		}
+		if handled {
+			return nil
+		}
+	}
+
+	// Try default handler
+	if defaultHandler != nil {
+		handled, err := defaultHandler.HandleBlock(block)
+		if err != nil {
+			r.stats.mu.Lock()
+			r.stats.RoutingErrors++
+			r.stats.mu.Unlock()
+			return oops.Wrapf(err, "default handler error for block type %d", block.Type)
+		}
+		if handled {
+			return nil
+		}
+	}
+
+	// No handler - log and continue
+	r.stats.mu.Lock()
+	r.stats.UnknownBlocks++
+	r.stats.mu.Unlock()
+
+	log.WithFields(map[string]interface{}{
+		"blockType":  block.Type,
+		"blockName":  BlockTypeName(block.Type),
+		"dataLength": len(block.Data),
+	}).Warn("No handler registered for block type")
+
+	return nil
+}
+
+// RouteBlocks routes multiple blocks to their handlers.
+// Continues routing even if some blocks fail.
+// Returns the first error encountered.
+func (r *BlockRouter) RouteBlocks(blocks []*SSU2Block) error {
+	var firstErr error
+	for _, block := range blocks {
+		if err := r.RouteBlock(block); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			// Continue routing remaining blocks
+		}
+	}
+	return firstErr
+}
+
+// GetStats returns a copy of routing statistics.
+func (r *BlockRouter) GetStats() BlockRouterStats {
+	r.stats.mu.Lock()
+	defer r.stats.mu.Unlock()
+
+	// Deep copy the map
+	blocksRouted := make(map[uint8]uint64, len(r.stats.BlocksRouted))
+	for k, v := range r.stats.BlocksRouted {
+		blocksRouted[k] = v
+	}
+
+	return BlockRouterStats{
+		BlocksRouted:  blocksRouted,
+		UnknownBlocks: r.stats.UnknownBlocks,
+		RoutingErrors: r.stats.RoutingErrors,
+	}
+}
+
+// HasHandler returns true if a handler is registered for the block type.
+func (r *BlockRouter) HasHandler(blockType uint8) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	_, exists := r.handlers[blockType]
+	return exists
+}
+
+// funcBlockHandler wraps a function as a BlockHandler.
+type funcBlockHandler struct {
+	fn    BlockHandlerFunc
+	types []uint8
+}
+
+func (h *funcBlockHandler) HandleBlock(block *SSU2Block) (bool, error) {
+	return h.fn(block)
+}
+
+func (h *funcBlockHandler) SupportedTypes() []uint8 {
+	return h.types
+}
+
+// BlockTypeName returns a human-readable name for a block type.
+// This is useful for logging and debugging.
+func BlockTypeName(blockType uint8) string {
+	switch blockType {
+	case BlockTypeDateTime:
+		return "DateTime"
+	case BlockTypeOptions:
+		return "Options"
+	case BlockTypeRouterInfo:
+		return "RouterInfo"
+	case BlockTypeI2NPMessage:
+		return "I2NPMessage"
+	case BlockTypeFirstFragment:
+		return "FirstFragment"
+	case BlockTypeFollowOnFragment:
+		return "FollowOnFragment"
+	case BlockTypeTermination:
+		return "Termination"
+	case BlockTypeRelayRequest:
+		return "RelayRequest"
+	case BlockTypeRelayResponse:
+		return "RelayResponse"
+	case BlockTypeRelayIntro:
+		return "RelayIntro"
+	case BlockTypePeerTest:
+		return "PeerTest"
+	case BlockTypeACK:
+		return "ACK"
+	case BlockTypeAddress:
+		return "Address"
+	case BlockTypeRelayTagRequest:
+		return "RelayTagRequest"
+	case BlockTypeRelayTag:
+		return "RelayTag"
+	case BlockTypeNewToken:
+		return "NewToken"
+	case BlockTypePathChallenge:
+		return "PathChallenge"
+	case BlockTypePathResponse:
+		return "PathResponse"
+	case BlockTypePadding:
+		return "Padding"
+	default:
+		return "Unknown"
+	}
+}
+
+// AllBlockTypes returns all defined SSU2 block types.
+// Useful for validation and testing.
+func AllBlockTypes() []uint8 {
+	return []uint8{
+		BlockTypeDateTime,         // 0
+		BlockTypeOptions,          // 1
+		BlockTypeRouterInfo,       // 2
+		BlockTypeI2NPMessage,      // 3
+		BlockTypeFirstFragment,    // 4
+		BlockTypeFollowOnFragment, // 5
+		BlockTypeTermination,      // 6
+		BlockTypeRelayRequest,     // 7
+		BlockTypeRelayResponse,    // 8
+		BlockTypeRelayIntro,       // 9
+		BlockTypePeerTest,         // 10
+		BlockTypeACK,              // 12 (note: 11 is undefined)
+		BlockTypeAddress,          // 13
+		BlockTypeRelayTagRequest,  // 15 (note: 14 is undefined)
+		BlockTypeRelayTag,         // 16
+		BlockTypeNewToken,         // 17
+		BlockTypePathChallenge,    // 18
+		BlockTypePathResponse,     // 19
+		BlockTypePadding,          // 254
+	}
+}
+
+// BlockTypeCategory returns the category of a block type for routing purposes.
+type BlockTypeCategory int
+
+const (
+	// CategoryMessage blocks contain I2NP messages or fragments
+	CategoryMessage BlockTypeCategory = iota
+	// CategoryRelay blocks are for relay/introduction operations
+	CategoryRelay
+	// CategoryPeerTest blocks are for peer testing
+	CategoryPeerTest
+	// CategoryPath blocks are for path validation
+	CategoryPath
+	// CategorySession blocks are for session management
+	CategorySession
+	// CategoryMetadata blocks contain connection metadata
+	CategoryMetadata
+	// CategoryUnknown for undefined block types
+	CategoryUnknown
+)
+
+// GetBlockCategory returns the category for a block type.
+func GetBlockCategory(blockType uint8) BlockTypeCategory {
+	switch blockType {
+	case BlockTypeI2NPMessage, BlockTypeFirstFragment, BlockTypeFollowOnFragment:
+		return CategoryMessage
+	case BlockTypeRelayRequest, BlockTypeRelayResponse, BlockTypeRelayIntro,
+		BlockTypeRelayTagRequest, BlockTypeRelayTag:
+		return CategoryRelay
+	case BlockTypePeerTest:
+		return CategoryPeerTest
+	case BlockTypePathChallenge, BlockTypePathResponse:
+		return CategoryPath
+	case BlockTypeTermination, BlockTypeNewToken:
+		return CategorySession
+	case BlockTypeDateTime, BlockTypeOptions, BlockTypeRouterInfo,
+		BlockTypeACK, BlockTypeAddress, BlockTypePadding:
+		return CategoryMetadata
+	default:
+		return CategoryUnknown
+	}
+}
