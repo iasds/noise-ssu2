@@ -236,9 +236,9 @@ func TestTransportWithDifferentNetworks(t *testing.T) {
 
 func TestDialNoiseWithPool(t *testing.T) {
 	// Save original pool and restore after test
-	originalPool := globalConnPool
+	originalPool := GetGlobalConnPool()
 	defer func() {
-		globalConnPool = originalPool
+		SetGlobalConnPool(originalPool)
 	}()
 
 	// Create test pool
@@ -313,9 +313,9 @@ func TestDialNoiseWithPool(t *testing.T) {
 
 func TestSetGetGlobalConnPool(t *testing.T) {
 	// Save original pool and restore after test
-	originalPool := globalConnPool
+	originalPool := GetGlobalConnPool()
 	defer func() {
-		globalConnPool = originalPool
+		SetGlobalConnPool(originalPool)
 	}()
 
 	testPool := pool.NewConnPool(&pool.PoolConfig{

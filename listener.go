@@ -84,6 +84,14 @@ type ListenerConfig struct {
 	// For NTCP2, this should be set to [][]byte{[]byte("ask")} to derive
 	// the ask_master used for SipHash key derivation.
 	AdditionalSymmetricKeyLabels [][]byte
+
+	// HandshakeRetries is the number of handshake retry attempts for accepted
+	// connections. 0 means no retries. Default: 0.
+	HandshakeRetries int
+
+	// RetryBackoff is the base delay between retry attempts for accepted
+	// connections. Actual delay uses exponential backoff. Default: 1 second.
+	RetryBackoff time.Duration
 }
 
 // NewListenerConfig creates a new ListenerConfig with sensible defaults.
@@ -91,8 +99,10 @@ func NewListenerConfig(pattern string) *ListenerConfig {
 	return &ListenerConfig{
 		Pattern:          pattern,
 		HandshakeTimeout: 30 * time.Second,
-		ReadTimeout:      0, // No timeout by default
-		WriteTimeout:     0, // No timeout by default
+		ReadTimeout:      0,
+		WriteTimeout:     0,
+		HandshakeRetries: 0,
+		RetryBackoff:     1 * time.Second,
 	}
 }
 
@@ -141,6 +151,20 @@ func (lc *ListenerConfig) WithPostHandshakeHook(hook func(*NoiseConn) error) *Li
 // For NTCP2, use [][]byte{[]byte("ask")}.
 func (lc *ListenerConfig) WithAdditionalSymmetricKeyLabels(labels [][]byte) *ListenerConfig {
 	lc.AdditionalSymmetricKeyLabels = labels
+	return lc
+}
+
+// WithHandshakeRetries sets the number of handshake retry attempts for
+// accepted connections. 0 means no retries.
+func (lc *ListenerConfig) WithHandshakeRetries(retries int) *ListenerConfig {
+	lc.HandshakeRetries = retries
+	return lc
+}
+
+// WithRetryBackoff sets the base delay between retry attempts for accepted
+// connections. Actual delay uses exponential backoff.
+func (lc *ListenerConfig) WithRetryBackoff(backoff time.Duration) *ListenerConfig {
+	lc.RetryBackoff = backoff
 	return lc
 }
 
@@ -294,6 +318,12 @@ func (nl *NoiseListener) createAcceptConnConfig() *ConnConfig {
 	}
 	if len(nl.config.AdditionalSymmetricKeyLabels) > 0 {
 		connConfig.AdditionalSymmetricKeyLabels = nl.config.AdditionalSymmetricKeyLabels
+	}
+	if nl.config.HandshakeRetries > 0 {
+		connConfig = connConfig.WithHandshakeRetries(nl.config.HandshakeRetries)
+	}
+	if nl.config.RetryBackoff > 0 {
+		connConfig = connConfig.WithRetryBackoff(nl.config.RetryBackoff)
 	}
 
 	return connConfig

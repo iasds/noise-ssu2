@@ -11,6 +11,9 @@ import (
 	"github.com/samber/oops"
 )
 
+// globalMu guards globalConnPool and globalShutdownManager against concurrent access.
+var globalMu sync.RWMutex
+
 // globalConnPool is the default connection pool used by transport functions
 var globalConnPool *pool.ConnPool
 
@@ -29,6 +32,8 @@ func init() {
 
 // SetGlobalConnPool sets a custom connection pool for transport functions
 func SetGlobalConnPool(p *pool.ConnPool) {
+	globalMu.Lock()
+	defer globalMu.Unlock()
 	if globalConnPool != nil {
 		globalConnPool.Close()
 	}
@@ -37,12 +42,16 @@ func SetGlobalConnPool(p *pool.ConnPool) {
 
 // GetGlobalConnPool returns the current global connection pool
 func GetGlobalConnPool() *pool.ConnPool {
+	globalMu.RLock()
+	defer globalMu.RUnlock()
 	return globalConnPool
 }
 
 // SetGlobalShutdownManager sets a custom shutdown manager for transport functions.
 // The previous shutdown manager will be shut down gracefully.
 func SetGlobalShutdownManager(sm *ShutdownManager) {
+	globalMu.Lock()
+	defer globalMu.Unlock()
 	if globalShutdownManager != nil {
 		globalShutdownManager.Shutdown()
 	}
@@ -51,14 +60,19 @@ func SetGlobalShutdownManager(sm *ShutdownManager) {
 
 // GetGlobalShutdownManager returns the current global shutdown manager.
 func GetGlobalShutdownManager() *ShutdownManager {
+	globalMu.RLock()
+	defer globalMu.RUnlock()
 	return globalShutdownManager
 }
 
 // GracefulShutdown initiates graceful shutdown of all global components.
 // This includes the global connection pool and all registered connections/listeners.
 func GracefulShutdown() error {
-	if globalShutdownManager != nil {
-		return globalShutdownManager.Shutdown()
+	globalMu.RLock()
+	sm := globalShutdownManager
+	globalMu.RUnlock()
+	if sm != nil {
+		return sm.Shutdown()
 	}
 	return nil
 }
@@ -84,8 +98,11 @@ func wrapTransportError(code, network, addr, msg string, err error, args ...inte
 // manager if one is configured. This consolidates the shutdown registration
 // pattern shared by DialNoise and ListenNoise.
 func registerShutdown(target shutdownRegisterer) {
-	if globalShutdownManager != nil {
-		target.SetShutdownManager(globalShutdownManager)
+	globalMu.RLock()
+	sm := globalShutdownManager
+	globalMu.RUnlock()
+	if sm != nil {
+		target.SetShutdownManager(sm)
 	}
 }
 
@@ -221,8 +238,11 @@ func DialNoiseWithPool(network, addr string, config *ConnConfig) (*NoiseConn, er
 		// the pool instead of closing it to the OS.  Pool-retrieved conns are
 		// already wrapped in PoolConnWrapper by ConnPool.Get(), which handles
 		// the release path; this wrapper covers only the new-connection case.
-		if globalConnPool != nil {
-			conn = newPutOnCloseWrapper(conn, globalConnPool)
+		globalMu.RLock()
+		p := globalConnPool
+		globalMu.RUnlock()
+		if p != nil {
+			conn = newPutOnCloseWrapper(conn, p)
 		}
 	}
 	_ = fromPool // pool-retrieved path is handled by PoolConnWrapper
@@ -239,8 +259,11 @@ func DialNoiseWithPool(network, addr string, config *ConnConfig) (*NoiseConn, er
 // tryGetPooledConn attempts to retrieve a connection from the global pool.
 // Returns the connection and a boolean indicating if it came from the pool.
 func tryGetPooledConn(addr string) (net.Conn, bool) {
-	if globalConnPool != nil {
-		conn := globalConnPool.Get(addr)
+	globalMu.RLock()
+	p := globalConnPool
+	globalMu.RUnlock()
+	if p != nil {
+		conn := p.Get(addr)
 		if conn != nil {
 			return conn, true
 		}
@@ -409,8 +432,11 @@ func DialNoiseWithPoolAndHandshakeContext(ctx context.Context, network, addr str
 
 	// pool.Put stores entries under conn.RemoteAddr().String(), which is the
 	// plain "host:port" string — use addr directly so the keys match.
-	if globalConnPool != nil {
-		if rawConn := globalConnPool.Get(addr); rawConn != nil {
+	globalMu.RLock()
+	p := globalConnPool
+	globalMu.RUnlock()
+	if p != nil {
+		if rawConn := p.Get(addr); rawConn != nil {
 			noiseConn, err := createAndHandshakeConn(ctx, rawConn, config, network, addr)
 			if err == nil {
 				return noiseConn, nil

@@ -356,23 +356,23 @@ func (h *HandshakeHandler) ProcessSessionCreated(packet *SSU2Packet) error {
 	return nil
 }
 
-// CreateSessionConfirmed creates a SessionConfirmed message (Message 2).
+// CreateSessionConfirmed creates a SessionConfirmed message (XK pattern message 3).
 // This is the third handshake message sent by the initiator.
 //
 // SessionConfirmed uses a short header (16 bytes) and contains no ephemeral key.
 // It may contain blocks like DateTime, but is not required by the protocol.
-// This message confirms the handshake and transitions to the transport phase.
+// This message completes the XK handshake (→ s, se) and produces transport cipher states.
 func (h *HandshakeHandler) CreateSessionConfirmed(connID uint64, packetNumber uint32) (*SSU2Packet, error) {
 	if !h.initiator {
 		return nil, oops.Errorf("only initiator can create SessionConfirmed")
 	}
 
-	if h.sendCipher == nil {
-		return nil, oops.Errorf("handshake not complete: no send cipher state")
+	// Verify handshake is at message 2 (messages 0 and 1 completed)
+	if h.handshakeState.MessageIndex() != 2 {
+		return nil, oops.Errorf("handshake not ready for SessionConfirmed: expected message index 2, got %d", h.handshakeState.MessageIndex())
 	}
 
 	// SessionConfirmed typically contains minimal or no blocks
-	// We'll create an empty payload for simplicity
 	blocks := make([]*SSU2Block, 0)
 
 	// Serialize blocks (may be empty)
@@ -381,18 +381,32 @@ func (h *HandshakeHandler) CreateSessionConfirmed(connID uint64, packetNumber ui
 		return nil, oops.Wrapf(err, "failed to serialize SessionConfirmed blocks")
 	}
 
-	// Encrypt payload using transport cipher
-	ciphertext, err := h.sendCipher.Encrypt(nil, nil, payload)
+	// Write 3rd XK handshake message through Noise state machine (→ s, se).
+	// This completes the handshake and returns transport cipher states.
+	ciphertext, cs1, cs2, err := h.handshakeState.WriteMessage(nil, payload)
 	if err != nil {
-		return nil, oops.Wrapf(err, "failed to encrypt SessionConfirmed payload")
+		return nil, oops.Wrapf(err, "failed to create SessionConfirmed handshake message")
+	}
+
+	// Store cipher states (handshake now complete)
+	h.updateCipherStates(cs1, cs2)
+
+	// Separate MAC (last 16 bytes) from payload
+	var pktPayload, mac []byte
+	if len(ciphertext) >= 16 {
+		pktPayload = ciphertext[:len(ciphertext)-16]
+		mac = ciphertext[len(ciphertext)-16:]
+	} else {
+		pktPayload = ciphertext
+		mac = make([]byte, 16)
 	}
 
 	// Create packet with 16-byte short header
 	packet := &SSU2Packet{
 		Header:       make([]byte, 16),
-		EphemeralKey: nil,                             // No ephemeral key in SessionConfirmed
-		Payload:      ciphertext[:len(ciphertext)-16], // Separate MAC
-		MAC:          ciphertext[len(ciphertext)-16:], // Last 16 bytes
+		EphemeralKey: nil, // No ephemeral key in SessionConfirmed
+		Payload:      pktPayload,
+		MAC:          mac,
 		MessageType:  MessageTypeSessionConfirmed,
 		PacketNumber: packetNumber,
 	}
@@ -406,7 +420,7 @@ func (h *HandshakeHandler) CreateSessionConfirmed(connID uint64, packetNumber ui
 }
 
 // ProcessSessionConfirmed processes a received SessionConfirmed message.
-// This is called by the responder to complete the handshake.
+// This is called by the responder to complete the XK handshake (→ s, se).
 //
 // After this, both sides have completed the handshake and can send Data messages.
 func (h *HandshakeHandler) ProcessSessionConfirmed(packet *SSU2Packet) error {
@@ -418,31 +432,32 @@ func (h *HandshakeHandler) ProcessSessionConfirmed(packet *SSU2Packet) error {
 		return oops.Errorf("expected SessionConfirmed (type 2), got type %d", packet.MessageType)
 	}
 
-	if h.recvCipher == nil {
-		return oops.Errorf("handshake not complete: no receive cipher state")
+	// Verify handshake is at message 2 (messages 0 and 1 completed)
+	if h.handshakeState.MessageIndex() != 2 {
+		return oops.Errorf("handshake not ready for SessionConfirmed: expected message index 2, got %d", h.handshakeState.MessageIndex())
 	}
 
-	// Reconstruct ciphertext with MAC
-	ciphertext := append(packet.Payload, packet.MAC...)
+	// Reconstruct Noise handshake message from payload + MAC
+	noiseMessage := append(copyBytes(packet.Payload), packet.MAC...)
 
-	// Decrypt using transport cipher
-	_, err := h.recvCipher.Decrypt(nil, nil, ciphertext)
+	// Process 3rd XK handshake message (→ s, se).
+	// This completes the handshake and returns transport cipher states.
+	_, cs1, cs2, err := h.handshakeState.ReadMessage(nil, noiseMessage)
 	if err != nil {
-		return oops.Wrapf(err, "failed to decrypt SessionConfirmed")
+		return oops.Wrapf(err, "failed to process SessionConfirmed handshake message")
 	}
 
-	// No need to parse blocks - SessionConfirmed may be empty
+	// Store cipher states (handshake now complete)
+	h.updateCipherStates(cs1, cs2)
 
 	return nil
 }
 
-// IsHandshakeComplete returns true if the handshake has finished.
-// For XK pattern (2-message handshake), this is true after both messages are exchanged.
-// Note: For XK, cipher states are not returned by Read/WriteMessage and must be
-// obtained differently (e.g., using HandshakeState directly for transport encryption).
+// IsHandshakeComplete returns true if the handshake has finished and
+// transport cipher states are available. For the XK pattern this requires
+// all three messages (SessionRequest, SessionCreated, SessionConfirmed).
 func (h *HandshakeHandler) IsHandshakeComplete() bool {
-	// For XK pattern: handshake is complete when MessageIndex reaches 2
-	return h.handshakeState != nil && h.handshakeState.MessageIndex() >= 2
+	return h.sendCipher != nil && h.recvCipher != nil
 }
 
 // GetCipherStates returns the transport cipher states after successful handshake.

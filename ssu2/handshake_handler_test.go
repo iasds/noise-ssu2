@@ -278,8 +278,8 @@ func TestHandshakeHandler_ProcessSessionCreated(t *testing.T) {
 	err = initiator.ProcessSessionCreated(createdPacket)
 	require.NoError(t, err)
 
-	// Handshake should be complete for initiator
-	assert.True(t, initiator.IsHandshakeComplete())
+	// XK requires 3 messages; handshake not yet complete after 2
+	assert.False(t, initiator.IsHandshakeComplete())
 }
 
 func TestHandshakeHandler_ProcessSessionCreated_InvalidType(t *testing.T) {
@@ -313,7 +313,6 @@ func TestHandshakeHandler_ProcessSessionCreated_ResponderError(t *testing.T) {
 // SessionConfirmed tests
 
 func TestHandshakeHandler_CreateSessionConfirmed(t *testing.T) {
-t.Skip("TODO: SessionConfirmed requires transport cipher state - to be implemented in SSU2Conn")
 	initiator, responder, _, _ := setupHandshakePair(t)
 
 	// Complete handshake up to SessionConfirmed
@@ -355,15 +354,13 @@ func TestHandshakeHandler_CreateSessionConfirmed_ResponderError(t *testing.T) {
 func TestHandshakeHandler_CreateSessionConfirmed_NotComplete(t *testing.T) {
 	initiator, _, _, _ := setupHandshakePair(t)
 
-	// Try to create SessionConfirmed without completing handshake
+	// Try to create SessionConfirmed without completing prior handshake messages
 	packet, err := initiator.CreateSessionConfirmed(11111, 1)
 	assert.Error(t, err)
 	assert.Nil(t, packet)
-	assert.Contains(t, err.Error(), "handshake not complete")
 }
 
 func TestHandshakeHandler_ProcessSessionConfirmed(t *testing.T) {
-t.Skip("TODO: SessionConfirmed requires transport cipher state - to be implemented in SSU2Conn")
 	initiator, responder, _, _ := setupHandshakePair(t)
 
 	// Complete full handshake flow
@@ -422,7 +419,6 @@ func TestHandshakeHandler_ProcessSessionConfirmed_InitiatorError(t *testing.T) {
 // Full handshake flow tests
 
 func TestHandshakeHandler_FullHandshakeFlow(t *testing.T) {
-t.Skip("TODO: SessionConfirmed requires transport cipher state - to be implemented in SSU2Conn")
 	initiator, responder, _, _ := setupHandshakePair(t)
 
 	// Neither should be complete initially
@@ -443,9 +439,9 @@ t.Skip("TODO: SessionConfirmed requires transport cipher state - to be implement
 	err = initiator.ProcessSessionCreated(createdPacket)
 	require.NoError(t, err)
 
-	// Both should be complete after SessionCreated
-	assert.True(t, initiator.IsHandshakeComplete())
-	assert.True(t, responder.IsHandshakeComplete())
+	// XK requires 3 messages; handshake should NOT be complete after 2
+	assert.False(t, initiator.IsHandshakeComplete())
+	assert.False(t, responder.IsHandshakeComplete())
 
 	// Step 3: SessionConfirmed
 	confirmedPacket, err := initiator.CreateSessionConfirmed(55555, 1)
@@ -454,7 +450,7 @@ t.Skip("TODO: SessionConfirmed requires transport cipher state - to be implement
 	err = responder.ProcessSessionConfirmed(confirmedPacket)
 	require.NoError(t, err)
 
-	// Both should still be complete
+	// Both should be complete after SessionConfirmed
 	assert.True(t, initiator.IsHandshakeComplete())
 	assert.True(t, responder.IsHandshakeComplete())
 
@@ -483,14 +479,21 @@ func TestHandshakeHandler_GetCipherStates_NotComplete(t *testing.T) {
 }
 
 func TestHandshakeHandler_GetCipherStates_AfterComplete(t *testing.T) {
-t.Skip("TODO: Cipher states not available via standard API for XK pattern - to be implemented in SSU2Conn")
 	initiator, responder, _, _ := setupHandshakePair(t)
 
-	// Complete handshake
-	requestPacket, _ := initiator.CreateSessionRequest(11111, 22222)
-	responder.ProcessSessionRequest(requestPacket)
-	createdPacket, _ := responder.CreateSessionCreated(33333, 44444)
-	initiator.ProcessSessionCreated(createdPacket)
+	// Complete full 3-message XK handshake
+	requestPacket, err := initiator.CreateSessionRequest(11111, 22222)
+	require.NoError(t, err)
+	_, err = responder.ProcessSessionRequest(requestPacket)
+	require.NoError(t, err)
+	createdPacket, err := responder.CreateSessionCreated(33333, 44444)
+	require.NoError(t, err)
+	err = initiator.ProcessSessionCreated(createdPacket)
+	require.NoError(t, err)
+	confirmedPacket, err := initiator.CreateSessionConfirmed(55555, 1)
+	require.NoError(t, err)
+	err = responder.ProcessSessionConfirmed(confirmedPacket)
+	require.NoError(t, err)
 
 	// Get cipher states
 	send, recv, err := initiator.GetCipherStates()

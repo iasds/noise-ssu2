@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-i2p/noise"
@@ -116,6 +117,11 @@ type SSU2Conn struct {
 
 	// Background goroutines coordination
 	wg sync.WaitGroup
+
+	// Error counters for observability (recvLoop)
+	readErrors    atomic.Uint64
+	parseErrors   atomic.Uint64
+	decryptErrors atomic.Uint64
 }
 
 // PendingPacket tracks an outbound packet awaiting acknowledgment.
@@ -196,11 +202,6 @@ func NewSSU2Conn(
 		lastActivity:     time.Now(),
 	}
 
-	// Start recvLoop immediately (needed during handshake).
-	// sendLoop and keepaliveLoop are deferred to startDataLoops after handshake.
-	conn.wg.Add(1)
-	go conn.recvLoop()
-
 	return conn, nil
 }
 
@@ -217,6 +218,12 @@ func (h *SSU2Conn) Handshake(ctx context.Context) error {
 	}
 	h.state = StateHandshaking
 	h.stateMutex.Unlock()
+
+	// Start recvLoop (needed during handshake for receivePacketWithTimeout).
+	// Started here rather than in the constructor so that callers who create
+	// a conn but never call Handshake or Close don't leak a goroutine.
+	h.wg.Add(1)
+	go h.recvLoop()
 
 	if h.initiator {
 		return h.handshakeInitiator(ctx)
@@ -251,17 +258,27 @@ func (h *SSU2Conn) handshakeInitiator(ctx context.Context) error {
 		return oops.Wrapf(err, "failed to process SessionCreated")
 	}
 
-	// Step 4: Check handshake completion
-	if !h.handshakeHandler.IsHandshakeComplete() {
-		return oops.Errorf("handshake not complete after SessionCreated")
+	// Step 4: Create and send SessionConfirmed (3rd XK message)
+	sessionConfirmed, err := h.handshakeHandler.CreateSessionConfirmed(h.config.ConnectionID, 1)
+	if err != nil {
+		return oops.Wrapf(err, "failed to create SessionConfirmed")
 	}
 
-	// Step 5: Extract transport cipher states
+	if err := h.sendPacketDirect(sessionConfirmed); err != nil {
+		return oops.Wrapf(err, "failed to send SessionConfirmed")
+	}
+
+	// Step 5: Check handshake completion
+	if !h.handshakeHandler.IsHandshakeComplete() {
+		return oops.Errorf("handshake not complete after SessionConfirmed")
+	}
+
+	// Step 6: Extract transport cipher states
 	if err := h.installCipherStates(); err != nil {
 		return oops.Wrapf(err, "failed to install cipher states")
 	}
 
-	// Step 6: Transition to established state
+	// Step 7: Transition to established state
 	h.stateMutex.Lock()
 	h.state = StateEstablished
 	h.stateMutex.Unlock()
@@ -299,17 +316,32 @@ func (h *SSU2Conn) handshakeResponder(ctx context.Context) error {
 		return oops.Wrapf(err, "failed to send SessionCreated")
 	}
 
-	// Step 4: Check handshake completion
-	if !h.handshakeHandler.IsHandshakeComplete() {
-		return oops.Errorf("handshake not complete after SessionCreated")
+	// Step 4: Wait for SessionConfirmed
+	sessionConfirmed, err := h.receivePacketWithTimeout(ctx, h.config.HandshakeTimeout)
+	if err != nil {
+		return oops.Wrapf(err, "failed to receive SessionConfirmed")
 	}
 
-	// Step 5: Extract transport cipher states
+	if sessionConfirmed.MessageType != MessageTypeSessionConfirmed {
+		return oops.Errorf("expected SessionConfirmed, got type %d", sessionConfirmed.MessageType)
+	}
+
+	// Step 5: Process SessionConfirmed
+	if err := h.handshakeHandler.ProcessSessionConfirmed(sessionConfirmed); err != nil {
+		return oops.Wrapf(err, "failed to process SessionConfirmed")
+	}
+
+	// Step 6: Check handshake completion
+	if !h.handshakeHandler.IsHandshakeComplete() {
+		return oops.Errorf("handshake not complete after SessionConfirmed")
+	}
+
+	// Step 7: Extract transport cipher states
 	if err := h.installCipherStates(); err != nil {
 		return oops.Wrapf(err, "failed to install cipher states")
 	}
 
-	// Step 6: Transition to established state
+	// Step 8: Transition to established state
 	h.stateMutex.Lock()
 	h.state = StateEstablished
 	h.stateMutex.Unlock()
@@ -533,6 +565,16 @@ func (h *SSU2Conn) GetState() ConnState {
 	return h.state
 }
 
+// RecvStats returns error counters from the receive loop for observability.
+// Keys: "read_errors", "parse_errors", "decrypt_errors".
+func (h *SSU2Conn) RecvStats() map[string]uint64 {
+	return map[string]uint64{
+		"read_errors":    h.readErrors.Load(),
+		"parse_errors":   h.parseErrors.Load(),
+		"decrypt_errors": h.decryptErrors.Load(),
+	}
+}
+
 // sendLoop handles outbound packet transmission.
 func (h *SSU2Conn) sendLoop() {
 	defer h.wg.Done()
@@ -568,7 +610,7 @@ func (h *SSU2Conn) recvLoop() {
 				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 					continue // Timeout is expected
 				}
-				// Real error
+				h.readErrors.Add(1)
 				continue
 			}
 
@@ -581,7 +623,8 @@ func (h *SSU2Conn) recvLoop() {
 			// Parse packet
 			packet := &SSU2Packet{}
 			if err := packet.Deserialize(buf[:n]); err != nil {
-				continue // Invalid packet
+				h.parseErrors.Add(1)
+				continue
 			}
 
 			// Decrypt payload for data packets when cipher states are available
@@ -592,7 +635,8 @@ func (h *SSU2Conn) recvLoop() {
 			if cipher != nil && packet.MessageType == MessageTypeData && len(packet.Payload) > 0 {
 				decrypted, err := cipher.Decrypt(nil, nil, packet.Payload)
 				if err != nil {
-					continue // Decryption failed, drop packet
+					h.decryptErrors.Add(1)
+					continue
 				}
 				packet.Payload = decrypted
 			}
