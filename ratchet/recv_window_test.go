@@ -412,7 +412,7 @@ func TestNSDateTimeFreshnessRejected(t *testing.T) {
 	savedNowFunc := nowFunc
 	t.Cleanup(func() { nowFunc = savedNowFunc })
 	nowFunc = func() time.Time {
-		return time.Now().Add(nsMaxPastAge + time.Minute)
+		return time.Now().Add(defaultNSMaxPastAge + time.Minute)
 	}
 
 	// Bob attempts to decrypt the NS — must fail because the timestamp is stale.

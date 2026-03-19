@@ -32,6 +32,9 @@ type DataHandler struct {
 	// blockRouter routes non-I2NP blocks to registered handlers
 	blockRouter *BlockRouter
 
+	// callbackMu protects concurrent access to callbacks.
+	callbackMu sync.RWMutex
+
 	// callbacks for specific block types
 	callbacks DataHandlerCallbacks
 }
@@ -121,7 +124,18 @@ func NewDataHandler(queueSize int) *DataHandler {
 
 // SetCallbacks sets the callback handlers for block types.
 func (h *DataHandler) SetCallbacks(callbacks DataHandlerCallbacks) {
+	h.callbackMu.Lock()
+	defer h.callbackMu.Unlock()
 	h.callbacks = callbacks
+}
+
+// getCallbacks returns a snapshot of the current callbacks.
+// Callers should use the snapshot rather than reading h.callbacks directly
+// to avoid races with SetCallbacks.
+func (h *DataHandler) getCallbacks() DataHandlerCallbacks {
+	h.callbackMu.RLock()
+	defer h.callbackMu.RUnlock()
+	return h.callbacks
 }
 
 // GetBlockRouter returns the block router for registering external handlers.
@@ -498,8 +512,9 @@ func (h *DataHandler) handleTermination(data []byte) error {
 		"dataLength": len(additionalData),
 	}).Info("Received Termination block")
 
-	if h.callbacks.OnTermination != nil {
-		h.callbacks.OnTermination(reason, additionalData)
+	cbs := h.getCallbacks()
+	if cbs.OnTermination != nil {
+		cbs.OnTermination(reason, additionalData)
 	}
 
 	return nil
@@ -514,8 +529,9 @@ func (h *DataHandler) handleNewToken(data []byte) error {
 
 	log.WithField("tokenLength", len(data)).Debug("Received NewToken block")
 
-	if h.callbacks.OnNewToken != nil {
-		h.callbacks.OnNewToken(data)
+	cbs := h.getCallbacks()
+	if cbs.OnNewToken != nil {
+		cbs.OnNewToken(data)
 	}
 
 	return nil
@@ -525,8 +541,9 @@ func (h *DataHandler) handleNewToken(data []byte) error {
 func (h *DataHandler) handleRelayRequest(block *SSU2Block) error {
 	log.WithField("dataLength", len(block.Data)).Debug("Received RelayRequest block")
 
-	if h.callbacks.OnRelayRequest != nil {
-		return h.callbacks.OnRelayRequest(block)
+	cbs := h.getCallbacks()
+	if cbs.OnRelayRequest != nil {
+		return cbs.OnRelayRequest(block)
 	}
 
 	// No callback registered - block will be handled by relay manager if connected
@@ -537,8 +554,9 @@ func (h *DataHandler) handleRelayRequest(block *SSU2Block) error {
 func (h *DataHandler) handleRelayResponse(block *SSU2Block) error {
 	log.WithField("dataLength", len(block.Data)).Debug("Received RelayResponse block")
 
-	if h.callbacks.OnRelayResponse != nil {
-		return h.callbacks.OnRelayResponse(block)
+	cbs := h.getCallbacks()
+	if cbs.OnRelayResponse != nil {
+		return cbs.OnRelayResponse(block)
 	}
 
 	return nil
@@ -548,8 +566,9 @@ func (h *DataHandler) handleRelayResponse(block *SSU2Block) error {
 func (h *DataHandler) handleRelayIntro(block *SSU2Block) error {
 	log.WithField("dataLength", len(block.Data)).Debug("Received RelayIntro block")
 
-	if h.callbacks.OnRelayIntro != nil {
-		return h.callbacks.OnRelayIntro(block)
+	cbs := h.getCallbacks()
+	if cbs.OnRelayIntro != nil {
+		return cbs.OnRelayIntro(block)
 	}
 
 	return nil
@@ -559,8 +578,9 @@ func (h *DataHandler) handleRelayIntro(block *SSU2Block) error {
 func (h *DataHandler) handleRelayTagRequest(block *SSU2Block) error {
 	log.WithField("dataLength", len(block.Data)).Debug("Received RelayTagRequest block")
 
-	if h.callbacks.OnRelayTagRequest != nil {
-		return h.callbacks.OnRelayTagRequest(block)
+	cbs := h.getCallbacks()
+	if cbs.OnRelayTagRequest != nil {
+		return cbs.OnRelayTagRequest(block)
 	}
 
 	return nil
@@ -570,8 +590,9 @@ func (h *DataHandler) handleRelayTagRequest(block *SSU2Block) error {
 func (h *DataHandler) handleRelayTag(block *SSU2Block) error {
 	log.WithField("dataLength", len(block.Data)).Debug("Received RelayTag block")
 
-	if h.callbacks.OnRelayTag != nil {
-		return h.callbacks.OnRelayTag(block)
+	cbs := h.getCallbacks()
+	if cbs.OnRelayTag != nil {
+		return cbs.OnRelayTag(block)
 	}
 
 	return nil
@@ -581,8 +602,9 @@ func (h *DataHandler) handleRelayTag(block *SSU2Block) error {
 func (h *DataHandler) handlePeerTest(block *SSU2Block) error {
 	log.WithField("dataLength", len(block.Data)).Debug("Received PeerTest block")
 
-	if h.callbacks.OnPeerTest != nil {
-		return h.callbacks.OnPeerTest(block)
+	cbs := h.getCallbacks()
+	if cbs.OnPeerTest != nil {
+		return cbs.OnPeerTest(block)
 	}
 
 	return nil
@@ -592,8 +614,9 @@ func (h *DataHandler) handlePeerTest(block *SSU2Block) error {
 func (h *DataHandler) handlePathChallenge(data []byte) error {
 	log.WithField("dataLength", len(data)).Debug("Received PathChallenge block")
 
-	if h.callbacks.OnPathChallenge != nil {
-		return h.callbacks.OnPathChallenge(data)
+	cbs := h.getCallbacks()
+	if cbs.OnPathChallenge != nil {
+		return cbs.OnPathChallenge(data)
 	}
 
 	return nil
@@ -603,8 +626,9 @@ func (h *DataHandler) handlePathChallenge(data []byte) error {
 func (h *DataHandler) handlePathResponse(data []byte) error {
 	log.WithField("dataLength", len(data)).Debug("Received PathResponse block")
 
-	if h.callbacks.OnPathResponse != nil {
-		return h.callbacks.OnPathResponse(data)
+	cbs := h.getCallbacks()
+	if cbs.OnPathResponse != nil {
+		return cbs.OnPathResponse(data)
 	}
 
 	return nil
@@ -619,8 +643,9 @@ func (h *DataHandler) handleDateTime(data []byte) error {
 
 	timestamp := uint32(data[0])<<24 | uint32(data[1])<<16 | uint32(data[2])<<8 | uint32(data[3])
 
-	if h.callbacks.OnDateTime != nil {
-		return h.callbacks.OnDateTime(timestamp)
+	cbs := h.getCallbacks()
+	if cbs.OnDateTime != nil {
+		return cbs.OnDateTime(timestamp)
 	}
 
 	return nil
@@ -630,8 +655,9 @@ func (h *DataHandler) handleDateTime(data []byte) error {
 func (h *DataHandler) handleOptions(data []byte) error {
 	log.WithField("dataLength", len(data)).Debug("Received Options block")
 
-	if h.callbacks.OnOptions != nil {
-		return h.callbacks.OnOptions(data)
+	cbs := h.getCallbacks()
+	if cbs.OnOptions != nil {
+		return cbs.OnOptions(data)
 	}
 
 	return nil
@@ -641,8 +667,9 @@ func (h *DataHandler) handleOptions(data []byte) error {
 func (h *DataHandler) handleRouterInfo(data []byte) error {
 	log.WithField("dataLength", len(data)).Debug("Received RouterInfo block")
 
-	if h.callbacks.OnRouterInfo != nil {
-		return h.callbacks.OnRouterInfo(data)
+	cbs := h.getCallbacks()
+	if cbs.OnRouterInfo != nil {
+		return cbs.OnRouterInfo(data)
 	}
 
 	return nil
@@ -653,8 +680,9 @@ func (h *DataHandler) handleRouterInfo(data []byte) error {
 func (h *DataHandler) handleAddress(data []byte) error {
 	log.WithField("dataLength", len(data)).Debug("Received Address block")
 
-	if h.callbacks.OnAddress != nil {
-		return h.callbacks.OnAddress(data)
+	cbs := h.getCallbacks()
+	if cbs.OnAddress != nil {
+		return cbs.OnAddress(data)
 	}
 
 	return nil
@@ -662,8 +690,9 @@ func (h *DataHandler) handleAddress(data []byte) error {
 
 // handleACK processes an ACK block (Type 12).
 func (h *DataHandler) handleACK(block *SSU2Block) error {
-	if h.callbacks.OnACK != nil {
-		return h.callbacks.OnACK(block)
+	cbs := h.getCallbacks()
+	if cbs.OnACK != nil {
+		return cbs.OnACK(block)
 	}
 
 	// ACK blocks are typically handled by the ack_handler component

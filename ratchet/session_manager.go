@@ -21,22 +21,32 @@ var _ TagResolver = (*SessionManager)(nil)
 const (
 	// MaxGarlicSessions is the upper bound on active garlic sessions.
 	MaxGarlicSessions = 5000
+
+	// defaultNSMaxPastAge is the maximum acceptable age of the DateTime block
+	// in a New Session message. Default: 5 minutes per ratchet.md §"Parameters".
+	defaultNSMaxPastAge = 5 * time.Minute
+
+	// defaultNSMaxFutureAge is the maximum acceptable forward skew of the DateTime
+	// block in a New Session message. Default: 2 minutes per ratchet.md §"Parameters".
+	defaultNSMaxFutureAge = 2 * time.Minute
 )
 
-// nsMaxPastAge is the maximum acceptable age of the DateTime block in a New
-// Session message. NS messages whose timestamp is more than nsMaxPastAge in the
-// past are rejected to prevent replay-based session reset attacks.
-//
-// Tests may temporarily modify this value via t.Cleanup to restore the original.
-// Default is 5 minutes per ratchet.md §"Parameters": max clock skew −5 minutes.
-var nsMaxPastAge = 5 * time.Minute
+// SessionManagerOption configures optional SessionManager parameters.
+type SessionManagerOption func(*SessionManager)
 
-// nsMaxFutureAge is the maximum acceptable forward skew of the DateTime block
-// in a New Session message. NS messages timestamped more than nsMaxFutureAge
-// into the future are rejected to limit the replay window.
-//
-// Default is 2 minutes per ratchet.md §"Parameters": max clock skew +2 minutes.
-var nsMaxFutureAge = 2 * time.Minute
+// WithNSMaxPastAge overrides the default maximum past age for NS DateTime freshness.
+func WithNSMaxPastAge(d time.Duration) SessionManagerOption {
+	return func(sm *SessionManager) {
+		sm.nsMaxPastAge = d
+	}
+}
+
+// WithNSMaxFutureAge overrides the default maximum future age for NS DateTime freshness.
+func WithNSMaxFutureAge(d time.Duration) SessionManagerOption {
+	return func(sm *SessionManager) {
+		sm.nsMaxFutureAge = d
+	}
+}
 
 // validateNSDateTimeFreshness parses the decrypted NS payload, locates the
 // required DateTime block (first block per ratchet.md §1b), and verifies that
@@ -45,11 +55,7 @@ var nsMaxFutureAge = 2 * time.Minute
 //   - Future: at most nsMaxFutureAge ahead (default 2 minutes)
 //
 // Spec ref: ratchet.md §"Parameters" — max clock skew: −5 minutes to +2 minutes.
-//
-// A stale or excessively future timestamp indicates either a replay of an old
-// session or a severe clock skew; both must be rejected to prevent an attacker
-// from resetting an active live session by replaying a captured NS message.
-func validateNSDateTimeFreshness(payload []byte) error {
+func (sm *SessionManager) validateNSDateTimeFreshness(payload []byte) error {
 	blocks, err := ParsePayload(payload)
 	if err != nil {
 		return oops.Wrapf(err, "NS payload parse failed during freshness check")
@@ -62,25 +68,25 @@ func validateNSDateTimeFreshness(payload []byte) error {
 		return oops.Wrapf(err, "NS DateTime block is malformed")
 	}
 	elapsed := nowFunc().Sub(msgTime)
-	if elapsed > nsMaxPastAge {
+	if elapsed > sm.nsMaxPastAge {
 		return oops.Errorf(
 			"NS DateTime block fails freshness check: message is %v old, max past age is %v (stale or replay)",
-			elapsed, nsMaxPastAge,
+			elapsed, sm.nsMaxPastAge,
 		)
 	}
-	if elapsed < -nsMaxFutureAge {
+	if elapsed < -sm.nsMaxFutureAge {
 		return oops.Errorf(
 			"NS DateTime block fails freshness check: message is %v in the future, max future skew is %v",
-			-elapsed, nsMaxFutureAge,
+			-elapsed, sm.nsMaxFutureAge,
 		)
 	}
 	return nil
 }
 
-// nsReplayCacheTTL is the time-to-live for NS replay cache entries.
-// Set to nsMaxPastAge + nsMaxFutureAge + 1 minute margin to cover the full
-// freshness window plus clock skew tolerance.
-var nsReplayCacheTTL = nsMaxPastAge + nsMaxFutureAge + time.Minute
+// nsReplayCacheTTL computes the replay cache TTL from the freshness window.
+func nsReplayCacheTTL(pastAge, futureAge time.Duration) time.Duration {
+	return pastAge + futureAge + time.Minute
+}
 
 // nsReplayCacheMaxSize is the maximum number of NS ephemeral keys tracked
 // before forced eviction. This prevents memory exhaustion under attack.
@@ -114,6 +120,11 @@ type SessionManager struct {
 	ctx             context.Context
 	cancel          context.CancelFunc
 
+	// nsMaxPastAge is the maximum acceptable age for NS DateTime freshness.
+	nsMaxPastAge time.Duration
+	// nsMaxFutureAge is the maximum acceptable future skew for NS DateTime freshness.
+	nsMaxFutureAge time.Duration
+
 	// nsReplayCache tracks recently-seen NS ephemeral keys (first 32 bytes of the
 	// NS message) to prevent replay attacks within the freshness window.
 	// Spec ref: ratchet.md §"DateTime" — "Bob must implement a Bloom filter or
@@ -122,7 +133,7 @@ type SessionManager struct {
 }
 
 // NewSessionManager creates a new session manager with the given private key.
-func NewSessionManager(privateKey [32]byte) (*SessionManager, error) {
+func NewSessionManager(privateKey [32]byte, opts ...SessionManagerOption) (*SessionManager, error) {
 	log.Debug("Creating new garlic session manager")
 
 	var publicKey [32]byte
@@ -146,15 +157,22 @@ func NewSessionManager(privateKey [32]byte) (*SessionManager, error) {
 		ourPrivateKey:   privateKey,
 		ourPublicKey:    publicKey,
 		sessionTimeout:  10 * time.Minute,
+		nsMaxPastAge:    defaultNSMaxPastAge,
+		nsMaxFutureAge:  defaultNSMaxFutureAge,
 		ctx:             ctx,
 		cancel:          cancel,
-		nsReplayCache: replaycache.New(replaycache.Config{
-			TTL:             nsReplayCacheTTL,
-			MaxSize:         nsReplayCacheMaxSize,
-			CleanupInterval: nsReplayCacheCleanupInterval,
-			NowFunc:         nowFunc,
-		}),
 	}
+
+	for _, opt := range opts {
+		opt(sm)
+	}
+
+	sm.nsReplayCache = replaycache.New(replaycache.Config{
+		TTL:             nsReplayCacheTTL(sm.nsMaxPastAge, sm.nsMaxFutureAge),
+		MaxSize:         nsReplayCacheMaxSize,
+		CleanupInterval: nsReplayCacheCleanupInterval,
+		NowFunc:         nowFunc,
+	})
 
 	return sm, nil
 }
@@ -435,7 +453,7 @@ func (sm *SessionManager) decryptNewSession(msg []byte) ([]byte, *[32]byte, erro
 	// Spec §1b / replay-prevention: reject NS messages whose DateTime block
 	// is too old or too far in the future. A captured NS can otherwise be
 	// replayed to reset the active session keyed on the initiator's static key.
-	if err := validateNSDateTimeFreshness(plaintext); err != nil {
+	if err := sm.validateNSDateTimeFreshness(plaintext); err != nil {
 		return nil, nil, oops.Wrapf(err, "New Session message rejected")
 	}
 
