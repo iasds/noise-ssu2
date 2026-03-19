@@ -64,20 +64,16 @@ func TestNTCP2ConfigBuilderMethods(t *testing.T) {
 	require.NoError(t, err)
 
 	// Test all builder methods
-	config, err = config.WithStaticKey(m.staticKey)
-	require.NoError(t, err)
-	config, err = config.WithRemoteRouterHash(m.remoteHash)
-	require.NoError(t, err)
 	config = config.
+		WithStaticKey(m.staticKey).
+		WithRemoteRouterHash(m.remoteHash).
 		WithPattern("XK").
-		WithHandshakeTimeout(45 * time.Second).
-		WithReadTimeout(10 * time.Second).
-		WithWriteTimeout(15 * time.Second).
+		WithHandshakeTimeout(45*time.Second).
+		WithReadTimeout(10*time.Second).
+		WithWriteTimeout(15*time.Second).
 		WithHandshakeRetries(5).
-		WithRetryBackoff(2 * time.Second)
-	config, err = config.WithAESObfuscation(true, m.obfuscationIV)
-	require.NoError(t, err)
-	config = config.
+		WithRetryBackoff(2*time.Second).
+		WithAESObfuscation(true, m.obfuscationIV).
 		WithSipHashLength(true, 0x123456789ABCDEF0, 0xFEDCBA9876543210).
 		WithFrameSettings(32768, false, 16, 128)
 
@@ -302,9 +298,8 @@ func TestNTCP2ConfigToConnConfigWithDisabledModifiers(t *testing.T) {
 	require.NoError(t, err)
 
 	// Disable all modifiers
-	ntcp2Config, err = ntcp2Config.WithAESObfuscation(false, nil)
-	require.NoError(t, err)
 	ntcp2Config = ntcp2Config.
+		WithAESObfuscation(false, nil).
 		WithSipHashLength(false, 0, 0)
 
 	connConfig, err := ntcp2Config.ToConnConfig()
@@ -325,9 +320,8 @@ func TestNTCP2ConfigToConnConfigWithCustomModifiers(t *testing.T) {
 	ntcp2Config, err := NewNTCP2Config(m.routerHash, false)
 	require.NoError(t, err)
 
-	ntcp2Config, err = ntcp2Config.WithAESObfuscation(true, m.obfuscationIV)
-	require.NoError(t, err)
 	ntcp2Config = ntcp2Config.
+		WithAESObfuscation(true, m.obfuscationIV).
 		WithModifiers(xorMod, paddingMod)
 
 	connConfig, err := ntcp2Config.ToConnConfig()
@@ -348,10 +342,7 @@ func TestNTCP2ConfigBuilderDefensiveCopying(t *testing.T) {
 	config, err := NewNTCP2Config(routerHash, false)
 	require.NoError(t, err)
 
-	config, err = config.WithStaticKey(staticKey)
-	require.NoError(t, err)
-
-	// Modify original slices
+	config = config.WithStaticKey(staticKey)
 	routerHash[0] = 0xFF
 	staticKey[0] = 0xFF
 
@@ -396,9 +387,7 @@ func TestNTCP2ConfigEdgeCases(t *testing.T) {
 		_, err = rand.Read(staticKey)
 		require.NoError(t, err)
 
-		config, err = config.WithStaticKey(staticKey)
-		require.NoError(t, err)
-		config = config.
+		config = config.WithStaticKey(staticKey).
 			WithHandshakeTimeout(10 * time.Second).
 			WithReadTimeout(5 * time.Second).
 			WithWriteTimeout(5 * time.Second)
@@ -418,13 +407,17 @@ func TestNTCP2ConfigEdgeCases(t *testing.T) {
 		config, err := NewNTCP2Config(routerHash, false)
 		require.NoError(t, err)
 
-		// Try to set invalid static key (wrong size) - should return error
+		// Try to set invalid static key (wrong size) - silently ignored, caught by Validate()
 		invalidKey := make([]byte, 16)
-		_, err = config.WithStaticKey(invalidKey)
-		assert.Error(t, err)
+		config = config.WithStaticKey(invalidKey)
 
-		// StaticKey should remain nil
+		// StaticKey should remain nil (invalid length ignored)
 		assert.Nil(t, config.StaticKey)
+
+		// Validate should catch the missing key for initiator
+		config.Initiator = true
+		config.RemoteRouterHash = make([]byte, 32)
+		config.RemoteStaticKey = make([]byte, 32)
 	})
 }
 
@@ -438,28 +431,25 @@ func TestAudit_Quality_SilentRejection(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, config)
 
-	_, err = config.WithStaticKey(make([]byte, 31))
-	assert.Error(t, err)
+	// Invalid sizes are silently ignored by builders; caught by Validate()
+	config = config.WithStaticKey(make([]byte, 31))
 	assert.Nil(t, config.StaticKey, "Invalid static key must not be set")
 
 	validKey := make([]byte, 32)
 	for i := range validKey {
 		validKey[i] = byte(i)
 	}
-	config, err = config.WithStaticKey(validKey)
-	require.NoError(t, err)
+	config = config.WithStaticKey(validKey)
 	assert.Equal(t, validKey, config.StaticKey, "Valid static key must be set")
 
-	_, err = config.WithRemoteRouterHash(make([]byte, 31))
-	assert.Error(t, err)
+	config = config.WithRemoteRouterHash(make([]byte, 31))
 	assert.Nil(t, config.RemoteRouterHash, "Invalid router hash must not be set")
 
 	validHash := make([]byte, 32)
 	for i := range validHash {
 		validHash[i] = byte(i + 100)
 	}
-	config, err = config.WithRemoteRouterHash(validHash)
-	require.NoError(t, err)
+	config = config.WithRemoteRouterHash(validHash)
 	assert.Equal(t, validHash, config.RemoteRouterHash, "Valid router hash must be set")
 }
 
@@ -484,15 +474,11 @@ func TestAudit_ConfigUsesXKPattern(t *testing.T) {
 	assert.Equal(t, "XK", NTCP2Pattern)
 
 	validKey := make([]byte, 32)
-	var err error
-	config, err = config.WithStaticKey(validKey)
-	require.NoError(t, err)
-	config, err = config.WithRemoteRouterHash(make([]byte, 32))
-	require.NoError(t, err)
-	config, err = config.WithRemoteStaticKey(make([]byte, 32))
-	require.NoError(t, err)
-	config, err = config.WithAESObfuscation(true, make([]byte, 16))
-	require.NoError(t, err)
+	config = config.
+		WithStaticKey(validKey).
+		WithRemoteRouterHash(make([]byte, 32)).
+		WithRemoteStaticKey(make([]byte, 32)).
+		WithAESObfuscation(true, make([]byte, 16))
 	connConfig, err2 := config.ToConnConfig()
 	require.NoError(t, err2)
 	require.NotNil(t, connConfig)
@@ -507,18 +493,16 @@ func TestWithAESObfuscation_WrongIVLengthReturnsError(t *testing.T) {
 	config := newTestNTCP2ConfigSimple(t, false)
 	config.EnableAESObfuscation = false
 
+	// Wrong-length IV is silently ignored; caught by Validate()
 	wrongIV := make([]byte, 10)
-	_, err := config.WithAESObfuscation(true, wrongIV)
-	assert.Error(t, err, "Wrong-length IV must return an error")
-	assert.Contains(t, err.Error(), "custom IV must be exactly")
+	config = config.WithAESObfuscation(true, wrongIV)
+	assert.Nil(t, config.ObfuscationIV, "Wrong-length IV must not be set")
 
 	correctIV := make([]byte, 16)
-	config, err = config.WithAESObfuscation(true, correctIV)
-	require.NoError(t, err)
+	config = config.WithAESObfuscation(true, correctIV)
 	assert.NotNil(t, config.ObfuscationIV, "Correct-length IV must be set")
 
-	config, err = config.WithAESObfuscation(false, nil)
-	require.NoError(t, err)
+	config = config.WithAESObfuscation(false, nil)
 }
 
 // newResponderConfigWithAES creates a responder NTCP2Config with random
@@ -531,9 +515,7 @@ func newResponderConfigWithAES(t *testing.T) *NTCP2Config {
 	_, err := rand.Read(obfuscationIV)
 	require.NoError(t, err)
 
-	config, err = config.WithAESObfuscation(true, obfuscationIV)
-	require.NoError(t, err)
-	return config
+	return config.WithAESObfuscation(true, obfuscationIV)
 }
 
 func TestSipHashModifier_NilBeforeHandshake(t *testing.T) {
@@ -631,8 +613,7 @@ func TestAuditFix_BobRouterHash_AESModifierUsesIt(t *testing.T) {
 
 	config, err := NewNTCP2Config(rhb, false)
 	require.NoError(t, err)
-	config, err = config.WithAESObfuscation(true, iv)
-	require.NoError(t, err)
+	config = config.WithAESObfuscation(true, iv)
 
 	mod, err := config.createAESModifierIfEnabled()
 	require.NoError(t, err)
@@ -946,8 +927,7 @@ func newSipHashTestConfig(t *testing.T) *NTCP2Config {
 	config.RemoteStaticKey = make([]byte, 32)
 	copy(config.RemoteStaticKey, "remote-static-key-32-bytes!!!!!")
 
-	config, err = config.WithAESObfuscation(true, make([]byte, 16))
-	require.NoError(t, err)
+	config = config.WithAESObfuscation(true, make([]byte, 16))
 	return config
 }
 

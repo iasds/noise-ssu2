@@ -575,6 +575,14 @@ func (h *SSU2Conn) RecvStats() map[string]uint64 {
 	}
 }
 
+// SetDataHandlerCallbacks wires application-level callbacks for SSU2 block types
+// received during the data phase. Call before Handshake() completes to ensure
+// callbacks are active from the first data packet. Safe to call concurrently
+// with an active connection; updates take effect on the next inbound packet.
+func (h *SSU2Conn) SetDataHandlerCallbacks(cbs DataHandlerCallbacks) {
+	h.dataHandler.SetCallbacks(cbs)
+}
+
 // sendLoop handles outbound packet transmission.
 func (h *SSU2Conn) sendLoop() {
 	defer h.wg.Done()

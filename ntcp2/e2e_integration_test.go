@@ -157,10 +157,9 @@ func TestE2E_PostHandshakeHook_DerivesCorrectKeys(t *testing.T) {
 
 	responderConfig, err := NewNTCP2Config(m.routerHash, false)
 	require.NoError(t, err)
-	responderConfig, err = responderConfig.WithStaticKey(m.staticKey)
-	require.NoError(t, err)
-	responderConfig, err = responderConfig.WithAESObfuscation(true, m.obfuscationIV)
-	require.NoError(t, err)
+	responderConfig = responderConfig.
+		WithStaticKey(m.staticKey).
+		WithAESObfuscation(true, m.obfuscationIV)
 
 	// Convert to ConnConfig (which sets up PostHandshakeHook and ASK labels)
 	initiatorConnConfig, err := initiatorConfig.ToConnConfig()
@@ -249,28 +248,24 @@ func TestE2E_WithAESObfuscation_RejectsInvalidIV(t *testing.T) {
 	config, err := NewNTCP2Config(routerHash, true)
 	require.NoError(t, err)
 
-	// Invalid IV lengths should return error
+	// Invalid IV lengths are silently ignored; caught by Validate()
 	invalidLengths := []int{1, 8, 15, 17, 32, 64}
 	for _, length := range invalidLengths {
 		iv := make([]byte, length)
-		_, err = config.WithAESObfuscation(true, iv)
-		assert.Error(t, err, "IV length %d should be rejected", length)
-		assert.Contains(t, err.Error(), "custom IV must be exactly")
+		testConfig := config.WithAESObfuscation(true, iv)
+		assert.Nil(t, testConfig.ObfuscationIV, "IV length %d should be ignored", length)
 	}
 
 	// Valid IV (16 bytes) should succeed
 	validIV := make([]byte, 16)
-	config, err = config.WithAESObfuscation(true, validIV)
-	require.NoError(t, err)
+	config = config.WithAESObfuscation(true, validIV)
 	assert.Equal(t, validIV, config.ObfuscationIV)
 
 	// nil IV (disabling) should succeed
-	config, err = config.WithAESObfuscation(false, nil)
-	require.NoError(t, err)
+	config = config.WithAESObfuscation(false, nil)
 
 	// Empty slice (len=0) should succeed (treated as no custom IV)
-	config, err = config.WithAESObfuscation(true, []byte{})
-	require.NoError(t, err)
+	config = config.WithAESObfuscation(true, []byte{})
 }
 
 // TestE2E_KDF_DeriveSipHashKeys_Deterministic verifies that DeriveSipHashKeys

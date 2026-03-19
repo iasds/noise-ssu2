@@ -152,36 +152,25 @@ func (nc *NTCP2Config) WithPattern(pattern string) *NTCP2Config {
 }
 
 // WithStaticKey sets the static key for this connection.
-// key must be 32 bytes for Curve25519. Returns an error if the key length is invalid.
-func (nc *NTCP2Config) WithStaticKey(key []byte) (*NTCP2Config, error) {
-	if len(key) != StaticKeySize {
-		return nc, oops.
-			Code("INVALID_STATIC_KEY").
-			In("ntcp2").
-			With("expected", StaticKeySize).
-			With("got", len(key)).
-			Errorf("static key must be exactly %d bytes", StaticKeySize)
+// key must be 32 bytes for Curve25519. Invalid lengths are ignored;
+// call Validate() to check all fields before use.
+func (nc *NTCP2Config) WithStaticKey(key []byte) *NTCP2Config {
+	if len(key) == StaticKeySize {
+		nc.StaticKey = make([]byte, StaticKeySize)
+		copy(nc.StaticKey, key)
 	}
-	nc.StaticKey = make([]byte, StaticKeySize)
-	copy(nc.StaticKey, key)
-	return nc, nil
+	return nc
 }
 
 // WithRemoteRouterHash sets the remote peer's router identity.
 // hash must be 32 bytes. Required for outbound connections.
-// Returns an error if the hash length is invalid.
-func (nc *NTCP2Config) WithRemoteRouterHash(hash []byte) (*NTCP2Config, error) {
-	if len(hash) != RouterHashSize {
-		return nc, oops.
-			Code("INVALID_REMOTE_ROUTER_HASH").
-			In("ntcp2").
-			With("expected", RouterHashSize).
-			With("got", len(hash)).
-			Errorf("remote router hash must be exactly %d bytes", RouterHashSize)
+// Invalid lengths are ignored; call Validate() to check all fields before use.
+func (nc *NTCP2Config) WithRemoteRouterHash(hash []byte) *NTCP2Config {
+	if len(hash) == RouterHashSize {
+		nc.RemoteRouterHash = make([]byte, RouterHashSize)
+		copy(nc.RemoteRouterHash, hash)
 	}
-	nc.RemoteRouterHash = make([]byte, RouterHashSize)
-	copy(nc.RemoteRouterHash, hash)
-	return nc, nil
+	return nc
 }
 
 // WithRemoteStaticKey sets the remote peer's Curve25519 static public key.
@@ -189,18 +178,13 @@ func (nc *NTCP2Config) WithRemoteRouterHash(hash []byte) (*NTCP2Config, error) {
 // XK pattern, where the initiator must know the responder's static key as a
 // pre-message (← s). This is distinct from RemoteRouterHash (which is
 // SHA-256 of the RouterIdentity).
-func (nc *NTCP2Config) WithRemoteStaticKey(key []byte) (*NTCP2Config, error) {
-	if len(key) != StaticKeySize {
-		return nc, oops.
-			Code("INVALID_REMOTE_STATIC_KEY").
-			In("ntcp2").
-			With("expected", StaticKeySize).
-			With("got", len(key)).
-			Errorf("remote static key must be exactly %d bytes", StaticKeySize)
+// Invalid lengths are ignored; call Validate() to check all fields before use.
+func (nc *NTCP2Config) WithRemoteStaticKey(key []byte) *NTCP2Config {
+	if len(key) == StaticKeySize {
+		nc.RemoteStaticKey = make([]byte, StaticKeySize)
+		copy(nc.RemoteStaticKey, key)
 	}
-	nc.RemoteStaticKey = make([]byte, StaticKeySize)
-	copy(nc.RemoteStaticKey, key)
-	return nc, nil
+	return nc
 }
 
 // WithHandshakeTimeout sets the handshake timeout.
@@ -235,24 +219,17 @@ func (nc *NTCP2Config) WithRetryBackoff(backoff time.Duration) *NTCP2Config {
 }
 
 // WithAESObfuscation enables or disables AES-based ephemeral key obfuscation.
-// When enabled with a custom IV, the IV must be exactly 16 bytes.
-// Returns an error if the custom IV has an invalid (non-zero, non-16) length.
+// When enabled with a custom IV, the IV must be exactly 16 bytes; invalid
+// IV lengths are ignored. Call Validate() to check all fields before use.
 // Note: Options negotiation (padding limits as 4.4 fixed-point, dummy traffic,
 // delay parameters) is the responsibility of the higher-level router transport.
-func (nc *NTCP2Config) WithAESObfuscation(enabled bool, customIV []byte) (*NTCP2Config, error) {
+func (nc *NTCP2Config) WithAESObfuscation(enabled bool, customIV []byte) *NTCP2Config {
 	nc.EnableAESObfuscation = enabled
 	if len(customIV) == IVSize {
 		nc.ObfuscationIV = make([]byte, IVSize)
 		copy(nc.ObfuscationIV, customIV)
-	} else if len(customIV) > 0 {
-		return nil, oops.
-			Code("INVALID_IV_LENGTH").
-			In("ntcp2").
-			With("expected", IVSize).
-			With("got", len(customIV)).
-			Errorf("WithAESObfuscation: custom IV must be exactly %d bytes, got %d", IVSize, len(customIV))
 	}
-	return nc, nil
+	return nc
 }
 
 // WithSipHashLength enables or disables SipHash-based frame length obfuscation.

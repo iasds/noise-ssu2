@@ -185,14 +185,11 @@ func newTestInitiatorConfigFrom(t *testing.T, m testCryptoMaterial) *NTCP2Config
 	t.Helper()
 	config, err := NewNTCP2Config(m.routerHash, true)
 	require.NoError(t, err)
-	config, err = config.WithStaticKey(m.staticKey)
-	require.NoError(t, err)
-	config, err = config.WithRemoteRouterHash(m.remoteHash)
-	require.NoError(t, err)
-	config, err = config.WithRemoteStaticKey(generateRandomBytes(32))
-	require.NoError(t, err)
-	config, err = config.WithAESObfuscation(true, m.obfuscationIV)
-	require.NoError(t, err)
+	config = config.
+		WithStaticKey(m.staticKey).
+		WithRemoteRouterHash(m.remoteHash).
+		WithRemoteStaticKey(generateRandomBytes(32)).
+		WithAESObfuscation(true, m.obfuscationIV)
 	return config
 }
 
@@ -204,9 +201,7 @@ func newTestResponderConfigWithKey(t *testing.T) *NTCP2Config {
 	staticKey := generateRandomBytes(32)
 	config, err := NewNTCP2Config(routerHash, false)
 	require.NoError(t, err)
-	config, err = config.WithStaticKey(staticKey)
-	require.NoError(t, err)
-	return config
+	return config.WithStaticKey(staticKey)
 }
 
 // newTestResponderConfigNoAES creates a responder NTCP2Config with a fixed
@@ -218,9 +213,7 @@ func newTestResponderConfigNoAES(t *testing.T) *NTCP2Config {
 
 	config, err := NewNTCP2Config(routerHash, false)
 	require.NoError(t, err)
-	config, err = config.WithAESObfuscation(false, nil)
-	require.NoError(t, err)
-	return config
+	return config.WithAESObfuscation(false, nil)
 }
 
 // testXKConfigPair holds a matched initiator/responder config pair for XK tests.
@@ -255,21 +248,17 @@ func newTestXKConfigPair(t *testing.T) testXKConfigPair {
 
 	responderConfig, err := NewNTCP2Config(responderHash, false)
 	require.NoError(t, err)
-	responderConfig, err = responderConfig.WithStaticKey(responderKP.Private)
-	require.NoError(t, err)
-	responderConfig, err = responderConfig.WithAESObfuscation(false, nil)
-	require.NoError(t, err)
+	responderConfig = responderConfig.
+		WithStaticKey(responderKP.Private).
+		WithAESObfuscation(false, nil)
 
 	initiatorConfig, err := NewNTCP2Config(initiatorHash, true)
 	require.NoError(t, err)
-	initiatorConfig, err = initiatorConfig.WithStaticKey(initiatorKP.Private)
-	require.NoError(t, err)
-	initiatorConfig, err = initiatorConfig.WithRemoteRouterHash(responderHash)
-	require.NoError(t, err)
-	initiatorConfig, err = initiatorConfig.WithRemoteStaticKey(responderKP.Public)
-	require.NoError(t, err)
-	initiatorConfig, err = initiatorConfig.WithAESObfuscation(false, nil)
-	require.NoError(t, err)
+	initiatorConfig = initiatorConfig.
+		WithStaticKey(initiatorKP.Private).
+		WithRemoteRouterHash(responderHash).
+		WithRemoteStaticKey(responderKP.Public).
+		WithAESObfuscation(false, nil)
 
 	return testXKConfigPair{
 		initiatorConfig: initiatorConfig,

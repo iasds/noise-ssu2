@@ -54,14 +54,9 @@ func TestXKHandshake_NTCP2_FullE2E(t *testing.T) {
 	responderConfig, err := NewNTCP2Config(responderHash, false)
 	require.NoError(t, err, "create responder NTCP2Config")
 
-	responderConfig, err = responderConfig.WithStaticKey(responderKP.Private)
-	require.NoError(t, err, "set responder static key")
-
-	// Disable AES obfuscation for this test (avoids needing a published IV).
-	// AES obfuscation is a handshake-phase modifier that doesn't affect
-	// the data-phase framing pipeline we're testing.
-	responderConfig, err = responderConfig.WithAESObfuscation(false, nil)
-	require.NoError(t, err, "disable responder AES obfuscation")
+	responderConfig = responderConfig.
+		WithStaticKey(responderKP.Private).
+		WithAESObfuscation(false, nil)
 
 	// SipHash is enabled by default — this is what we want to test.
 
@@ -69,19 +64,11 @@ func TestXKHandshake_NTCP2_FullE2E(t *testing.T) {
 	initiatorConfig, err := NewNTCP2Config(initiatorHash, true)
 	require.NoError(t, err, "create initiator NTCP2Config")
 
-	initiatorConfig, err = initiatorConfig.WithStaticKey(initiatorKP.Private)
-	require.NoError(t, err, "set initiator static key")
-
-	initiatorConfig, err = initiatorConfig.WithRemoteRouterHash(responderHash)
-	require.NoError(t, err, "set initiator remote router hash")
-
-	// XK requires the initiator to know the responder's static public key
-	// as a pre-message (← s).
-	initiatorConfig, err = initiatorConfig.WithRemoteStaticKey(responderKP.Public)
-	require.NoError(t, err, "set initiator remote static key")
-
-	initiatorConfig, err = initiatorConfig.WithAESObfuscation(false, nil)
-	require.NoError(t, err, "disable initiator AES obfuscation")
+	initiatorConfig = initiatorConfig.
+		WithStaticKey(initiatorKP.Private).
+		WithRemoteRouterHash(responderHash).
+		WithRemoteStaticKey(responderKP.Public).
+		WithAESObfuscation(false, nil)
 
 	// ── Step 5: Start TCP listener ────────────────────────────────────
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -466,24 +453,20 @@ func TestInboundRouterHash(t *testing.T) {
 	// --- Responder config (listener) ---
 	responderConfig, err := NewNTCP2Config(responderHash, false)
 	require.NoError(t, err)
-	responderConfig, err = responderConfig.WithStaticKey(responderKP.Private)
-	require.NoError(t, err)
-	responderConfig, err = responderConfig.WithAESObfuscation(false, nil)
-	require.NoError(t, err)
+	responderConfig = responderConfig.
+		WithStaticKey(responderKP.Private).
+		WithAESObfuscation(false, nil)
 	// Note: responderConfig.RemoteRouterHash is nil — the listener does NOT
 	// know the initiator's identity ahead of time.
 
 	// --- Initiator config ---
 	initiatorConfig, err := NewNTCP2Config(initiatorHash, true)
 	require.NoError(t, err)
-	initiatorConfig, err = initiatorConfig.WithStaticKey(initiatorKP.Private)
-	require.NoError(t, err)
-	initiatorConfig, err = initiatorConfig.WithRemoteRouterHash(responderHash)
-	require.NoError(t, err)
-	initiatorConfig, err = initiatorConfig.WithRemoteStaticKey(responderKP.Public)
-	require.NoError(t, err)
-	initiatorConfig, err = initiatorConfig.WithAESObfuscation(false, nil)
-	require.NoError(t, err)
+	initiatorConfig = initiatorConfig.
+		WithStaticKey(initiatorKP.Private).
+		WithRemoteRouterHash(responderHash).
+		WithRemoteStaticKey(responderKP.Public).
+		WithAESObfuscation(false, nil)
 
 	// --- Start NTCP2 listener ---
 	ntcp2Ln, tcpAddr := startTestNTCP2Listener(t, responderConfig)

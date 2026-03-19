@@ -146,12 +146,8 @@ func demonstrateAdvancedConfigurations(routerHash []byte) {
 
 // applyResponderFeatures applies NTCP2-specific features to the responder config
 func applyResponderFeatures(config *ntcp2.NTCP2Config, args *ntcp2shared.NTCP2Args) (*ntcp2.NTCP2Config, error) {
-	var err error
 	if args.EnableAESObfuscation {
-		config, err = config.WithAESObfuscation(args.EnableAESObfuscation, nil)
-		if err != nil {
-			return nil, fmt.Errorf("failed to set AES obfuscation: %w", err)
-		}
+		config = config.WithAESObfuscation(args.EnableAESObfuscation, nil)
 	}
 	if args.EnableSipHashLength {
 		config = config.WithSipHashLength(args.EnableSipHashLength, 0, 0)
@@ -184,18 +180,14 @@ func demonstrateResponderConfiguration(routerHash, staticKey []byte, args *ntcp2
 		log.Fatalf("Failed to create responder config: %v", err)
 	}
 
-	config, err = config.WithStaticKey(staticKey)
-	if err != nil {
-		log.Fatalf("Failed to set static key: %v", err)
-	}
-	config = config.
+	config = config.WithStaticKey(staticKey).
 		WithHandshakeTimeout(args.HandshakeTimeout).
 		WithReadTimeout(args.ReadTimeout).
 		WithWriteTimeout(args.WriteTimeout)
 
 	config, err = applyResponderFeatures(config, args)
 	if err != nil {
-		fmt.Printf("❌ %v\n", err)
+		fmt.Printf("❌ Failed to apply responder features: %v\n", err)
 		return
 	}
 
@@ -227,11 +219,8 @@ func createBaseInitiatorConfig(routerHash, staticKey []byte, args *ntcp2shared.N
 		log.Fatalf("Failed to create initiator config: %v", err)
 	}
 
-	config, err = config.WithStaticKey(staticKey)
-	if err != nil {
-		log.Fatalf("Failed to set static key: %v", err)
-	}
 	return config.
+		WithStaticKey(staticKey).
 		WithHandshakeTimeout(args.HandshakeTimeout).
 		WithReadTimeout(args.ReadTimeout).
 		WithWriteTimeout(args.WriteTimeout)
@@ -241,22 +230,13 @@ func createBaseInitiatorConfig(routerHash, staticKey []byte, args *ntcp2shared.N
 func applyNTCP2Features(configBuilder *ntcp2.NTCP2Config, remoteRouterHash []byte, args *ntcp2shared.NTCP2Args) *ntcp2.NTCP2Config {
 	// Add remote router hash if available
 	if remoteRouterHash != nil {
-		var err error
-		configBuilder, err = configBuilder.WithRemoteRouterHash(remoteRouterHash)
-		if err != nil {
-			log.Fatalf("Failed to set remote router hash: %v", err)
-		}
+		configBuilder = configBuilder.WithRemoteRouterHash(remoteRouterHash)
 	}
 
 	// Apply NTCP2-specific features
 	if args.EnableAESObfuscation {
-		var err error
-		configBuilder, err = configBuilder.WithAESObfuscation(args.EnableAESObfuscation, nil)
-		if err != nil {
-			log.Fatalf("Failed to set AES obfuscation: %v", err)
-		}
+		configBuilder = configBuilder.WithAESObfuscation(args.EnableAESObfuscation, nil)
 	}
-
 	if args.EnableSipHashLength {
 		configBuilder = configBuilder.WithSipHashLength(args.EnableSipHashLength, 0, 0)
 	}
