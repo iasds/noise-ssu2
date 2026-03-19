@@ -227,54 +227,46 @@ func (l *SSU2Listener) Addr() net.Addr {
 func (l *SSU2Listener) receiveLoop() {
 	defer l.wg.Done()
 
-	// Buffer for incoming packets (max SSU2 packet size)
 	buf := make([]byte, MaxPacketSizeIPv4)
-
-	// Set read deadline to avoid blocking indefinitely
-	deadline := time.Now().Add(100 * time.Millisecond)
-	_ = l.underlying.SetReadDeadline(deadline)
+	_ = l.underlying.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 
 	for {
 		select {
 		case <-l.shutdownChan:
 			return
 		default:
-			// Read packet from UDP socket
-			n, remoteAddr, err := l.underlying.ReadFrom(buf)
-			if err != nil {
-				// Check if listener was closed
-				select {
-				case <-l.shutdownChan:
-					return
-				default:
-					// Set new deadline and continue
-					deadline = time.Now().Add(100 * time.Millisecond)
-					_ = l.underlying.SetReadDeadline(deadline)
-					continue
-				}
-			}
-
-			// Convert to UDPAddr
-			udpAddr, ok := remoteAddr.(*net.UDPAddr)
-			if !ok {
-				continue // Skip non-UDP addresses
-			}
-
-			// Queue packet for worker pool processing; drop if full
-			packetData := make([]byte, n)
-			copy(packetData, buf[:n])
-
-			select {
-			case l.packetQueue <- incomingPacket{data: packetData, remoteAddr: udpAddr}:
-			default:
-				// Queue full, drop packet to prevent goroutine explosion
-			}
-
-			// Refresh deadline for next read
-			deadline = time.Now().Add(100 * time.Millisecond)
-			_ = l.underlying.SetReadDeadline(deadline)
+			l.readAndQueuePacket(buf)
 		}
 	}
+}
+
+// readAndQueuePacket reads a single packet from the UDP socket,
+// copies it, and enqueues it for worker processing.
+func (l *SSU2Listener) readAndQueuePacket(buf []byte) {
+	n, remoteAddr, err := l.underlying.ReadFrom(buf)
+	if err != nil {
+		select {
+		case <-l.shutdownChan:
+		default:
+			_ = l.underlying.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+		}
+		return
+	}
+
+	udpAddr, ok := remoteAddr.(*net.UDPAddr)
+	if !ok {
+		return
+	}
+
+	packetData := make([]byte, n)
+	copy(packetData, buf[:n])
+
+	select {
+	case l.packetQueue <- incomingPacket{data: packetData, remoteAddr: udpAddr}:
+	default:
+	}
+
+	_ = l.underlying.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 }
 
 // packetWorker drains the packet queue and processes packets.

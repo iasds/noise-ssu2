@@ -5,6 +5,7 @@ import (
 
 	noise "github.com/go-i2p/go-noise"
 	"github.com/go-i2p/go-noise/handshake"
+	"github.com/go-i2p/go-noise/internal"
 	"github.com/samber/oops"
 )
 
@@ -328,11 +329,8 @@ func (sc *SSU2Config) Validate() error {
 // validateBasicConfiguration checks pattern and router hash requirements.
 func (sc *SSU2Config) validateBasicConfiguration() error {
 	// Validate pattern (SSU2 typically uses XK)
-	if sc.Pattern == "" {
-		return oops.
-			Code("MISSING_PATTERN").
-			In("ssu2").
-			Errorf("noise pattern is required")
+	if err := internal.ValidatePattern(sc.Pattern, "ssu2"); err != nil {
+		return err
 	}
 
 	// Validate router hash
@@ -350,12 +348,8 @@ func (sc *SSU2Config) validateBasicConfiguration() error {
 // validateCryptographicParameters checks keys, hashes, and obfuscation settings.
 func (sc *SSU2Config) validateCryptographicParameters() error {
 	// Validate static key if provided
-	if len(sc.StaticKey) > 0 && len(sc.StaticKey) != 32 {
-		return oops.
-			Code("INVALID_STATIC_KEY").
-			In("ssu2").
-			With("key_length", len(sc.StaticKey)).
-			Errorf("static key must be 32 bytes")
+	if err := internal.ValidateKeyLength(sc.StaticKey, "static key", "ssu2"); err != nil {
+		return err
 	}
 
 	// Validate remote router hash if provided
@@ -390,29 +384,13 @@ func (sc *SSU2Config) validateCryptographicParameters() error {
 // validateTimeoutConfiguration checks handshake timeouts and retry settings.
 func (sc *SSU2Config) validateTimeoutConfiguration() error {
 	// Validate handshake timeout
-	if sc.HandshakeTimeout <= 0 {
-		return oops.
-			Code("INVALID_HANDSHAKE_TIMEOUT").
-			In("ssu2").
-			With("timeout", sc.HandshakeTimeout).
-			Errorf("handshake timeout must be positive")
+	if err := internal.ValidateHandshakeTimeout(sc.HandshakeTimeout, "ssu2"); err != nil {
+		return err
 	}
 
 	// Validate retry configuration
-	if sc.HandshakeRetries < -1 {
-		return oops.
-			Code("INVALID_RETRY_COUNT").
-			In("ssu2").
-			With("retries", sc.HandshakeRetries).
-			Errorf("handshake retries must be >= -1")
-	}
-
-	if sc.RetryBackoff < 0 {
-		return oops.
-			Code("INVALID_RETRY_BACKOFF").
-			In("ssu2").
-			With("backoff", sc.RetryBackoff).
-			Errorf("retry backoff must be non-negative")
+	if err := internal.ValidateRetryConfig(sc.HandshakeRetries, sc.RetryBackoff, "ssu2"); err != nil {
+		return err
 	}
 
 	// Validate keepalive interval

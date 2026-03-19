@@ -2,6 +2,7 @@ package ntcp2
 
 import (
 	"net"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -254,4 +255,41 @@ func BenchmarkNTCP2Addr_String(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		_ = addr.String()
 	}
+}
+
+func TestNTCP2AddrConcurrency(t *testing.T) {
+	underlying := &net.TCPAddr{IP: net.ParseIP("192.168.1.1"), Port: 8080}
+	routerHash := make([]byte, 32)
+	routerHash[0] = 0xAA
+
+	addr, err := NewNTCP2Addr(underlying, routerHash, "initiator")
+	require.NoError(t, err)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(4)
+		go func() {
+			defer wg.Done()
+			_ = addr.RouterHash()
+		}()
+		go func() {
+			defer wg.Done()
+			_ = addr.IdentHash()
+		}()
+		go func() {
+			defer wg.Done()
+			_ = addr.String()
+		}()
+		go func(i int) {
+			defer wg.Done()
+			newHash := make([]byte, 32)
+			newHash[0] = byte(i)
+			_ = addr.SetRouterHash(newHash)
+		}(i)
+	}
+	wg.Wait()
+
+	// Verify the address is still valid
+	hash := addr.RouterHash()
+	assert.Equal(t, 32, len(hash))
 }

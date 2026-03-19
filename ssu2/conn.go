@@ -522,9 +522,15 @@ func (h *SSU2Conn) Close() error {
 		}
 
 		// Create Data packet with termination block
+		pktNum := h.nextSendSequence()
+		hdr := make([]byte, ShortHeaderSize)
+		binary.BigEndian.PutUint64(hdr[0:8], h.config.ConnectionID)
+		binary.BigEndian.PutUint32(hdr[8:12], pktNum)
 		packet := &SSU2Packet{
 			MessageType:  MessageTypeData,
-			PacketNumber: h.nextSendSequence(),
+			PacketNumber: pktNum,
+			Header:       hdr,
+			MAC:          make([]byte, MACSize),
 		}
 		payload, err := SerializeBlocks([]*SSU2Block{termBlock})
 		if err == nil {
@@ -645,7 +651,9 @@ func (h *SSU2Conn) sendLoop() {
 func (h *SSU2Conn) recvLoop() {
 	defer h.wg.Done()
 
-	buf := make([]byte, h.config.MTU)
+	// Buffer must hold any valid SSU2 packet; use MaxPacketSizeIPv4 so we
+	// never truncate legitimate packets regardless of the configured MTU.
+	buf := make([]byte, MaxPacketSizeIPv4)
 	for {
 		select {
 		case <-h.closeChan:

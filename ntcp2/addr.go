@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net"
+	"sync"
 
 	"github.com/samber/oops"
 )
@@ -14,6 +15,8 @@ import (
 // It provides I2P-specific addressing information including router identity,
 // destination hash, and session parameters for the NTCP2 protocol.
 type NTCP2Addr struct {
+	// mu protects routerHash from concurrent access
+	mu sync.RWMutex
 	// underlying is the TCP network address
 	underlying net.Addr
 	// routerHash is the 32-byte I2P router identity hash
@@ -74,18 +77,18 @@ func (na *NTCP2Addr) String() string {
 		return "ntcp2://invalid"
 	}
 
-	// Base64 encode router hash for readability
+	na.mu.RLock()
 	routerB64 := base64.URLEncoding.EncodeToString(na.routerHash)
+	na.mu.RUnlock()
 
-	// Build base address
-	addr := fmt.Sprintf("ntcp2://%s/%s/%s", routerB64, na.role, na.underlying.String())
-
-	return addr
+	return fmt.Sprintf("ntcp2://%s/%s/%s", routerB64, na.role, na.underlying.String())
 }
 
 // RouterHash returns a copy of the router identity hash.
 // The returned slice is a defensive copy to prevent external modification.
 func (na *NTCP2Addr) RouterHash() []byte {
+	na.mu.RLock()
+	defer na.mu.RUnlock()
 	if na.routerHash == nil {
 		return nil
 	}
@@ -98,6 +101,8 @@ func (na *NTCP2Addr) RouterHash() []byte {
 // This provides the router hash in a standard type that callers (such as
 // go-i2p's transport layer) can convert to their own hash types as needed.
 func (na *NTCP2Addr) IdentHash() [32]byte {
+	na.mu.RLock()
+	defer na.mu.RUnlock()
 	var h [32]byte
 	copy(h[:], na.routerHash)
 	return h
@@ -115,7 +120,9 @@ func (na *NTCP2Addr) SetRouterHash(routerHash []byte) error {
 			With("hash_length", len(routerHash)).
 			Errorf("router hash must be exactly %d bytes", RouterHashSize)
 	}
+	na.mu.Lock()
 	copy(na.routerHash, routerHash)
+	na.mu.Unlock()
 	return nil
 }
 

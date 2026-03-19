@@ -283,84 +283,106 @@ func DecodePeerTestBlock(ssu2Block *SSU2Block) (*PeerTestBlock, error) {
 		return nil, oops.Errorf("invalid message code: %d (must be 1-7)", block.MessageCode)
 	}
 
-	offset := 5
-
 	// Decode message-specific fields
+	var err error
 	switch block.MessageCode {
-	case PeerTestRequest: // Message 1: [Code][Nonce][CharlieHash][CharlieAddr]
-		if len(data) < offset+32 {
-			return nil, oops.Errorf("message 1 too short for RouterHash: %d bytes", len(data))
-		}
-		block.RouterHash = make([]byte, 32)
-		copy(block.RouterHash, data[offset:offset+32])
-		offset += 32
-
-		addr, n, err := decodeAddress(data, offset)
-		if err != nil {
-			return nil, oops.Wrapf(err, "failed to decode CharlieAddress")
-		}
-		block.CharlieAddress = addr
-		offset += n
-
-	case PeerTestRelay: // Message 2: [Code][Nonce][AliceHash][AliceAddr][Timestamp]
-		if len(data) < offset+32 {
-			return nil, oops.Errorf("message 2 too short for RouterHash: %d bytes", len(data))
-		}
-		block.RouterHash = make([]byte, 32)
-		copy(block.RouterHash, data[offset:offset+32])
-		offset += 32
-
-		addr, n, err := decodeAddress(data, offset)
-		if err != nil {
-			return nil, oops.Wrapf(err, "failed to decode AliceAddress")
-		}
-		block.AliceAddress = addr
-		offset += n
-
-		if len(data) < offset+4 {
-			return nil, oops.Errorf("message 2 too short for Timestamp: %d bytes", len(data))
-		}
-		block.Timestamp = binary.BigEndian.Uint32(data[offset : offset+4])
-
-	case PeerTestResponse: // Message 3: [Code][Nonce]
-		// No additional fields
-
-	case PeerTestResult: // Message 4: [Code][Nonce][CharlieAddr][AliceAddr]
-		addr, n, err := decodeAddress(data, offset)
-		if err != nil {
-			return nil, oops.Wrapf(err, "failed to decode CharlieAddress")
-		}
-		block.CharlieAddress = addr
-		offset += n
-
-		addr2, n2, err := decodeAddress(data, offset)
-		if err != nil {
-			return nil, oops.Wrapf(err, "failed to decode AliceAddress")
-		}
-		block.AliceAddress = addr2
-		offset += n2
-
-	case PeerTestProbe: // Message 5: [Code][Nonce][AliceAddr][Timestamp]
-		addr, n, err := decodeAddress(data, offset)
-		if err != nil {
-			return nil, oops.Wrapf(err, "failed to decode AliceAddress")
-		}
-		block.AliceAddress = addr
-		offset += n
-
-		if len(data) < offset+4 {
-			return nil, oops.Errorf("message 5 too short for Timestamp: %d bytes", len(data))
-		}
-		block.Timestamp = binary.BigEndian.Uint32(data[offset : offset+4])
-
-	case PeerTestReply: // Message 6: [Code][Nonce]
-		// No additional fields
-
-	case PeerTestConfirmation: // Message 7: [Code][Nonce]
+	case PeerTestRequest:
+		err = decodePeerTestMessage1(data, block)
+	case PeerTestRelay:
+		err = decodePeerTestMessage2(data, block)
+	case PeerTestResult:
+		err = decodePeerTestMessage4(data, block)
+	case PeerTestProbe:
+		err = decodePeerTestMessage5(data, block)
+	case PeerTestResponse, PeerTestReply, PeerTestConfirmation:
 		// No additional fields
 	}
 
+	if err != nil {
+		return nil, err
+	}
 	return block, nil
+}
+
+// decodePeerTestMessage1 decodes Message 1 (Request: Alice -> Bob):
+// [Code][Nonce][CharlieHash:32][CharlieAddr]
+func decodePeerTestMessage1(data []byte, block *PeerTestBlock) error {
+	offset := 5
+	if len(data) < offset+32 {
+		return oops.Errorf("message 1 too short for RouterHash: %d bytes", len(data))
+	}
+	block.RouterHash = make([]byte, 32)
+	copy(block.RouterHash, data[offset:offset+32])
+	offset += 32
+
+	addr, _, err := decodeAddress(data, offset)
+	if err != nil {
+		return oops.Wrapf(err, "failed to decode CharlieAddress")
+	}
+	block.CharlieAddress = addr
+	return nil
+}
+
+// decodePeerTestMessage2 decodes Message 2 (Relay: Bob -> Charlie):
+// [Code][Nonce][AliceHash:32][AliceAddr][Timestamp:4]
+func decodePeerTestMessage2(data []byte, block *PeerTestBlock) error {
+	offset := 5
+	if len(data) < offset+32 {
+		return oops.Errorf("message 2 too short for RouterHash: %d bytes", len(data))
+	}
+	block.RouterHash = make([]byte, 32)
+	copy(block.RouterHash, data[offset:offset+32])
+	offset += 32
+
+	addr, n, err := decodeAddress(data, offset)
+	if err != nil {
+		return oops.Wrapf(err, "failed to decode AliceAddress")
+	}
+	block.AliceAddress = addr
+	offset += n
+
+	if len(data) < offset+4 {
+		return oops.Errorf("message 2 too short for Timestamp: %d bytes", len(data))
+	}
+	block.Timestamp = binary.BigEndian.Uint32(data[offset : offset+4])
+	return nil
+}
+
+// decodePeerTestMessage4 decodes Message 4 (Result: Bob -> Alice):
+// [Code][Nonce][CharlieAddr][AliceAddr]
+func decodePeerTestMessage4(data []byte, block *PeerTestBlock) error {
+	offset := 5
+	addr, n, err := decodeAddress(data, offset)
+	if err != nil {
+		return oops.Wrapf(err, "failed to decode CharlieAddress")
+	}
+	block.CharlieAddress = addr
+	offset += n
+
+	addr2, _, err := decodeAddress(data, offset)
+	if err != nil {
+		return oops.Wrapf(err, "failed to decode AliceAddress")
+	}
+	block.AliceAddress = addr2
+	return nil
+}
+
+// decodePeerTestMessage5 decodes Message 5 (Probe: Charlie -> Alice):
+// [Code][Nonce][AliceAddr][Timestamp:4]
+func decodePeerTestMessage5(data []byte, block *PeerTestBlock) error {
+	offset := 5
+	addr, n, err := decodeAddress(data, offset)
+	if err != nil {
+		return oops.Wrapf(err, "failed to decode AliceAddress")
+	}
+	block.AliceAddress = addr
+	offset += n
+
+	if len(data) < offset+4 {
+		return oops.Errorf("message 5 too short for Timestamp: %d bytes", len(data))
+	}
+	block.Timestamp = binary.BigEndian.Uint32(data[offset : offset+4])
+	return nil
 }
 
 // encodeAddressSize calculates the encoded size of a UDP address.

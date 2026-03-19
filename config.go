@@ -4,8 +4,8 @@ import (
 	"time"
 
 	"github.com/go-i2p/go-noise/handshake"
+	"github.com/go-i2p/go-noise/internal"
 	"github.com/go-i2p/noise"
-	"github.com/samber/oops"
 )
 
 // ConnConfig contains configuration for creating a NoiseConn.
@@ -235,74 +235,25 @@ func (c *ConnConfig) Validate() error {
 
 // validatePattern checks if the noise pattern is set and non-empty.
 func (c *ConnConfig) validatePattern() error {
-	if c.Pattern == "" {
-		return oops.
-			Code("INVALID_PATTERN").
-			In("noise").
-			With("config", c).
-			Errorf("noise pattern is required")
-	}
-	return nil
+	return internal.ValidatePattern(c.Pattern, "noise")
 }
 
 // validateHandshakeTimeout checks if the handshake timeout is positive.
 func (c *ConnConfig) validateHandshakeTimeout() error {
-	if c.HandshakeTimeout <= 0 {
-		return oops.
-			Code("INVALID_TIMEOUT").
-			In("noise").
-			With("timeout", c.HandshakeTimeout).
-			With("pattern", c.Pattern).
-			Errorf("handshake timeout must be positive")
-	}
-	return nil
+	return internal.ValidateHandshakeTimeout(c.HandshakeTimeout, "noise")
 }
 
 // validateRetryConfig checks if the retry configuration is valid.
 func (c *ConnConfig) validateRetryConfig() error {
-	if c.HandshakeRetries < -1 {
-		return oops.
-			Code("INVALID_RETRY_COUNT").
-			In("noise").
-			With("retries", c.HandshakeRetries).
-			With("pattern", c.Pattern).
-			Errorf("handshake retries must be >= -1 (-1 = infinite, 0 = no retries)")
-	}
-
-	if c.RetryBackoff < 0 {
-		return oops.
-			Code("INVALID_RETRY_BACKOFF").
-			In("noise").
-			With("backoff", c.RetryBackoff).
-			With("pattern", c.Pattern).
-			Errorf("retry backoff must be non-negative")
-	}
-
-	return nil
+	return internal.ValidateRetryConfig(c.HandshakeRetries, c.RetryBackoff, "noise")
 }
 
 // validateStaticKeyLength checks if the static key has the correct length for Curve25519.
 func (c *ConnConfig) validateStaticKeyLength() error {
-	if len(c.StaticKey) > 0 && len(c.StaticKey) != 32 {
-		return oops.
-			Code("INVALID_KEY_LENGTH").
-			In("noise").
-			With("key_length", len(c.StaticKey)).
-			With("pattern", c.Pattern).
-			Errorf("static key must be 32 bytes for Curve25519")
-	}
-	return nil
+	return internal.ValidateKeyLength(c.StaticKey, "static key", "noise")
 }
 
 // validateRemoteKeyLength checks if the remote key has the correct length for Curve25519.
 func (c *ConnConfig) validateRemoteKeyLength() error {
-	if len(c.RemoteKey) > 0 && len(c.RemoteKey) != 32 {
-		return oops.
-			Code("INVALID_KEY_LENGTH").
-			In("noise").
-			With("key_length", len(c.RemoteKey)).
-			With("pattern", c.Pattern).
-			Errorf("remote key must be 32 bytes for Curve25519")
-	}
-	return nil
+	return internal.ValidateKeyLength(c.RemoteKey, "remote key", "noise")
 }
