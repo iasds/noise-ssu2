@@ -2,6 +2,7 @@ package ssu2
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"net"
 	"sync"
 	"time"
@@ -336,10 +337,18 @@ func (l *SSU2Listener) handleNewSession(remoteAddr *net.UDPAddr, packet *SSU2Pac
 		return nil, oops.Wrapf(err, "failed to generate connection ID")
 	}
 
-	// Create SSU2 address for the new connection
-	routerHash := make([]byte, 32)
-	// TODO: Extract router hash from SessionRequest blocks
-	// For now, use placeholder
+	// Derive initial router hash from the SessionRequest ephemeral key.
+	// The ephemeral key (32-byte X25519 public key) is available in cleartext
+	// and uniquely identifies this handshake session. The real router hash
+	// (SHA-256 of the peer's RouterInfo) is installed post-handshake by
+	// installCipherStates once the peer's static key is known.
+	var routerHash []byte
+	if len(packet.EphemeralKey) == 32 {
+		h := sha256.Sum256(packet.EphemeralKey)
+		routerHash = h[:]
+	} else {
+		routerHash = make([]byte, 32)
+	}
 	addr, err := NewSSU2Addr(remoteAddr, routerHash, connID, "responder")
 	if err != nil {
 		return nil, oops.Wrapf(err, "failed to create session address")

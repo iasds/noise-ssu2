@@ -3,6 +3,7 @@ package ssu2
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -177,7 +178,16 @@ func NewSSU2Conn(
 		role = "responder"
 	}
 
-	ssu2Addr, err := NewSSU2Addr(remoteAddr, config.RouterHash, config.ConnectionID, role)
+	connID := config.ConnectionID
+	if connID == 0 {
+		var genErr error
+		connID, genErr = GenerateConnectionID()
+		if genErr != nil {
+			return nil, oops.Wrapf(genErr, "failed to generate connection ID")
+		}
+	}
+
+	ssu2Addr, err := NewSSU2Addr(remoteAddr, config.RouterHash, connID, role)
 	if err != nil {
 		return nil, oops.Wrapf(err, "failed to create SSU2 address")
 	}
@@ -433,28 +443,59 @@ func (h *SSU2Conn) Write(b []byte) (int, error) {
 		Data: copyBytes(b),
 	}
 
-	// Create Data packet
+	if err := h.writeBlock(block); err != nil {
+		return 0, err
+	}
+	return len(b), nil
+}
+
+// WriteBlocks sends the provided SSU2 blocks as individual Data packets (one
+// packet per block). Unlike Write, this bypasses the BlockTypeI2NPMessage
+// wrapper and sends pre-built blocks directly. Use this to send fragment
+// blocks (BlockTypeFirstFragment / BlockTypeFollowOnFragment) for large I2NP
+// messages.
+func (h *SSU2Conn) WriteBlocks(blocks []*SSU2Block) error {
+	if err := h.validateReadyForIO(); err != nil {
+		return err
+	}
+	for _, block := range blocks {
+		if err := h.writeBlock(block); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// writeBlock sends a single SSU2Block as a Data packet.
+func (h *SSU2Conn) writeBlock(block *SSU2Block) error {
+	pktNum := h.nextSendSequence()
+	hdr := make([]byte, ShortHeaderSize)
+	binary.BigEndian.PutUint64(hdr[0:8], h.config.ConnectionID)
+	binary.BigEndian.PutUint32(hdr[8:12], pktNum)
+	// byte 12 = MessageType will be written by Serialize()
 	packet := &SSU2Packet{
 		MessageType:  MessageTypeData,
-		PacketNumber: h.nextSendSequence(),
-		Payload:      nil, // Will be set by SerializeBlocks
+		PacketNumber: pktNum,
+		Payload:      nil,
+		Header:       hdr,
+		MAC:          make([]byte, MACSize), // placeholder; real MAC is in encrypted payload
 	}
 
 	// Serialize block into payload
 	payload, err := SerializeBlocks([]*SSU2Block{block})
 	if err != nil {
-		return 0, oops.Wrapf(err, "failed to serialize blocks")
+		return oops.Wrapf(err, "failed to serialize block")
 	}
 	packet.Payload = payload
 
-	// Send packet
+	// Enqueue for sending
 	select {
 	case h.sendQueue <- packet:
-		return len(b), nil
+		return nil
 	case <-h.closeChan:
-		return 0, oops.Errorf("connection closed")
+		return oops.Errorf("connection closed")
 	case <-h.getWriteDeadline():
-		return 0, oops.Errorf("write deadline exceeded")
+		return oops.Errorf("write deadline exceeded")
 	}
 }
 

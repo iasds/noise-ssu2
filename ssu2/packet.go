@@ -48,22 +48,22 @@ type SSU2Packet struct {
 
 // Message type constants from SSU2.md
 const (
-	MessageTypeSessionRequest  uint8 = 0
-	MessageTypeSessionCreated  uint8 = 1
+	MessageTypeSessionRequest   uint8 = 0
+	MessageTypeSessionCreated   uint8 = 1
 	MessageTypeSessionConfirmed uint8 = 2
-	MessageTypeData            uint8 = 6
-	MessageTypePeerTest        uint8 = 7
-	MessageTypeRetry           uint8 = 9
-	MessageTypeTokenRequest    uint8 = 10
-	MessageTypeHolePunch       uint8 = 11
+	MessageTypeData             uint8 = 6
+	MessageTypePeerTest         uint8 = 7
+	MessageTypeRetry            uint8 = 9
+	MessageTypeTokenRequest     uint8 = 10
+	MessageTypeHolePunch        uint8 = 11
 )
 
 // Header size constants from SSU2.md
 const (
-	ShortHeaderSize = 16 // SessionConfirmed, Data
-	LongHeaderSize  = 32 // SessionRequest, SessionCreated, PeerTest, Retry, TokenRequest, HolePunch
+	ShortHeaderSize  = 16 // SessionConfirmed, Data
+	LongHeaderSize   = 32 // SessionRequest, SessionCreated, PeerTest, Retry, TokenRequest, HolePunch
 	EphemeralKeySize = 32 // X25519 public key
-	MACSize         = 16 // Poly1305 MAC
+	MACSize          = 16 // Poly1305 MAC
 )
 
 // Size constraints from SSU2.md
@@ -120,6 +120,12 @@ func (p *SSU2Packet) Serialize() ([]byte, error) {
 		return nil, oops.Wrapf(err, "invalid packet")
 	}
 
+	// Embed the message type at header byte 12 (I2P SSU2 spec: type byte at
+	// offset 12 in both short and long headers). This must happen after
+	// validate() confirms len(Header) >= ShortHeaderSize (16), so index 12
+	// is always valid.
+	p.Header[12] = p.MessageType
+
 	// Calculate total size
 	size := len(p.Header) + len(p.Payload) + len(p.MAC)
 	if p.hasEphemeralKey() {
@@ -153,6 +159,11 @@ func (p *SSU2Packet) Deserialize(data []byte) error {
 	if len(data) < MinPacketSize {
 		return oops.Errorf("packet too short: %d bytes (minimum %d)", len(data), MinPacketSize)
 	}
+
+	// Read the message type from header byte 12 (I2P SSU2 spec).
+	// MinPacketSize (40) > 12, so this index is always safe.
+	// This allows Deserialize to work without needing MessageType pre-set.
+	p.MessageType = data[12]
 
 	// Get expected sizes
 	headerSize := p.getHeaderSize()

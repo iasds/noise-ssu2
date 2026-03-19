@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-i2p/noise"
 	"github.com/samber/oops"
+	"golang.org/x/crypto/curve25519"
 )
 
 // HandshakeHandler manages SSU2 handshake message processing using the XK pattern.
@@ -72,7 +73,7 @@ func NewHandshakeHandler(initiator bool, staticKey, remoteStaticKey []byte) (*Ha
 		Initiator:   initiator,
 		StaticKeypair: noise.DHKey{
 			Private: copyBytes(staticKey),
-			Public:  nil, // Will be computed by noise library
+			Public:  derivePublicKey(staticKey),
 		},
 	}
 
@@ -538,4 +539,17 @@ func copyBytes(b []byte) []byte {
 	copied := make([]byte, len(b))
 	copy(copied, b)
 	return copied
+}
+
+// derivePublicKey computes the Curve25519 public key that corresponds to the
+// given private key by performing a scalar multiplication with the base point.
+// This is required when constructing a noise.DHKey for use in handshake states
+// that need to send or hash the local static public key (e.g. XK message 3).
+func derivePublicKey(priv []byte) []byte {
+	pub, err := curve25519.X25519(priv, curve25519.Basepoint)
+	if err != nil {
+		// priv must be 32 bytes; callers always validate length before calling.
+		panic("ssu2: derivePublicKey: " + err.Error())
+	}
+	return pub
 }

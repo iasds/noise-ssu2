@@ -292,9 +292,11 @@ func TestSSU2Packet_Deserialize_Valid(t *testing.T) {
 			msgType: MessageTypeData,
 			createData: func() []byte {
 				data := make([]byte, 0, 128)
-				data = append(data, make([]byte, ShortHeaderSize)...) // Header
-				data = append(data, []byte("data payload")...)        // Payload (need 8+ bytes for MinPacketSize)
-				data = append(data, make([]byte, MACSize)...)         // MAC
+				hdr := make([]byte, ShortHeaderSize)
+				hdr[12] = MessageTypeData                      // type byte at offset 12
+				data = append(data, hdr...)                    // Header
+				data = append(data, []byte("data payload")...) // Payload (need 8+ bytes for MinPacketSize)
+				data = append(data, make([]byte, MACSize)...)  // MAC
 				return data
 			},
 			wantHeader:  ShortHeaderSize,
@@ -307,9 +309,11 @@ func TestSSU2Packet_Deserialize_Valid(t *testing.T) {
 			msgType: MessageTypeSessionConfirmed,
 			createData: func() []byte {
 				data := make([]byte, 0, 128)
-				data = append(data, make([]byte, ShortHeaderSize)...) // Header
-				data = append(data, []byte("12345678")...)            // Minimal payload for 40 byte packet
-				data = append(data, make([]byte, MACSize)...)         // MAC
+				hdr := make([]byte, ShortHeaderSize)
+				hdr[12] = MessageTypeSessionConfirmed         // type byte at offset 12
+				data = append(data, hdr...)                   // Header
+				data = append(data, []byte("12345678")...)    // Minimal payload for 40 byte packet
+				data = append(data, make([]byte, MACSize)...) // MAC
 				return data
 			},
 			wantHeader:  ShortHeaderSize,

@@ -1,6 +1,7 @@
 package ssu2
 
 import (
+	"crypto/sha256"
 	"net"
 	"sync"
 	"testing"
@@ -519,5 +520,67 @@ func TestSSU2Listener_SendRetry(t *testing.T) {
 		// The send might fail, but packet construction should work
 		// We verify no panic occurs
 		_ = err
+	})
+}
+
+// TestListenerRouterHash verifies that handleNewSession derives the initial
+// router hash from the SessionRequest ephemeral key rather than using a
+// zero-filled placeholder. The real router hash is installed post-handshake
+// by installCipherStates; this test covers the pre-handshake derivation.
+func TestListenerRouterHash(t *testing.T) {
+	t.Run("derives hash from ephemeral key", func(t *testing.T) {
+		listener := createTestListener(t)
+		defer listener.Close()
+
+		// Simulate a SessionRequest packet with a 32-byte ephemeral key
+		ephemeralKey := make([]byte, 32)
+		for i := range ephemeralKey {
+			ephemeralKey[i] = byte(i + 1)
+		}
+
+		packet := &SSU2Packet{
+			Header:       make([]byte, 32),
+			EphemeralKey: ephemeralKey,
+			Payload:      nil,
+			MAC:          make([]byte, 16),
+			MessageType:  MessageTypeSessionRequest,
+			PacketNumber: 0,
+		}
+
+		remoteAddr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 9999}
+
+		conn, err := listener.handleNewSession(remoteAddr, packet)
+		require.NoError(t, err)
+		require.NotNil(t, conn)
+
+		// The router hash should be SHA-256 of the ephemeral key, not all zeros
+		expectedHash := sha256.Sum256(ephemeralKey)
+		actualHash := conn.ssu2Addr.RouterHash()
+		assert.Equal(t, expectedHash[:], actualHash)
+		assert.NotEqual(t, make([]byte, 32), actualHash, "router hash must not be zero-filled")
+	})
+
+	t.Run("falls back to zero hash without ephemeral key", func(t *testing.T) {
+		listener := createTestListener(t)
+		defer listener.Close()
+
+		// Packet with no ephemeral key (e.g. non-standard or truncated)
+		packet := &SSU2Packet{
+			Header:       make([]byte, 32),
+			EphemeralKey: nil,
+			Payload:      nil,
+			MAC:          make([]byte, 16),
+			MessageType:  MessageTypeSessionRequest,
+			PacketNumber: 0,
+		}
+
+		remoteAddr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 9998}
+
+		conn, err := listener.handleNewSession(remoteAddr, packet)
+		require.NoError(t, err)
+		require.NotNil(t, conn)
+
+		// Without an ephemeral key, falls back to zero hash
+		assert.Equal(t, make([]byte, 32), conn.ssu2Addr.RouterHash())
 	})
 }
