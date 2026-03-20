@@ -451,9 +451,9 @@ func TestSSU2Listener_ValidateSessionRequestToken(t *testing.T) {
 		token, err := listener.tokenCache.GenerateToken(remoteAddr)
 		require.NoError(t, err)
 
-		// Create NewToken block with the token (use first 11 bytes)
+		// Create NewToken block with the token
 		expiration := time.Now().Add(60 * time.Second)
-		tokenBlock, err := NewNewTokenBlock(expiration, token[:11])
+		tokenBlock, err := NewNewTokenBlock(expiration, token)
 		require.NoError(t, err)
 
 		payload, err := tokenBlock.Serialize()
@@ -463,12 +463,7 @@ func TestSSU2Listener_ValidateSessionRequestToken(t *testing.T) {
 		packet := NewSSU2Packet(MessageTypeSessionRequest, 0)
 		packet.Payload = payload
 
-		// The full 32-byte token needs to match what's in cache
-		// Since we only send 11 bytes in the block, validation will fail
-		// This is expected - the actual implementation pads to 32 bytes
 		err = listener.validateSessionRequestToken(packet, remoteAddr)
-		// Token validation may fail due to padding mismatch in this test setup
-		// The important thing is that the code path executes without panic
 	})
 
 	t.Run("ExpiredTokenFails", func(t *testing.T) {
@@ -479,7 +474,7 @@ func TestSSU2Listener_ValidateSessionRequestToken(t *testing.T) {
 
 		// Create token with past expiration
 		expiration := time.Now().Add(-1 * time.Hour) // Expired
-		token := make([]byte, 11)
+		token := make([]byte, TokenSize)             // 8 bytes per SSU2 spec
 
 		tokenBlock, err := NewNewTokenBlock(expiration, token)
 		require.NoError(t, err)
@@ -507,7 +502,7 @@ func TestSSU2Listener_SendRetry(t *testing.T) {
 
 		err := listener.sendRetry(remoteAddr, shortToken, nil)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "token too short")
+		assert.Contains(t, err.Error(), "token must be exactly")
 	})
 
 	t.Run("ValidTokenCreatesRetry", func(t *testing.T) {
@@ -515,7 +510,7 @@ func TestSSU2Listener_SendRetry(t *testing.T) {
 		defer listener.Close()
 
 		remoteAddr := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 12345}
-		token := make([]byte, 32) // Valid size
+		token := make([]byte, TokenSize) // Valid size
 		for i := range token {
 			token[i] = byte(i)
 		}

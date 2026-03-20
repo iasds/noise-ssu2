@@ -134,7 +134,7 @@ func TestSSU2Block_Serialize_Invalid(t *testing.T) {
 		},
 		{
 			name:       "NewToken too short",
-			block:      NewSSU2Block(BlockTypeNewToken, make([]byte, 14)),
+			block:      NewSSU2Block(BlockTypeNewToken, make([]byte, 11)),
 			wantErrMsg: "NewToken block too short",
 		},
 		{
@@ -776,7 +776,7 @@ func TestSSU2Block_Constants(t *testing.T) {
 func TestNewNewTokenBlock(t *testing.T) {
 	t.Run("valid token creates block", func(t *testing.T) {
 		expiration := time.Now().Add(60 * time.Second)
-		token := make([]byte, 11) // Minimum size
+		token := make([]byte, 8) // 8 bytes per SSU2 spec
 		for i := range token {
 			token[i] = byte(i + 1)
 		}
@@ -786,26 +786,26 @@ func TestNewNewTokenBlock(t *testing.T) {
 		require.NotNil(t, block)
 
 		assert.Equal(t, BlockTypeNewToken, block.Type)
-		assert.Equal(t, 15, len(block.Data)) // 4 + 11
+		assert.Equal(t, 12, len(block.Data)) // 4 + 8
 	})
 
 	t.Run("token too short returns error", func(t *testing.T) {
 		expiration := time.Now().Add(60 * time.Second)
-		shortToken := make([]byte, 10) // Too short
+		shortToken := make([]byte, 7) // Too short
 
 		block, err := NewNewTokenBlock(expiration, shortToken)
 		assert.Error(t, err)
 		assert.Nil(t, block)
-		assert.Contains(t, err.Error(), "at least 11 bytes")
+		assert.Contains(t, err.Error(), "exactly 8 bytes")
 	})
 
-	t.Run("larger token creates larger block", func(t *testing.T) {
+	t.Run("token too long returns error", func(t *testing.T) {
 		expiration := time.Now().Add(60 * time.Second)
-		token := make([]byte, 20) // Larger than minimum
+		token := make([]byte, 9) // Wrong size
 
 		block, err := NewNewTokenBlock(expiration, token)
-		require.NoError(t, err)
-		assert.Equal(t, 24, len(block.Data)) // 4 + 20
+		assert.Error(t, err)
+		assert.Nil(t, block)
 	})
 }
 
@@ -813,7 +813,7 @@ func TestNewNewTokenBlock(t *testing.T) {
 func TestParseNewTokenBlock(t *testing.T) {
 	t.Run("valid block parses correctly", func(t *testing.T) {
 		expiration := time.Now().Add(60 * time.Second)
-		token := make([]byte, 11)
+		token := make([]byte, 8)
 		for i := range token {
 			token[i] = byte(i + 0xA0)
 		}
@@ -859,7 +859,7 @@ func TestParseNewTokenBlock(t *testing.T) {
 // TestNewTokenBlockRoundTrip tests serialization/deserialization roundtrip
 func TestNewTokenBlockRoundTrip(t *testing.T) {
 	expiration := time.Now().Add(120 * time.Second)
-	token := []byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B}
+	token := []byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08}
 
 	// Create block
 	block, err := NewNewTokenBlock(expiration, token)

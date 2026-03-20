@@ -39,7 +39,7 @@ func TestTokenCache_GenerateToken(t *testing.T) {
 		token, err := cache.GenerateToken(addr)
 		require.NoError(t, err)
 		require.NotNil(t, token)
-		assert.Equal(t, 32, len(token))
+		assert.Equal(t, TokenSize, len(token))
 		assert.Equal(t, 1, cache.Size())
 	})
 
@@ -96,7 +96,7 @@ func TestTokenCache_ValidateToken(t *testing.T) {
 		_, err := cache.GenerateToken(addr)
 		require.NoError(t, err)
 
-		wrongToken := make([]byte, 32)
+		wrongToken := make([]byte, TokenSize)
 		valid := cache.ValidateToken(wrongToken, addr)
 		assert.False(t, valid)
 	})
@@ -122,11 +122,11 @@ func TestTokenCache_ValidateToken(t *testing.T) {
 		_, err := cache.GenerateToken(addr)
 		require.NoError(t, err)
 
-		shortToken := make([]byte, 16)
+		shortToken := make([]byte, 8)
 		valid := cache.ValidateToken(shortToken, addr)
 		assert.False(t, valid)
 
-		longToken := make([]byte, 64)
+		longToken := make([]byte, 32)
 		valid = cache.ValidateToken(longToken, addr)
 		assert.False(t, valid)
 	})
@@ -149,7 +149,7 @@ func TestTokenCache_ValidateToken(t *testing.T) {
 		cache := NewTokenCache(60 * time.Second)
 		addr := &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 9001}
 
-		fakeToken := make([]byte, 32)
+		fakeToken := make([]byte, TokenSize)
 		valid := cache.ValidateToken(fakeToken, addr)
 		assert.False(t, valid)
 	})
@@ -177,7 +177,7 @@ func TestTokenCache_ConsumeToken(t *testing.T) {
 		cache := NewTokenCache(60 * time.Second)
 		addr := &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 9001}
 
-		fakeToken := make([]byte, 32)
+		fakeToken := make([]byte, TokenSize)
 		consumed := cache.ConsumeToken(fakeToken, addr)
 		assert.False(t, consumed)
 	})
@@ -230,7 +230,7 @@ func TestTokenCache_ConsumeToken(t *testing.T) {
 		_, err := cache.GenerateToken(addr)
 		require.NoError(t, err)
 
-		shortToken := make([]byte, 16)
+		shortToken := make([]byte, 8)
 		consumed := cache.ConsumeToken(shortToken, addr)
 		assert.False(t, consumed)
 	})
@@ -398,7 +398,7 @@ func TestTokenCache_IPv6Addresses(t *testing.T) {
 		token, err := cache.GenerateToken(addr)
 		require.NoError(t, err)
 		require.NotNil(t, token)
-		assert.Equal(t, 32, len(token))
+		assert.Equal(t, TokenSize, len(token))
 	})
 
 	t.Run("IPv6 token validation", func(t *testing.T) {

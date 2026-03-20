@@ -10,6 +10,11 @@ import (
 	"github.com/samber/oops"
 )
 
+// TokenSize is the size of SSU2 retry tokens in bytes.
+// Per SSU2 spec, tokens are 8-byte randomly-generated unsigned big-endian integers.
+// The NewToken block (Type 17) carries: 4-byte expiration + 8-byte token = 12 bytes of data.
+const TokenSize = 8
+
 // TokenCache manages tokens for SSU2 retry mechanism.
 // Tokens are used to prevent address spoofing attacks during connection establishment.
 // Per SSU2 specification, tokens are short-lived (typically 60 seconds) and tied to
@@ -51,8 +56,8 @@ func (tc *TokenCache) GenerateToken(addr *net.UDPAddr) ([]byte, error) {
 			Errorf("address cannot be nil")
 	}
 
-	// Generate 32 bytes of cryptographically random data
-	tokenValue := make([]byte, 32)
+	// Generate 8-byte random token per SSU2 spec
+	tokenValue := make([]byte, TokenSize)
 	if _, err := rand.Read(tokenValue); err != nil {
 		return nil, oops.
 			Code("TOKEN_GENERATION_FAILED").
@@ -79,7 +84,7 @@ func (tc *TokenCache) GenerateToken(addr *net.UDPAddr) ([]byte, error) {
 // ValidateToken checks if a token is valid for the specified address.
 // Returns true if the token exists, matches the address, and hasn't expired.
 func (tc *TokenCache) ValidateToken(tokenValue []byte, addr *net.UDPAddr) bool {
-	if addr == nil || len(tokenValue) != 32 {
+	if addr == nil || len(tokenValue) != TokenSize {
 		return false
 	}
 
@@ -104,7 +109,7 @@ func (tc *TokenCache) ValidateToken(tokenValue []byte, addr *net.UDPAddr) bool {
 // This should be called when a valid SessionRequest with token is received.
 // Returns true if the token was valid and consumed.
 func (tc *TokenCache) ConsumeToken(tokenValue []byte, addr *net.UDPAddr) bool {
-	if addr == nil || len(tokenValue) != 32 {
+	if addr == nil || len(tokenValue) != TokenSize {
 		return false
 	}
 

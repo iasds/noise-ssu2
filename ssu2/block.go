@@ -65,7 +65,7 @@ const (
 	minAddressSizeIPv6       = 21    // IPv6 address
 	minRelayTagRequestSize   = 3     // Relay tag request data
 	minRelayTagSize          = 7     // Relay tag data
-	minNewTokenSize          = 15    // New token data
+	minNewTokenSize          = 12    // New token data: 4 expiration + 8 token
 	minFirstPacketNumberSize = 4     // Initial packet number (4 bytes)
 	minCongestionSize        = 1     // Congestion experience (1 byte)
 	maxBlockLength           = 65535 // Maximum length field value (2 bytes)
@@ -363,26 +363,25 @@ func GetBlockTypeName(blockType uint8) string {
 	}
 }
 
-// NewTokenBlock represents a NewToken (Type 17) block for Retry messages.
+// NewTokenBlock represents a NewToken (Type 17) block.
 // Per SSU2 spec, this block contains:
 //   - 4 bytes: Token expiration timestamp (seconds since epoch)
-//   - 8 bytes: Reserved/nonce
-//   - Token data (remaining bytes, typically 3+ bytes)
+//   - 8 bytes: Token (randomly-generated, big-endian)
 //
-// Total minimum: 15 bytes
+// Total data size: 12 bytes
 type NewTokenBlock struct {
 	Expiration uint32 // Unix timestamp when token expires
-	Token      []byte // Token value (must be 11 bytes for 15-byte total)
+	Token      []byte // Token value (8 bytes per spec)
 }
 
 // NewNewTokenBlock creates a NewToken block with the specified expiration and token.
-// The token must be exactly 11 bytes to meet the 15-byte minimum requirement.
+// Per SSU2 spec, the token must be exactly 8 bytes.
 func NewNewTokenBlock(expiration time.Time, token []byte) (*SSU2Block, error) {
-	if len(token) < 11 {
-		return nil, oops.Errorf("token must be at least 11 bytes for NewToken block, got %d", len(token))
+	if len(token) != TokenSize {
+		return nil, oops.Errorf("token must be exactly %d bytes per SSU2 spec, got %d", TokenSize, len(token))
 	}
 
-	// Build block data: expiration (4) + token (11+)
+	// Build block data: expiration (4) + token (8)
 	data := make([]byte, 4+len(token))
 	binary.BigEndian.PutUint32(data[0:4], uint32(expiration.Unix()))
 	copy(data[4:], token)

@@ -1130,7 +1130,7 @@ func TestDataHandler_AllBlockTypesExplicitlyHandled(t *testing.T) {
 		{BlockTypeAddress, "Address", make([]byte, 9)},                 // minAddressSizeIPv4 = 9
 		{BlockTypeRelayTagRequest, "RelayTagRequest", make([]byte, 3)}, // minRelayTagRequestSize = 3
 		{BlockTypeRelayTag, "RelayTag", make([]byte, 7)},               // minRelayTagSize = 7
-		{BlockTypeNewToken, "NewToken", make([]byte, 15)},              // minNewTokenSize = 15
+		{BlockTypeNewToken, "NewToken", make([]byte, 12)},              // minNewTokenSize = 12
 		{BlockTypePathChallenge, "PathChallenge", make([]byte, 8)},     // Variable
 		{BlockTypePathResponse, "PathResponse", make([]byte, 8)},       // Variable
 		{BlockTypePadding, "Padding", make([]byte, 16)},                // Variable
@@ -1198,7 +1198,7 @@ func TestDataHandler_SetCallbacks(t *testing.T) {
 
 	// Test NewToken callback
 	t.Run("NewToken callback", func(t *testing.T) {
-		block := NewSSU2Block(BlockTypeNewToken, make([]byte, 15)) // minNewTokenSize = 15
+		block := NewSSU2Block(BlockTypeNewToken, make([]byte, 12)) // minNewTokenSize = 12
 		payload, _ := SerializeBlocks([]*SSU2Block{block})
 		packet := &SSU2Packet{
 			MessageType: MessageTypeData,

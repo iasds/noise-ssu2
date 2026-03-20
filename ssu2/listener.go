@@ -318,13 +318,10 @@ func (l *SSU2Listener) handleNewSession(remoteAddr *net.UDPAddr, packet *SSU2Pac
 	// For SessionRequest, attempt to validate token if present
 	if packet.MessageType == MessageTypeSessionRequest {
 		if err := l.validateSessionRequestToken(packet, remoteAddr); err != nil {
-			log.WithField("remote", remoteAddr.String()).Warn("Token validation failed: " + err.Error())
-			if l.config.StrictTokenValidation {
-				return nil, oops.
-					Code("TOKEN_VALIDATION_FAILED").
-					In("ssu2_listener").
-					Wrap(err)
-			}
+			return nil, oops.
+				Code("TOKEN_VALIDATION_FAILED").
+				In("ssu2_listener").
+				Wrap(err)
 		}
 	}
 
@@ -430,21 +427,14 @@ func (l *SSU2Listener) validateSessionRequestToken(packet *SSU2Packet, remoteAdd
 			Errorf("token has expired")
 	}
 
-	// Validate token against cache
-	// Note: We use the 11-byte token from the block, padded to match cache storage
-	fullToken := make([]byte, 32)
-	copy(fullToken, newToken.Token)
-
-	if !l.tokenCache.ValidateToken(fullToken, remoteAddr) {
+	// Validate and consume token against cache
+	if !l.tokenCache.ConsumeToken(newToken.Token, remoteAddr) {
 		return oops.
 			Code("INVALID_TOKEN").
 			In("ssu2_listener").
 			With("address", remoteAddr.String()).
 			Errorf("token validation failed")
 	}
-
-	// Token is valid - consume it
-	l.tokenCache.ConsumeToken(fullToken, remoteAddr)
 
 	return nil
 }
@@ -467,18 +457,18 @@ func (l *SSU2Listener) processTokenRequest(packet *SSU2Packet, remoteAddr *net.U
 //
 // Parameters:
 //   - remoteAddr: Destination UDP address
-//   - token: 32-byte token value (will use first 11 bytes for NewToken block)
+//   - token: 8-byte token value for the NewToken block
 //   - originalHeader: Header from TokenRequest (for connection ID extraction)
 func (l *SSU2Listener) sendRetry(remoteAddr *net.UDPAddr, token []byte, originalHeader []byte) error {
-	if len(token) < 11 {
-		return oops.Errorf("token too short: need at least 11 bytes, got %d", len(token))
+	if len(token) != TokenSize {
+		return oops.Errorf("token must be exactly %d bytes, got %d", TokenSize, len(token))
 	}
 
 	// Calculate token expiration (TTL from token cache)
 	expiration := time.Now().Add(l.tokenCache.GetTTL())
 
-	// Create NewToken block with first 11 bytes of token
-	tokenBlock, err := NewNewTokenBlock(expiration, token[:11])
+	// Create NewToken block
+	tokenBlock, err := NewNewTokenBlock(expiration, token)
 	if err != nil {
 		return oops.Wrapf(err, "failed to create NewToken block")
 	}
