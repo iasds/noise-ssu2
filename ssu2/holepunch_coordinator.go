@@ -187,6 +187,35 @@ func (hpc *HolePunchCoordinator) InitiateHolePunch(remoteAddr, introducerAddr *n
 	return sessionID, nil
 }
 
+// lookupAttempt validates inputs and returns the attempt under lock.
+// Caller must hold hpc.mutex.
+func (hpc *HolePunchCoordinator) lookupAttempt(sessionID uint64, addr *net.UDPAddr, addrLabel string) (*HolePunchAttempt, error) {
+	if sessionID == 0 {
+		return nil, oops.
+			Code("INVALID_SESSION_ID").
+			In("holepunch_coordinator").
+			Errorf("session ID cannot be zero")
+	}
+
+	if addr == nil {
+		return nil, oops.
+			Code("INVALID_ADDRESS").
+			In("holepunch_coordinator").
+			Errorf("%s address cannot be nil", addrLabel)
+	}
+
+	attempt, exists := hpc.attempts[sessionID]
+	if !exists {
+		return nil, oops.
+			Code("SESSION_NOT_FOUND").
+			In("holepunch_coordinator").
+			With("session_id", sessionID).
+			Errorf("hole punch session not found")
+	}
+
+	return attempt, nil
+}
+
 // SendHolePunch sends a hole punch packet to the target address.
 //
 // Parameters:
@@ -195,38 +224,15 @@ func (hpc *HolePunchCoordinator) InitiateHolePunch(remoteAddr, introducerAddr *n
 //
 // Returns error if session not found or send fails.
 func (hpc *HolePunchCoordinator) SendHolePunch(sessionID uint64, targetAddr *net.UDPAddr) error {
-	if sessionID == 0 {
-		return oops.
-			Code("INVALID_SESSION_ID").
-			In("holepunch_coordinator").
-			Errorf("session ID cannot be zero")
-	}
-
-	if targetAddr == nil {
-		return oops.
-			Code("INVALID_ADDRESS").
-			In("holepunch_coordinator").
-			Errorf("target address cannot be nil")
-	}
-
 	hpc.mutex.Lock()
 	defer hpc.mutex.Unlock()
 
-	attempt, exists := hpc.attempts[sessionID]
-	if !exists {
-		return oops.
-			Code("SESSION_NOT_FOUND").
-			In("holepunch_coordinator").
-			With("session_id", sessionID).
-			Errorf("hole punch session not found")
+	attempt, err := hpc.lookupAttempt(sessionID, targetAddr, "target")
+	if err != nil {
+		return err
 	}
 
-	// Update state
 	attempt.State = HolePunchSent
-
-	// Note: Actual packet sending would be done by the listener
-	// This method updates the state machine only
-
 	return nil
 }
 
@@ -238,35 +244,15 @@ func (hpc *HolePunchCoordinator) SendHolePunch(sessionID uint64, targetAddr *net
 //
 // Returns error if session not found.
 func (hpc *HolePunchCoordinator) HandleHolePunch(sessionID uint64, fromAddr *net.UDPAddr) error {
-	if sessionID == 0 {
-		return oops.
-			Code("INVALID_SESSION_ID").
-			In("holepunch_coordinator").
-			Errorf("session ID cannot be zero")
-	}
-
-	if fromAddr == nil {
-		return oops.
-			Code("INVALID_ADDRESS").
-			In("holepunch_coordinator").
-			Errorf("from address cannot be nil")
-	}
-
 	hpc.mutex.Lock()
 	defer hpc.mutex.Unlock()
 
-	attempt, exists := hpc.attempts[sessionID]
-	if !exists {
-		return oops.
-			Code("SESSION_NOT_FOUND").
-			In("holepunch_coordinator").
-			With("session_id", sessionID).
-			Errorf("hole punch session not found")
+	attempt, err := hpc.lookupAttempt(sessionID, fromAddr, "from")
+	if err != nil {
+		return err
 	}
 
-	// Update state to waiting
 	attempt.State = HolePunchWaiting
-
 	return nil
 }
 
@@ -278,30 +264,12 @@ func (hpc *HolePunchCoordinator) HandleHolePunch(sessionID uint64, fromAddr *net
 //
 // Returns error if session not found.
 func (hpc *HolePunchCoordinator) ProcessHolePunchResponse(sessionID uint64, addr *net.UDPAddr) error {
-	if sessionID == 0 {
-		return oops.
-			Code("INVALID_SESSION_ID").
-			In("holepunch_coordinator").
-			Errorf("session ID cannot be zero")
-	}
-
-	if addr == nil {
-		return oops.
-			Code("INVALID_ADDRESS").
-			In("holepunch_coordinator").
-			Errorf("address cannot be nil")
-	}
-
 	hpc.mutex.Lock()
 	defer hpc.mutex.Unlock()
 
-	attempt, exists := hpc.attempts[sessionID]
-	if !exists {
-		return oops.
-			Code("SESSION_NOT_FOUND").
-			In("holepunch_coordinator").
-			With("session_id", sessionID).
-			Errorf("hole punch session not found")
+	attempt, err := hpc.lookupAttempt(sessionID, addr, "response")
+	if err != nil {
+		return err
 	}
 
 	// Verify address matches expected remote

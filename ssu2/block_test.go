@@ -99,7 +99,7 @@ func TestSSU2Block_Serialize_Invalid(t *testing.T) {
 	}{
 		{
 			name:       "DateTime too short",
-			block:      NewSSU2Block(BlockTypeDateTime, make([]byte, 6)),
+			block:      NewSSU2Block(BlockTypeDateTime, make([]byte, 3)),
 			wantErrMsg: "DateTime block too short",
 		},
 		{
@@ -261,8 +261,8 @@ func TestSSU2Block_Deserialize_Invalid(t *testing.T) {
 			name: "DateTime block with insufficient data",
 			data: []byte{
 				BlockTypeDateTime,
-				0, 6, // Length 6 (but minimum is 7)
-				1, 2, 3, 4, 5, 6,
+				0, 3, // Length 3 (but minimum is 4)
+				1, 2, 3,
 			},
 			wantErrMsg: "DateTime block too short",
 		},
@@ -392,8 +392,8 @@ func TestSerializeBlocks(t *testing.T) {
 		{
 			name: "Invalid block in sequence",
 			blocks: []*SSU2Block{
-				NewSSU2Block(BlockTypeDateTime, make([]byte, 7)),
-				NewSSU2Block(BlockTypeDateTime, make([]byte, 6)), // Too short
+				NewSSU2Block(BlockTypeDateTime, make([]byte, 4)),
+				NewSSU2Block(BlockTypeDateTime, make([]byte, 3)), // Too short
 			},
 			wantError: true,
 		},
@@ -488,8 +488,8 @@ func TestDeserializeBlocks_Invalid(t *testing.T) {
 		{
 			name: "Invalid block in sequence",
 			data: []byte{
-				BlockTypeDateTime, 0, 7, 1, 2, 3, 4, 5, 6, 7, // Valid
-				BlockTypeDateTime, 0, 6, 1, 2, 3, 4, 5, 6, // Too short for DateTime
+				BlockTypeDateTime, 0, 4, 1, 2, 3, 4, // Valid (4 bytes)
+				BlockTypeDateTime, 0, 3, 1, 2, 3, // Too short for DateTime
 			},
 			wantErrMsg: "DateTime block too short",
 		},
@@ -547,17 +547,18 @@ func TestIsKnownBlockType(t *testing.T) {
 		{"RelayResponse", BlockTypeRelayResponse, true},
 		{"RelayIntro", BlockTypeRelayIntro, true},
 		{"PeerTest", BlockTypePeerTest, true},
+		{"NextNonce", BlockTypeNextNonce, true},
 		{"ACK", BlockTypeACK, true},
 		{"Address", BlockTypeAddress, true},
+		{"IntroKey", BlockTypeIntroKey, true},
 		{"RelayTagRequest", BlockTypeRelayTagRequest, true},
 		{"RelayTag", BlockTypeRelayTag, true},
 		{"NewToken", BlockTypeNewToken, true},
 		{"PathChallenge", BlockTypePathChallenge, true},
 		{"PathResponse", BlockTypePathResponse, true},
+		{"FirstPacketNumber", BlockTypeFirstPacketNumber, true},
+		{"Congestion", BlockTypeCongestion, true},
 		{"Padding", BlockTypePadding, true},
-		{"Unknown type 11", 11, false},
-		{"Unknown type 14", 14, false},
-		{"Unknown type 20", 20, false},
 		{"Unknown type 255", 255, false},
 	}
 
@@ -585,15 +586,18 @@ func TestGetBlockTypeName(t *testing.T) {
 		{BlockTypeRelayResponse, "RelayResponse"},
 		{BlockTypeRelayIntro, "RelayIntro"},
 		{BlockTypePeerTest, "PeerTest"},
+		{BlockTypeNextNonce, "NextNonce"},
 		{BlockTypeACK, "ACK"},
 		{BlockTypeAddress, "Address"},
+		{BlockTypeIntroKey, "IntroKey"},
 		{BlockTypeRelayTagRequest, "RelayTagRequest"},
 		{BlockTypeRelayTag, "RelayTag"},
 		{BlockTypeNewToken, "NewToken"},
 		{BlockTypePathChallenge, "PathChallenge"},
 		{BlockTypePathResponse, "PathResponse"},
+		{BlockTypeFirstPacketNumber, "FirstPacketNumber"},
+		{BlockTypeCongestion, "Congestion"},
 		{BlockTypePadding, "Padding"},
-		{11, "Unknown"},
 		{255, "Unknown"},
 	}
 
@@ -611,7 +615,7 @@ func TestSSU2Block_AllBlockTypes(t *testing.T) {
 		blockType uint8
 		minSize   int
 	}{
-		{"DateTime", BlockTypeDateTime, 7},
+		{"DateTime", BlockTypeDateTime, 4},
 		{"Options", BlockTypeOptions, 15},
 		{"RouterInfo", BlockTypeRouterInfo, 0},
 		{"I2NP", BlockTypeI2NPMessage, 0},
@@ -622,13 +626,17 @@ func TestSSU2Block_AllBlockTypes(t *testing.T) {
 		{"RelayResponse", BlockTypeRelayResponse, 0},
 		{"RelayIntro", BlockTypeRelayIntro, 0},
 		{"PeerTest", BlockTypePeerTest, 0},
+		{"NextNonce", BlockTypeNextNonce, 8},
 		{"ACK", BlockTypeACK, 5},
 		{"Address", BlockTypeAddress, 9},
+		{"IntroKey", BlockTypeIntroKey, 32},
 		{"RelayTagRequest", BlockTypeRelayTagRequest, 3},
 		{"RelayTag", BlockTypeRelayTag, 7},
 		{"NewToken", BlockTypeNewToken, 15},
 		{"PathChallenge", BlockTypePathChallenge, 0},
 		{"PathResponse", BlockTypePathResponse, 0},
+		{"FirstPacketNumber", BlockTypeFirstPacketNumber, 4},
+		{"Congestion", BlockTypeCongestion, 1},
 		{"Padding", BlockTypePadding, 0},
 	}
 

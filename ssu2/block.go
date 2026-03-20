@@ -27,40 +27,48 @@ type SSU2Block struct {
 
 // Block type constants from SSU2.md
 const (
-	BlockTypeDateTime         uint8 = 0   // Timestamp block (7 bytes)
-	BlockTypeOptions          uint8 = 1   // Connection options (15+ bytes)
-	BlockTypeRouterInfo       uint8 = 2   // RouterInfo structure (variable)
-	BlockTypeI2NPMessage      uint8 = 3   // I2NP message (variable)
-	BlockTypeFirstFragment    uint8 = 4   // First fragment of message (variable)
-	BlockTypeFollowOnFragment uint8 = 5   // Subsequent fragment (variable)
-	BlockTypeTermination      uint8 = 6   // Connection termination (9 bytes)
-	BlockTypeRelayRequest     uint8 = 7   // Relay request (variable)
-	BlockTypeRelayResponse    uint8 = 8   // Relay response (variable)
-	BlockTypeRelayIntro       uint8 = 9   // Relay introduction (variable)
-	BlockTypePeerTest         uint8 = 10  // Peer test message (variable)
-	BlockTypeACK              uint8 = 12  // Acknowledgment (5+ bytes)
-	BlockTypeAddress          uint8 = 13  // Address block (9 or 21 bytes)
-	BlockTypeRelayTagRequest  uint8 = 15  // Request relay tag (3 bytes)
-	BlockTypeRelayTag         uint8 = 16  // Relay tag assignment (7 bytes)
-	BlockTypeNewToken         uint8 = 17  // New session token (15 bytes)
-	BlockTypePathChallenge    uint8 = 18  // Path validation challenge (variable)
-	BlockTypePathResponse     uint8 = 19  // Path validation response (variable)
-	BlockTypePadding          uint8 = 254 // Padding block (variable)
+	BlockTypeDateTime          uint8 = 0   // Timestamp block (4 bytes, seconds since epoch)
+	BlockTypeOptions           uint8 = 1   // Connection options (15+ bytes)
+	BlockTypeRouterInfo        uint8 = 2   // RouterInfo structure (variable)
+	BlockTypeI2NPMessage       uint8 = 3   // I2NP message (variable)
+	BlockTypeFirstFragment     uint8 = 4   // First fragment of message (variable)
+	BlockTypeFollowOnFragment  uint8 = 5   // Subsequent fragment (variable)
+	BlockTypeTermination       uint8 = 6   // Connection termination (9 bytes)
+	BlockTypeRelayRequest      uint8 = 7   // Relay request (variable)
+	BlockTypeRelayResponse     uint8 = 8   // Relay response (variable)
+	BlockTypeRelayIntro        uint8 = 9   // Relay introduction (variable)
+	BlockTypePeerTest          uint8 = 10  // Peer test message (variable)
+	BlockTypeNextNonce         uint8 = 11  // Nonce rekeying (8 bytes)
+	BlockTypeACK               uint8 = 12  // Acknowledgment (5+ bytes)
+	BlockTypeAddress           uint8 = 13  // Address block (9 or 21 bytes)
+	BlockTypeIntroKey          uint8 = 14  // Introduction key (32 bytes)
+	BlockTypeRelayTagRequest   uint8 = 15  // Request relay tag (3 bytes)
+	BlockTypeRelayTag          uint8 = 16  // Relay tag assignment (7 bytes)
+	BlockTypeNewToken          uint8 = 17  // New session token (15 bytes)
+	BlockTypePathChallenge     uint8 = 18  // Path validation challenge (variable)
+	BlockTypePathResponse      uint8 = 19  // Path validation response (variable)
+	BlockTypeFirstPacketNumber uint8 = 20  // Initial packet number for data phase (4 bytes)
+	BlockTypeCongestion        uint8 = 21  // Congestion experience signaling (1 byte)
+	BlockTypePadding           uint8 = 254 // Padding block (variable)
 )
 
 // Minimum block data sizes from SSU2.md
 const (
-	minBlockHeaderSize     = 3     // Type (1) + Length (2)
-	minDateTimeSize        = 7     // Timestamp data
-	minOptionsSize         = 15    // Options data
-	minTerminationSize     = 9     // Termination data
-	minACKSize             = 5     // ACK data
-	minAddressSizeIPv4     = 9     // IPv4 address
-	minAddressSizeIPv6     = 21    // IPv6 address
-	minRelayTagRequestSize = 3     // Relay tag request data
-	minRelayTagSize        = 7     // Relay tag data
-	minNewTokenSize        = 15    // New token data
-	maxBlockLength         = 65535 // Maximum length field value (2 bytes)
+	minBlockHeaderSize       = 3     // Type (1) + Length (2)
+	minDateTimeSize          = 4     // Timestamp data (seconds since epoch)
+	minOptionsSize           = 15    // Options data
+	minTerminationSize       = 9     // Termination data
+	minNextNonceSize         = 8     // Next nonce (8 bytes)
+	minACKSize               = 5     // ACK data
+	minIntroKeySize          = 32    // Introduction key (32 bytes)
+	minAddressSizeIPv4       = 9     // IPv4 address
+	minAddressSizeIPv6       = 21    // IPv6 address
+	minRelayTagRequestSize   = 3     // Relay tag request data
+	minRelayTagSize          = 7     // Relay tag data
+	minNewTokenSize          = 15    // New token data
+	minFirstPacketNumberSize = 4     // Initial packet number (4 bytes)
+	minCongestionSize        = 1     // Congestion experience (1 byte)
+	maxBlockLength           = 65535 // Maximum length field value (2 bytes)
 )
 
 // NewSSU2Block creates a new block with the specified type and data.
@@ -154,6 +162,22 @@ func (b *SSU2Block) Deserialize(data []byte) (int, error) {
 	return totalLen, nil
 }
 
+// blockMinSizes maps block types to their minimum data sizes per SSU2.md.
+var blockMinSizes = map[uint8]int{
+	BlockTypeDateTime:          minDateTimeSize,
+	BlockTypeOptions:           minOptionsSize,
+	BlockTypeTermination:       minTerminationSize,
+	BlockTypeNextNonce:         minNextNonceSize,
+	BlockTypeACK:               minACKSize,
+	BlockTypeIntroKey:          minIntroKeySize,
+	BlockTypeAddress:           minAddressSizeIPv4,
+	BlockTypeRelayTagRequest:   minRelayTagRequestSize,
+	BlockTypeRelayTag:          minRelayTagSize,
+	BlockTypeNewToken:          minNewTokenSize,
+	BlockTypeFirstPacketNumber: minFirstPacketNumberSize,
+	BlockTypeCongestion:        minCongestionSize,
+}
+
 // validate checks that the block meets minimum size requirements per SSU2.md.
 func (b *SSU2Block) validate() error {
 	dataLen := len(b.Data)
@@ -163,40 +187,10 @@ func (b *SSU2Block) validate() error {
 		return oops.Errorf("block data too large: %d bytes (maximum %d)", dataLen, maxBlockLength)
 	}
 
-	// Validate minimum sizes for specific block types
-	switch b.Type {
-	case BlockTypeDateTime:
-		if dataLen < minDateTimeSize {
-			return oops.Errorf("DateTime block too short: %d bytes (minimum %d)", dataLen, minDateTimeSize)
-		}
-	case BlockTypeOptions:
-		if dataLen < minOptionsSize {
-			return oops.Errorf("Options block too short: %d bytes (minimum %d)", dataLen, minOptionsSize)
-		}
-	case BlockTypeTermination:
-		if dataLen < minTerminationSize {
-			return oops.Errorf("Termination block too short: %d bytes (minimum %d)", dataLen, minTerminationSize)
-		}
-	case BlockTypeACK:
-		if dataLen < minACKSize {
-			return oops.Errorf("ACK block too short: %d bytes (minimum %d)", dataLen, minACKSize)
-		}
-	case BlockTypeAddress:
-		if dataLen < minAddressSizeIPv4 {
-			return oops.Errorf("Address block too short: %d bytes (minimum %d)", dataLen, minAddressSizeIPv4)
-		}
-	case BlockTypeRelayTagRequest:
-		if dataLen < minRelayTagRequestSize {
-			return oops.Errorf("RelayTagRequest block too short: %d bytes (minimum %d)", dataLen, minRelayTagRequestSize)
-		}
-	case BlockTypeRelayTag:
-		if dataLen < minRelayTagSize {
-			return oops.Errorf("RelayTag block too short: %d bytes (minimum %d)", dataLen, minRelayTagSize)
-		}
-	case BlockTypeNewToken:
-		if dataLen < minNewTokenSize {
-			return oops.Errorf("NewToken block too short: %d bytes (minimum %d)", dataLen, minNewTokenSize)
-		}
+	// Validate minimum size for known block types
+	if minSize, ok := blockMinSizes[b.Type]; ok && dataLen < minSize {
+		return oops.Errorf("%s block too short: %d bytes (minimum %d)",
+			GetBlockTypeName(b.Type), dataLen, minSize)
 	}
 
 	return nil
@@ -297,13 +291,17 @@ func IsKnownBlockType(blockType uint8) bool {
 		BlockTypeRelayResponse,
 		BlockTypeRelayIntro,
 		BlockTypePeerTest,
+		BlockTypeNextNonce,
 		BlockTypeACK,
 		BlockTypeAddress,
+		BlockTypeIntroKey,
 		BlockTypeRelayTagRequest,
 		BlockTypeRelayTag,
 		BlockTypeNewToken,
 		BlockTypePathChallenge,
 		BlockTypePathResponse,
+		BlockTypeFirstPacketNumber,
+		BlockTypeCongestion,
 		BlockTypePadding:
 		return true
 	default:
@@ -336,10 +334,14 @@ func GetBlockTypeName(blockType uint8) string {
 		return "RelayIntro"
 	case BlockTypePeerTest:
 		return "PeerTest"
+	case BlockTypeNextNonce:
+		return "NextNonce"
 	case BlockTypeACK:
 		return "ACK"
 	case BlockTypeAddress:
 		return "Address"
+	case BlockTypeIntroKey:
+		return "IntroKey"
 	case BlockTypeRelayTagRequest:
 		return "RelayTagRequest"
 	case BlockTypeRelayTag:
@@ -350,6 +352,10 @@ func GetBlockTypeName(blockType uint8) string {
 		return "PathChallenge"
 	case BlockTypePathResponse:
 		return "PathResponse"
+	case BlockTypeFirstPacketNumber:
+		return "FirstPacketNumber"
+	case BlockTypeCongestion:
+		return "Congestion"
 	case BlockTypePadding:
 		return "Padding"
 	default:

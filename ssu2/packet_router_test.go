@@ -1,6 +1,7 @@
 package ssu2
 
 import (
+	"encoding/binary"
 	"net"
 	"sync"
 	"testing"
@@ -182,17 +183,17 @@ func TestPacketRouter_ExtractConnectionID(t *testing.T) {
 	router := NewPacketRouter(nil)
 
 	t.Run("ValidShortHeader", func(t *testing.T) {
-		// Create 16-byte header with connection ID in bytes 8-15
+		// Create 16-byte header with destination connection ID in bytes 0-7
 		header := make([]byte, 16)
 		// Set connection ID to 0x0123456789ABCDEF
-		header[8] = 0x01
-		header[9] = 0x23
-		header[10] = 0x45
-		header[11] = 0x67
-		header[12] = 0x89
-		header[13] = 0xAB
-		header[14] = 0xCD
-		header[15] = 0xEF
+		header[0] = 0x01
+		header[1] = 0x23
+		header[2] = 0x45
+		header[3] = 0x67
+		header[4] = 0x89
+		header[5] = 0xAB
+		header[6] = 0xCD
+		header[7] = 0xEF
 
 		connID, err := router.ExtractConnectionID(header)
 		require.NoError(t, err)
@@ -200,17 +201,17 @@ func TestPacketRouter_ExtractConnectionID(t *testing.T) {
 	})
 
 	t.Run("ValidLongHeader", func(t *testing.T) {
-		// Create 32-byte header with connection ID in bytes 8-15
+		// Create 32-byte header with destination connection ID in bytes 0-7
 		header := make([]byte, 32)
 		// Set connection ID to 0xFEDCBA9876543210
-		header[8] = 0xFE
-		header[9] = 0xDC
-		header[10] = 0xBA
-		header[11] = 0x98
-		header[12] = 0x76
-		header[13] = 0x54
-		header[14] = 0x32
-		header[15] = 0x10
+		header[0] = 0xFE
+		header[1] = 0xDC
+		header[2] = 0xBA
+		header[3] = 0x98
+		header[4] = 0x76
+		header[5] = 0x54
+		header[6] = 0x32
+		header[7] = 0x10
 
 		connID, err := router.ExtractConnectionID(header)
 		require.NoError(t, err)
@@ -459,17 +460,9 @@ func createMockSSU2Conn(t *testing.T, connID uint64) *SSU2Conn {
 func createMockPacket(t *testing.T, msgType uint8, connID uint64) *SSU2Packet {
 	t.Helper()
 
-	// Create header with connection ID
+	// Create header with destination connection ID in bytes 0-7 (big-endian)
 	header := make([]byte, 16)
-	// Set connection ID in bytes 8-15 (big-endian)
-	header[8] = byte(connID >> 56)
-	header[9] = byte(connID >> 48)
-	header[10] = byte(connID >> 40)
-	header[11] = byte(connID >> 32)
-	header[12] = byte(connID >> 24)
-	header[13] = byte(connID >> 16)
-	header[14] = byte(connID >> 8)
-	header[15] = byte(connID)
+	binary.BigEndian.PutUint64(header[0:8], connID)
 
 	return &SSU2Packet{
 		MessageType: msgType,

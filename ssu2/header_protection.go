@@ -373,85 +373,20 @@ func (hpm *HeaderProtectorManager) GetProtectorForType(headerType HeaderType) (*
 	defer hpm.mu.RUnlock()
 
 	var k1, k2 []byte
+	var err error
 
 	switch headerType {
 	case HeaderTypeSessionRequest, HeaderTypeTokenRequest, HeaderTypeHolePunch:
-		// Uses receiver's intro key for both
-		if hpm.isInitiator {
-			// We're sending to receiver, use their intro key
-			if len(hpm.remoteIntroKey) != HeaderKeySize {
-				return nil, oops.
-					Code("MISSING_REMOTE_INTRO_KEY").
-					In("ssu2").
-					Errorf("remote intro key required for Session Request")
-			}
-			k1 = hpm.remoteIntroKey
-			k2 = hpm.remoteIntroKey
-		} else {
-			// We're receiving, use our intro key
-			k1 = hpm.introKey
-			k2 = hpm.introKey
-		}
-
+		k1, k2, err = hpm.keysForIntroProtected()
 	case HeaderTypeSessionCreated, HeaderTypeRetry:
-		// Sender's intro key for k1, derived key for k2 (Session Created)
-		// Or sender's intro key for both (Retry)
-		if hpm.isInitiator {
-			// We're receiving from responder, use their intro key
-			if len(hpm.remoteIntroKey) != HeaderKeySize {
-				return nil, oops.
-					Code("MISSING_REMOTE_INTRO_KEY").
-					In("ssu2").
-					Errorf("remote intro key required for Session Created/Retry")
-			}
-			k1 = hpm.remoteIntroKey
-			if headerType == HeaderTypeRetry {
-				k2 = hpm.remoteIntroKey
-			} else {
-				// Session Created uses KDF-derived k2
-				if len(hpm.kdfHeader2) != HeaderKeySize {
-					// Fall back to intro key if KDF not yet available
-					k2 = hpm.remoteIntroKey
-				} else {
-					k2 = hpm.kdfHeader2
-				}
-			}
-		} else {
-			// We're sending as responder, use our intro key
-			k1 = hpm.introKey
-			if headerType == HeaderTypeRetry {
-				k2 = hpm.introKey
-			} else {
-				// Session Created uses KDF-derived k2
-				if len(hpm.kdfHeader2) != HeaderKeySize {
-					// Fall back to intro key if KDF not yet available
-					k2 = hpm.introKey
-				} else {
-					k2 = hpm.kdfHeader2
-				}
-			}
-		}
-
+		k1, k2, err = hpm.keysForSessionCreatedRetry(headerType)
 	case HeaderTypeSessionConfirmed, HeaderTypeData:
-		// Uses KDF-derived keys for both
-		if len(hpm.kdfHeader1) != HeaderKeySize || len(hpm.kdfHeader2) != HeaderKeySize {
-			return nil, oops.
-				Code("MISSING_KDF_KEYS").
-				In("ssu2").
-				With("header_type", headerType).
-				Errorf("KDF-derived keys required for Session Confirmed/Data packets")
-		}
-		k1 = hpm.kdfHeader1
-		k2 = hpm.kdfHeader2
-
+		k1, k2, err = hpm.keysForKDFProtected(headerType)
 	case HeaderTypePeerTest:
-		// Uses test target's intro key for both
-		// For Peer Test, the caller should provide the target's intro key separately
 		return nil, oops.
 			Code("PEER_TEST_NOT_SUPPORTED").
 			In("ssu2").
 			Errorf("Peer Test requires target's intro key - use GetProtectorForType with explicit keys")
-
 	default:
 		return nil, oops.
 			Code("UNKNOWN_HEADER_TYPE").
@@ -460,7 +395,62 @@ func (hpm *HeaderProtectorManager) GetProtectorForType(headerType HeaderType) (*
 			Errorf("unknown header type")
 	}
 
+	if err != nil {
+		return nil, err
+	}
 	return NewHeaderProtector(k1, k2, headerType)
+}
+
+// keysForIntroProtected returns keys for packets protected solely by intro keys
+// (SessionRequest, TokenRequest, HolePunch).
+func (hpm *HeaderProtectorManager) keysForIntroProtected() (k1, k2 []byte, err error) {
+	if hpm.isInitiator {
+		if len(hpm.remoteIntroKey) != HeaderKeySize {
+			return nil, nil, oops.
+				Code("MISSING_REMOTE_INTRO_KEY").
+				In("ssu2").
+				Errorf("remote intro key required for Session Request")
+		}
+		return hpm.remoteIntroKey, hpm.remoteIntroKey, nil
+	}
+	return hpm.introKey, hpm.introKey, nil
+}
+
+// keysForSessionCreatedRetry returns keys for SessionCreated or Retry packets.
+// Retry uses the sender's intro key for both; SessionCreated uses KDF-derived k2
+// when available, falling back to the intro key.
+func (hpm *HeaderProtectorManager) keysForSessionCreatedRetry(headerType HeaderType) (k1, k2 []byte, err error) {
+	base := hpm.introKey
+	if hpm.isInitiator {
+		if len(hpm.remoteIntroKey) != HeaderKeySize {
+			return nil, nil, oops.
+				Code("MISSING_REMOTE_INTRO_KEY").
+				In("ssu2").
+				Errorf("remote intro key required for Session Created/Retry")
+		}
+		base = hpm.remoteIntroKey
+	}
+
+	k1 = base
+	if headerType == HeaderTypeRetry || len(hpm.kdfHeader2) != HeaderKeySize {
+		k2 = base
+	} else {
+		k2 = hpm.kdfHeader2
+	}
+	return k1, k2, nil
+}
+
+// keysForKDFProtected returns keys for packets protected by KDF-derived keys
+// (SessionConfirmed, Data).
+func (hpm *HeaderProtectorManager) keysForKDFProtected(headerType HeaderType) (k1, k2 []byte, err error) {
+	if len(hpm.kdfHeader1) != HeaderKeySize || len(hpm.kdfHeader2) != HeaderKeySize {
+		return nil, nil, oops.
+			Code("MISSING_KDF_KEYS").
+			In("ssu2").
+			With("header_type", headerType).
+			Errorf("KDF-derived keys required for Session Confirmed/Data packets")
+	}
+	return hpm.kdfHeader1, hpm.kdfHeader2, nil
 }
 
 // SetKDFKeys sets the KDF-derived header protection keys.

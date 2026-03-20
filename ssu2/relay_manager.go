@@ -275,34 +275,37 @@ func (rm *RelayManager) AllocateRelayTag(addr *net.UDPAddr) (uint32, error) {
 	rm.mutex.Lock()
 	defer rm.mutex.Unlock()
 
-	// Generate cryptographically random tag (non-zero)
-	var tag uint32
-	for tag == 0 {
-		var buf [4]byte
-		if _, err := rand.Read(buf[:]); err != nil {
-			return 0, oops.
-				Code("TAG_GENERATION_FAILED").
-				In("relay_manager").
-				Wrapf(err, "failed to generate relay tag")
+	const maxAttempts = 3
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		var tag uint32
+		for tag == 0 {
+			var buf [4]byte
+			if _, err := rand.Read(buf[:]); err != nil {
+				return 0, oops.
+					Code("TAG_GENERATION_FAILED").
+					In("relay_manager").
+					Wrapf(err, "failed to generate relay tag")
+			}
+			tag = binary.BigEndian.Uint32(buf[:])
 		}
-		tag = binary.BigEndian.Uint32(buf[:])
+
+		if _, exists := rm.relayTags[tag]; exists {
+			continue
+		}
+
+		rm.relayTags[tag] = &RelayTag{
+			Tag:       tag,
+			ForAddr:   addr,
+			CreatedAt: time.Now(),
+			ExpiresAt: time.Now().Add(1 * time.Hour),
+		}
+		return tag, nil
 	}
 
-	// Check for collision (extremely unlikely with 32-bit random)
-	if _, exists := rm.relayTags[tag]; exists {
-		// Retry once on collision
-		return rm.AllocateRelayTag(addr)
-	}
-
-	// Store tag
-	rm.relayTags[tag] = &RelayTag{
-		Tag:       tag,
-		ForAddr:   addr,
-		CreatedAt: time.Now(),
-		ExpiresAt: time.Now().Add(1 * time.Hour),
-	}
-
-	return tag, nil
+	return 0, oops.
+		Code("TAG_COLLISION").
+		In("relay_manager").
+		Errorf("relay tag collision after %d attempts", maxAttempts)
 }
 
 // ValidateRelayTag validates that a relay tag is active and matches the specified address.

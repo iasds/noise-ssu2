@@ -82,6 +82,33 @@ func NewIntroducerRegistry(maxCount int) *IntroducerRegistry {
 //
 // Returns error if validation fails.
 func (ir *IntroducerRegistry) AddIntroducer(info *RegisteredIntroducer) error {
+	if err := validateIntroducer(info); err != nil {
+		return err
+	}
+
+	ir.mutex.Lock()
+	defer ir.mutex.Unlock()
+
+	// Check if introducer already exists
+	for i, intro := range ir.introducers {
+		if intro.Addr.String() == info.Addr.String() {
+			ir.introducers[i] = ir.copyIntroducer(info)
+			return nil
+		}
+	}
+
+	// Add new introducer or replace oldest
+	if len(ir.introducers) < ir.maxCount {
+		ir.introducers = append(ir.introducers, ir.copyIntroducer(info))
+	} else {
+		ir.introducers[ir.findOldestIndex()] = ir.copyIntroducer(info)
+	}
+
+	return nil
+}
+
+// validateIntroducer checks that all required fields are present and valid.
+func validateIntroducer(info *RegisteredIntroducer) error {
 	if info == nil {
 		return oops.
 			Code("INVALID_INTRODUCER").
@@ -127,35 +154,21 @@ func (ir *IntroducerRegistry) AddIntroducer(info *RegisteredIntroducer) error {
 			Errorf("relay tag cannot be zero")
 	}
 
-	ir.mutex.Lock()
-	defer ir.mutex.Unlock()
-
-	// Check if introducer already exists
-	for i, intro := range ir.introducers {
-		if intro.Addr.String() == info.Addr.String() {
-			// Update existing introducer
-			ir.introducers[i] = ir.copyIntroducer(info)
-			return nil
-		}
-	}
-
-	// Add new introducer
-	if len(ir.introducers) < ir.maxCount {
-		ir.introducers = append(ir.introducers, ir.copyIntroducer(info))
-	} else {
-		// Replace oldest introducer
-		oldestIdx := 0
-		oldestTime := ir.introducers[0].LastSeen
-		for i, intro := range ir.introducers {
-			if intro.LastSeen.Before(oldestTime) {
-				oldestIdx = i
-				oldestTime = intro.LastSeen
-			}
-		}
-		ir.introducers[oldestIdx] = ir.copyIntroducer(info)
-	}
-
 	return nil
+}
+
+// findOldestIndex returns the index of the introducer with the oldest LastSeen time.
+// Must be called with ir.mutex held.
+func (ir *IntroducerRegistry) findOldestIndex() int {
+	oldestIdx := 0
+	oldestTime := ir.introducers[0].LastSeen
+	for i, intro := range ir.introducers[1:] {
+		if intro.LastSeen.Before(oldestTime) {
+			oldestIdx = i + 1
+			oldestTime = intro.LastSeen
+		}
+	}
+	return oldestIdx
 }
 
 // RemoveIntroducer removes an introducer by address.

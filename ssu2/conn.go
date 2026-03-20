@@ -83,6 +83,9 @@ type SSU2Conn struct {
 	rttEstimator     *RTTEstimator
 	recvWindow       *ReceiveWindow
 
+	// Header protection (nil = disabled)
+	headerProtector *HeaderProtectorManager
+
 	// Connection state
 	state      ConnState
 	stateMutex sync.RWMutex
@@ -212,7 +215,58 @@ func NewSSU2Conn(
 		lastActivity:     time.Now(),
 	}
 
+	// Initialize header protection if intro keys are provided
+	if len(config.IntroKey) == HeaderKeySize {
+		hpm, hpErr := NewHeaderProtectorManager(config.IntroKey, config.RemoteIntroKey, initiator)
+		if hpErr != nil {
+			return nil, oops.Wrapf(hpErr, "failed to create header protector")
+		}
+		conn.headerProtector = hpm
+	}
+
 	return conn, nil
+}
+
+// messageTypeToHeaderType maps an SSU2 message type to the corresponding
+// header protection type used for key selection.
+func messageTypeToHeaderType(msgType uint8) HeaderType {
+	switch msgType {
+	case MessageTypeSessionRequest:
+		return HeaderTypeSessionRequest
+	case MessageTypeSessionCreated:
+		return HeaderTypeSessionCreated
+	case MessageTypeSessionConfirmed:
+		// KDF keys are not yet available when SessionConfirmed is sent.
+		// Use intro keys (same as SessionRequest) for consistency.
+		return HeaderTypeSessionRequest
+	case MessageTypeRetry:
+		return HeaderTypeRetry
+	case MessageTypeTokenRequest:
+		return HeaderTypeTokenRequest
+	case MessageTypePeerTest:
+		return HeaderTypePeerTest
+	case MessageTypeHolePunch:
+		return HeaderTypeHolePunch
+	default:
+		return HeaderTypeData
+	}
+}
+
+// expectedInboundHeaderType returns the header type to use when decrypting
+// inbound packets, based on the current connection state.
+func (h *SSU2Conn) expectedInboundHeaderType() HeaderType {
+	h.stateMutex.RLock()
+	state := h.state
+	h.stateMutex.RUnlock()
+
+	if state == StateEstablished {
+		return HeaderTypeData
+	}
+	// During handshake, use intro-key-based types.
+	if h.initiator {
+		return HeaderTypeSessionCreated
+	}
+	return HeaderTypeSessionRequest
 }
 
 // Handshake performs the SSU2 XK pattern handshake.
@@ -268,8 +322,8 @@ func (h *SSU2Conn) handshakeInitiator(ctx context.Context) error {
 		return oops.Wrapf(err, "failed to process SessionCreated")
 	}
 
-	// Step 4: Create and send SessionConfirmed (3rd XK message)
-	sessionConfirmed, err := h.handshakeHandler.CreateSessionConfirmed(h.config.ConnectionID, 1)
+	// Step 4: Create and send SessionConfirmed (3rd XK message) with RouterInfo
+	sessionConfirmed, err := h.handshakeHandler.CreateSessionConfirmed(h.config.ConnectionID, 1, h.config.RouterHash)
 	if err != nil {
 		return oops.Wrapf(err, "failed to create SessionConfirmed")
 	}
@@ -278,24 +332,8 @@ func (h *SSU2Conn) handshakeInitiator(ctx context.Context) error {
 		return oops.Wrapf(err, "failed to send SessionConfirmed")
 	}
 
-	// Step 5: Check handshake completion
-	if !h.handshakeHandler.IsHandshakeComplete() {
-		return oops.Errorf("handshake not complete after SessionConfirmed")
-	}
-
-	// Step 6: Extract transport cipher states
-	if err := h.installCipherStates(); err != nil {
-		return oops.Wrapf(err, "failed to install cipher states")
-	}
-
-	// Step 7: Transition to established state
-	h.stateMutex.Lock()
-	h.state = StateEstablished
-	h.stateMutex.Unlock()
-
-	h.startDataLoops()
-
-	return nil
+	// Step 5: Finalize handshake
+	return h.finalizeHandshake()
 }
 
 // handshakeResponder performs the responder side of XK handshake.
@@ -341,23 +379,35 @@ func (h *SSU2Conn) handshakeResponder(ctx context.Context) error {
 		return oops.Wrapf(err, "failed to process SessionConfirmed")
 	}
 
-	// Step 6: Check handshake completion
+	// Step 6: Finalize handshake
+	return h.finalizeHandshake()
+}
+
+// finalizeHandshake checks completion, installs cipher states, transitions to
+// established, and starts data loops. Shared by both initiator and responder.
+func (h *SSU2Conn) finalizeHandshake() error {
 	if !h.handshakeHandler.IsHandshakeComplete() {
 		return oops.Errorf("handshake not complete after SessionConfirmed")
 	}
-
-	// Step 7: Extract transport cipher states
 	if err := h.installCipherStates(); err != nil {
 		return oops.Wrapf(err, "failed to install cipher states")
 	}
 
-	// Step 8: Transition to established state
+	// Install KDF-derived header protection keys for data phase
+	if h.headerProtector != nil {
+		k1, k2, err := h.handshakeHandler.DeriveHeaderKeys()
+		if err != nil {
+			return oops.Wrapf(err, "failed to derive header protection keys")
+		}
+		if err := h.headerProtector.SetKDFKeys(k1, k2); err != nil {
+			return oops.Wrapf(err, "failed to set header protection KDF keys")
+		}
+	}
+
 	h.stateMutex.Lock()
 	h.state = StateEstablished
 	h.stateMutex.Unlock()
-
 	h.startDataLoops()
-
 	return nil
 }
 
@@ -659,52 +709,62 @@ func (h *SSU2Conn) recvLoop() {
 		case <-h.closeChan:
 			return
 		default:
-			// Set read deadline for non-blocking operation
-			_ = h.underlying.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+			_ = h.underlying.SetReadDeadline(time.Now().Add(1 * time.Second))
 
 			n, addr, err := h.underlying.ReadFrom(buf)
 			if err != nil {
 				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-					continue // Timeout is expected
+					continue
 				}
 				h.readErrors.Add(1)
 				continue
 			}
 
-			// Verify source address matches
-			udpAddr, ok := addr.(*net.UDPAddr)
-			if !ok || !udpAddr.IP.Equal(h.remoteAddr.IP) || udpAddr.Port != h.remoteAddr.Port {
-				continue // Wrong source
+			if packet := h.parseInboundPacket(buf[:n], addr); packet != nil {
+				h.processInboundPacket(packet)
 			}
-
-			// Parse packet
-			packet := &SSU2Packet{}
-			if err := packet.Deserialize(buf[:n]); err != nil {
-				h.parseErrors.Add(1)
-				continue
-			}
-
-			// Decrypt payload for data packets when cipher states are available
-			h.cipherMutex.RLock()
-			cipher := h.recvCipher
-			h.cipherMutex.RUnlock()
-
-			if cipher != nil && packet.MessageType == MessageTypeData && len(packet.Payload) > 0 {
-				decrypted, err := cipher.Decrypt(nil, nil, packet.Payload)
-				if err != nil {
-					h.decryptErrors.Add(1)
-					continue
-				}
-				packet.Payload = decrypted
-			}
-
-			// Update activity time
-			h.updateActivity()
-
-			// Process packet
-			h.processInboundPacket(packet)
 		}
 	}
+}
+
+// parseInboundPacket validates the source address, deserializes, and decrypts an
+// inbound UDP datagram. Returns nil if the packet should be dropped.
+func (h *SSU2Conn) parseInboundPacket(data []byte, addr net.Addr) *SSU2Packet {
+	udpAddr, ok := addr.(*net.UDPAddr)
+	if !ok || !udpAddr.IP.Equal(h.remoteAddr.IP) || udpAddr.Port != h.remoteAddr.Port {
+		return nil
+	}
+
+	// Decrypt header protection before parsing
+	if h.headerProtector != nil {
+		hType := h.expectedInboundHeaderType()
+		if err := h.headerProtector.DecryptInboundHeader(data, hType); err != nil {
+			h.parseErrors.Add(1)
+			return nil
+		}
+	}
+
+	packet := &SSU2Packet{}
+	if err := packet.Deserialize(data); err != nil {
+		h.parseErrors.Add(1)
+		return nil
+	}
+
+	h.cipherMutex.RLock()
+	cipher := h.recvCipher
+	h.cipherMutex.RUnlock()
+
+	if cipher != nil && packet.MessageType == MessageTypeData && len(packet.Payload) > 0 {
+		decrypted, err := cipher.Decrypt(nil, nil, packet.Payload)
+		if err != nil {
+			h.decryptErrors.Add(1)
+			return nil
+		}
+		packet.Payload = decrypted
+	}
+
+	h.updateActivity()
+	return packet
 }
 
 // keepaliveLoop manages connection keepalive.
@@ -772,6 +832,14 @@ func (h *SSU2Conn) sendPacketDirect(packet *SSU2Packet) error {
 		return oops.Wrapf(err, "failed to serialize packet")
 	}
 
+	// Apply header protection if enabled
+	if h.headerProtector != nil {
+		hType := messageTypeToHeaderType(packet.MessageType)
+		if hpErr := h.headerProtector.EncryptOutboundHeader(data, hType); hpErr != nil {
+			return oops.Wrapf(hpErr, "failed to encrypt header")
+		}
+	}
+
 	// Send to peer
 	_, err = h.underlying.WriteTo(data, h.remoteAddr)
 	if err != nil {
@@ -803,38 +871,35 @@ func (h *SSU2Conn) processInboundPacket(packet *SSU2Packet) {
 		h.ackHandler.RecordReceived(packet.PacketNumber)
 	}
 
-	// Process based on message type
 	switch packet.MessageType {
 	case MessageTypeData:
-		// Process data packet
-		blocks, err := h.dataHandler.ProcessDataPacket(packet)
-		if err != nil {
-			return
-		}
-
-		// Process ACK blocks
-		for _, block := range blocks {
-			if block.Type == BlockTypeACK {
-				ackedNums, _ := h.ackHandler.ProcessACK(block)
-				// Remove acknowledged packets from pending queue
-				h.pendingMutex.Lock()
-				for _, num := range ackedNums {
-					delete(h.pendingPackets, num)
-				}
-				h.pendingMutex.Unlock()
-			}
-		}
-
+		h.processDataPacket(packet)
 	case MessageTypeSessionRequest, MessageTypeSessionCreated, MessageTypeSessionConfirmed:
-		// Queue for handshake processing
 		select {
 		case h.recvQueue <- packet:
 		default:
-			// Queue full, drop packet
 		}
+	}
+}
 
-	default:
-		// Unknown message type, ignore
+// processDataPacket handles a data-phase packet: parses blocks and retires ACKed packets.
+func (h *SSU2Conn) processDataPacket(packet *SSU2Packet) {
+	blocks, err := h.dataHandler.ProcessDataPacket(packet)
+	if err != nil {
+		return
+	}
+
+	// Process ACK blocks
+	for _, block := range blocks {
+		if block.Type == BlockTypeACK {
+			ackedNums, _ := h.ackHandler.ProcessACK(block)
+			// Remove acknowledged packets from pending queue
+			h.pendingMutex.Lock()
+			for _, num := range ackedNums {
+				delete(h.pendingPackets, num)
+			}
+			h.pendingMutex.Unlock()
+		}
 	}
 }
 

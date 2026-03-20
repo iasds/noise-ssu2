@@ -151,103 +151,90 @@ func EncodePeerTestBlock(block *PeerTestBlock) (*SSU2Block, error) {
 		return nil, oops.Errorf("PeerTestBlock is nil")
 	}
 
-	// Validate message code
 	if block.MessageCode < 1 || block.MessageCode > 7 {
 		return nil, oops.Errorf("invalid message code: %d (must be 1-7)", block.MessageCode)
 	}
 
-	// Calculate size and validate fields based on message code
-	dataSize := 5 // code(1) + nonce(4)
-
-	switch block.MessageCode {
-	case PeerTestRequest: // Message 1
-		// Requires CharlieRouterHash and CharlieAddress
-		if len(block.RouterHash) != 32 {
-			return nil, oops.Errorf("message 1 requires 32-byte RouterHash (Charlie), got %d", len(block.RouterHash))
-		}
-		if block.CharlieAddress == nil {
-			return nil, oops.Errorf("message 1 requires CharlieAddress")
-		}
-		dataSize += 32 + encodeAddressSize(block.CharlieAddress)
-
-	case PeerTestRelay: // Message 2
-		// Requires AliceRouterHash, AliceAddress, Timestamp
-		if len(block.RouterHash) != 32 {
-			return nil, oops.Errorf("message 2 requires 32-byte RouterHash (Alice), got %d", len(block.RouterHash))
-		}
-		if block.AliceAddress == nil {
-			return nil, oops.Errorf("message 2 requires AliceAddress")
-		}
-		dataSize += 32 + encodeAddressSize(block.AliceAddress) + 4
-
-	case PeerTestResponse: // Message 3
-		// Only code + nonce
-
-	case PeerTestResult: // Message 4
-		// Requires CharlieAddress and AliceAddress
-		if block.CharlieAddress == nil {
-			return nil, oops.Errorf("message 4 requires CharlieAddress")
-		}
-		if block.AliceAddress == nil {
-			return nil, oops.Errorf("message 4 requires AliceAddress")
-		}
-		dataSize += encodeAddressSize(block.CharlieAddress) + encodeAddressSize(block.AliceAddress)
-
-	case PeerTestProbe: // Message 5
-		// Requires AliceAddress and Timestamp
-		if block.AliceAddress == nil {
-			return nil, oops.Errorf("message 5 requires AliceAddress")
-		}
-		dataSize += encodeAddressSize(block.AliceAddress) + 4
-
-	case PeerTestReply: // Message 6
-		// Only code + nonce
-
-	case PeerTestConfirmation: // Message 7
-		// Only code + nonce
+	dataSize, err := peerTestDataSize(block)
+	if err != nil {
+		return nil, err
 	}
 
-	// Allocate buffer
 	data := make([]byte, dataSize)
-
-	// Encode common fields
 	data[0] = uint8(block.MessageCode)
 	binary.BigEndian.PutUint32(data[1:5], block.Nonce)
 
-	// Encode message-specific fields
-	offset := 5
-
-	switch block.MessageCode {
-	case PeerTestRequest: // Message 1
-		copy(data[offset:offset+32], block.RouterHash)
-		offset += 32
-		offset = encodeAddress(data, offset, block.CharlieAddress)
-
-	case PeerTestRelay: // Message 2
-		copy(data[offset:offset+32], block.RouterHash)
-		offset += 32
-		offset = encodeAddress(data, offset, block.AliceAddress)
-		binary.BigEndian.PutUint32(data[offset:offset+4], block.Timestamp)
-
-	case PeerTestResponse: // Message 3
-		// No additional fields
-
-	case PeerTestResult: // Message 4
-		offset = encodeAddress(data, offset, block.CharlieAddress)
-		offset = encodeAddress(data, offset, block.AliceAddress)
-
-	case PeerTestProbe: // Message 5
-		offset = encodeAddress(data, offset, block.AliceAddress)
-		binary.BigEndian.PutUint32(data[offset:offset+4], block.Timestamp)
-
-	case PeerTestReply: // Message 6
-		// No additional fields
-
-	case PeerTestConfirmation: // Message 7
-		// No additional fields
-	}
+	encodePeerTestFields(data[5:], block)
 
 	return NewSSU2Block(BlockTypePeerTest, data), nil
+}
+
+// peerTestDataSize calculates the wire size and validates fields for a PeerTest block.
+func peerTestDataSize(block *PeerTestBlock) (int, error) {
+	size := 5 // code(1) + nonce(4)
+
+	switch block.MessageCode {
+	case PeerTestRequest:
+		if len(block.RouterHash) != 32 {
+			return 0, oops.Errorf("message 1 requires 32-byte RouterHash (Charlie), got %d", len(block.RouterHash))
+		}
+		if block.CharlieAddress == nil {
+			return 0, oops.Errorf("message 1 requires CharlieAddress")
+		}
+		size += 32 + encodeAddressSize(block.CharlieAddress)
+
+	case PeerTestRelay:
+		if len(block.RouterHash) != 32 {
+			return 0, oops.Errorf("message 2 requires 32-byte RouterHash (Alice), got %d", len(block.RouterHash))
+		}
+		if block.AliceAddress == nil {
+			return 0, oops.Errorf("message 2 requires AliceAddress")
+		}
+		size += 32 + encodeAddressSize(block.AliceAddress) + 4
+
+	case PeerTestResult:
+		if block.CharlieAddress == nil {
+			return 0, oops.Errorf("message 4 requires CharlieAddress")
+		}
+		if block.AliceAddress == nil {
+			return 0, oops.Errorf("message 4 requires AliceAddress")
+		}
+		size += encodeAddressSize(block.CharlieAddress) + encodeAddressSize(block.AliceAddress)
+
+	case PeerTestProbe:
+		if block.AliceAddress == nil {
+			return 0, oops.Errorf("message 5 requires AliceAddress")
+		}
+		size += encodeAddressSize(block.AliceAddress) + 4
+	}
+
+	return size, nil
+}
+
+// encodePeerTestFields encodes message-specific fields into buf (after code+nonce).
+func encodePeerTestFields(buf []byte, block *PeerTestBlock) {
+	offset := 0
+
+	switch block.MessageCode {
+	case PeerTestRequest:
+		copy(buf[offset:offset+32], block.RouterHash)
+		offset += 32
+		encodeAddress(buf, offset, block.CharlieAddress)
+
+	case PeerTestRelay:
+		copy(buf[offset:offset+32], block.RouterHash)
+		offset += 32
+		offset = encodeAddress(buf, offset, block.AliceAddress)
+		binary.BigEndian.PutUint32(buf[offset:offset+4], block.Timestamp)
+
+	case PeerTestResult:
+		offset = encodeAddress(buf, offset, block.CharlieAddress)
+		encodeAddress(buf, offset, block.AliceAddress)
+
+	case PeerTestProbe:
+		offset = encodeAddress(buf, offset, block.AliceAddress)
+		binary.BigEndian.PutUint32(buf[offset:offset+4], block.Timestamp)
+	}
 }
 
 // DecodePeerTestBlock decodes a PeerTest block from wire format.

@@ -124,6 +124,14 @@ type SSU2Config struct {
 	// These are applied in addition to SSU2's standard modifiers
 	// Default: empty (no additional modifiers)
 	Modifiers []handshake.HandshakeModifier
+
+	// IntroKey is the local router's intro key for header protection (32 bytes).
+	// If nil, header protection is disabled (headers sent in plaintext).
+	IntroKey []byte
+
+	// RemoteIntroKey is the remote peer's intro key for header protection (32 bytes).
+	// Required for initiator when IntroKey is set; optional for responder.
+	RemoteIntroKey []byte
 }
 
 // NewSSU2Config creates a new SSU2Config with sensible defaults.

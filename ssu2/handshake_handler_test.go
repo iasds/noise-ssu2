@@ -329,7 +329,7 @@ func TestHandshakeHandler_CreateSessionConfirmed(t *testing.T) {
 	require.NoError(t, err)
 
 	// Now initiator can create SessionConfirmed
-	confirmedPacket, err := initiator.CreateSessionConfirmed(55555, 1)
+	confirmedPacket, err := initiator.CreateSessionConfirmed(55555, 1, nil)
 	require.NoError(t, err)
 	require.NotNil(t, confirmedPacket)
 
@@ -345,7 +345,7 @@ func TestHandshakeHandler_CreateSessionConfirmed(t *testing.T) {
 func TestHandshakeHandler_CreateSessionConfirmed_ResponderError(t *testing.T) {
 	_, responder, _, _ := setupHandshakePair(t)
 
-	packet, err := responder.CreateSessionConfirmed(11111, 1)
+	packet, err := responder.CreateSessionConfirmed(11111, 1, nil)
 	assert.Error(t, err)
 	assert.Nil(t, packet)
 	assert.Contains(t, err.Error(), "only initiator")
@@ -355,7 +355,7 @@ func TestHandshakeHandler_CreateSessionConfirmed_NotComplete(t *testing.T) {
 	initiator, _, _, _ := setupHandshakePair(t)
 
 	// Try to create SessionConfirmed without completing prior handshake messages
-	packet, err := initiator.CreateSessionConfirmed(11111, 1)
+	packet, err := initiator.CreateSessionConfirmed(11111, 1, nil)
 	assert.Error(t, err)
 	assert.Nil(t, packet)
 }
@@ -376,7 +376,7 @@ func TestHandshakeHandler_ProcessSessionConfirmed(t *testing.T) {
 	err = initiator.ProcessSessionCreated(createdPacket)
 	require.NoError(t, err)
 
-	confirmedPacket, err := initiator.CreateSessionConfirmed(55555, 1)
+	confirmedPacket, err := initiator.CreateSessionConfirmed(55555, 1, nil)
 	require.NoError(t, err)
 
 	// Responder processes SessionConfirmed
@@ -444,7 +444,7 @@ func TestHandshakeHandler_FullHandshakeFlow(t *testing.T) {
 	assert.False(t, responder.IsHandshakeComplete())
 
 	// Step 3: SessionConfirmed
-	confirmedPacket, err := initiator.CreateSessionConfirmed(55555, 1)
+	confirmedPacket, err := initiator.CreateSessionConfirmed(55555, 1, nil)
 	require.NoError(t, err)
 
 	err = responder.ProcessSessionConfirmed(confirmedPacket)
@@ -490,7 +490,7 @@ func TestHandshakeHandler_GetCipherStates_AfterComplete(t *testing.T) {
 	require.NoError(t, err)
 	err = initiator.ProcessSessionCreated(createdPacket)
 	require.NoError(t, err)
-	confirmedPacket, err := initiator.CreateSessionConfirmed(55555, 1)
+	confirmedPacket, err := initiator.CreateSessionConfirmed(55555, 1, nil)
 	require.NoError(t, err)
 	err = responder.ProcessSessionConfirmed(confirmedPacket)
 	require.NoError(t, err)
@@ -616,7 +616,7 @@ func BenchmarkHandshakeHandler_FullHandshake(b *testing.B) {
 		createdPacket, _ := responder.CreateSessionCreated(33333, 44444)
 		_ = initiator.ProcessSessionCreated(createdPacket)
 
-		confirmedPacket, _ := initiator.CreateSessionConfirmed(55555, 1)
+		confirmedPacket, _ := initiator.CreateSessionConfirmed(55555, 1, nil)
 		_ = responder.ProcessSessionConfirmed(confirmedPacket)
 	}
 }

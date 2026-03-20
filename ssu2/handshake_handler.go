@@ -2,12 +2,15 @@ package ssu2
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/binary"
+	"io"
 	"time"
 
 	"github.com/go-i2p/noise"
 	"github.com/samber/oops"
 	"golang.org/x/crypto/curve25519"
+	"golang.org/x/crypto/hkdf"
 )
 
 // HandshakeHandler manages SSU2 handshake message processing using the XK pattern.
@@ -165,45 +168,7 @@ func (h *HandshakeHandler) CreateSessionRequest(sourceConnID, destConnID uint64)
 	// Create payload blocks for SessionRequest
 	blocks := h.createHandshakeBlocks(MessageTypeSessionRequest)
 
-	// Serialize blocks
-	payload, err := SerializeBlocks(blocks)
-	if err != nil {
-		return nil, oops.Wrapf(err, "failed to serialize SessionRequest blocks")
-	}
-
-	// Create handshake message using Noise protocol
-	// WriteMessage will: send ephemeral key, perform DH, encrypt payload
-	ciphertext, cs1, cs2, err := h.handshakeState.WriteMessage(nil, payload)
-	if err != nil {
-		return nil, oops.Wrapf(err, "failed to create SessionRequest handshake message")
-	}
-
-	// Store cipher states (may be nil until handshake completes)
-	h.updateCipherStates(cs1, cs2)
-
-	// Extract ephemeral key (first 32 bytes of ciphertext)
-	if len(ciphertext) < 32 {
-		return nil, oops.Errorf("invalid SessionRequest: too short (%d bytes)", len(ciphertext))
-	}
-	ephemeralKey := ciphertext[:32]
-	encryptedPayload := ciphertext[32:]
-
-	// Create packet with 32-byte long header
-	packet := &SSU2Packet{
-		Header:       make([]byte, 32),
-		EphemeralKey: copyBytes(ephemeralKey),
-		Payload:      encryptedPayload,
-		MAC:          make([]byte, 16), // Placeholder, will be computed
-		MessageType:  MessageTypeSessionRequest,
-		PacketNumber: 0, // Handshake messages don't use packet numbers
-	}
-
-	// Encode connection IDs in header
-	binary.BigEndian.PutUint64(packet.Header[0:8], destConnID)
-	binary.BigEndian.PutUint64(packet.Header[8:16], sourceConnID)
-	// Remaining header bytes are padding/reserved
-
-	return packet, nil
+	return h.buildHandshakePacket(blocks, MessageTypeSessionRequest, sourceConnID, destConnID)
 }
 
 // ProcessSessionRequest processes a received SessionRequest message.
@@ -275,43 +240,7 @@ func (h *HandshakeHandler) CreateSessionCreated(sourceConnID, destConnID uint64)
 	// Create payload blocks
 	blocks := h.createHandshakeBlocks(MessageTypeSessionCreated)
 
-	// Serialize blocks
-	payload, err := SerializeBlocks(blocks)
-	if err != nil {
-		return nil, oops.Wrapf(err, "failed to serialize SessionCreated blocks")
-	}
-
-	// Create handshake message using Noise protocol
-	ciphertext, cs1, cs2, err := h.handshakeState.WriteMessage(nil, payload)
-	if err != nil {
-		return nil, oops.Wrapf(err, "failed to create SessionCreated handshake message")
-	}
-
-	// Store cipher states (should be available now)
-	h.updateCipherStates(cs1, cs2)
-
-	// Extract ephemeral key
-	if len(ciphertext) < 32 {
-		return nil, oops.Errorf("invalid SessionCreated: too short (%d bytes)", len(ciphertext))
-	}
-	ephemeralKey := ciphertext[:32]
-	encryptedPayload := ciphertext[32:]
-
-	// Create packet with 32-byte long header
-	packet := &SSU2Packet{
-		Header:       make([]byte, 32),
-		EphemeralKey: copyBytes(ephemeralKey),
-		Payload:      encryptedPayload,
-		MAC:          make([]byte, 16), // Placeholder
-		MessageType:  MessageTypeSessionCreated,
-		PacketNumber: 0,
-	}
-
-	// Encode connection IDs
-	binary.BigEndian.PutUint64(packet.Header[0:8], destConnID)
-	binary.BigEndian.PutUint64(packet.Header[8:16], sourceConnID)
-
-	return packet, nil
+	return h.buildHandshakePacket(blocks, MessageTypeSessionCreated, sourceConnID, destConnID)
 }
 
 // ProcessSessionCreated processes a received SessionCreated message.
@@ -361,9 +290,10 @@ func (h *HandshakeHandler) ProcessSessionCreated(packet *SSU2Packet) error {
 // This is the third handshake message sent by the initiator.
 //
 // SessionConfirmed uses a short header (16 bytes) and contains no ephemeral key.
-// It may contain blocks like DateTime, but is not required by the protocol.
+// It contains the initiator's RouterInfo block so the responder can learn the
+// initiator's identity. routerInfo may be nil for testing.
 // This message completes the XK handshake (→ s, se) and produces transport cipher states.
-func (h *HandshakeHandler) CreateSessionConfirmed(connID uint64, packetNumber uint32) (*SSU2Packet, error) {
+func (h *HandshakeHandler) CreateSessionConfirmed(connID uint64, packetNumber uint32, routerInfo []byte) (*SSU2Packet, error) {
 	if !h.initiator {
 		return nil, oops.Errorf("only initiator can create SessionConfirmed")
 	}
@@ -373,8 +303,11 @@ func (h *HandshakeHandler) CreateSessionConfirmed(connID uint64, packetNumber ui
 		return nil, oops.Errorf("handshake not ready for SessionConfirmed: expected message index 2, got %d", h.handshakeState.MessageIndex())
 	}
 
-	// SessionConfirmed typically contains minimal or no blocks
-	blocks := make([]*SSU2Block, 0)
+	// SessionConfirmed must contain initiator's RouterInfo per SSU2 spec
+	var blocks []*SSU2Block
+	if len(routerInfo) > 0 {
+		blocks = append(blocks, NewSSU2Block(BlockTypeRouterInfo, routerInfo))
+	}
 
 	// Serialize blocks (may be empty)
 	payload, err := SerializeBlocks(blocks)
@@ -483,12 +416,9 @@ func (h *HandshakeHandler) createHandshakeBlocks(messageType uint8) []*SSU2Block
 	blocks := make([]*SSU2Block, 0, 2)
 
 	// DateTime block (Type 0) - required in SessionRequest and SessionCreated
-	// Format: 7 bytes - timestamp in milliseconds since epoch
-	now := time.Now().UnixMilli()
-	temp := make([]byte, 8)
-	binary.BigEndian.PutUint64(temp, uint64(now))
-	// Take last 7 bytes (skip first byte to get 56-bit timestamp)
-	dateTimeData := temp[1:]
+	// Format: 4 bytes - seconds since epoch (big-endian uint32)
+	dateTimeData := make([]byte, 4)
+	binary.BigEndian.PutUint32(dateTimeData, uint32(time.Now().Unix()))
 
 	blocks = append(blocks, NewSSU2Block(BlockTypeDateTime, dateTimeData))
 
@@ -505,7 +435,7 @@ func (h *HandshakeHandler) validateHandshakeBlocks(blocks []*SSU2Block, messageT
 	for _, block := range blocks {
 		if block.Type == BlockTypeDateTime {
 			hasDateTime = true
-			if len(block.Data) < 7 {
+			if len(block.Data) < 4 {
 				return oops.Errorf("DateTime block too short: %d bytes", len(block.Data))
 			}
 		}
@@ -516,6 +446,37 @@ func (h *HandshakeHandler) validateHandshakeBlocks(blocks []*SSU2Block, messageT
 	_ = hasDateTime
 
 	return nil
+}
+
+// buildHandshakePacket serializes blocks, runs the Noise WriteMessage, extracts
+// the ephemeral key, and assembles an SSU2Packet with a 32-byte long header.
+func (h *HandshakeHandler) buildHandshakePacket(blocks []*SSU2Block, msgType uint8, sourceConnID, destConnID uint64) (*SSU2Packet, error) {
+	payload, err := SerializeBlocks(blocks)
+	if err != nil {
+		return nil, oops.Wrapf(err, "failed to serialize handshake blocks")
+	}
+
+	ciphertext, cs1, cs2, err := h.handshakeState.WriteMessage(nil, payload)
+	if err != nil {
+		return nil, oops.Wrapf(err, "failed to create handshake message")
+	}
+	h.updateCipherStates(cs1, cs2)
+
+	if len(ciphertext) < 32 {
+		return nil, oops.Errorf("invalid handshake message: too short (%d bytes)", len(ciphertext))
+	}
+
+	packet := &SSU2Packet{
+		Header:       make([]byte, 32),
+		EphemeralKey: copyBytes(ciphertext[:32]),
+		Payload:      ciphertext[32:],
+		MAC:          make([]byte, 16),
+		MessageType:  msgType,
+		PacketNumber: 0,
+	}
+	binary.BigEndian.PutUint64(packet.Header[0:8], destConnID)
+	binary.BigEndian.PutUint64(packet.Header[8:16], sourceConnID)
+	return packet, nil
 }
 
 // updateCipherStates updates the send/receive cipher states when available.
@@ -529,6 +490,26 @@ func (h *HandshakeHandler) updateCipherStates(cs1, cs2 *noise.CipherState) {
 			h.recvCipher = cs1
 		}
 	}
+}
+
+// DeriveHeaderKeys derives header protection keys from the completed handshake.
+// Uses HKDF-SHA256 with the handshake hash (channel binding) as IKM.
+// Returns two 32-byte keys for use with HeaderProtectorManager.SetKDFKeys.
+func (h *HandshakeHandler) DeriveHeaderKeys() (k1, k2 []byte, err error) {
+	hash := h.handshakeState.ChannelBinding()
+	if hash == nil {
+		return nil, nil, oops.Errorf("handshake not complete: no channel binding available")
+	}
+	reader := hkdf.New(sha256.New, hash, nil, []byte("ssu2-header-protection"))
+	k1 = make([]byte, 32)
+	k2 = make([]byte, 32)
+	if _, err := io.ReadFull(reader, k1); err != nil {
+		return nil, nil, oops.Wrapf(err, "failed to derive k_header_1")
+	}
+	if _, err := io.ReadFull(reader, k2); err != nil {
+		return nil, nil, oops.Wrapf(err, "failed to derive k_header_2")
+	}
+	return k1, k2, nil
 }
 
 // copyBytes creates a defensive copy of a byte slice.

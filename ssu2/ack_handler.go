@@ -2,6 +2,7 @@ package ssu2
 
 import (
 	"encoding/binary"
+	"sync"
 	"time"
 
 	"github.com/samber/oops"
@@ -21,6 +22,8 @@ import (
 //
 // Minimum size: 5 bytes (4-byte Through PN + 1-byte acnt)
 type ACKHandler struct {
+	mu sync.Mutex
+
 	// receivedPackets tracks packet numbers we've received and need to ACK
 	receivedPackets []uint32
 
@@ -53,12 +56,16 @@ func NewACKHandler() *ACKHandler {
 // RecordReceived marks a packet number as received and needing acknowledgment.
 // This should be called for every successfully processed inbound packet.
 func (h *ACKHandler) RecordReceived(packetNum uint32) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	h.receivedPackets = append(h.receivedPackets, packetNum)
 }
 
 // ShouldSendACK determines if an ACK should be sent based on timing and packet count.
 // Per SSU2.md: ACK delay = max(10, min(rtt/6, 150)) ms
 func (h *ACKHandler) ShouldSendACK(rtt time.Duration) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	if len(h.receivedPackets) == 0 {
 		return false
 	}
@@ -81,6 +88,8 @@ func (h *ACKHandler) ShouldSendACK(rtt time.Duration) bool {
 // GenerateACK creates an ACK block (Type 12) for all received packets.
 // Returns nil if there are no packets to acknowledge.
 func (h *ACKHandler) GenerateACK() (*SSU2Block, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	if len(h.receivedPackets) == 0 {
 		return nil, nil
 	}
@@ -147,6 +156,8 @@ func (h *ACKHandler) GenerateACK() (*SSU2Block, error) {
 // ProcessACK handles an incoming ACK block, removing acknowledged packets
 // from the pending queue. Returns the list of acked packet numbers.
 func (h *ACKHandler) ProcessACK(ackBlock *SSU2Block) ([]uint32, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	if ackBlock.Type != BlockTypeACK {
 		return nil, oops.Errorf("expected ACK block type %d, got %d",
 			BlockTypeACK, ackBlock.Type)
@@ -196,6 +207,8 @@ func (h *ACKHandler) ProcessACK(ackBlock *SSU2Block) ([]uint32, error) {
 
 // AddPending marks a packet as sent and awaiting acknowledgment.
 func (h *ACKHandler) AddPending(packetNum uint32) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	h.pendingACKs[packetNum] = &PendingACK{
 		PacketNumber: packetNum,
 		SentTime:     time.Now(),
@@ -205,6 +218,8 @@ func (h *ACKHandler) AddPending(packetNum uint32) {
 
 // GetPending returns all packet numbers currently awaiting acknowledgment.
 func (h *ACKHandler) GetPending() []uint32 {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	pending := make([]uint32, 0, len(h.pendingACKs))
 	for pktNum := range h.pendingACKs {
 		pending = append(pending, pktNum)
@@ -214,17 +229,23 @@ func (h *ACKHandler) GetPending() []uint32 {
 
 // GetPendingPacket returns details about a specific pending packet.
 func (h *ACKHandler) GetPendingPacket(packetNum uint32) (*PendingACK, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	ack, exists := h.pendingACKs[packetNum]
 	return ack, exists
 }
 
 // HasPending returns true if there are packets awaiting acknowledgment.
 func (h *ACKHandler) HasPending() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	return len(h.pendingACKs) > 0
 }
 
 // ClearPending removes all pending acknowledgments (used on connection close).
 func (h *ACKHandler) ClearPending() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	h.pendingACKs = make(map[uint32]*PendingACK)
 	h.receivedPackets = h.receivedPackets[:0]
 }

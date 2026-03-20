@@ -211,9 +211,10 @@ func (pr *PacketRouter) ExtractConnectionID(header []byte) (uint64, error) {
 			Errorf("header too short (minimum %d bytes)", ShortHeaderSize)
 	}
 
-	// Extract 8-byte connection ID from bytes 8-15
-	// SSU2 uses big-endian encoding per I2P conventions
-	connID := binary.BigEndian.Uint64(header[8:16])
+	// Extract 8-byte destination connection ID from bytes 0-7
+	// per SSU2 spec: bytes 0-7 hold the destination connection ID in both
+	// short (16-byte) and long (32-byte) headers.
+	connID := binary.BigEndian.Uint64(header[0:8])
 
 	return connID, nil
 }

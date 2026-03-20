@@ -6,6 +6,7 @@ import (
 
 	noise "github.com/go-i2p/go-noise"
 	"github.com/go-i2p/go-noise/handshake"
+	"github.com/go-i2p/go-noise/internal"
 	upstreamnoise "github.com/go-i2p/noise"
 	"github.com/samber/oops"
 )
@@ -293,12 +294,8 @@ func (nc *NTCP2Config) Validate() error {
 
 // validateBasicConfiguration checks pattern and router hash requirements.
 func (nc *NTCP2Config) validateBasicConfiguration() error {
-	// Validate pattern (NTCP2 typically uses XK)
-	if nc.Pattern == "" {
-		return oops.
-			Code("MISSING_PATTERN").
-			In("ntcp2").
-			Errorf("noise pattern is required")
+	if err := internal.ValidatePattern(nc.Pattern, "ntcp2"); err != nil {
+		return err
 	}
 
 	// Validate Bob's router hash
@@ -315,13 +312,8 @@ func (nc *NTCP2Config) validateBasicConfiguration() error {
 
 // validateCryptographicParameters checks static keys, remote hashes, and obfuscation settings.
 func (nc *NTCP2Config) validateCryptographicParameters() error {
-	// Validate static key if provided
-	if len(nc.StaticKey) > 0 && len(nc.StaticKey) != StaticKeySize {
-		return oops.
-			Code("INVALID_STATIC_KEY").
-			In("ntcp2").
-			With("key_length", len(nc.StaticKey)).
-			Errorf("static key must be %d bytes", StaticKeySize)
+	if err := internal.ValidateKeyLength(nc.StaticKey, "static key", "ntcp2"); err != nil {
+		return err
 	}
 
 	// Validate remote router hash if provided
@@ -341,13 +333,8 @@ func (nc *NTCP2Config) validateCryptographicParameters() error {
 			Errorf("remote router hash is required for initiator connections")
 	}
 
-	// Validate remote static key length if provided
-	if len(nc.RemoteStaticKey) > 0 && len(nc.RemoteStaticKey) != StaticKeySize {
-		return oops.
-			Code("INVALID_REMOTE_STATIC_KEY").
-			In("ntcp2").
-			With("key_length", len(nc.RemoteStaticKey)).
-			Errorf("remote static key must be %d bytes", StaticKeySize)
+	if err := internal.ValidateKeyLength(nc.RemoteStaticKey, "remote static key", "ntcp2"); err != nil {
+		return err
 	}
 
 	// For initiator XK connections, remote static key is required (pre-message: ← s)
@@ -372,33 +359,10 @@ func (nc *NTCP2Config) validateCryptographicParameters() error {
 
 // validateTimeoutConfiguration checks handshake timeouts and retry settings.
 func (nc *NTCP2Config) validateTimeoutConfiguration() error {
-	// Validate handshake timeout
-	if nc.HandshakeTimeout <= 0 {
-		return oops.
-			Code("INVALID_HANDSHAKE_TIMEOUT").
-			In("ntcp2").
-			With("timeout", nc.HandshakeTimeout).
-			Errorf("handshake timeout must be positive")
+	if err := internal.ValidateHandshakeTimeout(nc.HandshakeTimeout, "ntcp2"); err != nil {
+		return err
 	}
-
-	// Validate retry configuration
-	if nc.HandshakeRetries < -1 {
-		return oops.
-			Code("INVALID_RETRY_COUNT").
-			In("ntcp2").
-			With("retries", nc.HandshakeRetries).
-			Errorf("handshake retries must be >= -1")
-	}
-
-	if nc.RetryBackoff < 0 {
-		return oops.
-			Code("INVALID_RETRY_BACKOFF").
-			In("ntcp2").
-			With("backoff", nc.RetryBackoff).
-			Errorf("retry backoff must be non-negative")
-	}
-
-	return nil
+	return internal.ValidateRetryConfig(nc.HandshakeRetries, nc.RetryBackoff, "ntcp2")
 }
 
 // validateFrameConfiguration checks frame size and padding settings.
