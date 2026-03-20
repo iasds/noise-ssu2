@@ -317,9 +317,13 @@ func (l *SSU2Listener) handleNewSession(remoteAddr *net.UDPAddr, packet *SSU2Pac
 	// For SessionRequest, attempt to validate token if present
 	if packet.MessageType == MessageTypeSessionRequest {
 		if err := l.validateSessionRequestToken(packet, remoteAddr); err != nil {
-			// Token validation failed - log but continue (token may not be required)
-			// In strict mode, we would reject the session here
-			_ = err // Silently continue for backward compatibility
+			log.WithField("remote", remoteAddr.String()).Warn("Token validation failed: " + err.Error())
+			if l.config.StrictTokenValidation {
+				return nil, oops.
+					Code("TOKEN_VALIDATION_FAILED").
+					In("ssu2_listener").
+					Wrap(err)
+			}
 		}
 	}
 
@@ -341,20 +345,19 @@ func (l *SSU2Listener) handleNewSession(remoteAddr *net.UDPAddr, packet *SSU2Pac
 	} else {
 		routerHash = make([]byte, 32)
 	}
-	addr, err := NewSSU2Addr(remoteAddr, routerHash, connID, "responder")
-	if err != nil {
-		return nil, oops.Wrapf(err, "failed to create session address")
-	}
 
-	// Create new connection
-	conn := &SSU2Conn{
-		underlying: l.underlying,
-		remoteAddr: remoteAddr,
-		ssu2Addr:   addr,
-		config:     l.config,
-		initiator:  false,
-		state:      StateInit,
-		closeChan:  make(chan struct{}),
+	// Create a connection-specific config with the generated connection ID
+	// and derived router hash so NewSSU2Conn initializes all fields properly
+	// (handshakeHandler, dataHandler, ackHandler, rttEstimator, recvWindow,
+	// sendQueue, recvQueue, pendingPackets, lastActivity).
+	connConfig := *l.config
+	connConfig.ConnectionID = connID
+	connConfig.RouterHash = routerHash
+	connConfig.Initiator = false
+
+	conn, err := NewSSU2Conn(l.underlying, remoteAddr, &connConfig, false, l.config.StaticKey, nil)
+	if err != nil {
+		return nil, oops.Wrapf(err, "failed to create SSU2 connection")
 	}
 
 	// Add to sessions map

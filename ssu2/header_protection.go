@@ -161,12 +161,11 @@ func (hp *HeaderProtector) applyHeaderProtection(packet []byte) error {
 			Errorf("packet too small for header protection: need at least %d bytes", minSize)
 	}
 
-	// Extract IV1 from packet[len-24:len-13] (11 bytes, we use first 12 for ChaCha20 nonce)
-	// The spec says bytes [len-24:len-13] which is 11 bytes
-	// ChaCha20 uses 12-byte nonce, so we pad the 11 bytes to 12
+	// SSU2 spec §"Header Protection": IV1 = packet[len-24 : len-12] (12 bytes).
+	// The KDF produces 12-byte nonces directly; no padding is needed.
 	iv1Start := len(packet) - 24
 	iv1 := make([]byte, 12)
-	copy(iv1, packet[iv1Start:iv1Start+11])
+	copy(iv1, packet[iv1Start:iv1Start+12])
 
 	// Generate first mask using ChaCha20(kHeader1, iv1, zeros)
 	mask1, err := hp.generateMask(hp.kHeader1, iv1)
@@ -179,10 +178,10 @@ func (hp *HeaderProtector) applyHeaderProtection(packet []byte) error {
 		packet[i] ^= mask1[i]
 	}
 
-	// Extract IV2 from packet[len-12:len-1] (11 bytes)
+	// SSU2 spec §"Header Protection": IV2 = packet[len-12 : len] (12 bytes).
 	iv2Start := len(packet) - 12
 	iv2 := make([]byte, 12)
-	copy(iv2, packet[iv2Start:iv2Start+11])
+	copy(iv2, packet[iv2Start:iv2Start+12])
 
 	// Generate second mask using ChaCha20(kHeader2, iv2, zeros)
 	mask2, err := hp.generateMask(hp.kHeader2, iv2)

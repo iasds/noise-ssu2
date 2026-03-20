@@ -115,6 +115,11 @@ type SSU2Config struct {
 	// Default: 15 seconds
 	KeepaliveInterval time.Duration
 
+	// StrictTokenValidation, when true, rejects sessions with invalid tokens.
+	// When false (default), invalid tokens are logged at WARN level but the
+	// session is still created for backward compatibility.
+	StrictTokenValidation bool
+
 	// Modifiers is a list of additional handshake modifiers for custom obfuscation
 	// These are applied in addition to SSU2's standard modifiers
 	// Default: empty (no additional modifiers)
@@ -298,6 +303,13 @@ func (sc *SSU2Config) WithModifiers(modifiers ...handshake.HandshakeModifier) *S
 	// Make defensive copy
 	sc.Modifiers = make([]handshake.HandshakeModifier, len(modifiers))
 	copy(sc.Modifiers, modifiers)
+	return sc
+}
+
+// WithStrictTokenValidation enables or disables strict token validation.
+// When enabled, sessions with invalid tokens are rejected immediately.
+func (sc *SSU2Config) WithStrictTokenValidation(strict bool) *SSU2Config {
+	sc.StrictTokenValidation = strict
 	return sc
 }
 
