@@ -3,6 +3,7 @@ package ssu2
 import (
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/binary"
 	"net"
 	"sync"
 	"time"
@@ -354,6 +355,12 @@ func (l *SSU2Listener) handleNewSession(remoteAddr *net.UDPAddr, packet *SSU2Pac
 	connConfig.ConnectionID = connID
 	connConfig.RouterHash = routerHash
 	connConfig.Initiator = false
+
+	// Extract initiator's source connection ID from the SessionRequest header
+	// for Noise prologue binding. The source connection ID is at header bytes 8-15.
+	if len(packet.Header) >= 16 {
+		connConfig.InitiatorConnectionID = binary.BigEndian.Uint64(packet.Header[8:16])
+	}
 
 	conn, err := NewSSU2Conn(l.underlying, remoteAddr, &connConfig, false, l.config.StaticKey, nil)
 	if err != nil {

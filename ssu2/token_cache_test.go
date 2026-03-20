@@ -390,38 +390,6 @@ func TestTokenCache_Concurrent(t *testing.T) {
 	})
 }
 
-func TestBytesEqual(t *testing.T) {
-	t.Run("equal bytes", func(t *testing.T) {
-		a := []byte{1, 2, 3, 4, 5}
-		b := []byte{1, 2, 3, 4, 5}
-		assert.True(t, bytesEqual(a, b))
-	})
-
-	t.Run("different bytes", func(t *testing.T) {
-		a := []byte{1, 2, 3, 4, 5}
-		b := []byte{1, 2, 3, 4, 6}
-		assert.False(t, bytesEqual(a, b))
-	})
-
-	t.Run("different lengths", func(t *testing.T) {
-		a := []byte{1, 2, 3, 4, 5}
-		b := []byte{1, 2, 3}
-		assert.False(t, bytesEqual(a, b))
-	})
-
-	t.Run("empty bytes", func(t *testing.T) {
-		a := []byte{}
-		b := []byte{}
-		assert.True(t, bytesEqual(a, b))
-	})
-
-	t.Run("nil vs empty", func(t *testing.T) {
-		var a []byte
-		b := []byte{}
-		assert.True(t, bytesEqual(a, b))
-	})
-}
-
 func TestTokenCache_IPv6Addresses(t *testing.T) {
 	cache := NewTokenCache(60 * time.Second)
 

@@ -16,15 +16,18 @@ import (
 // HandshakeHandler manages SSU2 handshake message processing using the XK pattern.
 // The XK pattern provides forward secrecy and responder authentication:
 //
+// Pre-message: ← s (responder's static key known to initiator)
+//
 // Initiator (Alice)          Responder (Bob)
 // SessionRequest ─────────────────────────>
 //
-//	(→ e, es, s, ss)
+//	(→ e, es)
 //	                 <───────────────────── SessionCreated
-//	                           (← e, ee, se)
+//	                           (← e, ee)
 //
 // SessionConfirmed ───────────────────────>
 //
+//	(→ s, se)
 //	(transport phase begins)
 //
 // The handshake establishes a secure channel with:
@@ -50,10 +53,21 @@ type HandshakeHandler struct {
 	recvCipher *noise.CipherState
 }
 
+// buildSSU2Prologue constructs the Noise prologue for SSU2 handshakes.
+// The prologue binds the handshake to the initiator's connection ID,
+// preventing replay of handshake messages across different sessions.
+func buildSSU2Prologue(initiatorConnID uint64) []byte {
+	prologue := make([]byte, 12) // "SSU2" + 8-byte connection ID
+	copy(prologue[0:4], []byte("SSU2"))
+	binary.BigEndian.PutUint64(prologue[4:12], initiatorConnID)
+	return prologue
+}
+
 // NewHandshakeHandler creates a new SSU2 handshake handler.
 // For initiators, remoteStaticKey must be provided (responder's public key).
 // For responders, remoteStaticKey is nil and will be learned during handshake.
-func NewHandshakeHandler(initiator bool, staticKey, remoteStaticKey []byte) (*HandshakeHandler, error) {
+// The prologue binds the Noise handshake to SSU2 session context; pass nil to omit.
+func NewHandshakeHandler(initiator bool, staticKey, remoteStaticKey, prologue []byte) (*HandshakeHandler, error) {
 	if len(staticKey) != 32 {
 		return nil, oops.Errorf("static key must be 32 bytes, got %d", len(staticKey))
 	}
@@ -74,6 +88,7 @@ func NewHandshakeHandler(initiator bool, staticKey, remoteStaticKey []byte) (*Ha
 		Random:      rand.Reader,
 		Pattern:     noise.HandshakeXK,
 		Initiator:   initiator,
+		Prologue:    prologue,
 		StaticKeypair: noise.DHKey{
 			Private: copyBytes(staticKey),
 			Public:  derivePublicKey(staticKey),
@@ -102,7 +117,8 @@ func NewHandshakeHandler(initiator bool, staticKey, remoteStaticKey []byte) (*Ha
 // This is useful when you already have a generated keypair from noise.DH25519.GenerateKeypair().
 // For initiators, remoteStaticKey must be provided (responder's public key).
 // For responders, remoteStaticKey is nil and will be learned during handshake.
-func NewHandshakeHandlerWithKeys(initiator bool, staticKeypair noise.DHKey, remoteStaticKey []byte) (*HandshakeHandler, error) {
+// The prologue binds the Noise handshake to SSU2 session context; pass nil to omit.
+func NewHandshakeHandlerWithKeys(initiator bool, staticKeypair noise.DHKey, remoteStaticKey, prologue []byte) (*HandshakeHandler, error) {
 	if len(staticKeypair.Private) != 32 {
 		return nil, oops.Errorf("static private key must be 32 bytes, got %d", len(staticKeypair.Private))
 	}
@@ -127,6 +143,7 @@ func NewHandshakeHandlerWithKeys(initiator bool, staticKeypair noise.DHKey, remo
 		Random:      rand.Reader,
 		Pattern:     noise.HandshakeXK,
 		Initiator:   initiator,
+		Prologue:    prologue,
 		StaticKeypair: noise.DHKey{
 			Private: copyBytes(staticKeypair.Private),
 			Public:  copyBytes(staticKeypair.Public),
@@ -159,7 +176,7 @@ func NewHandshakeHandlerWithKeys(initiator bool, staticKeypair noise.DHKey, remo
 // - Encrypted static key (32 + 16 bytes MAC)
 // - Encrypted blocks (DateTime, Options)
 //
-// XK pattern: → e, es, s, ss
+// XK pattern message 1: → e, es
 func (h *HandshakeHandler) CreateSessionRequest(sourceConnID, destConnID uint64) (*SSU2Packet, error) {
 	if !h.initiator {
 		return nil, oops.Errorf("only initiator can create SessionRequest")
@@ -384,6 +401,12 @@ func (h *HandshakeHandler) ProcessSessionConfirmed(packet *SSU2Packet) error {
 	// Store cipher states (handshake now complete)
 	h.updateCipherStates(cs1, cs2)
 
+	// Now that message 3 (→ s, se) is processed, the initiator's static key
+	// is available via PeerStatic(). Store it for identity lookup.
+	if ps := h.handshakeState.PeerStatic(); len(ps) > 0 {
+		h.remoteStaticKey = copyBytes(ps)
+	}
+
 	return nil
 }
 
@@ -413,7 +436,7 @@ func (h *HandshakeHandler) GetRemoteStaticKey() []byte {
 // createHandshakeBlocks creates the standard blocks for handshake messages.
 // Currently creates DateTime block with current timestamp.
 func (h *HandshakeHandler) createHandshakeBlocks(messageType uint8) []*SSU2Block {
-	blocks := make([]*SSU2Block, 0, 2)
+	blocks := make([]*SSU2Block, 0, 3)
 
 	// DateTime block (Type 0) - required in SessionRequest and SessionCreated
 	// Format: 4 bytes - seconds since epoch (big-endian uint32)
@@ -422,8 +445,29 @@ func (h *HandshakeHandler) createHandshakeBlocks(messageType uint8) []*SSU2Block
 
 	blocks = append(blocks, NewSSU2Block(BlockTypeDateTime, dateTimeData))
 
-	// Options block (Type 1) could be added here for MTU negotiation, etc.
-	// For now, we keep it simple and only include DateTime
+	// Options block (Type 1) - SHOULD be included per SSU2 spec
+	// Communicates version, padding parameters, and MTU preferences.
+	// Layout (15 bytes):
+	//   0-1: SSU2 version (2)
+	//   2:   padding params (min nibble << 4 | max nibble) — 0 = no constraints
+	//   3-4: padding ratio (fixed-point uint16) — 0x0100 = 1.0
+	//   5-6: reserved
+	//   7-8: min MTU (1280)
+	//   9-10: max MTU (1500)
+	//   11-12: requested MTU (1280)
+	//   13: min version (2)
+	//   14: max version (2)
+	optData := make([]byte, 15)
+	binary.BigEndian.PutUint16(optData[0:2], 2)     // SSU2 version
+	optData[2] = 0                                  // padding params: no constraints
+	binary.BigEndian.PutUint16(optData[3:5], 0x100) // padding ratio: 1.0
+	// bytes 5-6: reserved (zero)
+	binary.BigEndian.PutUint16(optData[7:9], 1280)   // min MTU
+	binary.BigEndian.PutUint16(optData[9:11], 1500)  // max MTU
+	binary.BigEndian.PutUint16(optData[11:13], 1280) // requested MTU
+	optData[13] = 2                                  // min version
+	optData[14] = 2                                  // max version
+	blocks = append(blocks, NewSSU2Block(BlockTypeOptions, optData))
 
 	return blocks
 }

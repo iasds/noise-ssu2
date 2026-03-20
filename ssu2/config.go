@@ -132,6 +132,11 @@ type SSU2Config struct {
 	// RemoteIntroKey is the remote peer's intro key for header protection (32 bytes).
 	// Required for initiator when IntroKey is set; optional for responder.
 	RemoteIntroKey []byte
+
+	// InitiatorConnectionID is the initiator's source connection ID, used by
+	// the responder to construct the Noise prologue for handshake binding.
+	// Set by the listener when creating a responder connection.
+	InitiatorConnectionID uint64
 }
 
 // NewSSU2Config creates a new SSU2Config with sensible defaults.

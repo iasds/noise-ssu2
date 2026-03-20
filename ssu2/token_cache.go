@@ -2,6 +2,7 @@ package ssu2
 
 import (
 	"crypto/rand"
+	"crypto/subtle"
 	"net"
 	"sync"
 	"time"
@@ -96,7 +97,7 @@ func (tc *TokenCache) ValidateToken(tokenValue []byte, addr *net.UDPAddr) bool {
 	}
 
 	// Compare token values using constant-time comparison
-	return bytesEqual(token.Value, tokenValue)
+	return subtle.ConstantTimeCompare(token.Value, tokenValue) == 1
 }
 
 // ConsumeToken validates and removes a token from the cache.
@@ -123,7 +124,7 @@ func (tc *TokenCache) ConsumeToken(tokenValue []byte, addr *net.UDPAddr) bool {
 	}
 
 	// Compare token values
-	if !bytesEqual(token.Value, tokenValue) {
+	if subtle.ConstantTimeCompare(token.Value, tokenValue) != 1 {
 		return false
 	}
 
@@ -168,20 +169,4 @@ func (tc *TokenCache) Clear() {
 // GetTTL returns the token time-to-live duration.
 func (tc *TokenCache) GetTTL() time.Duration {
 	return tc.ttl
-}
-
-// bytesEqual performs constant-time comparison of two byte slices.
-// This prevents timing attacks when comparing tokens.
-func bytesEqual(a, b []byte) bool {
-	if len(a) != len(b) {
-		return false
-	}
-
-	// XOR all bytes and check if result is zero
-	var result byte
-	for i := 0; i < len(a); i++ {
-		result |= a[i] ^ b[i]
-	}
-
-	return result == 0
 }

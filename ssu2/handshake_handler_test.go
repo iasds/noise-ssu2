@@ -23,11 +23,11 @@ func setupHandshakePair(t *testing.T) (*HandshakeHandler, *HandshakeHandler, []b
 
 	// Create handlers - initiator knows responder's public key
 	// Pass the full private key (already 32 bytes) and responder's public key
-	initiator, err := NewHandshakeHandlerWithKeys(true, initDH, respDH.Public)
+	initiator, err := NewHandshakeHandlerWithKeys(true, initDH, respDH.Public, nil)
 	require.NoError(t, err)
 
 	// Responder doesn't know initiator's key yet (will learn from SessionRequest)
-	responder, err := NewHandshakeHandlerWithKeys(false, respDH, nil)
+	responder, err := NewHandshakeHandlerWithKeys(false, respDH, nil, nil)
 	require.NoError(t, err)
 
 	return initiator, responder, initDH.Public, respDH.Public
@@ -39,7 +39,7 @@ func TestNewHandshakeHandler_ValidInitiator(t *testing.T) {
 	dh1, _ := noise.DH25519.GenerateKeypair(nil)
 	dh2, _ := noise.DH25519.GenerateKeypair(nil)
 
-	handler, err := NewHandshakeHandler(true, dh1.Private[:32], dh2.Public)
+	handler, err := NewHandshakeHandler(true, dh1.Private[:32], dh2.Public, nil)
 	require.NoError(t, err)
 	require.NotNil(t, handler)
 	assert.True(t, handler.initiator)
@@ -50,7 +50,7 @@ func TestNewHandshakeHandler_ValidInitiator(t *testing.T) {
 func TestNewHandshakeHandler_ValidResponder(t *testing.T) {
 	dh, _ := noise.DH25519.GenerateKeypair(nil)
 
-	handler, err := NewHandshakeHandler(false, dh.Private[:32], nil)
+	handler, err := NewHandshakeHandler(false, dh.Private[:32], nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, handler)
 	assert.False(t, handler.initiator)
@@ -71,7 +71,7 @@ func TestNewHandshakeHandler_InvalidStaticKey(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			staticKey := make([]byte, tt.staticKeyLen)
-			handler, err := NewHandshakeHandler(true, staticKey, nil)
+			handler, err := NewHandshakeHandler(true, staticKey, nil, nil)
 			assert.Error(t, err)
 			assert.Nil(t, handler)
 		})
@@ -80,7 +80,7 @@ func TestNewHandshakeHandler_InvalidStaticKey(t *testing.T) {
 
 func TestNewHandshakeHandler_InitiatorMissingRemoteKey(t *testing.T) {
 	dh, _ := noise.DH25519.GenerateKeypair(nil)
-	handler, err := NewHandshakeHandler(true, dh.Private[:32], nil)
+	handler, err := NewHandshakeHandler(true, dh.Private[:32], nil, nil)
 	assert.Error(t, err)
 	assert.Nil(t, handler)
 	assert.Contains(t, err.Error(), "initiator requires remote static key")
@@ -90,7 +90,7 @@ func TestNewHandshakeHandler_InvalidRemoteKey(t *testing.T) {
 	dh, _ := noise.DH25519.GenerateKeypair(nil)
 	invalidRemoteKey := make([]byte, 16) // Wrong size
 
-	handler, err := NewHandshakeHandler(true, dh.Private[:32], invalidRemoteKey)
+	handler, err := NewHandshakeHandler(true, dh.Private[:32], invalidRemoteKey, nil)
 	assert.Error(t, err)
 	assert.Nil(t, handler)
 }
@@ -104,7 +104,7 @@ func TestNewHandshakeHandler_DefensiveCopy(t *testing.T) {
 	origStatic := append([]byte(nil), staticKey...)
 	origRemote := append([]byte(nil), remoteKey...)
 
-	handler, err := NewHandshakeHandler(true, staticKey, remoteKey)
+	handler, err := NewHandshakeHandler(true, staticKey, remoteKey, nil)
 	require.NoError(t, err)
 
 	// Modify original slices
@@ -568,7 +568,7 @@ func BenchmarkHandshakeHandler_CreateSessionRequest(b *testing.B) {
 	dh1, _ := noise.DH25519.GenerateKeypair(nil)
 	dh2, _ := noise.DH25519.GenerateKeypair(nil)
 
-	handler, _ := NewHandshakeHandler(true, dh1.Private[:32], dh2.Public)
+	handler, _ := NewHandshakeHandler(true, dh1.Private[:32], dh2.Public, nil)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -584,12 +584,12 @@ func BenchmarkHandshakeHandler_ProcessSessionRequest(b *testing.B) {
 	dh2, _ := noise.DH25519.GenerateKeypair(nil)
 	dh3, _ := noise.DH25519.GenerateKeypair(nil)
 
-	initiator, _ := NewHandshakeHandler(true, dh1.Private[:32], dh2.Public)
+	initiator, _ := NewHandshakeHandler(true, dh1.Private[:32], dh2.Public, nil)
 	requestPacket, _ := initiator.CreateSessionRequest(11111, 22222)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		responder, _ := NewHandshakeHandler(false, dh3.Private[:32], nil)
+		responder, _ := NewHandshakeHandler(false, dh3.Private[:32], nil, nil)
 		_, err := responder.ProcessSessionRequest(requestPacket)
 		if err != nil {
 			b.Fatal(err)
@@ -607,8 +607,8 @@ func BenchmarkHandshakeHandler_FullHandshake(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		initiator, _ := NewHandshakeHandler(true, initPriv, respPub)
-		responder, _ := NewHandshakeHandler(false, respPriv, nil)
+		initiator, _ := NewHandshakeHandler(true, initPriv, respPub, nil)
+		responder, _ := NewHandshakeHandler(false, respPriv, nil, nil)
 
 		requestPacket, _ := initiator.CreateSessionRequest(11111, 22222)
 		_, _ = responder.ProcessSessionRequest(requestPacket)

@@ -169,8 +169,29 @@ func NewSSU2Conn(
 		return nil, oops.Wrapf(err, "invalid config")
 	}
 
-	// Create handshake handler
-	handshakeHandler, err := NewHandshakeHandler(initiator, staticKey, remoteStaticKey)
+	// Determine connection ID before creating handshake handler (needed for prologue)
+	connID := config.ConnectionID
+	if connID == 0 {
+		var genErr error
+		connID, genErr = GenerateConnectionID()
+		if genErr != nil {
+			return nil, oops.Wrapf(genErr, "failed to generate connection ID")
+		}
+	}
+
+	// Build Noise prologue from the initiator's connection ID.
+	// For the initiator, this is our own connection ID.
+	// For the responder, this is the initiator's ID received in the SessionRequest header.
+	var prologueConnID uint64
+	if initiator {
+		prologueConnID = connID
+	} else {
+		prologueConnID = config.InitiatorConnectionID
+	}
+	prologue := buildSSU2Prologue(prologueConnID)
+
+	// Create handshake handler with prologue binding
+	handshakeHandler, err := NewHandshakeHandler(initiator, staticKey, remoteStaticKey, prologue)
 	if err != nil {
 		return nil, oops.Wrapf(err, "failed to create handshake handler")
 	}
@@ -179,15 +200,6 @@ func NewSSU2Conn(
 	role := "initiator"
 	if !initiator {
 		role = "responder"
-	}
-
-	connID := config.ConnectionID
-	if connID == 0 {
-		var genErr error
-		connID, genErr = GenerateConnectionID()
-		if genErr != nil {
-			return nil, oops.Wrapf(genErr, "failed to generate connection ID")
-		}
 	}
 
 	ssu2Addr, err := NewSSU2Addr(remoteAddr, config.RouterHash, connID, role)

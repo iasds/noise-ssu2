@@ -175,6 +175,9 @@ func (h *ACKHandler) ProcessACK(ackBlock *SSU2Block) ([]uint32, error) {
 	var ackedPackets []uint32
 
 	// Initial consecutive run: throughPN down through throughPN-acnt
+	if uint32(acnt) > throughPN {
+		return nil, oops.Errorf("ACK acnt (%d) exceeds throughPN (%d)", acnt, throughPN)
+	}
 	for i := 0; i <= acnt; i++ {
 		pn := throughPN - uint32(i)
 		ackedPackets = append(ackedPackets, pn)
@@ -182,7 +185,11 @@ func (h *ACKHandler) ProcessACK(ackBlock *SSU2Block) ([]uint32, error) {
 	}
 
 	// cursor tracks the next position below the last acked packet
-	cursor := throughPN - uint32(acnt) - 1
+	base := throughPN - uint32(acnt)
+	if base == 0 {
+		return ackedPackets, nil
+	}
+	cursor := base - 1
 
 	// Parse optional nack/ack range pairs
 	offset := 5
@@ -191,10 +198,16 @@ func (h *ACKHandler) ProcessACK(ackBlock *SSU2Block) ([]uint32, error) {
 		acks := int(data[offset+1]) + 1 // stored minus 1
 		offset += 2
 
-		// Skip the gap (nacked packets)
+		// Skip the gap (nacked packets) — check for underflow
+		if uint32(nacks) > cursor {
+			return nil, oops.Errorf("ACK nack range (%d) exceeds cursor (%d)", nacks, cursor)
+		}
 		cursor -= uint32(nacks)
 
-		// Collect the ack run
+		// Collect the ack run — check for underflow
+		if uint32(acks) > cursor+1 {
+			return nil, oops.Errorf("ACK ack range (%d) exceeds remaining cursor (%d)", acks, cursor)
+		}
 		for i := 0; i < acks; i++ {
 			ackedPackets = append(ackedPackets, cursor)
 			delete(h.pendingACKs, cursor)
