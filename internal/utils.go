@@ -3,18 +3,16 @@ package internal
 import (
 	"errors"
 	"io"
+	"runtime"
 
 	"github.com/go-i2p/crypto/rand"
 )
 
-// SecureZero zeroes out the given byte slice (best-effort; not guaranteed
-// resistant to dead-store elimination by the compiler). The Go compiler
-// does not currently eliminate these stores, but the language specification
-// does not prohibit it.
+// SecureZero zeroes out the given byte slice. Uses runtime.KeepAlive to
+// prevent the compiler from eliding the zeroing as a dead store.
 func SecureZero(b []byte) {
-	for i := range b {
-		b[i] = 0
-	}
+	clear(b)
+	runtime.KeepAlive(b)
 }
 
 // RandomBytes generates cryptographically secure random bytes.
