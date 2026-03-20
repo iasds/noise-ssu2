@@ -1,6 +1,7 @@
 package ssu2
 
 import (
+	"encoding/binary"
 	"testing"
 	"time"
 
@@ -126,10 +127,12 @@ func TestACKHandler_ShouldSendACK_DelayCalculation(t *testing.T) {
 // TestACKHandler_GenerateACK tests ACK block generation
 func TestACKHandler_GenerateACK(t *testing.T) {
 	tests := []struct {
-		name       string
-		packets    []uint32
-		wantRanges int
-		wantNil    bool
+		name          string
+		packets       []uint32
+		wantNil       bool
+		wantThroughPN uint32
+		wantAcnt      uint8
+		wantDataLen   int // total expected data length
 	}{
 		{
 			name:    "no packets",
@@ -137,24 +140,32 @@ func TestACKHandler_GenerateACK(t *testing.T) {
 			wantNil: true,
 		},
 		{
-			name:       "single packet",
-			packets:    []uint32{100},
-			wantRanges: 1,
+			name:          "single packet",
+			packets:       []uint32{100},
+			wantThroughPN: 100,
+			wantAcnt:      0,
+			wantDataLen:   5, // header only, no ranges
 		},
 		{
-			name:       "contiguous range",
-			packets:    []uint32{100, 101, 102, 103},
-			wantRanges: 1,
+			name:          "contiguous range",
+			packets:       []uint32{100, 101, 102, 103},
+			wantThroughPN: 103,
+			wantAcnt:      3,
+			wantDataLen:   5,
 		},
 		{
-			name:       "multiple ranges",
-			packets:    []uint32{100, 101, 105, 106, 110},
-			wantRanges: 3,
+			name:          "two separate ranges",
+			packets:       []uint32{100, 101, 105, 106, 110},
+			wantThroughPN: 110,
+			wantAcnt:      0, // only 110 in top run
+			wantDataLen:   9, // 5 header + 2 range pairs
 		},
 		{
-			name:       "out of order",
-			packets:    []uint32{105, 100, 102, 101, 103},
-			wantRanges: 2, // [100-103], [105]
+			name:          "out of order",
+			packets:       []uint32{105, 100, 102, 101, 103},
+			wantThroughPN: 105,
+			wantAcnt:      0, // 105 alone at the top
+			wantDataLen:   7, // 5 header + 1 range pair (gap=1, ack-run=100-103)
 		},
 	}
 
@@ -177,9 +188,11 @@ func TestACKHandler_GenerateACK(t *testing.T) {
 			assert.Equal(t, BlockTypeACK, block.Type)
 			assert.GreaterOrEqual(t, len(block.Data), 5)
 
-			// Verify range count
-			rangeCount := int(block.Data[0])
-			assert.Equal(t, tt.wantRanges, rangeCount)
+			// Verify through-PN and acnt
+			throughPN := binary.BigEndian.Uint32(block.Data[0:4])
+			assert.Equal(t, tt.wantThroughPN, throughPN)
+			assert.Equal(t, tt.wantAcnt, block.Data[4])
+			assert.Equal(t, tt.wantDataLen, len(block.Data))
 
 			// Verify received packets cleared
 			assert.Empty(t, handler.receivedPackets)
@@ -187,7 +200,7 @@ func TestACKHandler_GenerateACK(t *testing.T) {
 	}
 }
 
-// TestACKHandler_GenerateACK_Format tests ACK block data format
+// TestACKHandler_GenerateACK_Format tests ACK block data format per SSU2 spec
 func TestACKHandler_GenerateACK_Format(t *testing.T) {
 	handler := NewACKHandler()
 	handler.RecordReceived(100)
@@ -199,17 +212,14 @@ func TestACKHandler_GenerateACK_Format(t *testing.T) {
 	require.NotNil(t, block)
 
 	data := block.Data
-	assert.GreaterOrEqual(t, len(data), 5)
+	require.Len(t, data, 5) // contiguous run: header only, no range pairs
 
-	// Check header
-	rangeCount := data[0]
-	assert.Equal(t, uint8(1), rangeCount) // One contiguous range
+	// Bytes 0-3: Through PN = 102
+	throughPN := binary.BigEndian.Uint32(data[0:4])
+	assert.Equal(t, uint32(102), throughPN)
 
-	// ACK delay should be present (4 bytes)
-	assert.GreaterOrEqual(t, len(data), 5)
-
-	// Check range (should be 100-102)
-	assert.Equal(t, 5+8, len(data)) // Header + one range (8 bytes)
+	// Byte 4: acnt = 2 (3 packets minus 1)
+	assert.Equal(t, uint8(2), data[4])
 }
 
 // TestACKHandler_ProcessACK tests processing incoming ACK blocks
@@ -221,50 +231,40 @@ func TestACKHandler_ProcessACK(t *testing.T) {
 		wantError   bool
 	}{
 		{
-			name: "single range",
+			name: "contiguous range only",
 			createBlock: func() *SSU2Block {
-				data := make([]byte, 13)
-				data[0] = 1 // 1 range
-				// ACK delay (bytes 1-4) already zero
-				// Range: 100-102
-				data[5] = 0
-				data[6] = 0
-				data[7] = 0
-				data[8] = 100
-				data[9] = 0
-				data[10] = 0
-				data[11] = 0
-				data[12] = 102
+				// Through PN = 102, acnt = 2 → acks 102, 101, 100
+				data := make([]byte, 5)
+				binary.BigEndian.PutUint32(data[0:4], 102)
+				data[4] = 2
 				return NewSSU2Block(BlockTypeACK, data)
 			},
-			wantPackets: []uint32{100, 101, 102},
+			wantPackets: []uint32{102, 101, 100},
 		},
 		{
-			name: "multiple ranges",
+			name: "with one nack/ack range",
 			createBlock: func() *SSU2Block {
-				data := make([]byte, 21)
-				data[0] = 2 // 2 ranges
-				// Range 1: 100-102
-				data[5] = 0
-				data[6] = 0
-				data[7] = 0
-				data[8] = 100
-				data[9] = 0
-				data[10] = 0
-				data[11] = 0
-				data[12] = 102
-				// Range 2: 200-201
-				data[13] = 0
-				data[14] = 0
-				data[15] = 0
-				data[16] = 200
-				data[17] = 0
-				data[18] = 0
-				data[19] = 0
-				data[20] = 201
+				// Through PN = 106, acnt = 1 (106, 105)
+				// Range: nacks=1 (2 missing: 104,103), acks=2 (3 acked: 102,101,100)
+				data := make([]byte, 7)
+				binary.BigEndian.PutUint32(data[0:4], 106)
+				data[4] = 1 // acnt
+				data[5] = 1 // nacks - 1
+				data[6] = 2 // acks - 1
 				return NewSSU2Block(BlockTypeACK, data)
 			},
-			wantPackets: []uint32{100, 101, 102, 200, 201},
+			wantPackets: []uint32{106, 105, 102, 101, 100},
+		},
+		{
+			name: "single packet ack",
+			createBlock: func() *SSU2Block {
+				// Through PN = 50, acnt = 0 → only packet 50
+				data := make([]byte, 5)
+				binary.BigEndian.PutUint32(data[0:4], 50)
+				data[4] = 0
+				return NewSSU2Block(BlockTypeACK, data)
+			},
+			wantPackets: []uint32{50},
 		},
 		{
 			name: "wrong block type",
@@ -277,24 +277,6 @@ func TestACKHandler_ProcessACK(t *testing.T) {
 			name: "too short",
 			createBlock: func() *SSU2Block {
 				return NewSSU2Block(BlockTypeACK, []byte{1, 2, 3}) // Only 3 bytes
-			},
-			wantError: true,
-		},
-		{
-			name: "invalid range",
-			createBlock: func() *SSU2Block {
-				data := make([]byte, 13)
-				data[0] = 1 // 1 range
-				// Range: 102-100 (start > end)
-				data[5] = 0
-				data[6] = 0
-				data[7] = 0
-				data[8] = 102
-				data[9] = 0
-				data[10] = 0
-				data[11] = 0
-				data[12] = 100
-				return NewSSU2Block(BlockTypeACK, data)
 			},
 			wantError: true,
 		},
@@ -363,17 +345,10 @@ func TestACKHandler_ProcessACK_RemovesPending(t *testing.T) {
 
 	assert.Len(t, handler.pendingACKs, 4)
 
-	// Create ACK for packets 100-102
-	data := make([]byte, 13)
-	data[0] = 1 // 1 range
-	data[5] = 0
-	data[6] = 0
-	data[7] = 0
-	data[8] = 100
-	data[9] = 0
-	data[10] = 0
-	data[11] = 0
-	data[12] = 102
+	// Create ACK for packets 100-102 (through PN = 102, acnt = 2)
+	data := make([]byte, 5)
+	binary.BigEndian.PutUint32(data[0:4], 102)
+	data[4] = 2
 	block := NewSSU2Block(BlockTypeACK, data)
 
 	_, err := handler.ProcessACK(block)
@@ -435,12 +410,12 @@ func TestACKHandler_RoundTrip(t *testing.T) {
 	assert.False(t, sender.HasPending())
 }
 
-// TestCompressPacketRanges tests packet range compression
-func TestCompressPacketRanges(t *testing.T) {
+// TestSortDescDedupPackets tests the sort/dedup helper
+func TestSortDescDedupPackets(t *testing.T) {
 	tests := []struct {
 		name    string
 		packets []uint32
-		want    []packetRange
+		want    []uint32
 	}{
 		{
 			name:    "empty",
@@ -450,52 +425,49 @@ func TestCompressPacketRanges(t *testing.T) {
 		{
 			name:    "single packet",
 			packets: []uint32{100},
-			want:    []packetRange{{100, 100}},
+			want:    []uint32{100},
 		},
 		{
-			name:    "contiguous range",
-			packets: []uint32{100, 101, 102, 103},
-			want:    []packetRange{{100, 103}},
+			name:    "already sorted descending",
+			packets: []uint32{103, 102, 101, 100},
+			want:    []uint32{103, 102, 101, 100},
 		},
 		{
-			name:    "two ranges",
+			name:    "ascending needs reversal",
 			packets: []uint32{100, 101, 105, 106},
-			want:    []packetRange{{100, 101}, {105, 106}},
+			want:    []uint32{106, 105, 101, 100},
 		},
 		{
-			name:    "three ranges",
-			packets: []uint32{100, 101, 105, 110, 111, 112},
-			want:    []packetRange{{100, 101}, {105, 105}, {110, 112}},
-		},
-		{
-			name:    "unsorted input",
-			packets: []uint32{105, 100, 102, 101, 103},
-			want:    []packetRange{{100, 103}, {105, 105}},
+			name:    "with duplicates",
+			packets: []uint32{105, 100, 102, 100, 105, 101, 103},
+			want:    []uint32{105, 103, 102, 101, 100},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := compressPacketRanges(tt.packets)
+			got := sortDescDedupPackets(tt.packets)
 			assert.Equal(t, tt.want, got)
 		})
 	}
 }
 
-// TestACKHandler_EmptyDelay tests ACK generation with zero delay
-func TestACKHandler_EmptyDelay(t *testing.T) {
+// TestACKHandler_GenerateACK_MinimalBlock tests that a single-packet ACK
+// produces a valid 5-byte block.
+func TestACKHandler_GenerateACK_MinimalBlock(t *testing.T) {
 	handler := NewACKHandler()
-	handler.lastACKTime = time.Now() // Just set, no delay
-
-	handler.RecordReceived(100)
+	handler.RecordReceived(42)
 
 	block, err := handler.GenerateACK()
 	require.NoError(t, err)
 	require.NotNil(t, block)
 
-	// ACK delay should be very small (0-1 ms)
 	data := block.Data
-	assert.GreaterOrEqual(t, len(data), 5)
+	require.Len(t, data, 5)
+
+	throughPN := binary.BigEndian.Uint32(data[0:4])
+	assert.Equal(t, uint32(42), throughPN)
+	assert.Equal(t, uint8(0), data[4]) // acnt = 0 → only throughPN
 }
 
 // Benchmark tests
@@ -524,11 +496,10 @@ func BenchmarkACKHandler_GenerateACK(b *testing.B) {
 }
 
 func BenchmarkACKHandler_ProcessACK(b *testing.B) {
-	// Create ACK block
-	data := make([]byte, 13)
-	data[0] = 1 // 1 range
-	data[8] = 100
-	data[12] = 110
+	// Create ACK block: Through PN = 110, acnt = 10 (packets 100-110)
+	data := make([]byte, 5)
+	binary.BigEndian.PutUint32(data[0:4], 110)
+	data[4] = 10
 	block := NewSSU2Block(BlockTypeACK, data)
 
 	b.ResetTimer()
@@ -541,7 +512,7 @@ func BenchmarkACKHandler_ProcessACK(b *testing.B) {
 	}
 }
 
-func BenchmarkCompressPacketRanges(b *testing.B) {
+func BenchmarkSortDescDedupPackets(b *testing.B) {
 	packets := make([]uint32, 100)
 	for i := 0; i < 100; i++ {
 		packets[i] = uint32(i * 2) // Create gaps
@@ -549,6 +520,6 @@ func BenchmarkCompressPacketRanges(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = compressPacketRanges(packets)
+		_ = sortDescDedupPackets(packets)
 	}
 }

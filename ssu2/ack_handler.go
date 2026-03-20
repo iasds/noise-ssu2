@@ -11,12 +11,15 @@ import (
 // It tracks received packets, generates ACK blocks, and processes incoming ACKs
 // to manage retransmission and congestion control.
 //
-// ACK Block Format (Type 12):
-// - Byte 0: ACK count (number of packet ranges)
-// - Bytes 1-4: ACK delay in milliseconds (uint32, big-endian)
-// - Followed by packet ranges (each range: start uint32 + end uint32)
+// ACK Block Format (Type 12) per SSU2 spec:
+//   - Bytes 0-3: Through Packet Number (highest PN being acked, big-endian)
+//   - Byte 4:    acnt — number of consecutive packets acked at and below the
+//     Through PN, MINUS 1 (so 0 means only the Through PN itself)
+//   - Bytes 5+:  Optional ranges, each 2 bytes:
+//     Byte 0: nacks minus 1 (gap of non-received packets)
+//     Byte 1: acks minus 1  (run of received packets)
 //
-// Minimum size: 5 bytes (1 byte count + 4 bytes delay, 0 ranges for keepalive)
+// Minimum size: 5 bytes (4-byte Through PN + 1-byte acnt)
 type ACKHandler struct {
 	// receivedPackets tracks packet numbers we've received and need to ACK
 	receivedPackets []uint32
@@ -82,40 +85,67 @@ func (h *ACKHandler) GenerateACK() (*SSU2Block, error) {
 		return nil, nil
 	}
 
-	// Compress packet numbers into ranges for efficiency
-	ranges := compressPacketRanges(h.receivedPackets)
+	// Sort received packets descending and deduplicate
+	sorted := sortDescDedupPackets(h.receivedPackets)
 
-	// Calculate ACK delay in milliseconds
-	ackDelayMS := uint32(time.Since(h.lastACKTime).Milliseconds())
-	if ackDelayMS > 65535 {
-		ackDelayMS = 65535 // Cap at max uint16 for reasonable delays
+	throughPN := sorted[0]
+
+	// Count initial consecutive run from the top (including throughPN)
+	consecutiveCount := 1
+	for i := 1; i < len(sorted); i++ {
+		if sorted[i] == sorted[i-1]-1 {
+			consecutiveCount++
+		} else {
+			break
+		}
+	}
+	acnt := uint8(consecutiveCount - 1) // stored minus 1
+
+	// Build optional nack/ack range pairs for remaining packets
+	var rangeBytes []byte
+	i := consecutiveCount
+	for i < len(sorted) {
+		// Gap: number of missing packets between previous run and next acked
+		prevPN := sorted[i-1]
+		nextPN := sorted[i]
+		nackCount := int(prevPN - nextPN - 1)
+		if nackCount < 1 {
+			nackCount = 1
+		}
+		if nackCount > 256 {
+			nackCount = 256 // cap at 1-byte max (stored minus 1 = 255)
+		}
+
+		// Ack run: count consecutive packets starting at sorted[i]
+		ackRun := 1
+		j := i + 1
+		for j < len(sorted) && sorted[j] == sorted[j-1]-1 {
+			ackRun++
+			j++
+		}
+		if ackRun > 256 {
+			ackRun = 256 // cap at 1-byte max
+		}
+
+		rangeBytes = append(rangeBytes, uint8(nackCount-1), uint8(ackRun-1))
+		i = j
 	}
 
-	// Build ACK block data:
-	// Byte 0: range count
-	// Bytes 1-4: ACK delay (ms)
-	// Bytes 5+: ranges (start:4 + end:4 per range)
-	data := make([]byte, 5+len(ranges)*8)
-	data[0] = uint8(len(ranges))
-	binary.BigEndian.PutUint32(data[1:5], ackDelayMS)
-
-	// Encode packet ranges
-	offset := 5
-	for _, r := range ranges {
-		binary.BigEndian.PutUint32(data[offset:offset+4], r.start)
-		binary.BigEndian.PutUint32(data[offset+4:offset+8], r.end)
-		offset += 8
-	}
+	// Encode: 4 bytes throughPN + 1 byte acnt + range pairs
+	data := make([]byte, 5+len(rangeBytes))
+	binary.BigEndian.PutUint32(data[0:4], throughPN)
+	data[4] = acnt
+	copy(data[5:], rangeBytes)
 
 	block := NewSSU2Block(BlockTypeACK, data)
 	h.lastACKTime = time.Now()
-	h.receivedPackets = h.receivedPackets[:0] // Clear acknowledged packets
+	h.receivedPackets = h.receivedPackets[:0]
 
 	return block, nil
 }
 
 // ProcessACK handles an incoming ACK block, removing acknowledged packets
-// from the pending queue and calculating RTT samples.
+// from the pending queue. Returns the list of acked packet numbers.
 func (h *ACKHandler) ProcessACK(ackBlock *SSU2Block) ([]uint32, error) {
 	if ackBlock.Type != BlockTypeACK {
 		return nil, oops.Errorf("expected ACK block type %d, got %d",
@@ -127,35 +157,37 @@ func (h *ACKHandler) ProcessACK(ackBlock *SSU2Block) ([]uint32, error) {
 		return nil, oops.Errorf("ACK block too short: %d bytes, minimum 5", len(data))
 	}
 
-	// Parse ACK block
-	rangeCount := int(data[0])
-	ackDelayMS := binary.BigEndian.Uint32(data[1:5])
-	_ = ackDelayMS // Delay available for future use
+	// Parse header
+	throughPN := binary.BigEndian.Uint32(data[0:4])
+	acnt := int(data[4])
 
-	expectedSize := 5 + rangeCount*8
-	if len(data) < expectedSize {
-		return nil, oops.Errorf("ACK block size mismatch: got %d bytes, expected %d",
-			len(data), expectedSize)
+	var ackedPackets []uint32
+
+	// Initial consecutive run: throughPN down through throughPN-acnt
+	for i := 0; i <= acnt; i++ {
+		pn := throughPN - uint32(i)
+		ackedPackets = append(ackedPackets, pn)
+		delete(h.pendingACKs, pn)
 	}
 
-	// Extract acknowledged packet numbers
-	var ackedPackets []uint32
+	// cursor tracks the next position below the last acked packet
+	cursor := throughPN - uint32(acnt) - 1
+
+	// Parse optional nack/ack range pairs
 	offset := 5
-	for i := 0; i < rangeCount; i++ {
-		start := binary.BigEndian.Uint32(data[offset : offset+4])
-		end := binary.BigEndian.Uint32(data[offset+4 : offset+8])
-		offset += 8
+	for offset+1 < len(data) {
+		nacks := int(data[offset]) + 1  // stored minus 1
+		acks := int(data[offset+1]) + 1 // stored minus 1
+		offset += 2
 
-		if start > end {
-			return nil, oops.Errorf("invalid ACK range: start %d > end %d", start, end)
-		}
+		// Skip the gap (nacked packets)
+		cursor -= uint32(nacks)
 
-		// Collect all packet numbers in range
-		for pktNum := start; pktNum <= end; pktNum++ {
-			ackedPackets = append(ackedPackets, pktNum)
-
-			// Remove from pending queue
-			delete(h.pendingACKs, pktNum)
+		// Collect the ack run
+		for i := 0; i < acks; i++ {
+			ackedPackets = append(ackedPackets, cursor)
+			delete(h.pendingACKs, cursor)
+			cursor--
 		}
 	}
 
@@ -197,45 +229,34 @@ func (h *ACKHandler) ClearPending() {
 	h.receivedPackets = h.receivedPackets[:0]
 }
 
-// packetRange represents a contiguous range of packet numbers.
-type packetRange struct {
-	start uint32
-	end   uint32
-}
-
-// compressPacketRanges converts a list of packet numbers into ranges.
-// Example: [1, 2, 3, 5, 6, 10] -> [(1,3), (5,6), (10,10)]
-func compressPacketRanges(packets []uint32) []packetRange {
+// sortDescDedupPackets returns a deduplicated copy of packets sorted in
+// descending order.
+func sortDescDedupPackets(packets []uint32) []uint32 {
 	if len(packets) == 0 {
 		return nil
 	}
 
-	// Sort packets (simple bubble sort for small lists)
 	sorted := make([]uint32, len(packets))
 	copy(sorted, packets)
-	for i := 0; i < len(sorted); i++ {
-		for j := i + 1; j < len(sorted); j++ {
-			if sorted[i] > sorted[j] {
-				sorted[i], sorted[j] = sorted[j], sorted[i]
-			}
-		}
-	}
 
-	// Build ranges
-	var ranges []packetRange
-	start := sorted[0]
-	end := sorted[0]
-
+	// Sort descending (simple insertion sort — received lists are typically small)
 	for i := 1; i < len(sorted); i++ {
-		if sorted[i] == end+1 {
-			end = sorted[i] // Extend current range
-		} else {
-			ranges = append(ranges, packetRange{start, end})
-			start = sorted[i]
-			end = sorted[i]
+		key := sorted[i]
+		j := i - 1
+		for j >= 0 && sorted[j] < key {
+			sorted[j+1] = sorted[j]
+			j--
+		}
+		sorted[j+1] = key
+	}
+
+	// Deduplicate (sorted is descending, so duplicates are adjacent)
+	out := sorted[:1]
+	for i := 1; i < len(sorted); i++ {
+		if sorted[i] != out[len(out)-1] {
+			out = append(out, sorted[i])
 		}
 	}
-	ranges = append(ranges, packetRange{start, end})
 
-	return ranges
+	return out
 }
