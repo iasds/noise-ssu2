@@ -237,20 +237,19 @@ func TestDataHandler_FirstFragment(t *testing.T) {
 
 	// Create first fragment
 	messageID := uint32(12345)
-	totalSize := uint32(100)
+	totalSize := uint16(100)
 	fragmentData := []byte("First fragment data")
 
-	// Build first fragment block data
-	blockData := make([]byte, 8+len(fragmentData))
+	// Build first fragment block data: MessageID(4) + FragInfo(1) + TotalSize(2) + Data
+	blockData := make([]byte, 7+len(fragmentData))
 	blockData[0] = byte(messageID >> 24)
 	blockData[1] = byte(messageID >> 16)
 	blockData[2] = byte(messageID >> 8)
 	blockData[3] = byte(messageID)
-	blockData[4] = byte(totalSize >> 24)
-	blockData[5] = byte(totalSize >> 16)
-	blockData[6] = byte(totalSize >> 8)
-	blockData[7] = byte(totalSize)
-	copy(blockData[8:], fragmentData)
+	blockData[4] = 0x00 // fragNum=0, isLast=false
+	blockData[5] = byte(totalSize >> 8)
+	blockData[6] = byte(totalSize)
+	copy(blockData[7:], fragmentData)
 
 	block := NewSSU2Block(BlockTypeFirstFragment, blockData)
 
@@ -283,7 +282,7 @@ func TestDataHandler_FirstFragment_TooShort(t *testing.T) {
 	handler := NewDataHandler(10)
 
 	// Create invalid first fragment (too short)
-	blockData := []byte{0x00, 0x01, 0x02} // Only 3 bytes, need at least 8
+	blockData := []byte{0x00, 0x01, 0x02} // Only 3 bytes, need at least 7
 
 	block := NewSSU2Block(BlockTypeFirstFragment, blockData)
 
@@ -310,20 +309,19 @@ func TestDataHandler_FirstFragment_Duplicate(t *testing.T) {
 	handler := NewDataHandler(10)
 
 	messageID := uint32(12345)
-	totalSize := uint32(100)
+	totalSize := uint16(100)
 	fragmentData := []byte("First fragment data")
 
-	// Build first fragment block data
-	blockData := make([]byte, 8+len(fragmentData))
+	// Build first fragment block data: MessageID(4) + FragInfo(1) + TotalSize(2) + Data
+	blockData := make([]byte, 7+len(fragmentData))
 	blockData[0] = byte(messageID >> 24)
 	blockData[1] = byte(messageID >> 16)
 	blockData[2] = byte(messageID >> 8)
 	blockData[3] = byte(messageID)
-	blockData[4] = byte(totalSize >> 24)
-	blockData[5] = byte(totalSize >> 16)
-	blockData[6] = byte(totalSize >> 8)
-	blockData[7] = byte(totalSize)
-	copy(blockData[8:], fragmentData)
+	blockData[4] = 0x00 // fragNum=0, isLast=false
+	blockData[5] = byte(totalSize >> 8)
+	blockData[6] = byte(totalSize)
+	copy(blockData[7:], fragmentData)
 
 	block := NewSSU2Block(BlockTypeFirstFragment, blockData)
 
@@ -356,19 +354,18 @@ func TestDataHandler_FollowOnFragment(t *testing.T) {
 	messageID := uint32(12345)
 	firstData := []byte("First fragment data")
 	secondData := []byte("Second fragment data")
-	totalSize := uint32(len(firstData) + len(secondData)) // Total size matches actual data
+	totalSize := uint16(len(firstData) + len(secondData)) // Total size matches actual data
 
-	// Send first fragment
-	firstBlockData := make([]byte, 8+len(firstData))
+	// Send first fragment: MessageID(4) + FragInfo(1) + TotalSize(2) + Data
+	firstBlockData := make([]byte, 7+len(firstData))
 	firstBlockData[0] = byte(messageID >> 24)
 	firstBlockData[1] = byte(messageID >> 16)
 	firstBlockData[2] = byte(messageID >> 8)
 	firstBlockData[3] = byte(messageID)
-	firstBlockData[4] = byte(totalSize >> 24)
-	firstBlockData[5] = byte(totalSize >> 16)
-	firstBlockData[6] = byte(totalSize >> 8)
-	firstBlockData[7] = byte(totalSize)
-	copy(firstBlockData[8:], firstData)
+	firstBlockData[4] = 0x00 // fragNum=0, isLast=false
+	firstBlockData[5] = byte(totalSize >> 8)
+	firstBlockData[6] = byte(totalSize)
+	copy(firstBlockData[7:], firstData)
 
 	firstBlock := NewSSU2Block(BlockTypeFirstFragment, firstBlockData)
 	payload1, err := SerializeBlocks([]*SSU2Block{firstBlock})
@@ -383,14 +380,16 @@ func TestDataHandler_FollowOnFragment(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, handler.GetFragmentCount())
 
-	// Send follow-on fragment
-	followOnBlockData := make([]byte, 5+len(secondData))
-	followOnBlockData[0] = byte(messageID >> 24)
-	followOnBlockData[1] = byte(messageID >> 16)
-	followOnBlockData[2] = byte(messageID >> 8)
-	followOnBlockData[3] = byte(messageID)
-	followOnBlockData[4] = 1 // Fragment number
-	copy(followOnBlockData[5:], secondData)
+	// Send follow-on fragment: FragInfo(1) + Reserved(2) + MessageID(4) + Data
+	followOnBlockData := make([]byte, 7+len(secondData))
+	followOnBlockData[0] = (1 << 1) | 0x01 // fragNum=1, isLast=true
+	followOnBlockData[1] = 0x00            // reserved
+	followOnBlockData[2] = 0x00            // reserved
+	followOnBlockData[3] = byte(messageID >> 24)
+	followOnBlockData[4] = byte(messageID >> 16)
+	followOnBlockData[5] = byte(messageID >> 8)
+	followOnBlockData[6] = byte(messageID)
+	copy(followOnBlockData[7:], secondData)
 
 	followOnBlock := NewSSU2Block(BlockTypeFollowOnFragment, followOnBlockData)
 	payload2, err := SerializeBlocks([]*SSU2Block{followOnBlock})
@@ -429,7 +428,7 @@ func TestDataHandler_FollowOnFragment_TooShort(t *testing.T) {
 	handler := NewDataHandler(10)
 
 	// Create invalid follow-on fragment (too short)
-	blockData := []byte{0x00, 0x01} // Only 2 bytes, need at least 5
+	blockData := []byte{0x00, 0x01} // Only 2 bytes, need at least 7
 
 	block := NewSSU2Block(BlockTypeFollowOnFragment, blockData)
 
@@ -458,14 +457,16 @@ func TestDataHandler_FollowOnFragment_UnknownMessageID(t *testing.T) {
 	messageID := uint32(99999)
 	fragmentData := []byte("Fragment data")
 
-	// Build follow-on fragment without first fragment
-	blockData := make([]byte, 5+len(fragmentData))
-	blockData[0] = byte(messageID >> 24)
-	blockData[1] = byte(messageID >> 16)
-	blockData[2] = byte(messageID >> 8)
-	blockData[3] = byte(messageID)
-	blockData[4] = 1 // Fragment number
-	copy(blockData[5:], fragmentData)
+	// Build follow-on fragment without first fragment: FragInfo(1) + Reserved(2) + MessageID(4) + Data
+	blockData := make([]byte, 7+len(fragmentData))
+	blockData[0] = (1 << 1) // fragNum=1, isLast=false
+	blockData[1] = 0x00     // reserved
+	blockData[2] = 0x00     // reserved
+	blockData[3] = byte(messageID >> 24)
+	blockData[4] = byte(messageID >> 16)
+	blockData[5] = byte(messageID >> 8)
+	blockData[6] = byte(messageID)
+	copy(blockData[7:], fragmentData)
 
 	block := NewSSU2Block(BlockTypeFollowOnFragment, blockData)
 
@@ -492,20 +493,19 @@ func TestDataHandler_FollowOnFragment_Duplicate(t *testing.T) {
 	handler := NewDataHandler(10)
 
 	messageID := uint32(12345)
-	totalSize := uint32(100)
+	totalSize := uint16(100)
 	firstData := []byte("First fragment data")
 
-	// Send first fragment
-	firstBlockData := make([]byte, 8+len(firstData))
+	// Send first fragment: MessageID(4) + FragInfo(1) + TotalSize(2) + Data
+	firstBlockData := make([]byte, 7+len(firstData))
 	firstBlockData[0] = byte(messageID >> 24)
 	firstBlockData[1] = byte(messageID >> 16)
 	firstBlockData[2] = byte(messageID >> 8)
 	firstBlockData[3] = byte(messageID)
-	firstBlockData[4] = byte(totalSize >> 24)
-	firstBlockData[5] = byte(totalSize >> 16)
-	firstBlockData[6] = byte(totalSize >> 8)
-	firstBlockData[7] = byte(totalSize)
-	copy(firstBlockData[8:], firstData)
+	firstBlockData[4] = 0x00 // fragNum=0, isLast=false
+	firstBlockData[5] = byte(totalSize >> 8)
+	firstBlockData[6] = byte(totalSize)
+	copy(firstBlockData[7:], firstData)
 
 	firstBlock := NewSSU2Block(BlockTypeFirstFragment, firstBlockData)
 	payload1, err := SerializeBlocks([]*SSU2Block{firstBlock})
@@ -519,15 +519,17 @@ func TestDataHandler_FollowOnFragment_Duplicate(t *testing.T) {
 	_, err = handler.ProcessDataPacket(packet1)
 	require.NoError(t, err)
 
-	// Send same follow-on fragment twice
+	// Send same follow-on fragment twice: FragInfo(1) + Reserved(2) + MessageID(4) + Data
 	fragmentData := []byte("Follow-on data")
-	followOnBlockData := make([]byte, 5+len(fragmentData))
-	followOnBlockData[0] = byte(messageID >> 24)
-	followOnBlockData[1] = byte(messageID >> 16)
-	followOnBlockData[2] = byte(messageID >> 8)
-	followOnBlockData[3] = byte(messageID)
-	followOnBlockData[4] = 1 // Fragment number
-	copy(followOnBlockData[5:], fragmentData)
+	followOnBlockData := make([]byte, 7+len(fragmentData))
+	followOnBlockData[0] = (1 << 1) // fragNum=1, isLast=false
+	followOnBlockData[1] = 0x00     // reserved
+	followOnBlockData[2] = 0x00     // reserved
+	followOnBlockData[3] = byte(messageID >> 24)
+	followOnBlockData[4] = byte(messageID >> 16)
+	followOnBlockData[5] = byte(messageID >> 8)
+	followOnBlockData[6] = byte(messageID)
+	copy(followOnBlockData[7:], fragmentData)
 
 	followOnBlock := NewSSU2Block(BlockTypeFollowOnFragment, followOnBlockData)
 	payload2, err := SerializeBlocks([]*SSU2Block{followOnBlock})
@@ -554,21 +556,20 @@ func TestDataHandler_FragmentReassembly_SizeMismatch(t *testing.T) {
 	handler := NewDataHandler(10)
 
 	messageID := uint32(12345)
-	totalSize := uint32(10)              // Claim 10 bytes total
+	totalSize := uint16(10)              // Claim 10 bytes total
 	firstData := []byte("First")         // 5 bytes
 	secondData := []byte("Second-Extra") // More than 5 bytes - will cause mismatch
 
-	// Send first fragment
-	firstBlockData := make([]byte, 8+len(firstData))
+	// Send first fragment: MessageID(4) + FragInfo(1) + TotalSize(2) + Data
+	firstBlockData := make([]byte, 7+len(firstData))
 	firstBlockData[0] = byte(messageID >> 24)
 	firstBlockData[1] = byte(messageID >> 16)
 	firstBlockData[2] = byte(messageID >> 8)
 	firstBlockData[3] = byte(messageID)
-	firstBlockData[4] = byte(totalSize >> 24)
-	firstBlockData[5] = byte(totalSize >> 16)
-	firstBlockData[6] = byte(totalSize >> 8)
-	firstBlockData[7] = byte(totalSize)
-	copy(firstBlockData[8:], firstData)
+	firstBlockData[4] = 0x00 // fragNum=0, isLast=false
+	firstBlockData[5] = byte(totalSize >> 8)
+	firstBlockData[6] = byte(totalSize)
+	copy(firstBlockData[7:], firstData)
 
 	firstBlock := NewSSU2Block(BlockTypeFirstFragment, firstBlockData)
 	payload1, err := SerializeBlocks([]*SSU2Block{firstBlock})
@@ -582,14 +583,16 @@ func TestDataHandler_FragmentReassembly_SizeMismatch(t *testing.T) {
 	_, err = handler.ProcessDataPacket(packet1)
 	require.NoError(t, err)
 
-	// Send follow-on fragment that makes total > declared size
-	followOnBlockData := make([]byte, 5+len(secondData))
-	followOnBlockData[0] = byte(messageID >> 24)
-	followOnBlockData[1] = byte(messageID >> 16)
-	followOnBlockData[2] = byte(messageID >> 8)
-	followOnBlockData[3] = byte(messageID)
-	followOnBlockData[4] = 1 // Fragment number
-	copy(followOnBlockData[5:], secondData)
+	// Send follow-on fragment that makes total > declared size: FragInfo(1) + Reserved(2) + MessageID(4) + Data
+	followOnBlockData := make([]byte, 7+len(secondData))
+	followOnBlockData[0] = (1 << 1) | 0x01 // fragNum=1, isLast=true
+	followOnBlockData[1] = 0x00            // reserved
+	followOnBlockData[2] = 0x00            // reserved
+	followOnBlockData[3] = byte(messageID >> 24)
+	followOnBlockData[4] = byte(messageID >> 16)
+	followOnBlockData[5] = byte(messageID >> 8)
+	followOnBlockData[6] = byte(messageID)
+	copy(followOnBlockData[7:], secondData)
 
 	followOnBlock := NewSSU2Block(BlockTypeFollowOnFragment, followOnBlockData)
 	payload2, err := SerializeBlocks([]*SSU2Block{followOnBlock})
@@ -715,21 +718,20 @@ func TestDataHandler_CleanupExpiredFragments(t *testing.T) {
 
 	messageID1 := uint32(12345)
 	messageID2 := uint32(67890)
-	totalSize := uint32(100)
+	totalSize := uint16(100)
 	fragmentData := []byte("Fragment data")
 
 	// Create two fragment sets
 	for _, msgID := range []uint32{messageID1, messageID2} {
-		blockData := make([]byte, 8+len(fragmentData))
+		blockData := make([]byte, 7+len(fragmentData))
 		blockData[0] = byte(msgID >> 24)
 		blockData[1] = byte(msgID >> 16)
 		blockData[2] = byte(msgID >> 8)
 		blockData[3] = byte(msgID)
-		blockData[4] = byte(totalSize >> 24)
-		blockData[5] = byte(totalSize >> 16)
-		blockData[6] = byte(totalSize >> 8)
-		blockData[7] = byte(totalSize)
-		copy(blockData[8:], fragmentData)
+		blockData[4] = 0x00 // fragNum=0, isLast=false
+		blockData[5] = byte(totalSize >> 8)
+		blockData[6] = byte(totalSize)
+		copy(blockData[7:], fragmentData)
 
 		block := NewSSU2Block(BlockTypeFirstFragment, blockData)
 		payload, err := SerializeBlocks([]*SSU2Block{block})
@@ -764,20 +766,19 @@ func TestDataHandler_CleanupExpiredFragments_NoExpired(t *testing.T) {
 	handler := NewDataHandler(10)
 
 	messageID := uint32(12345)
-	totalSize := uint32(100)
+	totalSize := uint16(100)
 	fragmentData := []byte("Fragment data")
 
 	// Create fragment set
-	blockData := make([]byte, 8+len(fragmentData))
+	blockData := make([]byte, 7+len(fragmentData))
 	blockData[0] = byte(messageID >> 24)
 	blockData[1] = byte(messageID >> 16)
 	blockData[2] = byte(messageID >> 8)
 	blockData[3] = byte(messageID)
-	blockData[4] = byte(totalSize >> 24)
-	blockData[5] = byte(totalSize >> 16)
-	blockData[6] = byte(totalSize >> 8)
-	blockData[7] = byte(totalSize)
-	copy(blockData[8:], fragmentData)
+	blockData[4] = 0x00 // fragNum=0, isLast=false
+	blockData[5] = byte(totalSize >> 8)
+	blockData[6] = byte(totalSize)
+	copy(blockData[7:], fragmentData)
 
 	block := NewSSU2Block(BlockTypeFirstFragment, blockData)
 	payload, err := SerializeBlocks([]*SSU2Block{block})
@@ -837,19 +838,18 @@ func TestDataHandler_GetFragmentCount(t *testing.T) {
 
 	// Add fragment
 	messageID := uint32(12345)
-	totalSize := uint32(100)
+	totalSize := uint16(100)
 	fragmentData := []byte("Fragment data")
 
-	blockData := make([]byte, 8+len(fragmentData))
+	blockData := make([]byte, 7+len(fragmentData))
 	blockData[0] = byte(messageID >> 24)
 	blockData[1] = byte(messageID >> 16)
 	blockData[2] = byte(messageID >> 8)
 	blockData[3] = byte(messageID)
-	blockData[4] = byte(totalSize >> 24)
-	blockData[5] = byte(totalSize >> 16)
-	blockData[6] = byte(totalSize >> 8)
-	blockData[7] = byte(totalSize)
-	copy(blockData[8:], fragmentData)
+	blockData[4] = 0x00 // fragNum=0, isLast=false
+	blockData[5] = byte(totalSize >> 8)
+	blockData[6] = byte(totalSize)
+	copy(blockData[7:], fragmentData)
 
 	block := NewSSU2Block(BlockTypeFirstFragment, blockData)
 	payload, err := SerializeBlocks([]*SSU2Block{block})
@@ -888,19 +888,18 @@ func TestDataHandler_Clear(t *testing.T) {
 
 	// Add fragments
 	messageID := uint32(12345)
-	totalSize := uint32(100)
+	totalSize := uint16(100)
 	fragmentData := []byte("Fragment data")
 
-	blockData := make([]byte, 8+len(fragmentData))
+	blockData := make([]byte, 7+len(fragmentData))
 	blockData[0] = byte(messageID >> 24)
 	blockData[1] = byte(messageID >> 16)
 	blockData[2] = byte(messageID >> 8)
 	blockData[3] = byte(messageID)
-	blockData[4] = byte(totalSize >> 24)
-	blockData[5] = byte(totalSize >> 16)
-	blockData[6] = byte(totalSize >> 8)
-	blockData[7] = byte(totalSize)
-	copy(blockData[8:], fragmentData)
+	blockData[4] = 0x00 // fragNum=0, isLast=false
+	blockData[5] = byte(totalSize >> 8)
+	blockData[6] = byte(totalSize)
+	copy(blockData[7:], fragmentData)
 
 	block := NewSSU2Block(BlockTypeFirstFragment, blockData)
 	payload, err := SerializeBlocks([]*SSU2Block{block})
@@ -1003,19 +1002,18 @@ func BenchmarkDataHandler_ProcessFragments(b *testing.B) {
 
 	// Create first fragment packet
 	messageID := uint32(12345)
-	totalSize := uint32(2048)
+	totalSize := uint16(2048)
 	fragmentData := make([]byte, 1024)
 
-	firstBlockData := make([]byte, 8+len(fragmentData))
+	firstBlockData := make([]byte, 7+len(fragmentData))
 	firstBlockData[0] = byte(messageID >> 24)
 	firstBlockData[1] = byte(messageID >> 16)
 	firstBlockData[2] = byte(messageID >> 8)
 	firstBlockData[3] = byte(messageID)
-	firstBlockData[4] = byte(totalSize >> 24)
-	firstBlockData[5] = byte(totalSize >> 16)
-	firstBlockData[6] = byte(totalSize >> 8)
-	firstBlockData[7] = byte(totalSize)
-	copy(firstBlockData[8:], fragmentData)
+	firstBlockData[4] = 0x00 // fragNum=0, isLast=false
+	firstBlockData[5] = byte(totalSize >> 8)
+	firstBlockData[6] = byte(totalSize)
+	copy(firstBlockData[7:], fragmentData)
 
 	firstBlock := NewSSU2Block(BlockTypeFirstFragment, firstBlockData)
 	payload1, _ := SerializeBlocks([]*SSU2Block{firstBlock})
@@ -1067,19 +1065,18 @@ func BenchmarkDataHandler_CleanupFragments(b *testing.B) {
 	// Create some expired fragments
 	for i := 0; i < 100; i++ {
 		messageID := uint32(i)
-		totalSize := uint32(100)
+		totalSize := uint16(100)
 		fragmentData := []byte("Fragment data")
 
-		blockData := make([]byte, 8+len(fragmentData))
+		blockData := make([]byte, 7+len(fragmentData))
 		blockData[0] = byte(messageID >> 24)
 		blockData[1] = byte(messageID >> 16)
 		blockData[2] = byte(messageID >> 8)
 		blockData[3] = byte(messageID)
-		blockData[4] = byte(totalSize >> 24)
-		blockData[5] = byte(totalSize >> 16)
-		blockData[6] = byte(totalSize >> 8)
-		blockData[7] = byte(totalSize)
-		copy(blockData[8:], fragmentData)
+		blockData[4] = 0x00 // fragNum=0, isLast=false
+		blockData[5] = byte(totalSize >> 8)
+		blockData[6] = byte(totalSize)
+		copy(blockData[7:], fragmentData)
 
 		block := NewSSU2Block(BlockTypeFirstFragment, blockData)
 		payload, _ := SerializeBlocks([]*SSU2Block{block})
@@ -1119,14 +1116,15 @@ func TestDataHandler_AllBlockTypesExplicitlyHandled(t *testing.T) {
 		{BlockTypeOptions, "Options", make([]byte, 15)},        // minOptionsSize = 15
 		{BlockTypeRouterInfo, "RouterInfo", make([]byte, 100)}, // Variable
 		{BlockTypeI2NPMessage, "I2NPMessage", []byte("test i2np message")},
-		{BlockTypeFirstFragment, "FirstFragment", append([]byte{0, 0, 0, 1, 0, 0, 0, 100}, make([]byte, 50)...)},
-		{BlockTypeFollowOnFragment, "FollowOnFragment", append([]byte{0, 0, 0, 1, 1}, make([]byte, 50)...)},
+		{BlockTypeFirstFragment, "FirstFragment", append([]byte{0, 0, 0, 1, 0x00, 0, 100}, make([]byte, 50)...)},
+		{BlockTypeFollowOnFragment, "FollowOnFragment", append([]byte{0x02, 0, 0, 0, 0, 0, 1}, make([]byte, 50)...)},
 		{BlockTypeTermination, "Termination", make([]byte, 9)},         // minTerminationSize = 9
 		{BlockTypeRelayRequest, "RelayRequest", make([]byte, 50)},      // Variable
 		{BlockTypeRelayResponse, "RelayResponse", make([]byte, 50)},    // Variable
 		{BlockTypeRelayIntro, "RelayIntro", make([]byte, 50)},          // Variable
 		{BlockTypePeerTest, "PeerTest", make([]byte, 50)},              // Variable
 		{BlockTypeACK, "ACK", make([]byte, 5)},                         // minACKSize = 5
+		{BlockTypeNextNonce, "NextNonce", make([]byte, 8)},             // minNextNonceSize = 8
 		{BlockTypeAddress, "Address", make([]byte, 9)},                 // minAddressSizeIPv4 = 9
 		{BlockTypeRelayTagRequest, "RelayTagRequest", make([]byte, 3)}, // minRelayTagRequestSize = 3
 		{BlockTypeRelayTag, "RelayTag", make([]byte, 7)},               // minRelayTagSize = 7
@@ -1166,7 +1164,7 @@ func TestDataHandler_SetCallbacks(t *testing.T) {
 	var dateTimeValue uint32
 
 	handler.SetCallbacks(DataHandlerCallbacks{
-		OnTermination: func(reason uint8, data []byte) {
+		OnTermination: func(validAfterTime uint32, reason uint8, signedData []byte) {
 			terminationCalled = true
 			terminationReason = reason
 		},
@@ -1183,7 +1181,7 @@ func TestDataHandler_SetCallbacks(t *testing.T) {
 	// Test Termination callback
 	t.Run("Termination callback", func(t *testing.T) {
 		block := NewSSU2Block(BlockTypeTermination, make([]byte, 9)) // minTerminationSize = 9
-		block.Data[0] = 0x05                                         // Set reason code
+		block.Data[4] = 0x05                                         // Set reason code (byte 4 per spec)
 		payload, _ := SerializeBlocks([]*SSU2Block{block})
 		packet := &SSU2Packet{
 			MessageType: MessageTypeData,
@@ -1487,7 +1485,7 @@ func TestDataHandler_MultipleBlockTypes(t *testing.T) {
 
 	var terminationCalled, ackCalled bool
 	handler.SetCallbacks(DataHandlerCallbacks{
-		OnTermination: func(reason uint8, data []byte) {
+		OnTermination: func(validAfterTime uint32, reason uint8, signedData []byte) {
 			terminationCalled = true
 		},
 		OnACK: func(block *SSU2Block) error {
@@ -1499,10 +1497,10 @@ func TestDataHandler_MultipleBlockTypes(t *testing.T) {
 	blocks := []*SSU2Block{
 		NewSSU2Block(BlockTypeDateTime, make([]byte, 7)),    // minDateTimeSize = 7
 		NewSSU2Block(BlockTypeACK, make([]byte, 5)),         // minACKSize = 5
-		NewSSU2Block(BlockTypeTermination, make([]byte, 9)), // minTerminationSize = 9, first byte is reason
+		NewSSU2Block(BlockTypeTermination, make([]byte, 9)), // minTerminationSize = 9, byte 4 is reason
 		NewSSU2Block(BlockTypePadding, make([]byte, 16)),
 	}
-	blocks[2].Data[0] = 0x01 // Set termination reason
+	blocks[2].Data[4] = 0x01 // Set termination reason (byte 4 per spec)
 
 	payload, _ := SerializeBlocks(blocks)
 	packet := &SSU2Packet{

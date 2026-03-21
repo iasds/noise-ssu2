@@ -653,6 +653,24 @@ func TestSSU2Packet_ConnectionID_Errors(t *testing.T) {
 	})
 }
 
+// TestSSU2Packet_ConnectionID_BigEndian verifies connection IDs use big-endian encoding per spec
+func TestSSU2Packet_ConnectionID_BigEndian(t *testing.T) {
+	pkt := NewSSU2Packet(MessageTypeData, 0)
+	pkt.Header = make([]byte, ShortHeaderSize)
+
+	// Known value: 0x0102030405060708
+	// Big-endian wire bytes: [01 02 03 04 05 06 07 08]
+	err := pkt.EncodeConnectionID(0x0102030405060708)
+	require.NoError(t, err)
+
+	expected := []byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08}
+	assert.Equal(t, expected, pkt.Header[0:8], "connection ID must be big-endian on wire")
+
+	decoded, err := pkt.DecodeConnectionID()
+	require.NoError(t, err)
+	assert.Equal(t, uint64(0x0102030405060708), decoded)
+}
+
 // TestSSU2Packet_Constants verifies constant values match spec
 func TestSSU2Packet_Constants(t *testing.T) {
 	assert.Equal(t, 16, ShortHeaderSize)

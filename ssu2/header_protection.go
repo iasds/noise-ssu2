@@ -64,7 +64,7 @@ const (
 //  2. Generate mask using ChaCha20.encrypt(key, iv, zeros)
 //  3. XOR header bytes 0-7 with first mask
 //  4. XOR header bytes 8-15 with second mask
-//  5. For long headers (Session Request/Created): encrypt bytes 16-63 with ChaCha20(key1, n=0)
+//  5. For long headers: encrypt bytes 16-63 with ChaCha20(key1, n=1) per spec
 type HeaderProtector struct {
 	// mu protects concurrent access to the protector
 	mu sync.RWMutex
@@ -125,31 +125,56 @@ func NewHeaderProtectorFromIntroKey(introKey []byte, headerType HeaderType) (*He
 
 // EncryptHeader encrypts the header bytes of an SSU2 packet in place.
 // The packet must be the complete SSU2 packet including header, payload, and MAC.
-// Returns error if packet is too small for header encryption.
+// Per SSU2 spec, encryption order: ChaCha20 extension first, then XOR masks.
 func (hp *HeaderProtector) EncryptHeader(packet []byte) error {
 	hp.mu.Lock()
 	defer hp.mu.Unlock()
 
-	return hp.applyHeaderProtection(packet)
+	if err := hp.validatePacketSize(packet); err != nil {
+		return err
+	}
+
+	// Step 1: Encrypt long header extension (+ ephemeral key) with ChaCha20
+	// This must happen before XOR masks so that the IVs (from packet tail)
+	// are in a consistent state for both encrypt and decrypt.
+	if hp.isLongHeader() && len(packet) >= LongHeaderSize {
+		if err := hp.encryptLongHeaderExtension(packet); err != nil {
+			return oops.Wrapf(err, "failed to encrypt long header extension")
+		}
+	}
+
+	// Step 2: Apply XOR masks to bytes 0-15
+	return hp.applyXORMasks(packet)
 }
 
 // DecryptHeader decrypts the header bytes of an SSU2 packet in place.
-// Since header protection uses XOR, encryption and decryption are the same operation.
-// The packet must be the complete SSU2 packet including header, payload, and MAC.
+// Per SSU2 spec, decryption order: XOR masks first, then ChaCha20 extension.
 func (hp *HeaderProtector) DecryptHeader(packet []byte) error {
 	hp.mu.Lock()
 	defer hp.mu.Unlock()
 
-	// XOR is symmetric, so encrypt and decrypt are the same
-	return hp.applyHeaderProtection(packet)
+	if err := hp.validatePacketSize(packet); err != nil {
+		return err
+	}
+
+	// Step 1: Remove XOR masks from bytes 0-15
+	if err := hp.applyXORMasks(packet); err != nil {
+		return err
+	}
+
+	// Step 2: Decrypt long header extension (+ ephemeral key) with ChaCha20
+	if hp.isLongHeader() && len(packet) >= LongHeaderSize {
+		if err := hp.encryptLongHeaderExtension(packet); err != nil {
+			return oops.Wrapf(err, "failed to decrypt long header extension")
+		}
+	}
+
+	return nil
 }
 
-// applyHeaderProtection applies or removes header protection (XOR is symmetric).
-// This implements the SSU2 header encryption algorithm from the specification.
-func (hp *HeaderProtector) applyHeaderProtection(packet []byte) error {
+// validatePacketSize checks that the packet is large enough for header protection.
+func (hp *HeaderProtector) validatePacketSize(packet []byte) error {
 	headerSize := hp.getHeaderSize()
-
-	// Minimum packet size check: need header + at least 24 bytes for IV extraction
 	minSize := headerSize + 24
 	if len(packet) < minSize {
 		return oops.
@@ -160,9 +185,13 @@ func (hp *HeaderProtector) applyHeaderProtection(packet []byte) error {
 			With("header_type", hp.headerType).
 			Errorf("packet too small for header protection: need at least %d bytes", minSize)
 	}
+	return nil
+}
 
+// applyXORMasks applies or removes XOR masks on header bytes 0-15.
+// XOR is symmetric so this works for both encrypt and decrypt.
+func (hp *HeaderProtector) applyXORMasks(packet []byte) error {
 	// SSU2 spec §"Header Protection": IV1 = packet[len-24 : len-12] (12 bytes).
-	// The KDF produces 12-byte nonces directly; no padding is needed.
 	iv1Start := len(packet) - 24
 	iv1 := make([]byte, 12)
 	copy(iv1, packet[iv1Start:iv1Start+12])
@@ -192,16 +221,6 @@ func (hp *HeaderProtector) applyHeaderProtection(packet []byte) error {
 	// XOR bytes 8-15 with mask2[0:8]
 	for i := 8; i < 16; i++ {
 		packet[i] ^= mask2[i-8]
-	}
-
-	// For long headers (Session Request/Created/Retry/TokenRequest/PeerTest/HolePunch):
-	// Encrypt bytes 16-31 with ChaCha20(kHeader1, n=0) for the remaining header bytes
-	// (Static key or router hash encryption)
-	if hp.isLongHeader() && len(packet) >= LongHeaderSize {
-		err = hp.encryptLongHeaderExtension(packet)
-		if err != nil {
-			return oops.Wrapf(err, "failed to encrypt long header extension")
-		}
 	}
 
 	return nil
@@ -242,22 +261,32 @@ func (hp *HeaderProtector) generateMask(key, nonce []byte) ([]byte, error) {
 	return mask, nil
 }
 
-// encryptLongHeaderExtension encrypts bytes 16-31 of a long header.
-// Uses ChaCha20 with kHeader1 and nonce=0.
+// encryptLongHeaderExtension encrypts the long header extension and optional
+// ephemeral key per the SSU2 spec. Uses ChaCha20 with kHeader1 and nonce n=1.
+// For SessionRequest/SessionCreated (which include a 32-byte ephemeral key),
+// encrypts bytes 16-63 (48 bytes) as one ChaCha20 operation.
+// For other long header types, encrypts bytes 16-31 (16 bytes).
 func (hp *HeaderProtector) encryptLongHeaderExtension(packet []byte) error {
 	if len(packet) < LongHeaderSize {
 		return nil // Nothing to encrypt
 	}
 
-	// Create ChaCha20 cipher with nonce = 0
+	// SSU2 spec: use nonce n=1 for long header extension encryption
 	nonce := make([]byte, 12)
+	nonce[0] = 1 // n=1 (little-endian counter)
 	cipher, err := chacha20.NewUnauthenticatedCipher(hp.kHeader1, nonce)
 	if err != nil {
 		return oops.Wrapf(err, "failed to initialize ChaCha20 for header extension")
 	}
 
-	// Encrypt bytes 16-31 in place
-	cipher.XORKeyStream(packet[16:32], packet[16:32])
+	// For packets with ephemeral keys, encrypt 48 bytes (header[16:64])
+	hasEphemeral := hp.headerType == HeaderTypeSessionRequest ||
+		hp.headerType == HeaderTypeSessionCreated
+	if hasEphemeral && len(packet) >= LongHeaderSize+EphemeralKeySize {
+		cipher.XORKeyStream(packet[16:64], packet[16:64])
+	} else {
+		cipher.XORKeyStream(packet[16:32], packet[16:32])
+	}
 
 	return nil
 }

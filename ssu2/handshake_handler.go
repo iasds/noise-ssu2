@@ -7,6 +7,7 @@ import (
 	"io"
 	"time"
 
+	"github.com/go-i2p/go-noise/internal/replaycache"
 	"github.com/go-i2p/noise"
 	"github.com/samber/oops"
 	"golang.org/x/crypto/curve25519"
@@ -51,6 +52,10 @@ type HandshakeHandler struct {
 	// cipherStates store the transport cipher states after handshake
 	sendCipher *noise.CipherState
 	recvCipher *noise.CipherState
+
+	// replayCache detects replayed handshake messages per SSU2 spec.
+	// Only used by responders to protect ProcessSessionRequest.
+	replayCache *replaycache.TTLCache
 }
 
 // buildSSU2Prologue constructs the Noise prologue for SSU2 handshakes.
@@ -105,12 +110,23 @@ func NewHandshakeHandler(initiator bool, staticKey, remoteStaticKey, prologue []
 		return nil, oops.Wrapf(err, "failed to create handshake state")
 	}
 
-	return &HandshakeHandler{
+	handler := &HandshakeHandler{
 		initiator:       initiator,
 		staticKey:       copyBytes(staticKey),
 		remoteStaticKey: copyBytes(remoteStaticKey),
 		handshakeState:  hs,
-	}, nil
+	}
+
+	// Responders need a replay cache to protect against replayed SessionRequests
+	if !initiator {
+		handler.replayCache = replaycache.New(replaycache.Config{
+			TTL:             2 * time.Minute,
+			MaxSize:         1024,
+			CleanupInterval: 30 * time.Second,
+		})
+	}
+
+	return handler, nil
 }
 
 // NewHandshakeHandlerWithKeys creates a new SSU2 handshake handler with a full DHKey.
@@ -160,12 +176,23 @@ func NewHandshakeHandlerWithKeys(initiator bool, staticKeypair noise.DHKey, remo
 		return nil, oops.Wrapf(err, "failed to create handshake state")
 	}
 
-	return &HandshakeHandler{
+	handler := &HandshakeHandler{
 		initiator:       initiator,
 		staticKey:       copyBytes(staticKeypair.Private),
 		remoteStaticKey: copyBytes(remoteStaticKey),
 		handshakeState:  hs,
-	}, nil
+	}
+
+	// Responders need a replay cache to protect against replayed SessionRequests
+	if !initiator {
+		handler.replayCache = replaycache.New(replaycache.Config{
+			TTL:             2 * time.Minute,
+			MaxSize:         1024,
+			CleanupInterval: 30 * time.Second,
+		})
+	}
+
+	return handler, nil
 }
 
 // CreateSessionRequest creates a SessionRequest message (Message 0, XK pattern message 1).
@@ -203,6 +230,16 @@ func (h *HandshakeHandler) ProcessSessionRequest(packet *SSU2Packet) ([]byte, er
 
 	if len(packet.EphemeralKey) != 32 {
 		return nil, oops.Errorf("SessionRequest missing ephemeral key")
+	}
+
+	// Replay protection: hash the ephemeral key + payload as a unique message ID.
+	// The ephemeral key is randomly generated per handshake attempt, so its
+	// hash is a reliable replay detection key.
+	if h.replayCache != nil {
+		digest := sha256.Sum256(append(packet.EphemeralKey, packet.Payload...))
+		if h.replayCache.CheckAndAdd(digest) {
+			return nil, oops.Errorf("replayed SessionRequest detected")
+		}
 	}
 
 	// Reconstruct Noise message: ephemeral key + encrypted payload
@@ -446,27 +483,23 @@ func (h *HandshakeHandler) createHandshakeBlocks(messageType uint8) []*SSU2Block
 	blocks = append(blocks, NewSSU2Block(BlockTypeDateTime, dateTimeData))
 
 	// Options block (Type 1) - SHOULD be included per SSU2 spec
-	// Communicates version, padding parameters, and MTU preferences.
-	// Layout (15 bytes):
-	//   0-1: SSU2 version (2)
-	//   2:   padding params (min nibble << 4 | max nibble) — 0 = no constraints
-	//   3-4: padding ratio (fixed-point uint16) — 0x0100 = 1.0
-	//   5-6: reserved
-	//   7-8: min MTU (1280)
-	//   9-10: max MTU (1500)
-	//   11-12: requested MTU (1280)
-	//   13: min version (2)
-	//   14: max version (2)
+	// Communicates version and padding negotiation parameters.
+	// Spec-defined layout (15 bytes):
+	//   Bytes 0-1:   version (uint16 big-endian, currently 2)
+	//   Byte 2:      tmin  (fixed-point 4.4 transmit padding minimum ratio)
+	//   Byte 3:      tmax  (fixed-point 4.4 transmit padding maximum ratio)
+	//   Byte 4:      rmin  (fixed-point 4.4 receive padding minimum ratio)
+	//   Byte 5:      rmax  (fixed-point 4.4 receive padding maximum ratio)
+	//   Bytes 6-7:   tdummy (transmit dummy traffic rate)
+	//   Bytes 8-9:   rdummy (receive dummy traffic rate)
+	//   Bytes 10-11: tdelay (transmit delay)
+	//   Bytes 12-13: rdelay (receive delay)
+	//   Byte 14:     flags
 	optData := make([]byte, 15)
-	binary.BigEndian.PutUint16(optData[0:2], 2)     // SSU2 version
-	optData[2] = 0                                  // padding params: no constraints
-	binary.BigEndian.PutUint16(optData[3:5], 0x100) // padding ratio: 1.0
-	// bytes 5-6: reserved (zero)
-	binary.BigEndian.PutUint16(optData[7:9], 1280)   // min MTU
-	binary.BigEndian.PutUint16(optData[9:11], 1500)  // max MTU
-	binary.BigEndian.PutUint16(optData[11:13], 1280) // requested MTU
-	optData[13] = 2                                  // min version
-	optData[14] = 2                                  // max version
+	binary.BigEndian.PutUint16(optData[0:2], 2) // SSU2 version 2
+	// Bytes 2-5: padding ratios (4.4 fixed-point) — 0 = no constraints
+	// Bytes 6-13: dummy traffic rates and delays — 0 = none
+	// Byte 14: flags — 0 = no flags set
 	blocks = append(blocks, NewSSU2Block(BlockTypeOptions, optData))
 
 	return blocks
@@ -554,6 +587,14 @@ func (h *HandshakeHandler) DeriveHeaderKeys() (k1, k2 []byte, err error) {
 		return nil, nil, oops.Wrapf(err, "failed to derive k_header_2")
 	}
 	return k1, k2, nil
+}
+
+// Close releases resources held by the HandshakeHandler, including the
+// replay cache's background goroutine.
+func (h *HandshakeHandler) Close() {
+	if h.replayCache != nil {
+		h.replayCache.Close()
+	}
 }
 
 // copyBytes creates a defensive copy of a byte slice.

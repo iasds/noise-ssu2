@@ -103,7 +103,7 @@ func TestHeaderProtector_EncryptDecrypt_LongHeader(t *testing.T) {
 	hp, err := NewHeaderProtector(k1, k2, HeaderTypeSessionRequest)
 	require.NoError(t, err)
 
-	// Create a test packet with long header (32 bytes)
+	// Create a test packet with long header (32 bytes) + ephemeral key area (32 bytes) + payload
 	original := createTestPacket(LongHeaderSize, 128)
 	packet := make([]byte, len(original))
 	copy(packet, original)
@@ -112,18 +112,19 @@ func TestHeaderProtector_EncryptDecrypt_LongHeader(t *testing.T) {
 	err = hp.EncryptHeader(packet)
 	require.NoError(t, err)
 
-	// Verify bytes 0-31 are modified (full long header is encrypted)
-	assert.NotEqual(t, original[:32], packet[:32], "long header should be encrypted")
+	// Per SSU2 spec: for SessionRequest, bytes 16-63 are encrypted with ChaCha20(k1, n=1)
+	// So bytes 0-63 should be modified (header + ephemeral key area)
+	assert.NotEqual(t, original[:LongHeaderSize], packet[:LongHeaderSize], "long header should be encrypted")
 
-	// Verify rest of packet is unchanged
-	assert.Equal(t, original[32:], packet[32:], "payload should be unchanged")
+	// Verify bytes 64+ are unchanged (payload beyond ephemeral key)
+	assert.Equal(t, original[64:], packet[64:], "payload beyond ephemeral key should be unchanged")
 
 	// Decrypt header
 	err = hp.DecryptHeader(packet)
 	require.NoError(t, err)
 
-	// Verify header is restored
-	assert.Equal(t, original[:32], packet[:32], "long header should be decrypted to original")
+	// Verify full header + ephemeral key area is restored
+	assert.Equal(t, original[:64], packet[:64], "long header + ephemeral key should be decrypted to original")
 }
 
 func TestHeaderProtector_PacketTooSmall(t *testing.T) {

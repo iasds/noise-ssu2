@@ -326,32 +326,27 @@ func (p *SSU2Packet) IsDataPacket() bool {
 }
 
 // DecodeConnectionID extracts the connection ID from the packet header.
-// The connection ID is encoded in the first 8 bytes of the header (little-endian).
-// This is a placeholder implementation - actual header encryption/decryption
-// will be handled by the Noise protocol layer.
+// The connection ID is encoded in the first 8 bytes of the header (big-endian)
+// per the SSU2 spec: "Destination Connection ID: 8-byte big-endian integer".
 func (p *SSU2Packet) DecodeConnectionID() (uint64, error) {
 	if len(p.Header) < 8 {
 		return 0, oops.Errorf("header too short to contain connection ID: %d bytes", len(p.Header))
 	}
 
-	// Connection ID is first 8 bytes (little-endian)
-	// Note: In real implementation, header is encrypted, so this would need
-	// to be called after header decryption
-	connID := binary.LittleEndian.Uint64(p.Header[0:8])
+	// Connection ID is first 8 bytes (big-endian per spec)
+	connID := binary.BigEndian.Uint64(p.Header[0:8])
 	return connID, nil
 }
 
 // EncodeConnectionID sets the connection ID in the packet header.
-// The connection ID is stored in the first 8 bytes (little-endian).
-// This is a placeholder implementation - actual header encryption/decryption
-// will be handled by the Noise protocol layer.
+// The connection ID is stored in the first 8 bytes (big-endian)
+// per the SSU2 spec: "Destination Connection ID: 8-byte big-endian integer".
 func (p *SSU2Packet) EncodeConnectionID(connID uint64) error {
 	if len(p.Header) < 8 {
 		return oops.Errorf("header too short to store connection ID: %d bytes", len(p.Header))
 	}
 
-	// Store connection ID in first 8 bytes (little-endian)
-	// Note: In real implementation, this would be done before header encryption
-	binary.LittleEndian.PutUint64(p.Header[0:8], connID)
+	// Store connection ID in first 8 bytes (big-endian per spec)
+	binary.BigEndian.PutUint64(p.Header[0:8], connID)
 	return nil
 }

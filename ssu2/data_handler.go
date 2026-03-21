@@ -1,6 +1,7 @@
 package ssu2
 
 import (
+	"encoding/binary"
 	"sync"
 	"time"
 
@@ -42,8 +43,10 @@ type DataHandler struct {
 // DataHandlerCallbacks defines optional callbacks for block types
 // that need external handling.
 type DataHandlerCallbacks struct {
-	// OnTermination is called when a Termination block is received
-	OnTermination func(reason uint8, additionalData []byte)
+	// OnTermination is called when a Termination block is received.
+	// validAfterTime is seconds since epoch; reason is the termination code;
+	// signedData is the remaining bytes per SSU2 spec.
+	OnTermination func(validAfterTime uint32, reason uint8, signedData []byte)
 
 	// OnNewToken is called when a NewToken block is received
 	OnNewToken func(token []byte)
@@ -86,6 +89,10 @@ type DataHandlerCallbacks struct {
 
 	// OnDateTime is called when a DateTime block is received
 	OnDateTime func(timestamp uint32) error
+
+	// OnNextNonce is called when a NextNonce block is received.
+	// The newNonce is the 8-byte value signaling the peer's next send nonce.
+	OnNextNonce func(newNonce uint64) error
 }
 
 // DataHandlerStats tracks statistics for monitoring and debugging.
@@ -223,6 +230,8 @@ func (h *DataHandler) dispatchNonCriticalBlock(block *SSU2Block) {
 		err = h.handleAddress(block.Data)
 	case BlockTypeACK:
 		err = h.handleACK(block)
+	case BlockTypeNextNonce:
+		err = h.handleNextNonce(block.Data)
 	default:
 		h.incrementStat(&h.stats.UnknownBlocks)
 		log.WithFields(map[string]interface{}{
@@ -262,16 +271,19 @@ func (h *DataHandler) handleI2NPMessage(data []byte) error {
 }
 
 // handleFirstFragment processes the first fragment of a message.
-// First fragment format: MessageID (4 bytes) + TotalSize (4 bytes) + Data
+// SSU2 spec format: MessageID (4 bytes) + FragmentInfo (3 bytes) + Data
+// FragmentInfo: byte 0 = (fragNum << 1) | isLast, bytes 1-2 = total msg size (big-endian)
 func (h *DataHandler) handleFirstFragment(data []byte) error {
-	if len(data) < 8 {
+	if len(data) < 7 {
 		h.incrementStat(&h.stats.MessagesDropped)
-		return oops.Errorf("first fragment too short: %d bytes, need at least 8", len(data))
+		return oops.Errorf("first fragment too short: %d bytes, need at least 7", len(data))
 	}
 
-	messageID := uint32(data[0])<<24 | uint32(data[1])<<16 | uint32(data[2])<<8 | uint32(data[3])
-	totalSize := uint32(data[4])<<24 | uint32(data[5])<<16 | uint32(data[6])<<8 | uint32(data[7])
-	fragmentData := data[8:]
+	messageID := binary.BigEndian.Uint32(data[0:4])
+	fragInfo := data[4]
+	isLast := (fragInfo & 0x01) != 0
+	totalSize := binary.BigEndian.Uint16(data[5:7])
+	fragmentData := data[7:]
 
 	h.mutex.Lock()
 	defer h.mutex.Unlock()
@@ -285,7 +297,7 @@ func (h *DataHandler) handleFirstFragment(data []byte) error {
 	// Create new fragment set
 	fragmentSet := &FragmentSet{
 		MessageID:    messageID,
-		TotalSize:    totalSize,
+		TotalSize:    uint32(totalSize),
 		Fragments:    make(map[uint8][]byte),
 		ReceivedSize: uint32(len(fragmentData)),
 		CreatedAt:    time.Now(),
@@ -299,20 +311,31 @@ func (h *DataHandler) handleFirstFragment(data []byte) error {
 	h.fragments[messageID] = fragmentSet
 	h.incrementStat(&h.stats.FragmentsReceived)
 
+	// If isLast is set, this is the only fragment — attempt reassembly
+	if isLast {
+		if err := h.reassembleMessage(messageID); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
 // handleFollowOnFragment processes subsequent fragments of a message.
-// Follow-on fragment format: MessageID (4 bytes) + FragmentNum (1 byte) + Data
+// SSU2 spec format: FragmentInfo (3 bytes) + MessageID (4 bytes) + Data
+// FragmentInfo: byte 0 = (fragNum << 1) | isLast, bytes 1-2 = reserved
 func (h *DataHandler) handleFollowOnFragment(data []byte) error {
-	if len(data) < 5 {
+	if len(data) < 7 {
 		h.incrementStat(&h.stats.MessagesDropped)
-		return oops.Errorf("follow-on fragment too short: %d bytes, need at least 5", len(data))
+		return oops.Errorf("follow-on fragment too short: %d bytes, need at least 7", len(data))
 	}
 
-	messageID := uint32(data[0])<<24 | uint32(data[1])<<16 | uint32(data[2])<<8 | uint32(data[3])
-	fragmentNum := data[4]
-	fragmentData := data[5:]
+	fragInfo := data[0]
+	fragmentNum := fragInfo >> 1
+	isLast := (fragInfo & 0x01) != 0
+	// bytes 1-2 reserved
+	messageID := binary.BigEndian.Uint32(data[3:7])
+	fragmentData := data[7:]
 
 	h.mutex.Lock()
 	defer h.mutex.Unlock()
@@ -337,8 +360,9 @@ func (h *DataHandler) handleFollowOnFragment(data []byte) error {
 	fragmentSet.LastUpdate = time.Now()
 	h.incrementStat(&h.stats.FragmentsReceived)
 
-	// Check if message is complete
-	if fragmentSet.ReceivedSize >= fragmentSet.TotalSize {
+	// Check if message is complete: either received all expected bytes,
+	// or this is the last fragment and we have enough data
+	if isLast || fragmentSet.ReceivedSize >= fragmentSet.TotalSize {
 		if err := h.reassembleMessage(messageID); err != nil {
 			return err
 		}
@@ -498,23 +522,26 @@ func (h *DataHandler) incrementStat(stat *uint64) {
 // or by delegating to registered callbacks.
 
 // handleTermination processes a Termination block (Type 6).
-// Termination format: Reason (1 byte) + Additional data (variable)
+// SSU2 spec format: validAfterTime (4 bytes) + reason (1 byte) + signedData (4+ bytes)
+// Minimum length: 9 bytes.
 func (h *DataHandler) handleTermination(data []byte) error {
-	if len(data) < 1 {
-		return oops.Errorf("Termination block too short: %d bytes", len(data))
+	if len(data) < 9 {
+		return oops.Errorf("Termination block too short: %d bytes, need at least 9", len(data))
 	}
 
-	reason := data[0]
-	additionalData := data[1:]
+	validAfterTime := binary.BigEndian.Uint32(data[0:4])
+	reason := data[4]
+	signedData := data[5:]
 
 	log.WithFields(map[string]interface{}{
-		"reason":     reason,
-		"dataLength": len(additionalData),
+		"validAfterTime": validAfterTime,
+		"reason":         reason,
+		"signedDataLen":  len(signedData),
 	}).Info("Received Termination block")
 
 	cbs := h.getCallbacks()
 	if cbs.OnTermination != nil {
-		cbs.OnTermination(reason, additionalData)
+		cbs.OnTermination(validAfterTime, reason, signedData)
 	}
 
 	return nil
@@ -532,6 +559,25 @@ func (h *DataHandler) handleNewToken(data []byte) error {
 	cbs := h.getCallbacks()
 	if cbs.OnNewToken != nil {
 		cbs.OnNewToken(data)
+	}
+
+	return nil
+}
+
+// handleNextNonce processes a NextNonce block (Type 11).
+// NextNonce format: 8 bytes representing the new nonce value.
+func (h *DataHandler) handleNextNonce(data []byte) error {
+	if len(data) < 8 {
+		return oops.Errorf("NextNonce block too short: %d bytes, need 8", len(data))
+	}
+
+	newNonce := binary.BigEndian.Uint64(data[0:8])
+
+	log.WithField("newNonce", newNonce).Debug("Received NextNonce block")
+
+	cbs := h.getCallbacks()
+	if cbs.OnNextNonce != nil {
+		return cbs.OnNextNonce(newNonce)
 	}
 
 	return nil
