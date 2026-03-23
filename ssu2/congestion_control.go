@@ -9,6 +9,9 @@ import (
 // This implements a hybrid model: TCP Reno slow start / congestion avoidance
 // with RFC 9002 persistent congestion detection (§7.6). The SSU2 spec
 // references RFC 9002 (QUIC Loss Detection and Congestion Control).
+//
+// NOTE: The spec recommends Westwood+ or similar for better performance over
+// lossy links typical of I2P. Future versions should consider Westwood+ or BBR.
 const (
 	// MinCongestionWindow is the minimum congestion window per SSU2 spec (1280 bytes)
 	MinCongestionWindow = 1280

@@ -188,7 +188,7 @@ func (pr *PacketRouter) RoutePacket(packet *SSU2Packet, remoteAddr *net.UDPAddr)
 
 // ExtractConnectionID extracts the destination connection ID from an encrypted header.
 //
-// Design: The connection ID location depends on the header format per SSU2.md.
+// Design: The connection ID location depends on the header format per ssu2.rst.
 // For short headers (16 bytes): bytes 8-15 contain the destination connection ID
 // For long headers (32 bytes): bytes 8-15 contain the destination connection ID
 //
@@ -222,7 +222,7 @@ func (pr *PacketRouter) ExtractConnectionID(header []byte) (uint64, error) {
 // IsHandshakePacket returns true if the message type represents a handshake packet
 // that can initiate a new connection session.
 //
-// Handshake packets per SSU2.md:
+// Handshake packets per ssu2.rst:
 // - SessionRequest (0): Initial handshake message
 // - TokenRequest (10): Request for retry token
 //

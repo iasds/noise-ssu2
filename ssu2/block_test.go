@@ -124,7 +124,7 @@ func TestSSU2Block_Serialize_Invalid(t *testing.T) {
 		},
 		{
 			name:       "RelayTag too short",
-			block:      NewSSU2Block(BlockTypeRelayTag, make([]byte, 6)),
+			block:      NewSSU2Block(BlockTypeRelayTag, make([]byte, 3)),
 			wantErrMsg: "RelayTag block too short",
 		},
 		{

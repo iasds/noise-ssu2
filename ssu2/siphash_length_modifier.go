@@ -5,6 +5,11 @@ import (
 	"github.com/go-i2p/go-noise/ntcp2"
 )
 
+// Deprecated: SipHashLengthModifier is an NTCP2-specific feature for TCP framing.
+// The SSU2 spec does not use SipHash for any purpose; SSU2 uses ChaCha20 for
+// header obfuscation and standard AEAD for payload protection. This wrapper is
+// retained for API compatibility but should not be used in SSU2 connections.
+//
 // SipHashLengthModifier is an SSU2-specific wrapper around NTCP2's SipHash-2-4
 // length obfuscation modifier. The SipHash algorithm and length obfuscation logic
 // are identical between NTCP2 and SSU2 protocols, so we reuse the NTCP2

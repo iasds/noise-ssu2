@@ -12,11 +12,11 @@ import (
 // Keys must persist across restarts with minimum downtime before rotation.
 const (
 	// PublishedKeyMinAge is the minimum age before rotating keys that are published
-	// in router addresses. Per SSU2.md: "With published addresses: ~1 month minimum"
+	// in router addresses. Per ssu2.rst: "With published addresses: ~1 month minimum"
 	PublishedKeyMinAge = 30 * 24 * time.Hour // ~1 month
 
 	// UnpublishedKeyMinAge is the minimum age before rotating keys that are not published.
-	// Per SSU2.md: "Without published addresses: ~2 hours minimum"
+	// Per ssu2.rst: "Without published addresses: ~2 hours minimum"
 	UnpublishedKeyMinAge = 2 * time.Hour
 
 	// KeyRotationCheckInterval is how often to check if rotation is needed.

@@ -8,7 +8,7 @@ import (
 )
 
 // SSU2Packet represents an SSU2 protocol packet with encrypted header and payload.
-// SSU2 packets follow the wire format defined in SSU2.md:
+// SSU2 packets follow the wire format defined in ssu2.rst:
 //   - Encrypted header (16 or 32 bytes depending on message type)
 //   - Optional ephemeral key (32 bytes for SessionRequest/Created only)
 //   - ChaCha20-encrypted payload (variable length)
@@ -18,7 +18,7 @@ import (
 // via the Encrypt/Decrypt methods which operate on the wire format.
 type SSU2Packet struct {
 	// Header contains the encrypted header bytes (16 or 32 bytes)
-	// Length depends on message type per SSU2.md
+	// Length depends on message type per ssu2.rst
 	Header []byte
 
 	// EphemeralKey is the optional X25519 ephemeral public key (32 bytes)
@@ -33,7 +33,7 @@ type SSU2Packet struct {
 	// Authenticates header, ephemeral key, and payload
 	MAC []byte
 
-	// MessageType identifies the packet type (0-11 per SSU2.md)
+	// MessageType identifies the packet type (0-11 per ssu2.rst)
 	// 0=SessionRequest, 1=SessionCreated, 2=SessionConfirmed, 6=Data, etc.
 	MessageType uint8
 
@@ -46,7 +46,7 @@ type SSU2Packet struct {
 	Timestamp time.Time
 }
 
-// Message type constants from SSU2.md
+// Message type constants from ssu2.rst
 const (
 	MessageTypeSessionRequest   uint8 = 0
 	MessageTypeSessionCreated   uint8 = 1
@@ -58,7 +58,7 @@ const (
 	MessageTypeHolePunch        uint8 = 11
 )
 
-// Header size constants from SSU2.md
+// Header size constants from ssu2.rst
 const (
 	ShortHeaderSize  = 16 // SessionConfirmed, Data
 	LongHeaderSize   = 32 // SessionRequest, SessionCreated, PeerTest, Retry, TokenRequest, HolePunch
@@ -66,7 +66,7 @@ const (
 	MACSize          = 16 // Poly1305 MAC
 )
 
-// Size constraints from SSU2.md
+// Size constraints from ssu2.rst
 const (
 	MinPacketSize     = 40   // Minimum valid packet size
 	MaxPacketSizeIPv4 = 1472 // 1500 Ethernet MTU - 20 IPv4 header - 8 UDP header

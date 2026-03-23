@@ -49,7 +49,7 @@ func NewACKHandler() *ACKHandler {
 	return &ACKHandler{
 		receivedPackets: make([]uint32, 0, 64),
 		pendingACKs:     make(map[uint32]*PendingACK),
-		ackDelay:        10 * time.Millisecond, // Default from SSU2.md
+		ackDelay:        10 * time.Millisecond, // Default from ssu2.rst
 	}
 }
 
@@ -62,7 +62,7 @@ func (h *ACKHandler) RecordReceived(packetNum uint32) {
 }
 
 // ShouldSendACK determines if an ACK should be sent based on timing and packet count.
-// Per SSU2.md: ACK delay = max(10, min(rtt/6, 150)) ms
+// Per ssu2.rst: ACK delay = max(10, min(rtt/6, 150)) ms
 func (h *ACKHandler) ShouldSendACK(rtt time.Duration) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()

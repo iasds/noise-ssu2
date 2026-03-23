@@ -70,6 +70,10 @@ type HandshakeHandler struct {
 //
 // The connection ID is NOT part of the prologue; it is bound to the
 // handshake via header MixHash operations for each message.
+//
+// NOTE: For Retry sessions the spec may require different prologue
+// handling (e.g., binding the Retry token). This should be revisited
+// when Retry/token-based sessions are fully implemented.
 func buildSSU2Prologue() []byte {
 	return nil
 }
@@ -220,7 +224,23 @@ func (h *HandshakeHandler) CreateSessionRequest(sourceConnID, destConnID uint64)
 	// Create payload blocks for SessionRequest
 	blocks := h.createHandshakeBlocks(MessageTypeSessionRequest)
 
-	return h.buildHandshakePacket(blocks, MessageTypeSessionRequest, sourceConnID, destConnID)
+	return h.buildHandshakePacket(blocks, MessageTypeSessionRequest, sourceConnID, destConnID, nil)
+}
+
+// CreateSessionRequestWithToken creates a SessionRequest with a Retry token
+// inserted into header bytes 24-31. This is used when resending SessionRequest
+// after receiving a Retry message from the responder.
+func (h *HandshakeHandler) CreateSessionRequestWithToken(sourceConnID, destConnID uint64, token []byte) (*SSU2Packet, error) {
+	if !h.initiator {
+		return nil, oops.Errorf("only initiator can create SessionRequest")
+	}
+	if len(token) != 8 {
+		return nil, oops.Errorf("retry token must be exactly 8 bytes, got %d", len(token))
+	}
+
+	blocks := h.createHandshakeBlocks(MessageTypeSessionRequest)
+
+	return h.buildHandshakePacket(blocks, MessageTypeSessionRequest, sourceConnID, destConnID, token)
 }
 
 // ProcessSessionRequest processes a received SessionRequest message.
@@ -306,7 +326,7 @@ func (h *HandshakeHandler) CreateSessionCreated(sourceConnID, destConnID uint64)
 	// Create payload blocks
 	blocks := h.createHandshakeBlocks(MessageTypeSessionCreated)
 
-	return h.buildHandshakePacket(blocks, MessageTypeSessionCreated, sourceConnID, destConnID)
+	return h.buildHandshakePacket(blocks, MessageTypeSessionCreated, sourceConnID, destConnID, nil)
 }
 
 // ProcessSessionCreated processes a received SessionCreated message.
@@ -538,6 +558,11 @@ func (h *HandshakeHandler) createHandshakeBlocks(messageType uint8) []*SSU2Block
 
 	// Options block (Type 1) - SHOULD be included per SSU2 spec
 	// Communicates version and padding negotiation parameters.
+	//
+	// NOTE: All padding ratios, dummy traffic rates, delays, and flags are
+	// zeroed. This means no padding negotiation occurs and the peer's padding
+	// preferences are ignored. Future work should parse the peer's Options
+	// block and negotiate padding parameters for traffic analysis resistance.
 	// Spec-defined layout (15 bytes):
 	//   Bytes 0-1:   version (uint16 big-endian, currently 2)
 	//   Byte 2:      tmin  (fixed-point 4.4 transmit padding minimum ratio)
@@ -582,7 +607,8 @@ func (h *HandshakeHandler) validateHandshakeBlocks(blocks []*SSU2Block, messageT
 // buildHandshakePacket serializes blocks, builds the long header, calls
 // MixHash(header) per the SSU2 specification, runs the Noise WriteMessage,
 // extracts the ephemeral key, and assembles an SSU2Packet.
-func (h *HandshakeHandler) buildHandshakePacket(blocks []*SSU2Block, msgType uint8, sourceConnID, destConnID uint64) (*SSU2Packet, error) {
+// token may be nil for initial requests, or an 8-byte slice for Retry sessions.
+func (h *HandshakeHandler) buildHandshakePacket(blocks []*SSU2Block, msgType uint8, sourceConnID, destConnID uint64, token []byte) (*SSU2Packet, error) {
 	payload, err := SerializeBlocks(blocks)
 	if err != nil {
 		return nil, oops.Wrapf(err, "failed to serialize handshake blocks")
@@ -599,7 +625,10 @@ func (h *HandshakeHandler) buildHandshakePacket(blocks []*SSU2Block, msgType uin
 	header[14] = SSU2NetworkID       // id=2 (I2P mainnet)
 	header[15] = 0                   // flag=0
 	binary.BigEndian.PutUint64(header[16:24], sourceConnID)
-	// bytes 24-31 = token (zero for initial SessionRequest, populated elsewhere for retries)
+	// bytes 24-31 = token (zero for initial SessionRequest, populated by retries)
+	if len(token) == 8 {
+		copy(header[24:32], token)
+	}
 
 	// MixHash(header) binds the encrypted header into the handshake hash
 	// (h = SHA256(h || header)), preventing header substitution attacks.

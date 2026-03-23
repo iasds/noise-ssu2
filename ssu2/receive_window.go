@@ -50,7 +50,7 @@ const (
 	// Based on typical UDP window sizes and SSU2 requirements.
 	DefaultMaxWindowSize = 256
 
-	// MaxPacketNumber is the maximum packet number (2^32 - 1 per SSU2.md)
+	// MaxPacketNumber is the maximum packet number (2^32 - 1 per ssu2.rst)
 	MaxPacketNumber = 0xFFFFFFFF
 )
 

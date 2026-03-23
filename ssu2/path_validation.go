@@ -29,7 +29,7 @@ import (
 // - Cryptographic challenge IDs prevent spoofing
 // - Timeout-based cleanup prevents resource leaks
 // - Thread-safe for concurrent path validations
-// - Follows SSU2.md specification for path validation
+// - Follows ssu2.rst specification for path validation
 type PathValidator struct {
 	// conn is the SSU2 connection this validator belongs to
 	conn PathValidationConn

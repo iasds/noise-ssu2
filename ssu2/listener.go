@@ -353,6 +353,11 @@ func (l *SSU2Listener) handleNewSession(remoteAddr *net.UDPAddr, packet *SSU2Pac
 		connConfig.InitiatorConnectionID = binary.BigEndian.Uint64(packet.Header[16:24])
 	}
 
+	// Per spec: Source and Destination IDs must NOT be identical.
+	if connConfig.InitiatorConnectionID != 0 && connConfig.InitiatorConnectionID == connID {
+		return nil, oops.Errorf("connection ID collision: source and destination IDs are identical (%d)", connID)
+	}
+
 	conn, err := NewSSU2Conn(l.underlying, remoteAddr, &connConfig, false, l.config.StaticKey, nil)
 	if err != nil {
 		return nil, oops.Wrapf(err, "failed to create SSU2 connection")

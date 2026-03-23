@@ -9,10 +9,10 @@ import (
 	"github.com/samber/oops"
 )
 
-// Default timeout values per SSU2 specification (SSU2.md)
+// Default timeout values per SSU2 specification (ssu2.rst)
 const (
 	// DefaultHandshakeTimeout is the spec-defined handshake timeout of 15 seconds.
-	// Per SSU2.md: "Handshake timeout: 15 seconds"
+	// Per ssu2.rst: "Handshake timeout: 15 seconds"
 	DefaultHandshakeTimeout = 15 * time.Second
 )
 

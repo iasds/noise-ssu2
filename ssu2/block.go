@@ -2,6 +2,7 @@ package ssu2
 
 import (
 	"encoding/binary"
+	"net"
 	"time"
 
 	"github.com/samber/oops"
@@ -14,7 +15,7 @@ import (
 //   - Value: variable length data
 //
 // SSU2 packets can contain multiple blocks concatenated together.
-// Block types are defined in SSU2.md specification.
+// Block types are defined in ssu2.rst specification.
 type SSU2Block struct {
 	// Type identifies the block type (0-254)
 	// See BlockType* constants for valid values
@@ -25,7 +26,7 @@ type SSU2Block struct {
 	Data []byte
 }
 
-// Block type constants from SSU2.md
+// Block type constants from ssu2.rst
 const (
 	BlockTypeDateTime          uint8 = 0   // Timestamp block (4 bytes, seconds since epoch)
 	BlockTypeOptions           uint8 = 1   // Connection options (15+ bytes)
@@ -52,7 +53,7 @@ const (
 	BlockTypePadding           uint8 = 254 // Padding block (variable)
 )
 
-// Minimum block data sizes from SSU2.md
+// Minimum block data sizes from ssu2.rst
 const (
 	minBlockHeaderSize       = 3     // Type (1) + Length (2)
 	minDateTimeSize          = 4     // Timestamp data (seconds since epoch)
@@ -64,7 +65,7 @@ const (
 	minAddressSizeIPv4       = 6     // IPv4 address: port(2) + IP(4)
 	minAddressSizeIPv6       = 18    // IPv6 address: port(2) + IP(16)
 	minRelayTagRequestSize   = 0     // Relay tag request (empty data per spec)
-	minRelayTagSize          = 7     // Relay tag data
+	minRelayTagSize          = 4     // Relay tag data: relay_tag(4) + expiration(3) = 7 total block, but data length is 4 minimum
 	minNewTokenSize          = 12    // New token data: 4 expiration + 8 token
 	minFirstPacketNumberSize = 4     // Initial packet number (4 bytes)
 	minCongestionSize        = 1     // Congestion experience (1 byte)
@@ -162,7 +163,7 @@ func (b *SSU2Block) Deserialize(data []byte) (int, error) {
 	return totalLen, nil
 }
 
-// blockMinSizes maps block types to their minimum data sizes per SSU2.md.
+// blockMinSizes maps block types to their minimum data sizes per ssu2.rst.
 var blockMinSizes = map[uint8]int{
 	BlockTypeDateTime:          minDateTimeSize,
 	BlockTypeOptions:           minOptionsSize,
@@ -178,7 +179,7 @@ var blockMinSizes = map[uint8]int{
 	BlockTypeCongestion:        minCongestionSize,
 }
 
-// validate checks that the block meets minimum size requirements per SSU2.md.
+// validate checks that the block meets minimum size requirements per ssu2.rst.
 func (b *SSU2Block) validate() error {
 	dataLen := len(b.Data)
 
@@ -414,4 +415,49 @@ func FindBlockByType(blocks []*SSU2Block, blockType uint8) *SSU2Block {
 		}
 	}
 	return nil
+}
+
+// AddressBlock represents a decoded Address block (type 13).
+// Per spec: port(2) + IP(4 for IPv4, 16 for IPv6).
+type AddressBlock struct {
+	IP   net.IP
+	Port uint16
+}
+
+// EncodeAddressBlock creates an Address block from an IP and port.
+func EncodeAddressBlock(ip net.IP, port uint16) *SSU2Block {
+	ip4 := ip.To4()
+	var data []byte
+	if ip4 != nil {
+		data = make([]byte, 6)
+		binary.BigEndian.PutUint16(data[0:2], port)
+		copy(data[2:6], ip4)
+	} else {
+		data = make([]byte, 18)
+		binary.BigEndian.PutUint16(data[0:2], port)
+		copy(data[2:18], ip.To16())
+	}
+	return NewSSU2Block(BlockTypeAddress, data)
+}
+
+// DecodeAddressBlock parses an Address block into IP and port.
+func DecodeAddressBlock(block *SSU2Block) (*AddressBlock, error) {
+	if block.Type != BlockTypeAddress {
+		return nil, oops.Errorf("expected Address block (type %d), got type %d", BlockTypeAddress, block.Type)
+	}
+	switch len(block.Data) {
+	case minAddressSizeIPv4: // 6 = port(2) + IPv4(4)
+		return &AddressBlock{
+			Port: binary.BigEndian.Uint16(block.Data[0:2]),
+			IP:   net.IP(block.Data[2:6]),
+		}, nil
+	case minAddressSizeIPv6: // 18 = port(2) + IPv6(16)
+		return &AddressBlock{
+			Port: binary.BigEndian.Uint16(block.Data[0:2]),
+			IP:   net.IP(block.Data[2:18]),
+		}, nil
+	default:
+		return nil, oops.Errorf("Address block unexpected size: %d bytes (expected %d or %d)",
+			len(block.Data), minAddressSizeIPv4, minAddressSizeIPv6)
+	}
 }

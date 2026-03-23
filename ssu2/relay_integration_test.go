@@ -12,7 +12,7 @@ import (
 
 // TestRelay6StepProcess tests the complete SSU2 relay 6-step process:
 //
-// Per SSU2.md specification:
+// Per ssu2.rst specification:
 //  1. Alice → Bob: RelayRequest
 //  2. Bob → Charlie: RelayIntro (with Alice's RI)
 //  3. Charlie → Bob: RelayResponse

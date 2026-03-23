@@ -59,7 +59,7 @@ func TestNewKeepaliveManager_DefaultValues(t *testing.T) {
 	// Test with zero values (should use defaults)
 	km := NewKeepaliveManager(conn, 0, 0)
 	require.NotNil(t, km)
-	assert.Equal(t, 15*time.Second, km.interval) // SSU2.md default
+	assert.Equal(t, 15*time.Second, km.interval) // ssu2.rst default
 	assert.Equal(t, 45*time.Second, km.timeout)  // 3x interval
 }
 
@@ -340,11 +340,11 @@ func TestKeepaliveManager_RepeatedStartStop(t *testing.T) {
 	}
 }
 
-// TestKeepaliveManager_DefaultIntervalBehavior tests SSU2.md recommended 15s interval.
+// TestKeepaliveManager_DefaultIntervalBehavior tests ssu2.rst recommended 15s interval.
 func TestKeepaliveManager_DefaultIntervalBehavior(t *testing.T) {
 	conn := &mockSendReceiver{}
 
-	// Use defaults (15s interval per SSU2.md)
+	// Use defaults (15s interval per ssu2.rst)
 	km := NewKeepaliveManager(conn, 0, 0)
 	assert.Equal(t, 15*time.Second, km.interval)
 	assert.Equal(t, 45*time.Second, km.timeout) // 3x interval

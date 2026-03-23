@@ -94,7 +94,7 @@ type RelayIntroBlock struct {
 // Request allocation of a relay tag from an introducer.
 type RelayTagRequestBlock struct {
 	// Nonce uniquely identifies this request (4 bytes)
-	// Minimum 3 bytes per SSU2.md, we use 4 for alignment
+	// Minimum 3 bytes per ssu2.rst, we use 4 for alignment
 	Nonce uint32
 }
 

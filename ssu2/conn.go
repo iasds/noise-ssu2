@@ -203,6 +203,11 @@ func NewSSU2Conn(
 		}
 	}
 
+	// Per spec: Source and Destination Connection IDs must NOT be identical.
+	if config.InitiatorConnectionID != 0 && config.InitiatorConnectionID == connID {
+		return nil, oops.Errorf("connection ID collision: source and destination IDs are identical (%d)", connID)
+	}
+
 	// Build Noise prologue — per spec, prologue is null (empty).
 	prologue := buildSSU2Prologue()
 
@@ -324,28 +329,52 @@ func (h *SSU2Conn) Handshake(ctx context.Context) error {
 
 // handshakeInitiator performs the initiator side of XK handshake.
 func (h *SSU2Conn) handshakeInitiator(ctx context.Context) error {
-	// Step 1: Create and send SessionRequest
+	// Step 1: Create SessionRequest
 	sessionRequest, err := h.handshakeHandler.CreateSessionRequest(h.config.ConnectionID, 0)
 	if err != nil {
 		return oops.Wrapf(err, "failed to create SessionRequest")
 	}
 
+	// Step 2: Send SessionRequest and wait for SessionCreated, with retransmit.
+	// Per spec: handshake packets are retransmitted whole with identical contents.
 	if err := h.sendPacketDirect(sessionRequest); err != nil {
 		return oops.Wrapf(err, "failed to send SessionRequest")
 	}
 
-	// Step 2: Wait for SessionCreated
-	sessionCreated, err := h.receivePacketWithTimeout(ctx, h.config.HandshakeTimeout)
+	response, err := h.receiveHandshakeWithRetransmit(ctx, sessionRequest, h.config.HandshakeTimeout)
 	if err != nil {
 		return oops.Wrapf(err, "failed to receive SessionCreated")
 	}
 
-	if sessionCreated.MessageType != MessageTypeSessionCreated {
-		return oops.Errorf("expected SessionCreated, got type %d", sessionCreated.MessageType)
+	// Handle Retry: responder may require a token before proceeding.
+	if response.MessageType == MessageTypeRetry {
+		token, err := h.extractRetryToken(response)
+		if err != nil {
+			return oops.Wrapf(err, "failed to extract Retry token")
+		}
+
+		// Resend SessionRequest with the token inserted at header bytes 24-31.
+		sessionRequest, err = h.handshakeHandler.CreateSessionRequestWithToken(
+			h.config.ConnectionID, 0, token,
+		)
+		if err != nil {
+			return oops.Wrapf(err, "failed to create SessionRequest with Retry token")
+		}
+		if err := h.sendPacketDirect(sessionRequest); err != nil {
+			return oops.Wrapf(err, "failed to send SessionRequest with token")
+		}
+		response, err = h.receiveHandshakeWithRetransmit(ctx, sessionRequest, h.config.HandshakeTimeout)
+		if err != nil {
+			return oops.Wrapf(err, "failed to receive SessionCreated after Retry")
+		}
+	}
+
+	if response.MessageType != MessageTypeSessionCreated {
+		return oops.Errorf("expected SessionCreated, got type %d", response.MessageType)
 	}
 
 	// Step 3: Process SessionCreated
-	if err := h.handshakeHandler.ProcessSessionCreated(sessionCreated); err != nil {
+	if err := h.handshakeHandler.ProcessSessionCreated(response); err != nil {
 		return oops.Wrapf(err, "failed to process SessionCreated")
 	}
 
@@ -365,7 +394,7 @@ func (h *SSU2Conn) handshakeInitiator(ctx context.Context) error {
 
 // handshakeResponder performs the responder side of XK handshake.
 func (h *SSU2Conn) handshakeResponder(ctx context.Context) error {
-	// Step 1: Wait for SessionRequest
+	// Step 1: Wait for SessionRequest (no retransmit on first receive)
 	sessionRequest, err := h.receivePacketWithTimeout(ctx, h.config.HandshakeTimeout)
 	if err != nil {
 		return oops.Wrapf(err, "failed to receive SessionRequest")
@@ -391,8 +420,9 @@ func (h *SSU2Conn) handshakeResponder(ctx context.Context) error {
 		return oops.Wrapf(err, "failed to send SessionCreated")
 	}
 
-	// Step 4: Wait for SessionConfirmed
-	sessionConfirmed, err := h.receivePacketWithTimeout(ctx, h.config.HandshakeTimeout)
+	// Step 4: Wait for SessionConfirmed, retransmitting SessionCreated if needed.
+	// Per spec: handshake packets are retransmitted whole with identical contents.
+	sessionConfirmed, err := h.receiveHandshakeWithRetransmit(ctx, sessionCreated, h.config.HandshakeTimeout)
 	if err != nil {
 		return oops.Wrapf(err, "failed to receive SessionConfirmed")
 	}
@@ -987,6 +1017,10 @@ func (h *SSU2Conn) processInboundPacket(packet *SSU2Packet) {
 	switch packet.MessageType {
 	case MessageTypeData:
 		h.validDataPacketsReceived.Add(1)
+		// Check immediate-ack flag: header byte 13, bit 0
+		if len(packet.Header) > 13 && packet.Header[13]&0x01 != 0 {
+			h.sendImmediateACK()
+		}
 		h.processDataPacket(packet)
 	case MessageTypeSessionRequest, MessageTypeSessionCreated, MessageTypeSessionConfirmed:
 		select {
@@ -1017,6 +1051,45 @@ func (h *SSU2Conn) processDataPacket(packet *SSU2Packet) {
 	}
 }
 
+// sendImmediateACK generates and sends an ACK packet without delay, honoring
+// the immediate-ack flag (header byte 13 bit 0) from the peer.
+func (h *SSU2Conn) sendImmediateACK() {
+	ack, err := h.ackHandler.GenerateACK()
+	if err != nil || ack == nil {
+		return
+	}
+	pktNum := h.nextSendSequence()
+	hdr := make([]byte, ShortHeaderSize)
+	binary.BigEndian.PutUint64(hdr[0:8], h.config.ConnectionID)
+	binary.BigEndian.PutUint32(hdr[8:12], pktNum)
+	packet := &SSU2Packet{
+		MessageType:  MessageTypeData,
+		PacketNumber: pktNum,
+		Header:       hdr,
+		MAC:          make([]byte, MACSize),
+	}
+	payload, _ := SerializeBlocks([]*SSU2Block{ack})
+	packet.Payload = payload
+	_ = h.sendPacketDirect(packet)
+}
+
+// extractRetryToken parses a Retry message and returns the 8-byte token.
+func (h *SSU2Conn) extractRetryToken(retry *SSU2Packet) ([]byte, error) {
+	blocks, err := DeserializeBlocks(retry.Payload)
+	if err != nil {
+		return nil, oops.Wrapf(err, "failed to parse Retry payload")
+	}
+	tokenBlock := FindBlockByType(blocks, BlockTypeNewToken)
+	if tokenBlock == nil {
+		return nil, oops.Errorf("Retry message missing NewToken block")
+	}
+	parsed, err := ParseNewTokenBlock(tokenBlock)
+	if err != nil {
+		return nil, oops.Wrapf(err, "failed to parse NewToken block from Retry")
+	}
+	return parsed.Token, nil
+}
+
 // receivePacketWithTimeout waits for a packet with timeout.
 func (h *SSU2Conn) receivePacketWithTimeout(ctx context.Context, timeout time.Duration) (*SSU2Packet, error) {
 	timer := time.NewTimer(timeout)
@@ -1034,10 +1107,58 @@ func (h *SSU2Conn) receivePacketWithTimeout(ctx context.Context, timeout time.Du
 	}
 }
 
+// receiveHandshakeWithRetransmit waits for the next handshake message, retransmitting
+// lastSent if no response arrives within a per-attempt interval.
+// Per spec: handshake packets MUST be retransmitted with the same packet number
+// and identical encrypted contents.
+func (h *SSU2Conn) receiveHandshakeWithRetransmit(ctx context.Context, lastSent *SSU2Packet, totalTimeout time.Duration) (*SSU2Packet, error) {
+	const maxRetransmits = 3
+	attemptTimeout := totalTimeout / time.Duration(maxRetransmits+1)
+	if attemptTimeout < time.Second {
+		attemptTimeout = time.Second
+	}
+
+	deadline := time.Now().Add(totalTimeout)
+	for attempt := 0; attempt <= maxRetransmits; attempt++ {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			break
+		}
+		wait := attemptTimeout
+		if wait > remaining {
+			wait = remaining
+		}
+
+		pkt, err := h.receivePacketWithTimeout(ctx, wait)
+		if err == nil {
+			return pkt, nil
+		}
+
+		// On context cancellation or connection close, don't retry.
+		select {
+		case <-ctx.Done():
+			return nil, oops.Wrapf(ctx.Err(), "context cancelled during handshake retransmit")
+		case <-h.closeChan:
+			return nil, oops.Errorf("connection closed during handshake retransmit")
+		default:
+		}
+
+		// Retransmit the last sent handshake packet with identical contents.
+		if attempt < maxRetransmits {
+			_ = h.sendPacketDirect(lastSent)
+		}
+	}
+	return nil, oops.Errorf("handshake timeout after %d retransmits", maxRetransmits)
+}
+
 // nextSendSequence returns the next packet sequence number.
 // When the sequence crosses rekeyThreshold, it fires a one-shot
 // NextNonce rekey so the cipher is refreshed before the 32-bit
 // counter wraps.
+//
+// NOTE: The SSU2 spec marks NextNonce (block type 11) as "TODO only if we
+// rotate keys" with size "TBD". This rekey mechanism is based on an
+// unfinalized spec area and may need revision when the spec is updated.
 func (h *SSU2Conn) nextSendSequence() uint32 {
 	h.sendSeqMutex.Lock()
 	defer h.sendSeqMutex.Unlock()

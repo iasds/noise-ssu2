@@ -16,7 +16,7 @@ import (
 //  2. Detects dead connections through lack of peer response
 //  3. Maintains minimal overhead by piggybacking on data packets when possible
 //
-// Per SSU2.md specification, the default keepalive interval is 15 seconds.
+// Per ssu2.rst specification, the default keepalive interval is 15 seconds.
 // Dead connection detection occurs after 3x the keepalive interval with no response.
 type KeepaliveManager struct {
 	// conn is the SSU2 connection this manager belongs to
@@ -62,13 +62,13 @@ type SendReceiver interface {
 //
 // Parameters:
 //   - conn: The connection to manage keepalive for
-//   - interval: Time between keepalive checks (use 15*time.Second per SSU2.md)
+//   - interval: Time between keepalive checks (use 15*time.Second per ssu2.rst)
 //   - timeout: Dead connection timeout (use 3*interval, typically 45 seconds)
 //
 // Returns an initialized but not yet started manager.
 func NewKeepaliveManager(conn SendReceiver, interval, timeout time.Duration) *KeepaliveManager {
 	if interval <= 0 {
-		interval = 15 * time.Second // SSU2.md default
+		interval = 15 * time.Second // ssu2.rst default
 	}
 	if timeout <= 0 {
 		timeout = 3 * interval // Standard 3x interval
