@@ -73,6 +73,12 @@ const (
 	MaxPacketSizeIPv6 = 1452 // 1500 Ethernet MTU - 40 IPv6 header - 8 UDP header
 )
 
+// SSU2 long header field constants per specification
+const (
+	SSU2ProtocolVersion uint8 = 2 // Protocol version at header byte 13
+	SSU2NetworkID       uint8 = 2 // Network ID (I2P mainnet) at header byte 14
+)
+
 // NewSSU2Packet creates a new SSU2 packet with the specified message type.
 // The packet is initially empty and must be populated with Serialize or by
 // setting the fields directly.

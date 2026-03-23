@@ -561,11 +561,18 @@ func (h *HandshakeHandler) buildHandshakePacket(blocks []*SSU2Block, msgType uin
 		return nil, oops.Wrapf(err, "failed to serialize handshake blocks")
 	}
 
-	// Build the 32-byte long header before encrypting so it can be
-	// mixed into the handshake hash per SSU2 spec §KDF.
+	// Build the 32-byte long header per SSU2 spec §LongHeader:
+	// dest_conn_id(0-7), pkt_num(8-11), type(12), ver(13), id(14),
+	// flag(15), src_conn_id(16-23), token(24-31).
 	header := make([]byte, 32)
 	binary.BigEndian.PutUint64(header[0:8], destConnID)
-	binary.BigEndian.PutUint64(header[8:16], sourceConnID)
+	binary.BigEndian.PutUint32(header[8:12], 0) // packet number 0 for handshake
+	header[12] = msgType
+	header[13] = SSU2ProtocolVersion // ver=2
+	header[14] = SSU2NetworkID       // id=2 (I2P mainnet)
+	header[15] = 0                   // flag=0
+	binary.BigEndian.PutUint64(header[16:24], sourceConnID)
+	// bytes 24-31 = token (zero for initial SessionRequest, populated elsewhere for retries)
 
 	// MixHash(header) binds the encrypted header into the handshake hash
 	// (h = SHA256(h || header)), preventing header substitution attacks.

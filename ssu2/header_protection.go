@@ -64,7 +64,8 @@ const (
 //  2. Generate mask using ChaCha20.encrypt(key, iv, zeros)
 //  3. XOR header bytes 0-7 with first mask
 //  4. XOR header bytes 8-15 with second mask
-//  5. For long headers: encrypt bytes 16-63 with ChaCha20(key1, n=1) per spec
+//
+// 5. For long headers: encrypt bytes 16-63 with ChaCha20(k_header_2, iv=zeros) per spec
 type HeaderProtector struct {
 	// mu protects concurrent access to the protector
 	mu sync.RWMutex
@@ -262,7 +263,7 @@ func (hp *HeaderProtector) generateMask(key, nonce []byte) ([]byte, error) {
 }
 
 // encryptLongHeaderExtension encrypts the long header extension and optional
-// ephemeral key per the SSU2 spec. Uses ChaCha20 with kHeader1 and nonce n=1.
+// ephemeral key per the SSU2 spec. Uses ChaCha20 with kHeader2 and all-zero nonce.
 // For SessionRequest/SessionCreated (which include a 32-byte ephemeral key),
 // encrypts bytes 16-63 (48 bytes) as one ChaCha20 operation.
 // For other long header types, encrypts bytes 16-31 (16 bytes).
@@ -271,10 +272,9 @@ func (hp *HeaderProtector) encryptLongHeaderExtension(packet []byte) error {
 		return nil // Nothing to encrypt
 	}
 
-	// SSU2 spec: use nonce n=1 for long header extension encryption
-	nonce := make([]byte, 12)
-	nonce[0] = 1 // n=1 (little-endian counter)
-	cipher, err := chacha20.NewUnauthenticatedCipher(hp.kHeader1, nonce)
+	// SSU2 spec §HeaderEncryptionKDF: ChaCha20.encrypt(k_header_2, iv={0,...}, packet[16:63])
+	nonce := make([]byte, 12) // all-zero nonce per spec
+	cipher, err := chacha20.NewUnauthenticatedCipher(hp.kHeader2, nonce)
 	if err != nil {
 		return oops.Wrapf(err, "failed to initialize ChaCha20 for header extension")
 	}

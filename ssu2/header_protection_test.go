@@ -112,7 +112,7 @@ func TestHeaderProtector_EncryptDecrypt_LongHeader(t *testing.T) {
 	err = hp.EncryptHeader(packet)
 	require.NoError(t, err)
 
-	// Per SSU2 spec: for SessionRequest, bytes 16-63 are encrypted with ChaCha20(k1, n=1)
+	// Per SSU2 spec: for SessionRequest, bytes 16-63 are encrypted with ChaCha20(k2, iv=zeros)
 	// So bytes 0-63 should be modified (header + ephemeral key area)
 	assert.NotEqual(t, original[:LongHeaderSize], packet[:LongHeaderSize], "long header should be encrypted")
 

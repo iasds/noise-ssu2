@@ -140,11 +140,14 @@ func TestHandshakeHandler_CreateSessionRequest(t *testing.T) {
 	assert.NotEmpty(t, packet.Payload)
 	assert.Equal(t, uint32(0), packet.PacketNumber)
 
-	// Validate connection IDs in header
+	// Validate connection IDs in header per spec §LongHeader layout
 	decodedDestConnID := binary.BigEndian.Uint64(packet.Header[0:8])
-	decodedSourceConnID := binary.BigEndian.Uint64(packet.Header[8:16])
+	decodedSourceConnID := binary.BigEndian.Uint64(packet.Header[16:24])
 	assert.Equal(t, destConnID, decodedDestConnID)
 	assert.Equal(t, sourceConnID, decodedSourceConnID)
+	assert.Equal(t, MessageTypeSessionRequest, packet.Header[12])
+	assert.Equal(t, SSU2ProtocolVersion, packet.Header[13])
+	assert.Equal(t, SSU2NetworkID, packet.Header[14])
 }
 
 func TestHandshakeHandler_CreateSessionRequest_ResponderError(t *testing.T) {
@@ -245,11 +248,13 @@ func TestHandshakeHandler_CreateSessionCreated(t *testing.T) {
 	assert.Equal(t, 32, len(createdPacket.EphemeralKey))
 	assert.NotNil(t, createdPacket.Payload)
 
-	// Validate connection IDs
+	// Validate connection IDs per spec §LongHeader layout
 	decodedDestConnID := binary.BigEndian.Uint64(createdPacket.Header[0:8])
-	decodedSourceConnID := binary.BigEndian.Uint64(createdPacket.Header[8:16])
+	decodedSourceConnID := binary.BigEndian.Uint64(createdPacket.Header[16:24])
 	assert.Equal(t, uint64(44444), decodedDestConnID)
 	assert.Equal(t, uint64(33333), decodedSourceConnID)
+	assert.Equal(t, MessageTypeSessionCreated, createdPacket.Header[12])
+	assert.Equal(t, SSU2ProtocolVersion, createdPacket.Header[13])
 }
 
 func TestHandshakeHandler_CreateSessionCreated_InitiatorError(t *testing.T) {

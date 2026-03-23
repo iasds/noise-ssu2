@@ -348,9 +348,9 @@ func (l *SSU2Listener) handleNewSession(remoteAddr *net.UDPAddr, packet *SSU2Pac
 	connConfig.Initiator = false
 
 	// Extract initiator's source connection ID from the SessionRequest header
-	// for Noise prologue binding. The source connection ID is at header bytes 8-15.
-	if len(packet.Header) >= 16 {
-		connConfig.InitiatorConnectionID = binary.BigEndian.Uint64(packet.Header[8:16])
+	// per spec §LongHeader: src_conn_id is at bytes 16-23.
+	if len(packet.Header) >= 24 {
+		connConfig.InitiatorConnectionID = binary.BigEndian.Uint64(packet.Header[16:24])
 	}
 
 	conn, err := NewSSU2Conn(l.underlying, remoteAddr, &connConfig, false, l.config.StaticKey, nil)
@@ -477,16 +477,20 @@ func (l *SSU2Listener) sendRetry(remoteAddr *net.UDPAddr, token []byte, original
 	retryPacket := NewSSU2Packet(MessageTypeRetry, 0)
 
 	// Build header (32 bytes for Retry message)
-	// Header format per SSU2: includes destination/source connection IDs and flags
+	// Long header layout per spec §LongHeader:
+	// dest_conn_id(0-7), pkt_num(8-11), type(12), ver(13), id(14), flag(15),
+	// src_conn_id(16-23), token(24-31).
 	header := make([]byte, LongHeaderSize)
 
-	// Copy connection ID from original request if available
+	// Copy destination connection ID from original request if available
 	if len(originalHeader) >= 8 {
 		copy(header[0:8], originalHeader[0:8]) // Destination connection ID
 	}
 
-	// Set message type flags in header
-	header[8] = MessageTypeRetry
+	// Set message type at byte 12 per spec
+	header[12] = MessageTypeRetry
+	header[13] = SSU2ProtocolVersion
+	header[14] = SSU2NetworkID
 
 	retryPacket.Header = header
 	retryPacket.Payload = payload
