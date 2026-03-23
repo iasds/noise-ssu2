@@ -34,6 +34,14 @@ const (
 	// NextNonce rekey. Per the SSU2 spec the 32-bit packet number must
 	// not wrap, so we start the rekey handshake well before 0xFFFFFFFF.
 	rekeyThreshold uint32 = 0xFFFF_FF00
+
+	// maxPacketRetries is the maximum number of retransmission attempts
+	// before a pending packet is dropped.
+	maxPacketRetries = 5
+
+	// retransmitInterval is how often the retransmit loop checks for
+	// expired pending packets.
+	retransmitInterval = 250 * time.Millisecond
 )
 
 // String returns a human-readable state name.
@@ -428,9 +436,10 @@ func (h *SSU2Conn) finalizeHandshake() error {
 // startDataLoops starts background goroutines for data transport.
 // Called after handshake completes to avoid wasting resources on failed connections.
 func (h *SSU2Conn) startDataLoops() {
-	h.wg.Add(2)
+	h.wg.Add(3)
 	go h.sendLoop()
 	go h.keepaliveLoop()
+	go h.retransmitLoop()
 }
 
 // installCipherStates transfers transport cipher states from the handshake handler.
@@ -709,6 +718,56 @@ func (h *SSU2Conn) sendLoop() {
 			}
 		case <-h.closeChan:
 			return
+		}
+	}
+}
+
+// retransmitLoop periodically scans pendingPackets for RTO expiry and
+// re-enqueues expired packets. Packets exceeding maxPacketRetries are dropped.
+func (h *SSU2Conn) retransmitLoop() {
+	defer h.wg.Done()
+
+	ticker := time.NewTicker(retransmitInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			h.retransmitExpired()
+		case <-h.closeChan:
+			return
+		}
+	}
+}
+
+// retransmitExpired checks all pending packets and retransmits those that
+// have exceeded their NextRetry deadline.
+func (h *SSU2Conn) retransmitExpired() {
+	now := time.Now()
+	rto := h.rttEstimator.GetRTO()
+
+	h.pendingMutex.Lock()
+	defer h.pendingMutex.Unlock()
+
+	for pn, pp := range h.pendingPackets {
+		if now.Before(pp.NextRetry) {
+			continue
+		}
+
+		if pp.Retries >= maxPacketRetries {
+			delete(h.pendingPackets, pn)
+			continue
+		}
+
+		pp.Retries++
+		// Exponential backoff: double the RTO for each retry
+		backoff := rto * time.Duration(1<<pp.Retries)
+		pp.NextRetry = now.Add(backoff)
+
+		// Best-effort re-enqueue; drop if sendQueue is full
+		select {
+		case h.sendQueue <- pp.Packet:
+		default:
 		}
 	}
 }

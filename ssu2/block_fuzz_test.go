@@ -211,18 +211,20 @@ func FuzzDecodeRelayIntro(f *testing.F) {
 
 // FuzzDecodePeerTestBlock fuzzes PeerTest block decoding.
 func FuzzDecodePeerTestBlock(f *testing.F) {
-	// Minimal peer test block
-	valid := make([]byte, 20)
+	// Minimal peer test block: type(1) + length(2) + msg(1) + status(1) + nonce(4) + timestamp(4) + version(1) = 14
+	valid := make([]byte, 14)
 	valid[0] = BlockTypePeerTest
-	binary.BigEndian.PutUint16(valid[1:3], 17)
-	valid[3] = 1 // Message code
+	binary.BigEndian.PutUint16(valid[1:3], 11)
+	valid[3] = 1  // Message code
+	valid[13] = 2 // Version
 	f.Add(valid)
 
-	// With signature
-	withSig := make([]byte, 84)
+	// With signed data
+	withSig := make([]byte, 46)
 	withSig[0] = BlockTypePeerTest
-	binary.BigEndian.PutUint16(withSig[1:3], 81)
-	withSig[3] = 1 // Message code
+	binary.BigEndian.PutUint16(withSig[1:3], 43)
+	withSig[3] = 1  // Message code
+	withSig[13] = 2 // Version
 	f.Add(withSig)
 
 	f.Fuzz(func(t *testing.T, data []byte) {
