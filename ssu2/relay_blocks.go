@@ -24,22 +24,31 @@ import (
 
 // RelayRequestBlock represents a relay request (Type 7).
 // Alice sends this to Bob to request relay through to Charlie.
+//
+// Wire format per SSU2 spec:
+//
+//	[Nonce:4][SignedData:32][Flag:1][RouterInfoFragment:variable]
 type RelayRequestBlock struct {
 	// Nonce uniquely identifies this relay request (4 bytes)
 	Nonce uint32
 
-	// RelayTag is the tag assigned by the introducer (4 bytes)
-	RelayTag uint32
+	// SignedData is the 32-byte signed relay data containing
+	// relay tag, Alice IP/port, and Alice's signature.
+	SignedData []byte
 
-	// CharlieRouterHash is Charlie's 32-byte router identity hash
-	CharlieRouterHash []byte
+	// Flag is a 1-byte flag field
+	Flag uint8
 
-	// Token is an optional verification token (variable length)
-	Token []byte
+	// RouterInfoFragment is an optional Alice RouterInfo fragment
+	RouterInfoFragment []byte
 }
 
 // RelayResponseBlock represents a relay response (Type 8).
 // Bob sends this to Alice after processing relay request.
+//
+// Wire format per SSU2 spec:
+//
+//	[Nonce:4][StatusCode:1][SignedData:variable]
 type RelayResponseBlock struct {
 	// Nonce matches the nonce from RelayRequest (4 bytes)
 	Nonce uint32
@@ -48,9 +57,10 @@ type RelayResponseBlock struct {
 	// 0 = success, non-zero = various error codes
 	StatusCode uint8
 
-	// CharlieAddress is Charlie's UDP address (optional)
-	// Present when StatusCode is 0 (success)
-	CharlieAddress *net.UDPAddr
+	// SignedData is Charlie's signed response data (variable length).
+	// Present when StatusCode is 0 (success); contains Charlie's address
+	// and signature.
+	SignedData []byte
 }
 
 // RelayIntroBlock represents a relay introduction (Type 9).
@@ -90,9 +100,9 @@ type RelayTagBlock struct {
 
 // EncodeRelayRequest encodes a RelayRequest block to wire format.
 //
-// Wire format:
+// Wire format per SSU2 spec:
 //
-//	[Nonce:4][RelayTag:4][CharlieRouterHash:32][TokenLength:2][Token:variable]
+//	[Nonce:4][SignedData:32][Flag:1][RouterInfoFragment:variable]
 //
 // Parameters:
 //   - req: RelayRequest data to encode
@@ -105,29 +115,29 @@ func EncodeRelayRequest(req *RelayRequestBlock) (*SSU2Block, error) {
 		return nil, oops.Errorf("RelayRequestBlock is nil")
 	}
 
-	// Validate router hash
-	if len(req.CharlieRouterHash) != 32 {
-		return nil, oops.Errorf("CharlieRouterHash must be 32 bytes, got %d", len(req.CharlieRouterHash))
+	// Validate signed data
+	if len(req.SignedData) != 32 {
+		return nil, oops.Errorf("SignedData must be 32 bytes, got %d", len(req.SignedData))
 	}
 
-	// Calculate size: nonce(4) + relayTag(4) + hash(32) + tokenLen(2) + token
-	tokenLen := len(req.Token)
-	dataSize := 4 + 4 + 32 + 2 + tokenLen
+	// Size: nonce(4) + signedData(32) + flag(1) + routerInfoFragment
+	dataSize := 4 + 32 + 1 + len(req.RouterInfoFragment)
 	data := make([]byte, dataSize)
 
 	// Encode fields
 	binary.BigEndian.PutUint32(data[0:4], req.Nonce)
-	binary.BigEndian.PutUint32(data[4:8], req.RelayTag)
-	copy(data[8:40], req.CharlieRouterHash)
-	binary.BigEndian.PutUint16(data[40:42], uint16(tokenLen))
-	if tokenLen > 0 {
-		copy(data[42:], req.Token)
+	copy(data[4:36], req.SignedData)
+	data[36] = req.Flag
+	if len(req.RouterInfoFragment) > 0 {
+		copy(data[37:], req.RouterInfoFragment)
 	}
 
 	return NewSSU2Block(BlockTypeRelayRequest, data), nil
 }
 
 // DecodeRelayRequest decodes a RelayRequest block from wire format.
+//
+// Wire format: [Nonce:4][SignedData:32][Flag:1][RouterInfoFragment:variable]
 //
 // Parameters:
 //   - block: SSU2Block with Type 7
@@ -145,48 +155,35 @@ func DecodeRelayRequest(block *SSU2Block) (*RelayRequestBlock, error) {
 	}
 
 	data := block.Data
-	if len(data) < 42 {
-		return nil, oops.Errorf("RelayRequest block too short: %d bytes (minimum 42)", len(data))
+	if len(data) < 37 {
+		return nil, oops.Errorf("RelayRequest block too short: %d bytes (minimum 37)", len(data))
 	}
 
-	// Decode fixed fields
+	// Decode fields
 	nonce := binary.BigEndian.Uint32(data[0:4])
-	relayTag := binary.BigEndian.Uint32(data[4:8])
-	routerHash := make([]byte, 32)
-	copy(routerHash, data[8:40])
-	tokenLen := binary.BigEndian.Uint16(data[40:42])
+	signedData := make([]byte, 32)
+	copy(signedData, data[4:36])
+	flag := data[36]
 
-	// Validate total length
-	expectedLen := 42 + int(tokenLen)
-	if len(data) < expectedLen {
-		return nil, oops.Errorf("RelayRequest block truncated: %d bytes (expected %d)", len(data), expectedLen)
-	}
-
-	// Decode token if present
-	var token []byte
-	if tokenLen > 0 {
-		token = make([]byte, tokenLen)
-		copy(token, data[42:42+tokenLen])
+	var routerInfoFragment []byte
+	if len(data) > 37 {
+		routerInfoFragment = make([]byte, len(data)-37)
+		copy(routerInfoFragment, data[37:])
 	}
 
 	return &RelayRequestBlock{
-		Nonce:             nonce,
-		RelayTag:          relayTag,
-		CharlieRouterHash: routerHash,
-		Token:             token,
+		Nonce:              nonce,
+		SignedData:         signedData,
+		Flag:               flag,
+		RouterInfoFragment: routerInfoFragment,
 	}, nil
 }
 
 // EncodeRelayResponse encodes a RelayResponse block to wire format.
 //
-// Wire format:
+// Wire format per SSU2 spec:
 //
-//	[Nonce:4][StatusCode:1][AddressPresent:1][Address:variable]
-//
-// Address encoding (if present):
-//
-//	IPv4: [IP:4][Port:2]
-//	IPv6: [IP:16][Port:2]
+//	[Nonce:4][StatusCode:1][SignedData:variable]
 //
 // Parameters:
 //   - resp: RelayResponse data to encode
@@ -199,41 +196,23 @@ func EncodeRelayResponse(resp *RelayResponseBlock) (*SSU2Block, error) {
 		return nil, oops.Errorf("RelayResponseBlock is nil")
 	}
 
-	// Calculate size
-	dataSize := 6 // nonce(4) + statusCode(1) + addressPresent(1)
-	hasAddress := resp.CharlieAddress != nil && resp.StatusCode == 0
-	if hasAddress {
-		if resp.CharlieAddress.IP.To4() != nil {
-			dataSize += 6 // IPv4(4) + port(2)
-		} else {
-			dataSize += 18 // IPv6(16) + port(2)
-		}
-	}
-
+	// Size: nonce(4) + statusCode(1) + signedData
+	dataSize := 5 + len(resp.SignedData)
 	data := make([]byte, dataSize)
 
-	// Encode fixed fields
+	// Encode fields
 	binary.BigEndian.PutUint32(data[0:4], resp.Nonce)
 	data[4] = resp.StatusCode
-
-	// Encode address flag and data
-	if hasAddress {
-		data[5] = 1 // Address present
-		if ip4 := resp.CharlieAddress.IP.To4(); ip4 != nil {
-			copy(data[6:10], ip4)
-			binary.BigEndian.PutUint16(data[10:12], uint16(resp.CharlieAddress.Port))
-		} else {
-			copy(data[6:22], resp.CharlieAddress.IP.To16())
-			binary.BigEndian.PutUint16(data[22:24], uint16(resp.CharlieAddress.Port))
-		}
-	} else {
-		data[5] = 0 // No address
+	if len(resp.SignedData) > 0 {
+		copy(data[5:], resp.SignedData)
 	}
 
 	return NewSSU2Block(BlockTypeRelayResponse, data), nil
 }
 
 // DecodeRelayResponse decodes a RelayResponse block from wire format.
+//
+// Wire format: [Nonce:4][StatusCode:1][SignedData:variable]
 //
 // Parameters:
 //   - block: SSU2Block with Type 8
@@ -251,45 +230,24 @@ func DecodeRelayResponse(block *SSU2Block) (*RelayResponseBlock, error) {
 	}
 
 	data := block.Data
-	if len(data) < 6 {
-		return nil, oops.Errorf("RelayResponse block too short: %d bytes (minimum 6)", len(data))
+	if len(data) < 5 {
+		return nil, oops.Errorf("RelayResponse block too short: %d bytes (minimum 5)", len(data))
 	}
 
-	// Decode fixed fields
 	nonce := binary.BigEndian.Uint32(data[0:4])
 	statusCode := data[4]
-	addressPresent := data[5]
 
-	resp := &RelayResponseBlock{
+	var signedData []byte
+	if len(data) > 5 {
+		signedData = make([]byte, len(data)-5)
+		copy(signedData, data[5:])
+	}
+
+	return &RelayResponseBlock{
 		Nonce:      nonce,
 		StatusCode: statusCode,
-	}
-
-	// Decode address if present
-	if addressPresent == 1 {
-		if len(data) >= 12 {
-			// Could be IPv4 or IPv6
-			if len(data) == 12 {
-				// IPv4: 6 header + 4 IP + 2 port
-				ip := net.IP(make([]byte, 4))
-				copy(ip, data[6:10])
-				port := binary.BigEndian.Uint16(data[10:12])
-				resp.CharlieAddress = &net.UDPAddr{IP: ip, Port: int(port)}
-			} else if len(data) == 24 {
-				// IPv6: 6 header + 16 IP + 2 port
-				ip := net.IP(make([]byte, 16))
-				copy(ip, data[6:22])
-				port := binary.BigEndian.Uint16(data[22:24])
-				resp.CharlieAddress = &net.UDPAddr{IP: ip, Port: int(port)}
-			} else {
-				return nil, oops.Errorf("invalid RelayResponse address length: %d", len(data))
-			}
-		} else {
-			return nil, oops.Errorf("RelayResponse claims address but data too short: %d bytes", len(data))
-		}
-	}
-
-	return resp, nil
+		SignedData: signedData,
+	}, nil
 }
 
 // EncodeRelayIntro encodes a RelayIntro block to wire format.

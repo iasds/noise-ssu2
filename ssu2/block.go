@@ -33,7 +33,7 @@ const (
 	BlockTypeI2NPMessage       uint8 = 3   // I2NP message (variable)
 	BlockTypeFirstFragment     uint8 = 4   // First fragment of message (variable)
 	BlockTypeFollowOnFragment  uint8 = 5   // Subsequent fragment (variable)
-	BlockTypeTermination       uint8 = 6   // Connection termination (5+ bytes)
+	BlockTypeTermination       uint8 = 6   // Connection termination (9+ bytes)
 	BlockTypeRelayRequest      uint8 = 7   // Relay request (variable)
 	BlockTypeRelayResponse     uint8 = 8   // Relay response (variable)
 	BlockTypeRelayIntro        uint8 = 9   // Relay introduction (variable)
@@ -57,7 +57,7 @@ const (
 	minBlockHeaderSize       = 3     // Type (1) + Length (2)
 	minDateTimeSize          = 4     // Timestamp data (seconds since epoch)
 	minOptionsSize           = 12    // Options data (per spec minimum)
-	minTerminationSize       = 5     // Termination data: reason(1) + valid-after-time(4)
+	minTerminationSize       = 9     // Termination data: valid-data-packets-received(8) + reason(1)
 	minNextNonceSize         = 8     // Next nonce (8 bytes)
 	minACKSize               = 5     // ACK data
 	minReserved14Size        = 0     // Reserved block type (no data expected)

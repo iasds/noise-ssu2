@@ -8,40 +8,42 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// makeSignedData returns a deterministic 32-byte signed relay data blob for tests.
+func makeSignedData() []byte {
+	data := make([]byte, 32)
+	for i := range data {
+		data[i] = byte(i)
+	}
+	return data
+}
+
 // TestEncodeRelayRequest_Valid tests encoding a valid relay request.
 func TestEncodeRelayRequest_Valid(t *testing.T) {
-	routerHash := make([]byte, 32)
-	for i := range routerHash {
-		routerHash[i] = byte(i)
-	}
-
 	req := &RelayRequestBlock{
-		Nonce:             12345,
-		RelayTag:          67890,
-		CharlieRouterHash: routerHash,
-		Token:             []byte{0xAA, 0xBB, 0xCC},
+		Nonce:              12345,
+		SignedData:         makeSignedData(),
+		Flag:               0x01,
+		RouterInfoFragment: []byte{0xAA, 0xBB, 0xCC},
 	}
 
 	block, err := EncodeRelayRequest(req)
 	require.NoError(t, err)
 	assert.NotNil(t, block)
 	assert.Equal(t, BlockTypeRelayRequest, block.Type)
-	assert.Equal(t, 45, len(block.Data)) // 4+4+32+2+3
+	assert.Equal(t, 40, len(block.Data)) // 4+32+1+3
 }
 
-// TestEncodeRelayRequest_NoToken tests encoding relay request without token.
-func TestEncodeRelayRequest_NoToken(t *testing.T) {
-	routerHash := make([]byte, 32)
+// TestEncodeRelayRequest_NoFragment tests encoding relay request without RI fragment.
+func TestEncodeRelayRequest_NoFragment(t *testing.T) {
 	req := &RelayRequestBlock{
-		Nonce:             12345,
-		RelayTag:          67890,
-		CharlieRouterHash: routerHash,
-		Token:             nil,
+		Nonce:      12345,
+		SignedData: makeSignedData(),
+		Flag:       0x00,
 	}
 
 	block, err := EncodeRelayRequest(req)
 	require.NoError(t, err)
-	assert.Equal(t, 42, len(block.Data)) // 4+4+32+2+0
+	assert.Equal(t, 37, len(block.Data)) // 4+32+1
 }
 
 // TestEncodeRelayRequest_NilBlock tests encoding nil request.
@@ -52,13 +54,11 @@ func TestEncodeRelayRequest_NilBlock(t *testing.T) {
 	assert.Contains(t, err.Error(), "nil")
 }
 
-// TestEncodeRelayRequest_InvalidRouterHash tests invalid router hash size.
-func TestEncodeRelayRequest_InvalidRouterHash(t *testing.T) {
+// TestEncodeRelayRequest_InvalidSignedData tests invalid signed data size.
+func TestEncodeRelayRequest_InvalidSignedData(t *testing.T) {
 	req := &RelayRequestBlock{
-		Nonce:             12345,
-		RelayTag:          67890,
-		CharlieRouterHash: []byte{1, 2, 3}, // Wrong size
-		Token:             nil,
+		Nonce:      12345,
+		SignedData: []byte{1, 2, 3}, // Wrong size
 	}
 
 	block, err := EncodeRelayRequest(req)
@@ -69,16 +69,11 @@ func TestEncodeRelayRequest_InvalidRouterHash(t *testing.T) {
 
 // TestDecodeRelayRequest_Valid tests decoding a valid relay request.
 func TestDecodeRelayRequest_Valid(t *testing.T) {
-	routerHash := make([]byte, 32)
-	for i := range routerHash {
-		routerHash[i] = byte(i)
-	}
-
 	original := &RelayRequestBlock{
-		Nonce:             12345,
-		RelayTag:          67890,
-		CharlieRouterHash: routerHash,
-		Token:             []byte{0xAA, 0xBB, 0xCC},
+		Nonce:              12345,
+		SignedData:         makeSignedData(),
+		Flag:               0x01,
+		RouterInfoFragment: []byte{0xAA, 0xBB, 0xCC},
 	}
 
 	block, err := EncodeRelayRequest(original)
@@ -87,9 +82,9 @@ func TestDecodeRelayRequest_Valid(t *testing.T) {
 	decoded, err := DecodeRelayRequest(block)
 	require.NoError(t, err)
 	assert.Equal(t, original.Nonce, decoded.Nonce)
-	assert.Equal(t, original.RelayTag, decoded.RelayTag)
-	assert.Equal(t, original.CharlieRouterHash, decoded.CharlieRouterHash)
-	assert.Equal(t, original.Token, decoded.Token)
+	assert.Equal(t, original.SignedData, decoded.SignedData)
+	assert.Equal(t, original.Flag, decoded.Flag)
+	assert.Equal(t, original.RouterInfoFragment, decoded.RouterInfoFragment)
 }
 
 // TestDecodeRelayRequest_NilBlock tests decoding nil block.
@@ -131,46 +126,44 @@ func TestEncodeRelayResponse_Success(t *testing.T) {
 	resp := &RelayResponseBlock{
 		Nonce:      12345,
 		StatusCode: 0,
-		CharlieAddress: &net.UDPAddr{
-			IP:   net.ParseIP("192.168.1.1"),
-			Port: 8080,
-		},
+		SignedData: []byte("charlie-signed-data-placeholder!"), // 32 bytes
 	}
 
 	block, err := EncodeRelayResponse(resp)
 	require.NoError(t, err)
 	assert.NotNil(t, block)
 	assert.Equal(t, BlockTypeRelayResponse, block.Type)
-	assert.Equal(t, 12, len(block.Data)) // 4+1+1+4+2
+	assert.Equal(t, 37, len(block.Data)) // 4+1+32
 }
 
-// TestEncodeRelayResponse_SuccessIPv6 tests encoding relay response with IPv6.
-func TestEncodeRelayResponse_SuccessIPv6(t *testing.T) {
+// TestEncodeRelayResponse_SuccessLargeSignedData tests encoding relay response with larger signed data.
+func TestEncodeRelayResponse_SuccessLargeSignedData(t *testing.T) {
+	signedData := make([]byte, 64)
+	for i := range signedData {
+		signedData[i] = byte(i)
+	}
+
 	resp := &RelayResponseBlock{
 		Nonce:      12345,
 		StatusCode: 0,
-		CharlieAddress: &net.UDPAddr{
-			IP:   net.ParseIP("2001:db8::1"),
-			Port: 8080,
-		},
+		SignedData: signedData,
 	}
 
 	block, err := EncodeRelayResponse(resp)
 	require.NoError(t, err)
-	assert.Equal(t, 24, len(block.Data)) // 4+1+1+16+2
+	assert.Equal(t, 69, len(block.Data)) // 4+1+64
 }
 
 // TestEncodeRelayResponse_Failure tests encoding failed relay response.
 func TestEncodeRelayResponse_Failure(t *testing.T) {
 	resp := &RelayResponseBlock{
-		Nonce:          12345,
-		StatusCode:     1, // Error
-		CharlieAddress: nil,
+		Nonce:      12345,
+		StatusCode: 1, // Error
 	}
 
 	block, err := EncodeRelayResponse(resp)
 	require.NoError(t, err)
-	assert.Equal(t, 6, len(block.Data)) // 4+1+1 (no address)
+	assert.Equal(t, 5, len(block.Data)) // 4+1 (no signed data)
 }
 
 // TestEncodeRelayResponse_NilBlock tests encoding nil response.
@@ -186,10 +179,7 @@ func TestDecodeRelayResponse_Success(t *testing.T) {
 	original := &RelayResponseBlock{
 		Nonce:      12345,
 		StatusCode: 0,
-		CharlieAddress: &net.UDPAddr{
-			IP:   net.ParseIP("192.168.1.1"),
-			Port: 8080,
-		},
+		SignedData: []byte("charlie-signed-data-placeholder!"),
 	}
 
 	block, err := EncodeRelayResponse(original)
@@ -199,17 +189,14 @@ func TestDecodeRelayResponse_Success(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, original.Nonce, decoded.Nonce)
 	assert.Equal(t, original.StatusCode, decoded.StatusCode)
-	assert.NotNil(t, decoded.CharlieAddress)
-	assert.True(t, original.CharlieAddress.IP.Equal(decoded.CharlieAddress.IP))
-	assert.Equal(t, original.CharlieAddress.Port, decoded.CharlieAddress.Port)
+	assert.Equal(t, original.SignedData, decoded.SignedData)
 }
 
 // TestDecodeRelayResponse_Failure tests decoding failed relay response.
 func TestDecodeRelayResponse_Failure(t *testing.T) {
 	original := &RelayResponseBlock{
-		Nonce:          12345,
-		StatusCode:     1,
-		CharlieAddress: nil,
+		Nonce:      12345,
+		StatusCode: 1,
 	}
 
 	block, err := EncodeRelayResponse(original)
@@ -219,7 +206,7 @@ func TestDecodeRelayResponse_Failure(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, original.Nonce, decoded.Nonce)
 	assert.Equal(t, original.StatusCode, decoded.StatusCode)
-	assert.Nil(t, decoded.CharlieAddress)
+	assert.Nil(t, decoded.SignedData)
 }
 
 // TestDecodeRelayResponse_NilBlock tests decoding nil block.
@@ -624,16 +611,11 @@ func TestDecodeRelayTag_TooShort(t *testing.T) {
 func TestRelayBlocks_RoundTrip(t *testing.T) {
 	// Test RelayRequest
 	t.Run("RelayRequest", func(t *testing.T) {
-		routerHash := make([]byte, 32)
-		for i := range routerHash {
-			routerHash[i] = byte(i)
-		}
-
 		req := &RelayRequestBlock{
-			Nonce:             99999,
-			RelayTag:          88888,
-			CharlieRouterHash: routerHash,
-			Token:             []byte{1, 2, 3, 4, 5},
+			Nonce:              99999,
+			SignedData:         makeSignedData(),
+			Flag:               0x02,
+			RouterInfoFragment: []byte{1, 2, 3, 4, 5},
 		}
 
 		block, err := EncodeRelayRequest(req)
@@ -643,9 +625,9 @@ func TestRelayBlocks_RoundTrip(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Equal(t, req.Nonce, decoded.Nonce)
-		assert.Equal(t, req.RelayTag, decoded.RelayTag)
-		assert.Equal(t, req.CharlieRouterHash, decoded.CharlieRouterHash)
-		assert.Equal(t, req.Token, decoded.Token)
+		assert.Equal(t, req.SignedData, decoded.SignedData)
+		assert.Equal(t, req.Flag, decoded.Flag)
+		assert.Equal(t, req.RouterInfoFragment, decoded.RouterInfoFragment)
 	})
 
 	// Test RelayResponse
@@ -653,10 +635,7 @@ func TestRelayBlocks_RoundTrip(t *testing.T) {
 		resp := &RelayResponseBlock{
 			Nonce:      11111,
 			StatusCode: 0,
-			CharlieAddress: &net.UDPAddr{
-				IP:   net.ParseIP("172.16.0.1"),
-				Port: 12345,
-			},
+			SignedData: []byte("charlie-signed-data-placeholder!"),
 		}
 
 		block, err := EncodeRelayResponse(resp)
@@ -667,8 +646,7 @@ func TestRelayBlocks_RoundTrip(t *testing.T) {
 
 		assert.Equal(t, resp.Nonce, decoded.Nonce)
 		assert.Equal(t, resp.StatusCode, decoded.StatusCode)
-		assert.True(t, resp.CharlieAddress.IP.Equal(decoded.CharlieAddress.IP))
-		assert.Equal(t, resp.CharlieAddress.Port, decoded.CharlieAddress.Port)
+		assert.Equal(t, resp.SignedData, decoded.SignedData)
 	})
 
 	// Test RelayIntro

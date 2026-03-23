@@ -29,6 +29,13 @@ const (
 	StateClosed
 )
 
+const (
+	// rekeyThreshold is the send-sequence value at which we initiate a
+	// NextNonce rekey. Per the SSU2 spec the 32-bit packet number must
+	// not wrap, so we start the rekey handshake well before 0xFFFFFFFF.
+	rekeyThreshold uint32 = 0xFFFF_FF00
+)
+
 // String returns a human-readable state name.
 func (s ConnState) String() string {
 	switch s {
@@ -118,6 +125,10 @@ type SSU2Conn struct {
 	lastActivity     time.Time
 	lastActivityLock sync.RWMutex
 	keepaliveTimer   *time.Timer
+
+	// Nonce rekeying: tracks whether a NextNonce block has been sent
+	// for the current send cipher. Reset after rekey completes.
+	rekeyInFlight atomic.Bool
 
 	// Background goroutines coordination
 	wg sync.WaitGroup
@@ -432,6 +443,11 @@ func (h *SSU2Conn) installCipherStates() error {
 	h.sendCipher = send
 	h.recvCipher = recv
 	h.cipherMutex.Unlock()
+
+	// Wire NextNonce callback so peer-initiated rekeys are applied.
+	cbs := h.dataHandler.getCallbacks()
+	cbs.OnNextNonce = h.handlePeerNextNonce
+	h.dataHandler.SetCallbacks(cbs)
 
 	// Update router hash from peer's static key if available
 	if peerKey := h.handshakeHandler.GetRemoteStaticKey(); len(peerKey) == 32 {
@@ -921,12 +937,73 @@ func (h *SSU2Conn) receivePacketWithTimeout(ctx context.Context, timeout time.Du
 }
 
 // nextSendSequence returns the next packet sequence number.
+// When the sequence crosses rekeyThreshold, it fires a one-shot
+// NextNonce rekey so the cipher is refreshed before the 32-bit
+// counter wraps.
 func (h *SSU2Conn) nextSendSequence() uint32 {
 	h.sendSeqMutex.Lock()
 	defer h.sendSeqMutex.Unlock()
 	seq := h.sendSequence
 	h.sendSequence++
+
+	// Trigger rekey exactly once when we cross the threshold.
+	if seq >= rekeyThreshold && !h.rekeyInFlight.Load() {
+		if h.rekeyInFlight.CompareAndSwap(false, true) {
+			go h.initiateRekey()
+		}
+	}
 	return seq
+}
+
+// initiateRekey sends a NextNonce block to the peer, then rekeys the local
+// send cipher and resets the send sequence counter.
+func (h *SSU2Conn) initiateRekey() {
+	h.cipherMutex.Lock()
+	defer h.cipherMutex.Unlock()
+
+	if h.sendCipher == nil {
+		return
+	}
+
+	// Rekey the send cipher (REKEY per Noise spec).
+	h.sendCipher.Rekey()
+
+	// New starting nonce for the rekeyed cipher is 0.
+	h.sendCipher.SetNonce(0)
+
+	// Build a NextNonce block with the new starting nonce (0).
+	var nonceBuf [8]byte
+	// nonceBuf is already zero-valued, which is what we want.
+	block := &SSU2Block{
+		Type: BlockTypeNextNonce,
+		Data: nonceBuf[:],
+	}
+
+	// Reset send sequence so new packets start at 0.
+	h.sendSeqMutex.Lock()
+	h.sendSequence = 0
+	h.sendSeqMutex.Unlock()
+
+	// Best-effort send via the regular write path.
+	// writeBlock will allocate its own sequence number (0) from the reset counter.
+	_ = h.writeBlock(block)
+}
+
+// handlePeerNextNonce is the OnNextNonce callback wired in installCipherStates.
+// When the peer sends us a NextNonce, we rekey the *receive* cipher to match.
+func (h *SSU2Conn) handlePeerNextNonce(newNonce uint64) error {
+	h.cipherMutex.Lock()
+	defer h.cipherMutex.Unlock()
+
+	if h.recvCipher == nil {
+		return oops.Errorf("receive cipher not initialized")
+	}
+
+	h.recvCipher.Rekey()
+	h.recvCipher.SetNonce(newNonce)
+
+	log.WithField("newNonce", newNonce).Info("Applied peer NextNonce rekey on receive cipher")
+	return nil
 }
 
 // updateActivity updates the last activity timestamp.

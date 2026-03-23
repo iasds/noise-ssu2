@@ -121,8 +121,8 @@ func (h *ACKHandler) GenerateACK() (*SSU2Block, error) {
 		if nackCount < 1 {
 			nackCount = 1
 		}
-		if nackCount > 255 {
-			nackCount = 255 // cap at 1-byte max
+		if nackCount > 256 {
+			nackCount = 256 // cap so minus-1 fits in 1 byte
 		}
 
 		// Ack run: count consecutive packets starting at sorted[i]
@@ -132,11 +132,11 @@ func (h *ACKHandler) GenerateACK() (*SSU2Block, error) {
 			ackRun++
 			j++
 		}
-		if ackRun > 255 {
-			ackRun = 255 // cap at 1-byte max
+		if ackRun > 256 {
+			ackRun = 256 // cap so minus-1 fits in 1 byte
 		}
 
-		rangeBytes = append(rangeBytes, uint8(nackCount), uint8(ackRun))
+		rangeBytes = append(rangeBytes, uint8(nackCount-1), uint8(ackRun-1))
 		i = j
 	}
 
@@ -194,8 +194,8 @@ func (h *ACKHandler) ProcessACK(ackBlock *SSU2Block) ([]uint32, error) {
 	// Parse optional nack/ack range pairs
 	offset := 5
 	for offset+1 < len(data) {
-		nacks := int(data[offset])  // raw count per spec
-		acks := int(data[offset+1]) // raw count per spec
+		nacks := int(data[offset]) + 1  // stored minus 1 per spec
+		acks := int(data[offset+1]) + 1 // stored minus 1 per spec
 		offset += 2
 
 		// Skip the gap (nacked packets) — check for underflow

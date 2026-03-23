@@ -250,6 +250,10 @@ func (h *HandshakeHandler) ProcessSessionRequest(packet *SSU2Packet) ([]byte, er
 		}
 	}
 
+	// MixHash(header) per SSU2 spec §KDF — binds the header into
+	// the handshake hash before processing the Noise message.
+	h.handshakeState.MixHash(packet.Header)
+
 	// Reconstruct Noise message: ephemeral key + encrypted payload
 	noiseMessage := append(copyBytes(packet.EphemeralKey), packet.Payload...)
 
@@ -322,6 +326,10 @@ func (h *HandshakeHandler) ProcessSessionCreated(packet *SSU2Packet) error {
 		return oops.Errorf("SessionCreated missing ephemeral key")
 	}
 
+	// MixHash(header) per SSU2 spec §KDF — binds the header into
+	// the handshake hash before processing the Noise message.
+	h.handshakeState.MixHash(packet.Header)
+
 	// Reconstruct Noise message
 	noiseMessage := append(copyBytes(packet.EphemeralKey), packet.Payload...)
 
@@ -377,6 +385,15 @@ func (h *HandshakeHandler) CreateSessionConfirmed(connID uint64, packetNumber ui
 		return nil, oops.Wrapf(err, "failed to serialize SessionConfirmed blocks")
 	}
 
+	// Build the 16-byte short header before encrypting so it can be
+	// mixed into the handshake hash per SSU2 spec §KDF.
+	header := make([]byte, 16)
+	binary.BigEndian.PutUint64(header[0:8], connID)
+	binary.BigEndian.PutUint32(header[8:12], packetNumber)
+
+	// MixHash(header) binds the header into the handshake hash.
+	h.handshakeState.MixHash(header)
+
 	// Write 3rd XK handshake message through Noise state machine (→ s, se).
 	// This completes the handshake and returns transport cipher states.
 	ciphertext, cs1, cs2, err := h.handshakeState.WriteMessage(nil, payload)
@@ -407,10 +424,8 @@ func (h *HandshakeHandler) CreateSessionConfirmed(connID uint64, packetNumber ui
 		PacketNumber: packetNumber,
 	}
 
-	// Encode connection ID and packet number in header
-	binary.BigEndian.PutUint64(packet.Header[0:8], connID)
-	binary.BigEndian.PutUint32(packet.Header[8:12], packetNumber)
-	// Remaining 4 bytes are message type and flags
+	// Header already built above for MixHash; assign it to packet.
+	packet.Header = header
 
 	return packet, nil
 }
@@ -432,6 +447,10 @@ func (h *HandshakeHandler) ProcessSessionConfirmed(packet *SSU2Packet) error {
 	if h.handshakeState.MessageIndex() != 2 {
 		return oops.Errorf("handshake not ready for SessionConfirmed: expected message index 2, got %d", h.handshakeState.MessageIndex())
 	}
+
+	// MixHash(header) per SSU2 spec §KDF — binds the short header into
+	// the handshake hash before processing the Noise message.
+	h.handshakeState.MixHash(packet.Header)
 
 	// Reconstruct Noise handshake message from payload + MAC
 	noiseMessage := append(copyBytes(packet.Payload), packet.MAC...)
@@ -533,13 +552,24 @@ func (h *HandshakeHandler) validateHandshakeBlocks(blocks []*SSU2Block, messageT
 	return nil
 }
 
-// buildHandshakePacket serializes blocks, runs the Noise WriteMessage, extracts
-// the ephemeral key, and assembles an SSU2Packet with a 32-byte long header.
+// buildHandshakePacket serializes blocks, builds the long header, calls
+// MixHash(header) per the SSU2 specification, runs the Noise WriteMessage,
+// extracts the ephemeral key, and assembles an SSU2Packet.
 func (h *HandshakeHandler) buildHandshakePacket(blocks []*SSU2Block, msgType uint8, sourceConnID, destConnID uint64) (*SSU2Packet, error) {
 	payload, err := SerializeBlocks(blocks)
 	if err != nil {
 		return nil, oops.Wrapf(err, "failed to serialize handshake blocks")
 	}
+
+	// Build the 32-byte long header before encrypting so it can be
+	// mixed into the handshake hash per SSU2 spec §KDF.
+	header := make([]byte, 32)
+	binary.BigEndian.PutUint64(header[0:8], destConnID)
+	binary.BigEndian.PutUint64(header[8:16], sourceConnID)
+
+	// MixHash(header) binds the encrypted header into the handshake hash
+	// (h = SHA256(h || header)), preventing header substitution attacks.
+	h.handshakeState.MixHash(header)
 
 	ciphertext, cs1, cs2, err := h.handshakeState.WriteMessage(nil, payload)
 	if err != nil {
@@ -552,15 +582,13 @@ func (h *HandshakeHandler) buildHandshakePacket(blocks []*SSU2Block, msgType uin
 	}
 
 	packet := &SSU2Packet{
-		Header:       make([]byte, 32),
+		Header:       header,
 		EphemeralKey: copyBytes(ciphertext[:32]),
 		Payload:      ciphertext[32:],
 		MAC:          make([]byte, 16),
 		MessageType:  msgType,
 		PacketNumber: 0,
 	}
-	binary.BigEndian.PutUint64(packet.Header[0:8], destConnID)
-	binary.BigEndian.PutUint64(packet.Header[8:16], sourceConnID)
 	return packet, nil
 }
 

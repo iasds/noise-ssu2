@@ -47,10 +47,9 @@ func TestRelay6StepProcess(t *testing.T) {
 	t.Log("Step 1: Alice creates RelayRequest to reach Charlie via Bob")
 
 	relayRequest := &RelayRequestBlock{
-		Nonce:             12345,
-		RelayTag:          aliceRelayTag,
-		CharlieRouterHash: charlie.routerHash,
-		Token:             []byte("test-token"),
+		Nonce:      12345,
+		SignedData: makeSignedData(),
+		Flag:       0x00,
 	}
 
 	requestBlock, err := EncodeRelayRequest(relayRequest)
@@ -61,8 +60,8 @@ func TestRelay6StepProcess(t *testing.T) {
 	decodedRequest, err := DecodeRelayRequest(requestBlock)
 	require.NoError(t, err)
 	assert.Equal(t, relayRequest.Nonce, decodedRequest.Nonce)
-	assert.Equal(t, relayRequest.RelayTag, decodedRequest.RelayTag)
-	assert.Equal(t, relayRequest.CharlieRouterHash, decodedRequest.CharlieRouterHash)
+	assert.Equal(t, relayRequest.SignedData, decodedRequest.SignedData)
+	assert.Equal(t, relayRequest.Flag, decodedRequest.Flag)
 	t.Log("Step 1 complete: RelayRequest encoded and decoded successfully")
 
 	// === Step 2: Bob → Charlie: RelayIntro ===
@@ -90,9 +89,9 @@ func TestRelay6StepProcess(t *testing.T) {
 	t.Log("Step 3: Charlie creates RelayResponse acknowledging intro")
 
 	charlieResponse := &RelayResponseBlock{
-		Nonce:          relayRequest.Nonce, // Echo original nonce
-		StatusCode:     0,                  // Success
-		CharlieAddress: charlie.addr,
+		Nonce:      relayRequest.Nonce, // Echo original nonce
+		StatusCode: 0,                  // Success
+		SignedData: []byte("charlie-signed-data-placeholder!"),
 	}
 
 	responseBlock, err := EncodeRelayResponse(charlieResponse)
@@ -103,16 +102,16 @@ func TestRelay6StepProcess(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, charlieResponse.Nonce, decodedResponse.Nonce)
 	assert.Equal(t, uint8(0), decodedResponse.StatusCode) // Success
-	assert.NotNil(t, decodedResponse.CharlieAddress)
+	assert.NotNil(t, decodedResponse.SignedData)
 	t.Log("Step 3 complete: Charlie's RelayResponse encoded and decoded successfully")
 
 	// === Step 4: Bob → Alice: RelayResponse ===
 	t.Log("Step 4: Bob forwards RelayResponse to Alice")
 
 	bobToAliceResponse := &RelayResponseBlock{
-		Nonce:          relayRequest.Nonce,
-		StatusCode:     0, // Success
-		CharlieAddress: charlie.addr,
+		Nonce:      relayRequest.Nonce,
+		StatusCode: 0, // Success
+		SignedData: []byte("charlie-signed-data-placeholder!"),
 	}
 
 	forwardBlock, err := EncodeRelayResponse(bobToAliceResponse)
@@ -121,7 +120,7 @@ func TestRelay6StepProcess(t *testing.T) {
 	decodedForward, err := DecodeRelayResponse(forwardBlock)
 	require.NoError(t, err)
 	assert.Equal(t, bobToAliceResponse.Nonce, decodedForward.Nonce)
-	assert.Equal(t, charlie.addr.String(), decodedForward.CharlieAddress.String())
+	assert.Equal(t, bobToAliceResponse.SignedData, decodedForward.SignedData)
 	t.Log("Step 4 complete: Bob forwarded RelayResponse to Alice")
 
 	// === Step 5: Charlie → Alice: HolePunch ===
@@ -164,32 +163,29 @@ func TestRelayRequestEncoding(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name: "valid_with_token",
+			name: "valid_with_fragment",
 			request: &RelayRequestBlock{
-				Nonce:             0xDEADBEEF,
-				RelayTag:          0x12345678,
-				CharlieRouterHash: make([]byte, 32),
-				Token:             []byte("verification-token"),
+				Nonce:              0xDEADBEEF,
+				SignedData:         makeSignedData(),
+				Flag:               0x01,
+				RouterInfoFragment: []byte("verification-token"),
 			},
 			wantErr: false,
 		},
 		{
-			name: "valid_without_token",
+			name: "valid_without_fragment",
 			request: &RelayRequestBlock{
-				Nonce:             1,
-				RelayTag:          2,
-				CharlieRouterHash: make([]byte, 32),
-				Token:             nil,
+				Nonce:      1,
+				SignedData: makeSignedData(),
+				Flag:       0x00,
 			},
 			wantErr: false,
 		},
 		{
-			name: "invalid_router_hash_short",
+			name: "invalid_signed_data_short",
 			request: &RelayRequestBlock{
-				Nonce:             1,
-				RelayTag:          2,
-				CharlieRouterHash: make([]byte, 16), // Too short
-				Token:             nil,
+				Nonce:      1,
+				SignedData: make([]byte, 16), // Too short
 			},
 			wantErr: true,
 		},
@@ -215,9 +211,9 @@ func TestRelayRequestEncoding(t *testing.T) {
 			require.NoError(t, err)
 
 			assert.Equal(t, tc.request.Nonce, decoded.Nonce)
-			assert.Equal(t, tc.request.RelayTag, decoded.RelayTag)
-			assert.Equal(t, tc.request.CharlieRouterHash, decoded.CharlieRouterHash)
-			assert.Equal(t, tc.request.Token, decoded.Token)
+			assert.Equal(t, tc.request.SignedData, decoded.SignedData)
+			assert.Equal(t, tc.request.Flag, decoded.Flag)
+			assert.Equal(t, tc.request.RouterInfoFragment, decoded.RouterInfoFragment)
 		})
 	}
 }
@@ -230,29 +226,28 @@ func TestRelayResponseEncoding(t *testing.T) {
 		wantErr  bool
 	}{
 		{
-			name: "success_with_ipv4",
+			name: "success_with_signed_data",
 			response: &RelayResponseBlock{
-				Nonce:          12345,
-				StatusCode:     0,
-				CharlieAddress: &net.UDPAddr{IP: net.IPv4(192, 168, 1, 100), Port: 5555},
+				Nonce:      12345,
+				StatusCode: 0,
+				SignedData: makeSignedData(),
 			},
 			wantErr: false,
 		},
 		{
-			name: "success_with_ipv6",
+			name: "success_with_large_signed_data",
 			response: &RelayResponseBlock{
-				Nonce:          12345,
-				StatusCode:     0,
-				CharlieAddress: &net.UDPAddr{IP: net.ParseIP("2001:db8::1"), Port: 6666},
+				Nonce:      12345,
+				StatusCode: 0,
+				SignedData: make([]byte, 64),
 			},
 			wantErr: false,
 		},
 		{
-			name: "failure_no_address",
+			name: "failure_no_signed_data",
 			response: &RelayResponseBlock{
-				Nonce:          12345,
-				StatusCode:     1, // Failure
-				CharlieAddress: nil,
+				Nonce:      12345,
+				StatusCode: 1, // Failure
 			},
 			wantErr: false,
 		},
@@ -279,11 +274,7 @@ func TestRelayResponseEncoding(t *testing.T) {
 
 			assert.Equal(t, tc.response.Nonce, decoded.Nonce)
 			assert.Equal(t, tc.response.StatusCode, decoded.StatusCode)
-
-			if tc.response.StatusCode == 0 && tc.response.CharlieAddress != nil {
-				require.NotNil(t, decoded.CharlieAddress)
-				assert.Equal(t, tc.response.CharlieAddress.Port, decoded.CharlieAddress.Port)
-			}
+			assert.Equal(t, tc.response.SignedData, decoded.SignedData)
 		})
 	}
 }
@@ -432,9 +423,8 @@ func TestRelayFlowWithErrors(t *testing.T) {
 
 		for _, code := range failureCodes {
 			response := &RelayResponseBlock{
-				Nonce:          12345,
-				StatusCode:     code,
-				CharlieAddress: nil, // No address on failure
+				Nonce:      12345,
+				StatusCode: code,
 			}
 
 			block, err := EncodeRelayResponse(response)
@@ -444,7 +434,7 @@ func TestRelayFlowWithErrors(t *testing.T) {
 			require.NoError(t, err)
 
 			assert.Equal(t, code, decoded.StatusCode)
-			assert.Nil(t, decoded.CharlieAddress)
+			assert.Nil(t, decoded.SignedData)
 		}
 	})
 }
@@ -513,10 +503,10 @@ func TestRelayMessageRoundTrip(t *testing.T) {
 
 	// Create a complete relay request with all fields
 	originalRequest := &RelayRequestBlock{
-		Nonce:             0xFEDCBA98,
-		RelayTag:          0x87654321,
-		CharlieRouterHash: charlie.routerHash,
-		Token:             []byte("authentication-token-data-here"),
+		Nonce:              0xFEDCBA98,
+		SignedData:         makeSignedData(),
+		Flag:               0x03,
+		RouterInfoFragment: []byte("authentication-token-data-here"),
 	}
 
 	// Encode → Serialize → Deserialize → Decode
@@ -536,9 +526,9 @@ func TestRelayMessageRoundTrip(t *testing.T) {
 
 	// Verify all fields match
 	assert.Equal(t, originalRequest.Nonce, decoded.Nonce)
-	assert.Equal(t, originalRequest.RelayTag, decoded.RelayTag)
-	assert.Equal(t, originalRequest.CharlieRouterHash, decoded.CharlieRouterHash)
-	assert.Equal(t, originalRequest.Token, decoded.Token)
+	assert.Equal(t, originalRequest.SignedData, decoded.SignedData)
+	assert.Equal(t, originalRequest.Flag, decoded.Flag)
+	assert.Equal(t, originalRequest.RouterInfoFragment, decoded.RouterInfoFragment)
 }
 
 // relayTestPeer represents a peer for relay integration testing.

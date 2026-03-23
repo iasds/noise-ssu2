@@ -45,9 +45,9 @@ type DataHandler struct {
 // that need external handling.
 type DataHandlerCallbacks struct {
 	// OnTermination is called when a Termination block is received.
-	// validAfterTime is seconds since epoch; reason is the termination code;
-	// signedData is the remaining bytes per SSU2 spec.
-	OnTermination func(validAfterTime uint32, reason uint8, signedData []byte)
+	// validDataReceived is the number of valid data packets received (8-byte uint64);
+	// reason is the termination code; additionalData is the remaining bytes per SSU2 spec.
+	OnTermination func(validDataReceived uint64, reason uint8, additionalData []byte)
 
 	// OnNewToken is called when a NewToken block is received
 	OnNewToken func(token []byte)
@@ -522,26 +522,26 @@ func (h *DataHandler) incrementStat(stat *uint64) {
 // or by delegating to registered callbacks.
 
 // handleTermination processes a Termination block (Type 6).
-// SSU2 spec format: validAfterTime (4 bytes) + reason (1 byte) + signedData (4+ bytes)
+// SSU2 spec format: validDataPacketsReceived (8 bytes) + reason (1 byte) + additionalData (optional)
 // Minimum length: 9 bytes.
 func (h *DataHandler) handleTermination(data []byte) error {
 	if len(data) < 9 {
 		return oops.Errorf("Termination block too short: %d bytes, need at least 9", len(data))
 	}
 
-	validAfterTime := binary.BigEndian.Uint32(data[0:4])
-	reason := data[4]
-	signedData := data[5:]
+	validDataReceived := binary.BigEndian.Uint64(data[0:8])
+	reason := data[8]
+	additionalData := data[9:]
 
 	log.WithFields(map[string]interface{}{
-		"validAfterTime": validAfterTime,
-		"reason":         reason,
-		"signedDataLen":  len(signedData),
+		"validDataReceived": validDataReceived,
+		"reason":            reason,
+		"additionalDataLen": len(additionalData),
 	}).Info("Received Termination block")
 
 	cbs := h.getCallbacks()
 	if cbs.OnTermination != nil {
-		cbs.OnTermination(validAfterTime, reason, signedData)
+		cbs.OnTermination(validDataReceived, reason, additionalData)
 	}
 
 	return nil

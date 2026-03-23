@@ -121,24 +121,25 @@ func FuzzDeserializeBlocks(f *testing.F) {
 
 // FuzzDecodeRelayRequest fuzzes RelayRequest block decoding.
 func FuzzDecodeRelayRequest(f *testing.F) {
-	// Valid relay request: nonce(4) + tag(4) + hash(32) = 40 minimum
-	valid := make([]byte, 43)
+	// Valid relay request: nonce(4) + signedData(32) + flag(1) = 37 minimum
+	valid := make([]byte, 40)
 	valid[0] = BlockTypeRelayRequest
-	binary.BigEndian.PutUint16(valid[1:3], 40)
-	binary.BigEndian.PutUint32(valid[3:7], 12345)  // Nonce
-	binary.BigEndian.PutUint32(valid[7:11], 67890) // RelayTag
+	binary.BigEndian.PutUint16(valid[1:3], 37)
+	binary.BigEndian.PutUint32(valid[3:7], 12345) // Nonce
+	// bytes 7-39: signed data (zeros ok)
+	valid[39] = 0x01 // Flag
 	f.Add(valid)
 
-	// With token appended
-	withToken := make([]byte, 58)
-	copy(withToken, valid)
-	binary.BigEndian.PutUint16(withToken[1:3], 55) // Larger length
-	f.Add(withToken)
+	// With router info fragment appended
+	withFragment := make([]byte, 50)
+	copy(withFragment, valid)
+	binary.BigEndian.PutUint16(withFragment[1:3], 47) // Larger length
+	f.Add(withFragment)
 
 	// Wrong type
-	wrongType := make([]byte, 43)
+	wrongType := make([]byte, 40)
 	wrongType[0] = 0xFF
-	binary.BigEndian.PutUint16(wrongType[1:3], 40)
+	binary.BigEndian.PutUint16(wrongType[1:3], 37)
 	f.Add(wrongType)
 
 	// Too short
@@ -157,30 +158,20 @@ func FuzzDecodeRelayRequest(f *testing.F) {
 
 // FuzzDecodeRelayResponse fuzzes RelayResponse block decoding.
 func FuzzDecodeRelayResponse(f *testing.F) {
-	// Valid relay response: nonce(4) + status(1) + addr_type(1) + addr
-	valid := make([]byte, 15)
+	// Valid relay response: nonce(4) + status(1) + signedData(variable)
+	valid := make([]byte, 40)
 	valid[0] = BlockTypeRelayResponse
-	binary.BigEndian.PutUint16(valid[1:3], 12) // Length
+	binary.BigEndian.PutUint16(valid[1:3], 37) // Length = 4+1+32
 	binary.BigEndian.PutUint32(valid[3:7], 12345)
-	valid[7] = 0                                   // Success status
-	valid[8] = 0x04                                // IPv4
-	copy(valid[9:13], []byte{192, 168, 1, 1})      // IP
-	binary.BigEndian.PutUint16(valid[13:15], 5555) // Port
+	valid[7] = 0 // Success status
+	// bytes 8-39: signed data
 	f.Add(valid)
 
-	// IPv6 response
-	validV6 := make([]byte, 27)
-	validV6[0] = BlockTypeRelayResponse
-	binary.BigEndian.PutUint16(validV6[1:3], 24) // Length
-	binary.BigEndian.PutUint32(validV6[3:7], 12345)
-	validV6[7] = 0    // Success
-	validV6[8] = 0x06 // IPv6
-	f.Add(validV6)
-
-	// Failure response (no address)
+	// Failure response (no signed data)
 	failure := make([]byte, 8)
 	failure[0] = BlockTypeRelayResponse
-	binary.BigEndian.PutUint16(failure[1:3], 5)
+	binary.BigEndian.PutUint16(failure[1:3], 5) // Length = 4+1
+	binary.BigEndian.PutUint32(failure[3:7], 12345)
 	failure[7] = 1 // Failure status
 	f.Add(failure)
 

@@ -7,12 +7,16 @@ import (
 	"golang.org/x/crypto/chacha20"
 )
 
-// ChaChaObfuscationModifier implements SSU2's ChaCha20-based ephemeral key obfuscation.
-// This modifier encrypts/decrypts the X and Y ephemeral keys in messages 1 and 2
-// using ChaCha20 stream cipher per the SSU2 spec:
+// ChaChaObfuscationModifier implements SSU2's ChaCha20-based obfuscation.
+// Per the SSU2 specification, SessionRequest and SessionCreated obfuscate
+// 48 bytes (header[16:32] || ephemeral_key) with a single ChaCha20 stream
+// at nonce n=1. This modifier supports both the 48-byte spec-compliant mode
+// and 32-byte ephemeral-key-only mode for backward compatibility.
 //
-//	SessionRequest:  ChaCha20(key=Bob's intro key, nonce=1, data)
-//	SessionCreated:  ChaCha20(key=Bob's intro key, nonce=1, data)
+// Note: The primary obfuscation path in SSU2 is handled by
+// HeaderProtector.encryptLongHeaderExtension, which processes the assembled
+// packet. This modifier is available for use in modifier chains where the
+// data is processed separately.
 type ChaChaObfuscationModifier struct {
 	name     string
 	introKey []byte // 32-byte intro key (Bob's intro key per SSU2 spec)
@@ -44,12 +48,12 @@ func NewChaChaObfuscationModifier(name string, introKey []byte) (*ChaChaObfuscat
 	}, nil
 }
 
-// ModifyOutbound applies ChaCha20 obfuscation to ephemeral keys in handshake messages.
-// Message 1: XOR X key with ChaCha20(introKey, n=1)
-// Message 2: XOR Y key with ChaCha20(introKey, n=1)
+// ModifyOutbound applies ChaCha20 obfuscation to handshake messages.
+// Accepts 48 bytes (header[16:32] || ephemeral key) per SSU2 spec, or
+// 32 bytes (ephemeral key only) for backward compatibility.
 // Message 3+: No obfuscation
 func (com *ChaChaObfuscationModifier) ModifyOutbound(phase handshake.HandshakePhase, data []byte) ([]byte, error) {
-	if len(data) != 32 {
+	if len(data) != 48 && len(data) != 32 {
 		return data, nil
 	}
 
@@ -61,10 +65,11 @@ func (com *ChaChaObfuscationModifier) ModifyOutbound(phase handshake.HandshakePh
 	}
 }
 
-// ModifyInbound removes ChaCha20 obfuscation from ephemeral keys in handshake messages.
+// ModifyInbound removes ChaCha20 obfuscation from handshake messages.
 // ChaCha20 is symmetric (XOR-based), so encryption and decryption are identical.
+// Accepts 48 bytes (spec-compliant) or 32 bytes (backward compatibility).
 func (com *ChaChaObfuscationModifier) ModifyInbound(phase handshake.HandshakePhase, data []byte) ([]byte, error) {
-	if len(data) != 32 {
+	if len(data) != 48 && len(data) != 32 {
 		return data, nil
 	}
 
@@ -81,7 +86,8 @@ func (com *ChaChaObfuscationModifier) Name() string {
 	return com.name
 }
 
-// applyChacha creates a ChaCha20 cipher with fixed nonce n=1 and XORs 32 bytes of data.
+// applyChacha creates a ChaCha20 cipher with fixed nonce n=1 and XORs the data.
+// Supports 48-byte (spec-compliant) and 32-byte (ephemeral-only) inputs.
 func (com *ChaChaObfuscationModifier) applyChacha(data []byte) ([]byte, error) {
 	cipher, err := chacha20.NewUnauthenticatedCipher(com.introKey, nonce1)
 	if err != nil {
@@ -92,7 +98,7 @@ func (com *ChaChaObfuscationModifier) applyChacha(data []byte) ([]byte, error) {
 			Wrap(err)
 	}
 
-	result := make([]byte, 32)
+	result := make([]byte, len(data))
 	copy(result, data)
 	cipher.XORKeyStream(result, result)
 	return result, nil
