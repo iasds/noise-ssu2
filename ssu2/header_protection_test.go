@@ -743,10 +743,12 @@ func TestHeaderProtectorManager_Retry_Responder(t *testing.T) {
 
 func TestHeaderProtectorManager_SessionConfirmed_WithKDFKeys(t *testing.T) {
 	introKey := createTestKey()
+	remoteIntroKey := createTestKey()
 
-	hpm, _ := NewHeaderProtectorManager(introKey, nil, true)
+	// Initiator: k_header_1 = remoteIntroKey (bik per spec)
+	hpm, _ := NewHeaderProtectorManager(introKey, remoteIntroKey, true)
 
-	// Set KDF keys
+	// Set KDF keys (only kdfHeader2 is needed for SessionConfirmed)
 	kdf1 := createTestKey()
 	kdf2 := createTestKey()
 	hpm.SetKDFKeys(kdf1, kdf2)
@@ -755,6 +757,15 @@ func TestHeaderProtectorManager_SessionConfirmed_WithKDFKeys(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, hp)
 	assert.Equal(t, HeaderTypeSessionConfirmed, hp.GetHeaderType())
+
+	// Responder: k_header_1 = introKey (own intro key = bik per spec)
+	hpmResp, _ := NewHeaderProtectorManager(introKey, remoteIntroKey, false)
+	hpmResp.SetKDFKeys(kdf1, kdf2)
+
+	hpResp, err := hpmResp.GetProtectorForType(HeaderTypeSessionConfirmed)
+	require.NoError(t, err)
+	require.NotNil(t, hpResp)
+	assert.Equal(t, HeaderTypeSessionConfirmed, hpResp.GetHeaderType())
 }
 
 func TestHeaderProtector_DefensiveCopy(t *testing.T) {

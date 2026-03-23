@@ -145,6 +145,10 @@ type SSU2Conn struct {
 	readErrors    atomic.Uint64
 	parseErrors   atomic.Uint64
 	decryptErrors atomic.Uint64
+
+	// validDataPacketsReceived counts successfully received data-phase packets.
+	// Included in the Termination block per spec §Termination.
+	validDataPacketsReceived atomic.Uint64
 }
 
 // PendingPacket tracks an outbound packet awaiting acknowledgment.
@@ -587,14 +591,13 @@ func (h *SSU2Conn) Close() error {
 		h.stateMutex.Unlock()
 
 		// Send Termination block (best effort)
+		// Spec §Termination: validDataPacketsReceived(8 bytes, big-endian) + reason(1 byte)
 		termBlock := &SSU2Block{
 			Type: BlockTypeTermination,
-			Data: make([]byte, 5), // 1 byte reason + 4 bytes valid-after-time (seconds)
+			Data: make([]byte, 9),
 		}
-		// Reason: 0 (normal close)
-		termBlock.Data[0] = 0
-		// Valid-after-time: seconds since epoch, big-endian (4 bytes per spec)
-		binary.BigEndian.PutUint32(termBlock.Data[1:5], uint32(time.Now().Unix()))
+		binary.BigEndian.PutUint64(termBlock.Data[0:8], h.validDataPacketsReceived.Load())
+		termBlock.Data[8] = 0 // Reason: 0 (normal close)
 
 		// Create Data packet with termination block
 		pktNum := h.nextSendSequence()
@@ -948,6 +951,7 @@ func (h *SSU2Conn) processInboundPacket(packet *SSU2Packet) {
 
 	switch packet.MessageType {
 	case MessageTypeData:
+		h.validDataPacketsReceived.Add(1)
 		h.processDataPacket(packet)
 	case MessageTypeSessionRequest, MessageTypeSessionCreated, MessageTypeSessionConfirmed:
 		select {

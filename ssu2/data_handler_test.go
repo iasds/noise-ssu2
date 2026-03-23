@@ -1,6 +1,7 @@
 package ssu2
 
 import (
+	"encoding/binary"
 	"testing"
 	"time"
 
@@ -237,19 +238,14 @@ func TestDataHandler_FirstFragment(t *testing.T) {
 
 	// Create first fragment
 	messageID := uint32(12345)
-	totalSize := uint16(100)
 	fragmentData := []byte("First fragment data")
 
-	// Build first fragment block data: MessageID(4) + FragInfo(1) + TotalSize(2) + Data
-	blockData := make([]byte, 7+len(fragmentData))
-	blockData[0] = byte(messageID >> 24)
-	blockData[1] = byte(messageID >> 16)
-	blockData[2] = byte(messageID >> 8)
-	blockData[3] = byte(messageID)
-	blockData[4] = 0x00 // fragNum=0, isLast=false
-	blockData[5] = byte(totalSize >> 8)
-	blockData[6] = byte(totalSize)
-	copy(blockData[7:], fragmentData)
+	// Build first fragment block data per spec: I2NPType(1) + MessageID(4) + ShortExp(4) + Data
+	blockData := make([]byte, 9+len(fragmentData))
+	blockData[0] = 11 // I2NP type (e.g., DatabaseStore)
+	binary.BigEndian.PutUint32(blockData[1:5], messageID)
+	binary.BigEndian.PutUint32(blockData[5:9], uint32(time.Now().Unix())) // shortExpiration
+	copy(blockData[9:], fragmentData)
 
 	block := NewSSU2Block(BlockTypeFirstFragment, blockData)
 
@@ -281,8 +277,8 @@ func TestDataHandler_FirstFragment(t *testing.T) {
 func TestDataHandler_FirstFragment_TooShort(t *testing.T) {
 	handler := NewDataHandler(10)
 
-	// Create invalid first fragment (too short)
-	blockData := []byte{0x00, 0x01, 0x02} // Only 3 bytes, need at least 7
+	// Create invalid first fragment (too short - need at least 9 bytes)
+	blockData := []byte{0x00, 0x01, 0x02, 0x03, 0x04} // Only 5 bytes
 
 	block := NewSSU2Block(BlockTypeFirstFragment, blockData)
 
@@ -309,19 +305,14 @@ func TestDataHandler_FirstFragment_Duplicate(t *testing.T) {
 	handler := NewDataHandler(10)
 
 	messageID := uint32(12345)
-	totalSize := uint16(100)
 	fragmentData := []byte("First fragment data")
 
-	// Build first fragment block data: MessageID(4) + FragInfo(1) + TotalSize(2) + Data
-	blockData := make([]byte, 7+len(fragmentData))
-	blockData[0] = byte(messageID >> 24)
-	blockData[1] = byte(messageID >> 16)
-	blockData[2] = byte(messageID >> 8)
-	blockData[3] = byte(messageID)
-	blockData[4] = 0x00 // fragNum=0, isLast=false
-	blockData[5] = byte(totalSize >> 8)
-	blockData[6] = byte(totalSize)
-	copy(blockData[7:], fragmentData)
+	// Build first fragment block data per spec: I2NPType(1) + MessageID(4) + ShortExp(4) + Data
+	blockData := make([]byte, 9+len(fragmentData))
+	blockData[0] = 11 // I2NP type
+	binary.BigEndian.PutUint32(blockData[1:5], messageID)
+	binary.BigEndian.PutUint32(blockData[5:9], uint32(time.Now().Unix()))
+	copy(blockData[9:], fragmentData)
 
 	block := NewSSU2Block(BlockTypeFirstFragment, blockData)
 
@@ -354,18 +345,13 @@ func TestDataHandler_FollowOnFragment(t *testing.T) {
 	messageID := uint32(12345)
 	firstData := []byte("First fragment data")
 	secondData := []byte("Second fragment data")
-	totalSize := uint16(len(firstData) + len(secondData)) // Total size matches actual data
 
-	// Send first fragment: MessageID(4) + FragInfo(1) + TotalSize(2) + Data
-	firstBlockData := make([]byte, 7+len(firstData))
-	firstBlockData[0] = byte(messageID >> 24)
-	firstBlockData[1] = byte(messageID >> 16)
-	firstBlockData[2] = byte(messageID >> 8)
-	firstBlockData[3] = byte(messageID)
-	firstBlockData[4] = 0x00 // fragNum=0, isLast=false
-	firstBlockData[5] = byte(totalSize >> 8)
-	firstBlockData[6] = byte(totalSize)
-	copy(firstBlockData[7:], firstData)
+	// Send first fragment per spec: I2NPType(1) + MessageID(4) + ShortExp(4) + Data
+	firstBlockData := make([]byte, 9+len(firstData))
+	firstBlockData[0] = 11 // I2NP type
+	binary.BigEndian.PutUint32(firstBlockData[1:5], messageID)
+	binary.BigEndian.PutUint32(firstBlockData[5:9], uint32(time.Now().Unix()))
+	copy(firstBlockData[9:], firstData)
 
 	firstBlock := NewSSU2Block(BlockTypeFirstFragment, firstBlockData)
 	payload1, err := SerializeBlocks([]*SSU2Block{firstBlock})
@@ -380,16 +366,11 @@ func TestDataHandler_FollowOnFragment(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, handler.GetFragmentCount())
 
-	// Send follow-on fragment: FragInfo(1) + Reserved(2) + MessageID(4) + Data
-	followOnBlockData := make([]byte, 7+len(secondData))
+	// Send follow-on fragment per spec: FragInfo(1) + MessageID(4) + Data
+	followOnBlockData := make([]byte, 5+len(secondData))
 	followOnBlockData[0] = (1 << 1) | 0x01 // fragNum=1, isLast=true
-	followOnBlockData[1] = 0x00            // reserved
-	followOnBlockData[2] = 0x00            // reserved
-	followOnBlockData[3] = byte(messageID >> 24)
-	followOnBlockData[4] = byte(messageID >> 16)
-	followOnBlockData[5] = byte(messageID >> 8)
-	followOnBlockData[6] = byte(messageID)
-	copy(followOnBlockData[7:], secondData)
+	binary.BigEndian.PutUint32(followOnBlockData[1:5], messageID)
+	copy(followOnBlockData[5:], secondData)
 
 	followOnBlock := NewSSU2Block(BlockTypeFollowOnFragment, followOnBlockData)
 	payload2, err := SerializeBlocks([]*SSU2Block{followOnBlock})
@@ -405,7 +386,7 @@ func TestDataHandler_FollowOnFragment(t *testing.T) {
 
 	// Message should be complete and queued
 	if !handler.HasMessages() {
-		t.Logf("Fragment count: %d, Received size: %d, Total size: %d", handler.GetFragmentCount(), uint32(len(firstData)+len(secondData)), totalSize)
+		t.Logf("Fragment count: %d, Received size: %d", handler.GetFragmentCount(), uint32(len(firstData)+len(secondData)))
 	}
 	assert.True(t, handler.HasMessages())
 	msg := handler.GetMessage()
@@ -427,8 +408,8 @@ func TestDataHandler_FollowOnFragment(t *testing.T) {
 func TestDataHandler_FollowOnFragment_TooShort(t *testing.T) {
 	handler := NewDataHandler(10)
 
-	// Create invalid follow-on fragment (too short)
-	blockData := []byte{0x00, 0x01} // Only 2 bytes, need at least 7
+	// Create invalid follow-on fragment (too short - need at least 5 bytes)
+	blockData := []byte{0x00, 0x01} // Only 2 bytes
 
 	block := NewSSU2Block(BlockTypeFollowOnFragment, blockData)
 
@@ -457,16 +438,11 @@ func TestDataHandler_FollowOnFragment_UnknownMessageID(t *testing.T) {
 	messageID := uint32(99999)
 	fragmentData := []byte("Fragment data")
 
-	// Build follow-on fragment without first fragment: FragInfo(1) + Reserved(2) + MessageID(4) + Data
-	blockData := make([]byte, 7+len(fragmentData))
+	// Build follow-on fragment without first fragment per spec: FragInfo(1) + MessageID(4) + Data
+	blockData := make([]byte, 5+len(fragmentData))
 	blockData[0] = (1 << 1) // fragNum=1, isLast=false
-	blockData[1] = 0x00     // reserved
-	blockData[2] = 0x00     // reserved
-	blockData[3] = byte(messageID >> 24)
-	blockData[4] = byte(messageID >> 16)
-	blockData[5] = byte(messageID >> 8)
-	blockData[6] = byte(messageID)
-	copy(blockData[7:], fragmentData)
+	binary.BigEndian.PutUint32(blockData[1:5], messageID)
+	copy(blockData[5:], fragmentData)
 
 	block := NewSSU2Block(BlockTypeFollowOnFragment, blockData)
 
@@ -493,19 +469,14 @@ func TestDataHandler_FollowOnFragment_Duplicate(t *testing.T) {
 	handler := NewDataHandler(10)
 
 	messageID := uint32(12345)
-	totalSize := uint16(100)
 	firstData := []byte("First fragment data")
 
-	// Send first fragment: MessageID(4) + FragInfo(1) + TotalSize(2) + Data
-	firstBlockData := make([]byte, 7+len(firstData))
-	firstBlockData[0] = byte(messageID >> 24)
-	firstBlockData[1] = byte(messageID >> 16)
-	firstBlockData[2] = byte(messageID >> 8)
-	firstBlockData[3] = byte(messageID)
-	firstBlockData[4] = 0x00 // fragNum=0, isLast=false
-	firstBlockData[5] = byte(totalSize >> 8)
-	firstBlockData[6] = byte(totalSize)
-	copy(firstBlockData[7:], firstData)
+	// Send first fragment per spec: I2NPType(1) + MessageID(4) + ShortExp(4) + Data
+	firstBlockData := make([]byte, 9+len(firstData))
+	firstBlockData[0] = 11 // I2NP type
+	binary.BigEndian.PutUint32(firstBlockData[1:5], messageID)
+	binary.BigEndian.PutUint32(firstBlockData[5:9], uint32(time.Now().Unix()))
+	copy(firstBlockData[9:], firstData)
 
 	firstBlock := NewSSU2Block(BlockTypeFirstFragment, firstBlockData)
 	payload1, err := SerializeBlocks([]*SSU2Block{firstBlock})
@@ -519,17 +490,12 @@ func TestDataHandler_FollowOnFragment_Duplicate(t *testing.T) {
 	_, err = handler.ProcessDataPacket(packet1)
 	require.NoError(t, err)
 
-	// Send same follow-on fragment twice: FragInfo(1) + Reserved(2) + MessageID(4) + Data
+	// Send same follow-on fragment twice per spec: FragInfo(1) + MessageID(4) + Data
 	fragmentData := []byte("Follow-on data")
-	followOnBlockData := make([]byte, 7+len(fragmentData))
+	followOnBlockData := make([]byte, 5+len(fragmentData))
 	followOnBlockData[0] = (1 << 1) // fragNum=1, isLast=false
-	followOnBlockData[1] = 0x00     // reserved
-	followOnBlockData[2] = 0x00     // reserved
-	followOnBlockData[3] = byte(messageID >> 24)
-	followOnBlockData[4] = byte(messageID >> 16)
-	followOnBlockData[5] = byte(messageID >> 8)
-	followOnBlockData[6] = byte(messageID)
-	copy(followOnBlockData[7:], fragmentData)
+	binary.BigEndian.PutUint32(followOnBlockData[1:5], messageID)
+	copy(followOnBlockData[5:], fragmentData)
 
 	followOnBlock := NewSSU2Block(BlockTypeFollowOnFragment, followOnBlockData)
 	payload2, err := SerializeBlocks([]*SSU2Block{followOnBlock})
@@ -552,24 +518,19 @@ func TestDataHandler_FollowOnFragment_Duplicate(t *testing.T) {
 	assert.Equal(t, 1, handler.GetFragmentCount())
 }
 
-func TestDataHandler_FragmentReassembly_SizeMismatch(t *testing.T) {
+func TestDataHandler_FragmentReassembly_MultiFragment(t *testing.T) {
 	handler := NewDataHandler(10)
 
 	messageID := uint32(12345)
-	totalSize := uint16(10)              // Claim 10 bytes total
-	firstData := []byte("First")         // 5 bytes
-	secondData := []byte("Second-Extra") // More than 5 bytes - will cause mismatch
+	firstData := []byte("First")
+	secondData := []byte("Second-Extra")
 
-	// Send first fragment: MessageID(4) + FragInfo(1) + TotalSize(2) + Data
-	firstBlockData := make([]byte, 7+len(firstData))
-	firstBlockData[0] = byte(messageID >> 24)
-	firstBlockData[1] = byte(messageID >> 16)
-	firstBlockData[2] = byte(messageID >> 8)
-	firstBlockData[3] = byte(messageID)
-	firstBlockData[4] = 0x00 // fragNum=0, isLast=false
-	firstBlockData[5] = byte(totalSize >> 8)
-	firstBlockData[6] = byte(totalSize)
-	copy(firstBlockData[7:], firstData)
+	// Send first fragment per spec: I2NPType(1) + MessageID(4) + ShortExp(4) + Data
+	firstBlockData := make([]byte, 9+len(firstData))
+	firstBlockData[0] = 11 // I2NP type
+	binary.BigEndian.PutUint32(firstBlockData[1:5], messageID)
+	binary.BigEndian.PutUint32(firstBlockData[5:9], uint32(time.Now().Unix()))
+	copy(firstBlockData[9:], firstData)
 
 	firstBlock := NewSSU2Block(BlockTypeFirstFragment, firstBlockData)
 	payload1, err := SerializeBlocks([]*SSU2Block{firstBlock})
@@ -583,16 +544,11 @@ func TestDataHandler_FragmentReassembly_SizeMismatch(t *testing.T) {
 	_, err = handler.ProcessDataPacket(packet1)
 	require.NoError(t, err)
 
-	// Send follow-on fragment that makes total > declared size: FragInfo(1) + Reserved(2) + MessageID(4) + Data
-	followOnBlockData := make([]byte, 7+len(secondData))
+	// Send follow-on fragment per spec: FragInfo(1) + MessageID(4) + Data
+	followOnBlockData := make([]byte, 5+len(secondData))
 	followOnBlockData[0] = (1 << 1) | 0x01 // fragNum=1, isLast=true
-	followOnBlockData[1] = 0x00            // reserved
-	followOnBlockData[2] = 0x00            // reserved
-	followOnBlockData[3] = byte(messageID >> 24)
-	followOnBlockData[4] = byte(messageID >> 16)
-	followOnBlockData[5] = byte(messageID >> 8)
-	followOnBlockData[6] = byte(messageID)
-	copy(followOnBlockData[7:], secondData)
+	binary.BigEndian.PutUint32(followOnBlockData[1:5], messageID)
+	copy(followOnBlockData[5:], secondData)
 
 	followOnBlock := NewSSU2Block(BlockTypeFollowOnFragment, followOnBlockData)
 	payload2, err := SerializeBlocks([]*SSU2Block{followOnBlock})
@@ -603,17 +559,22 @@ func TestDataHandler_FragmentReassembly_SizeMismatch(t *testing.T) {
 		Payload:     payload2,
 	}
 
-	// Process - should trigger reassembly attempt and fail due to size >= totalSize
+	// Process - should trigger reassembly and succeed
 	_, err = handler.ProcessDataPacket(packet2)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "size mismatch")
+	require.NoError(t, err)
 
 	// Fragment set should be cleaned up
 	assert.Equal(t, 0, handler.GetFragmentCount())
 
+	// Verify the reassembled message
+	assert.True(t, handler.HasMessages())
+	msg := handler.GetMessage()
+	expected := append(firstData, secondData...)
+	assert.Equal(t, expected, msg)
+
 	// Verify stats
 	stats := handler.GetStats()
-	assert.Equal(t, uint64(1), stats.MessagesDropped)
+	assert.Equal(t, uint64(1), stats.MessagesReassembled)
 }
 
 func TestDataHandler_GetMessage_NonBlocking(t *testing.T) {
@@ -718,20 +679,15 @@ func TestDataHandler_CleanupExpiredFragments(t *testing.T) {
 
 	messageID1 := uint32(12345)
 	messageID2 := uint32(67890)
-	totalSize := uint16(100)
 	fragmentData := []byte("Fragment data")
 
-	// Create two fragment sets
+	// Create two fragment sets per spec: I2NPType(1) + MessageID(4) + ShortExp(4) + Data
 	for _, msgID := range []uint32{messageID1, messageID2} {
-		blockData := make([]byte, 7+len(fragmentData))
-		blockData[0] = byte(msgID >> 24)
-		blockData[1] = byte(msgID >> 16)
-		blockData[2] = byte(msgID >> 8)
-		blockData[3] = byte(msgID)
-		blockData[4] = 0x00 // fragNum=0, isLast=false
-		blockData[5] = byte(totalSize >> 8)
-		blockData[6] = byte(totalSize)
-		copy(blockData[7:], fragmentData)
+		blockData := make([]byte, 9+len(fragmentData))
+		blockData[0] = 11 // I2NP type
+		binary.BigEndian.PutUint32(blockData[1:5], msgID)
+		binary.BigEndian.PutUint32(blockData[5:9], uint32(time.Now().Unix()))
+		copy(blockData[9:], fragmentData)
 
 		block := NewSSU2Block(BlockTypeFirstFragment, blockData)
 		payload, err := SerializeBlocks([]*SSU2Block{block})
@@ -766,19 +722,14 @@ func TestDataHandler_CleanupExpiredFragments_NoExpired(t *testing.T) {
 	handler := NewDataHandler(10)
 
 	messageID := uint32(12345)
-	totalSize := uint16(100)
 	fragmentData := []byte("Fragment data")
 
-	// Create fragment set
-	blockData := make([]byte, 7+len(fragmentData))
-	blockData[0] = byte(messageID >> 24)
-	blockData[1] = byte(messageID >> 16)
-	blockData[2] = byte(messageID >> 8)
-	blockData[3] = byte(messageID)
-	blockData[4] = 0x00 // fragNum=0, isLast=false
-	blockData[5] = byte(totalSize >> 8)
-	blockData[6] = byte(totalSize)
-	copy(blockData[7:], fragmentData)
+	// Create fragment set per spec: I2NPType(1) + MessageID(4) + ShortExp(4) + Data
+	blockData := make([]byte, 9+len(fragmentData))
+	blockData[0] = 11 // I2NP type
+	binary.BigEndian.PutUint32(blockData[1:5], messageID)
+	binary.BigEndian.PutUint32(blockData[5:9], uint32(time.Now().Unix()))
+	copy(blockData[9:], fragmentData)
 
 	block := NewSSU2Block(BlockTypeFirstFragment, blockData)
 	payload, err := SerializeBlocks([]*SSU2Block{block})
@@ -836,20 +787,15 @@ func TestDataHandler_GetFragmentCount(t *testing.T) {
 	// Initially zero
 	assert.Equal(t, 0, handler.GetFragmentCount())
 
-	// Add fragment
+	// Add fragment per spec: I2NPType(1) + MessageID(4) + ShortExp(4) + Data
 	messageID := uint32(12345)
-	totalSize := uint16(100)
 	fragmentData := []byte("Fragment data")
 
-	blockData := make([]byte, 7+len(fragmentData))
-	blockData[0] = byte(messageID >> 24)
-	blockData[1] = byte(messageID >> 16)
-	blockData[2] = byte(messageID >> 8)
-	blockData[3] = byte(messageID)
-	blockData[4] = 0x00 // fragNum=0, isLast=false
-	blockData[5] = byte(totalSize >> 8)
-	blockData[6] = byte(totalSize)
-	copy(blockData[7:], fragmentData)
+	blockData := make([]byte, 9+len(fragmentData))
+	blockData[0] = 11 // I2NP type
+	binary.BigEndian.PutUint32(blockData[1:5], messageID)
+	binary.BigEndian.PutUint32(blockData[5:9], uint32(time.Now().Unix()))
+	copy(blockData[9:], fragmentData)
 
 	block := NewSSU2Block(BlockTypeFirstFragment, blockData)
 	payload, err := SerializeBlocks([]*SSU2Block{block})
@@ -886,20 +832,15 @@ func TestDataHandler_Clear(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	// Add fragments
+	// Add fragments per spec: I2NPType(1) + MessageID(4) + ShortExp(4) + Data
 	messageID := uint32(12345)
-	totalSize := uint16(100)
 	fragmentData := []byte("Fragment data")
 
-	blockData := make([]byte, 7+len(fragmentData))
-	blockData[0] = byte(messageID >> 24)
-	blockData[1] = byte(messageID >> 16)
-	blockData[2] = byte(messageID >> 8)
-	blockData[3] = byte(messageID)
-	blockData[4] = 0x00 // fragNum=0, isLast=false
-	blockData[5] = byte(totalSize >> 8)
-	blockData[6] = byte(totalSize)
-	copy(blockData[7:], fragmentData)
+	blockData := make([]byte, 9+len(fragmentData))
+	blockData[0] = 11 // I2NP type
+	binary.BigEndian.PutUint32(blockData[1:5], messageID)
+	binary.BigEndian.PutUint32(blockData[5:9], uint32(time.Now().Unix()))
+	copy(blockData[9:], fragmentData)
 
 	block := NewSSU2Block(BlockTypeFirstFragment, blockData)
 	payload, err := SerializeBlocks([]*SSU2Block{block})
@@ -1000,20 +941,15 @@ func BenchmarkDataHandler_ProcessI2NPMessage(b *testing.B) {
 func BenchmarkDataHandler_ProcessFragments(b *testing.B) {
 	handler := NewDataHandler(1000)
 
-	// Create first fragment packet
+	// Create first fragment packet per spec: I2NPType(1) + MessageID(4) + ShortExp(4) + Data
 	messageID := uint32(12345)
-	totalSize := uint16(2048)
 	fragmentData := make([]byte, 1024)
 
-	firstBlockData := make([]byte, 7+len(fragmentData))
-	firstBlockData[0] = byte(messageID >> 24)
-	firstBlockData[1] = byte(messageID >> 16)
-	firstBlockData[2] = byte(messageID >> 8)
-	firstBlockData[3] = byte(messageID)
-	firstBlockData[4] = 0x00 // fragNum=0, isLast=false
-	firstBlockData[5] = byte(totalSize >> 8)
-	firstBlockData[6] = byte(totalSize)
-	copy(firstBlockData[7:], fragmentData)
+	firstBlockData := make([]byte, 9+len(fragmentData))
+	firstBlockData[0] = 11 // I2NP type
+	binary.BigEndian.PutUint32(firstBlockData[1:5], messageID)
+	binary.BigEndian.PutUint32(firstBlockData[5:9], uint32(time.Now().Unix()))
+	copy(firstBlockData[9:], fragmentData)
 
 	firstBlock := NewSSU2Block(BlockTypeFirstFragment, firstBlockData)
 	payload1, _ := SerializeBlocks([]*SSU2Block{firstBlock})
@@ -1065,18 +1001,13 @@ func BenchmarkDataHandler_CleanupFragments(b *testing.B) {
 	// Create some expired fragments
 	for i := 0; i < 100; i++ {
 		messageID := uint32(i)
-		totalSize := uint16(100)
 		fragmentData := []byte("Fragment data")
 
-		blockData := make([]byte, 7+len(fragmentData))
-		blockData[0] = byte(messageID >> 24)
-		blockData[1] = byte(messageID >> 16)
-		blockData[2] = byte(messageID >> 8)
-		blockData[3] = byte(messageID)
-		blockData[4] = 0x00 // fragNum=0, isLast=false
-		blockData[5] = byte(totalSize >> 8)
-		blockData[6] = byte(totalSize)
-		copy(blockData[7:], fragmentData)
+		blockData := make([]byte, 9+len(fragmentData))
+		blockData[0] = 11 // I2NP type
+		binary.BigEndian.PutUint32(blockData[1:5], messageID)
+		binary.BigEndian.PutUint32(blockData[5:9], uint32(time.Now().Unix()))
+		copy(blockData[9:], fragmentData)
 
 		block := NewSSU2Block(BlockTypeFirstFragment, blockData)
 		payload, _ := SerializeBlocks([]*SSU2Block{block})
@@ -1116,8 +1047,8 @@ func TestDataHandler_AllBlockTypesExplicitlyHandled(t *testing.T) {
 		{BlockTypeOptions, "Options", make([]byte, 15)},        // minOptionsSize = 12
 		{BlockTypeRouterInfo, "RouterInfo", make([]byte, 100)}, // Variable
 		{BlockTypeI2NPMessage, "I2NPMessage", []byte("test i2np message")},
-		{BlockTypeFirstFragment, "FirstFragment", append([]byte{0, 0, 0, 1, 0x00, 0, 100}, make([]byte, 50)...)},
-		{BlockTypeFollowOnFragment, "FollowOnFragment", append([]byte{0x02, 0, 0, 0, 0, 0, 1}, make([]byte, 50)...)},
+		{BlockTypeFirstFragment, "FirstFragment", append([]byte{11, 0, 0, 0, 1, 0, 0, 0, 0}, make([]byte, 50)...)},
+		{BlockTypeFollowOnFragment, "FollowOnFragment", append([]byte{0x02, 0, 0, 0, 1}, make([]byte, 50)...)},
 		{BlockTypeTermination, "Termination", make([]byte, 9)},         // minTerminationSize = 9
 		{BlockTypeRelayRequest, "RelayRequest", make([]byte, 50)},      // Variable
 		{BlockTypeRelayResponse, "RelayResponse", make([]byte, 50)},    // Variable

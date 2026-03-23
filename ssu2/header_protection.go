@@ -477,12 +477,36 @@ func (hpm *HeaderProtectorManager) keysForSessionCreatedRetry(headerType HeaderT
 // keysForKDFProtected returns keys for packets protected by KDF-derived keys
 // (SessionConfirmed, Data).
 func (hpm *HeaderProtectorManager) keysForKDFProtected(headerType HeaderType) (k1, k2 []byte, err error) {
+	if headerType == HeaderTypeSessionConfirmed {
+		// Spec: SessionConfirmed uses k_header_1 = Bob's intro key (bik),
+		// k_header_2 = KDF-derived from SessionCreated.
+		if hpm.isInitiator {
+			if len(hpm.remoteIntroKey) != HeaderKeySize {
+				return nil, nil, oops.
+					Code("MISSING_REMOTE_INTRO_KEY").
+					In("ssu2").
+					Errorf("remote intro key (bik) required for SessionConfirmed k_header_1")
+			}
+			k1 = hpm.remoteIntroKey
+		} else {
+			k1 = hpm.introKey
+		}
+		if len(hpm.kdfHeader2) != HeaderKeySize {
+			return nil, nil, oops.
+				Code("MISSING_KDF_KEY").
+				In("ssu2").
+				Errorf("KDF-derived k_header_2 required for SessionConfirmed")
+		}
+		return k1, hpm.kdfHeader2, nil
+	}
+
+	// Data phase: both keys are KDF-derived
 	if len(hpm.kdfHeader1) != HeaderKeySize || len(hpm.kdfHeader2) != HeaderKeySize {
 		return nil, nil, oops.
 			Code("MISSING_KDF_KEYS").
 			In("ssu2").
 			With("header_type", headerType).
-			Errorf("KDF-derived keys required for Session Confirmed/Data packets")
+			Errorf("KDF-derived keys required for Data packets")
 	}
 	return hpm.kdfHeader1, hpm.kdfHeader2, nil
 }

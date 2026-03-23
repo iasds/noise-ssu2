@@ -108,12 +108,15 @@ type DataHandlerStats struct {
 
 // FragmentSet represents a message being reassembled from fragments.
 type FragmentSet struct {
-	MessageID    uint32           // Unique message identifier
-	TotalSize    uint32           // Expected total message size
-	Fragments    map[uint8][]byte // Fragment number -> data
-	ReceivedSize uint32           // Bytes received so far
-	CreatedAt    time.Time        // When first fragment arrived
-	LastUpdate   time.Time        // Last fragment received time
+	MessageID       uint32           // I2NP message identifier
+	I2NPType        uint8            // I2NP message type from First Fragment
+	ShortExpiration uint32           // I2NP short expiration from First Fragment
+	Fragments       map[uint8][]byte // Fragment number -> data
+	ReceivedSize    uint32           // Bytes received so far
+	HasLast         bool             // Whether we've received the last fragment
+	LastFragNum     uint8            // Fragment number of the last fragment
+	CreatedAt       time.Time        // When first fragment arrived
+	LastUpdate      time.Time        // Last fragment received time
 }
 
 // NewDataHandler creates a new Data message handler.
@@ -272,19 +275,17 @@ func (h *DataHandler) handleI2NPMessage(data []byte) error {
 }
 
 // handleFirstFragment processes the first fragment of a message.
-// SSU2 spec format: MessageID (4 bytes) + FragmentInfo (3 bytes) + Data
-// FragmentInfo: byte 0 = (fragNum << 1) | isLast, bytes 1-2 = total msg size (big-endian)
+// SSU2 spec format: I2NP type(1) + messageID(4) + shortExpiration(4) + data
 func (h *DataHandler) handleFirstFragment(data []byte) error {
-	if len(data) < 7 {
+	if len(data) < 9 {
 		h.incrementStat(&h.stats.MessagesDropped)
-		return oops.Errorf("first fragment too short: %d bytes, need at least 7", len(data))
+		return oops.Errorf("first fragment too short: %d bytes, need at least 9", len(data))
 	}
 
-	messageID := binary.BigEndian.Uint32(data[0:4])
-	fragInfo := data[4]
-	isLast := (fragInfo & 0x01) != 0
-	totalSize := binary.BigEndian.Uint16(data[5:7])
-	fragmentData := data[7:]
+	i2npType := data[0]
+	messageID := binary.BigEndian.Uint32(data[1:5])
+	shortExpiration := binary.BigEndian.Uint32(data[5:9])
+	fragmentData := data[9:]
 
 	h.mutex.Lock()
 	defer h.mutex.Unlock()
@@ -297,12 +298,13 @@ func (h *DataHandler) handleFirstFragment(data []byte) error {
 
 	// Create new fragment set
 	fragmentSet := &FragmentSet{
-		MessageID:    messageID,
-		TotalSize:    uint32(totalSize),
-		Fragments:    make(map[uint8][]byte),
-		ReceivedSize: uint32(len(fragmentData)),
-		CreatedAt:    time.Now(),
-		LastUpdate:   time.Now(),
+		MessageID:       messageID,
+		I2NPType:        i2npType,
+		ShortExpiration: shortExpiration,
+		Fragments:       make(map[uint8][]byte),
+		ReceivedSize:    uint32(len(fragmentData)),
+		CreatedAt:       time.Now(),
+		LastUpdate:      time.Now(),
 	}
 
 	// Store first fragment (fragment number 0)
@@ -312,31 +314,23 @@ func (h *DataHandler) handleFirstFragment(data []byte) error {
 	h.fragments[messageID] = fragmentSet
 	h.incrementStat(&h.stats.FragmentsReceived)
 
-	// If isLast is set, this is the only fragment — attempt reassembly
-	if isLast {
-		if err := h.reassembleMessage(messageID); err != nil {
-			return err
-		}
-	}
-
 	return nil
 }
 
 // handleFollowOnFragment processes subsequent fragments of a message.
-// SSU2 spec format: FragmentInfo (3 bytes) + MessageID (4 bytes) + Data
-// FragmentInfo: byte 0 = (fragNum << 1) | isLast, bytes 1-2 = reserved
+// SSU2 spec format: FragmentInfo(1) + MessageID(4) + Data
+// FragmentInfo: (fragNum << 1) | isLast
 func (h *DataHandler) handleFollowOnFragment(data []byte) error {
-	if len(data) < 7 {
+	if len(data) < 5 {
 		h.incrementStat(&h.stats.MessagesDropped)
-		return oops.Errorf("follow-on fragment too short: %d bytes, need at least 7", len(data))
+		return oops.Errorf("follow-on fragment too short: %d bytes, need at least 5", len(data))
 	}
 
 	fragInfo := data[0]
 	fragmentNum := fragInfo >> 1
 	isLast := (fragInfo & 0x01) != 0
-	// bytes 1-2 reserved
-	messageID := binary.BigEndian.Uint32(data[3:7])
-	fragmentData := data[7:]
+	messageID := binary.BigEndian.Uint32(data[1:5])
+	fragmentData := data[5:]
 
 	h.mutex.Lock()
 	defer h.mutex.Unlock()
@@ -361,9 +355,13 @@ func (h *DataHandler) handleFollowOnFragment(data []byte) error {
 	fragmentSet.LastUpdate = time.Now()
 	h.incrementStat(&h.stats.FragmentsReceived)
 
-	// Check if message is complete: either received all expected bytes,
-	// or this is the last fragment and we have enough data
-	if isLast || fragmentSet.ReceivedSize >= fragmentSet.TotalSize {
+	if isLast {
+		fragmentSet.HasLast = true
+		fragmentSet.LastFragNum = fragmentNum
+	}
+
+	// Attempt reassembly if we have the last fragment and all preceding ones
+	if fragmentSet.HasLast {
 		if err := h.reassembleMessage(messageID); err != nil {
 			return err
 		}
@@ -380,24 +378,20 @@ func (h *DataHandler) reassembleMessage(messageID uint32) error {
 		return oops.Errorf("fragment set not found for message ID %d", messageID)
 	}
 
-	// Allocate buffer for complete message
-	message := make([]byte, 0, fragmentSet.TotalSize)
-
-	// Reassemble fragments in order
-	for i := uint8(0); ; i++ {
-		fragment, exists := fragmentSet.Fragments[i]
-		if !exists {
-			break
+	// Check we have all fragments from 0 through LastFragNum
+	if !fragmentSet.HasLast {
+		return nil // Not ready yet
+	}
+	for i := uint8(0); i <= fragmentSet.LastFragNum; i++ {
+		if _, exists := fragmentSet.Fragments[i]; !exists {
+			return nil // Missing fragment, wait for it
 		}
-		message = append(message, fragment...)
 	}
 
-	// Verify size
-	if uint32(len(message)) != fragmentSet.TotalSize {
-		h.incrementStat(&h.stats.MessagesDropped)
-		delete(h.fragments, messageID)
-		return oops.Errorf("reassembled message size mismatch: got %d, expected %d",
-			len(message), fragmentSet.TotalSize)
+	// Reassemble fragments in order
+	var message []byte
+	for i := uint8(0); i <= fragmentSet.LastFragNum; i++ {
+		message = append(message, fragmentSet.Fragments[i]...)
 	}
 
 	// Queue complete message
