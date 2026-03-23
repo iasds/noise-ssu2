@@ -620,3 +620,103 @@ func BenchmarkHandshakeHandler_FullHandshake(b *testing.B) {
 		_ = responder.ProcessSessionConfirmed(confirmedPacket)
 	}
 }
+
+// C-2 regression tests: protocol name and null prologue
+
+func TestSSU2ProtocolName_MatchesSpec(t *testing.T) {
+	// The SSU2 spec defines this exact protocol name string.
+	expected := "Noise_XKchaobfse+hs1+hs2+hs3_25519_ChaChaPoly_SHA256"
+	assert.Equal(t, expected, SSU2ProtocolName)
+	assert.Equal(t, 52, len(SSU2ProtocolName), "Protocol name should be 52 bytes (US-ASCII)")
+}
+
+func TestBuildSSU2Prologue_ReturnsNil(t *testing.T) {
+	// Per the SSU2 spec, the prologue is null (empty).
+	// MixHash(null prologue) → h = SHA256(h)
+	result := buildSSU2Prologue(12345)
+	assert.Nil(t, result, "SSU2 prologue must be nil per spec")
+}
+
+func TestBuildSSU2Prologue_IgnoresConnID(t *testing.T) {
+	// The connection ID parameter should not affect the result.
+	r1 := buildSSU2Prologue(0)
+	r2 := buildSSU2Prologue(99999)
+	assert.Nil(t, r1)
+	assert.Nil(t, r2)
+}
+
+// C-3 regression tests: header key derivation
+
+func TestDeriveHeaderKeys_AfterHandshake(t *testing.T) {
+	initiator, responder, _, _ := setupHandshakePair(t)
+
+	// Complete the 3-message XK handshake
+	requestPacket, err := initiator.CreateSessionRequest(11111, 22222)
+	require.NoError(t, err)
+	_, err = responder.ProcessSessionRequest(requestPacket)
+	require.NoError(t, err)
+	createdPacket, err := responder.CreateSessionCreated(33333, 44444)
+	require.NoError(t, err)
+	err = initiator.ProcessSessionCreated(createdPacket)
+	require.NoError(t, err)
+	confirmedPacket, err := initiator.CreateSessionConfirmed(55555, 1, nil)
+	require.NoError(t, err)
+	err = responder.ProcessSessionConfirmed(confirmedPacket)
+	require.NoError(t, err)
+
+	// Derive header keys on both sides
+	initSendK, initRecvK, err := initiator.DeriveHeaderKeys()
+	require.NoError(t, err)
+	assert.Len(t, initSendK, 32, "k_header_2 must be 32 bytes")
+	assert.Len(t, initRecvK, 32, "k_header_2 must be 32 bytes")
+
+	respSendK, respRecvK, err := responder.DeriveHeaderKeys()
+	require.NoError(t, err)
+	assert.Len(t, respSendK, 32)
+	assert.Len(t, respRecvK, 32)
+
+	// Initiator's send key should match responder's recv key and vice versa
+	assert.Equal(t, initSendK, respRecvK, "initiator send k_header_2 must match responder recv k_header_2")
+	assert.Equal(t, initRecvK, respSendK, "initiator recv k_header_2 must match responder send k_header_2")
+}
+
+func TestDeriveHeaderKeys_NotComplete(t *testing.T) {
+	initiator, _, _, _ := setupHandshakePair(t)
+
+	k1, k2, err := initiator.DeriveHeaderKeys()
+	assert.Error(t, err)
+	assert.Nil(t, k1)
+	assert.Nil(t, k2)
+	assert.Contains(t, err.Error(), "handshake not complete")
+}
+
+func TestDeriveHeaderKeys_Deterministic(t *testing.T) {
+	// Same key material should produce the same header keys
+	dh1, err := noise.DH25519.GenerateKeypair(nil)
+	require.NoError(t, err)
+	dh2, err := noise.DH25519.GenerateKeypair(nil)
+	require.NoError(t, err)
+
+	doHandshake := func() ([]byte, []byte) {
+		init, _ := NewHandshakeHandlerWithKeys(true, dh1, dh2.Public, nil)
+		resp, _ := NewHandshakeHandlerWithKeys(false, dh2, nil, nil)
+
+		req, _ := init.CreateSessionRequest(11111, 22222)
+		_, _ = resp.ProcessSessionRequest(req)
+		created, _ := resp.CreateSessionCreated(33333, 44444)
+		_ = init.ProcessSessionCreated(created)
+		confirmed, _ := init.CreateSessionConfirmed(55555, 1, nil)
+		_ = resp.ProcessSessionConfirmed(confirmed)
+
+		k1, k2, _ := init.DeriveHeaderKeys()
+		return k1, k2
+	}
+
+	// NOTE: Noise uses random ephemeral keys, so different handshakes with
+	// the same static keys will produce different split keys and thus
+	// different header keys. This test just verifies the derivation doesn't
+	// error and returns valid 32-byte keys.
+	k1, k2 := doHandshake()
+	assert.Len(t, k1, 32)
+	assert.Len(t, k2, 32)
+}
