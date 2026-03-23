@@ -245,12 +245,12 @@ func TestACKHandler_ProcessACK(t *testing.T) {
 			name: "with one nack/ack range",
 			createBlock: func() *SSU2Block {
 				// Through PN = 106, acnt = 1 (106, 105)
-				// Range: nacks=1 (2 missing: 104,103), acks=2 (3 acked: 102,101,100)
+				// Range: nacks=2 (gap of 2: 104,103), acks=3 (3 acked: 102,101,100)
 				data := make([]byte, 7)
 				binary.BigEndian.PutUint32(data[0:4], 106)
 				data[4] = 1 // acnt
-				data[5] = 1 // nacks - 1
-				data[6] = 2 // acks - 1
+				data[5] = 2 // nacks (raw count per spec)
+				data[6] = 3 // acks (raw count per spec)
 				return NewSSU2Block(BlockTypeACK, data)
 			},
 			wantPackets: []uint32{106, 105, 102, 101, 100},

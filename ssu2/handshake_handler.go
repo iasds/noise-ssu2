@@ -70,7 +70,7 @@ type HandshakeHandler struct {
 //
 // The connection ID is NOT part of the prologue; it is bound to the
 // handshake via header MixHash operations for each message.
-func buildSSU2Prologue(_ uint64) []byte {
+func buildSSU2Prologue() []byte {
 	return nil
 }
 

@@ -1,7 +1,6 @@
 package ssu2
 
 import (
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
 	"net"
@@ -103,13 +102,8 @@ func NewSSU2Listener(underlying net.PacketConn, config *SSU2Config) (*SSU2Listen
 		return nil, oops.Wrapf(err, "failed to generate connection ID")
 	}
 
-	// Create listener SSU2 address
-	routerHash := make([]byte, 32)
-	if _, err := rand.Read(routerHash); err != nil {
-		return nil, oops.Wrapf(err, "failed to generate router hash")
-	}
-
-	addr, err := NewSSU2Addr(underlying.LocalAddr(), routerHash, connID, "responder")
+	// Create listener SSU2 address using config's router hash
+	addr, err := NewSSU2Addr(underlying.LocalAddr(), config.RouterHash, connID, "responder")
 	if err != nil {
 		return nil, oops.Wrapf(err, "failed to create SSU2 address")
 	}

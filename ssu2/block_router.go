@@ -258,25 +258,28 @@ func BlockTypeName(blockType uint8) string {
 // Useful for validation and testing.
 func AllBlockTypes() []uint8 {
 	return []uint8{
-		BlockTypeDateTime,         // 0
-		BlockTypeOptions,          // 1
-		BlockTypeRouterInfo,       // 2
-		BlockTypeI2NPMessage,      // 3
-		BlockTypeFirstFragment,    // 4
-		BlockTypeFollowOnFragment, // 5
-		BlockTypeTermination,      // 6
-		BlockTypeRelayRequest,     // 7
-		BlockTypeRelayResponse,    // 8
-		BlockTypeRelayIntro,       // 9
-		BlockTypePeerTest,         // 10
-		BlockTypeACK,              // 12 (note: 11 is undefined)
-		BlockTypeAddress,          // 13
-		BlockTypeRelayTagRequest,  // 15 (note: 14 is undefined)
-		BlockTypeRelayTag,         // 16
-		BlockTypeNewToken,         // 17
-		BlockTypePathChallenge,    // 18
-		BlockTypePathResponse,     // 19
-		BlockTypePadding,          // 254
+		BlockTypeDateTime,          // 0
+		BlockTypeOptions,           // 1
+		BlockTypeRouterInfo,        // 2
+		BlockTypeI2NPMessage,       // 3
+		BlockTypeFirstFragment,     // 4
+		BlockTypeFollowOnFragment,  // 5
+		BlockTypeTermination,       // 6
+		BlockTypeRelayRequest,      // 7
+		BlockTypeRelayResponse,     // 8
+		BlockTypeRelayIntro,        // 9
+		BlockTypePeerTest,          // 10
+		BlockTypeNextNonce,         // 11
+		BlockTypeACK,               // 12
+		BlockTypeAddress,           // 13
+		BlockTypeRelayTagRequest,   // 15 (note: 14 is undefined)
+		BlockTypeRelayTag,          // 16
+		BlockTypeNewToken,          // 17
+		BlockTypePathChallenge,     // 18
+		BlockTypePathResponse,      // 19
+		BlockTypeFirstPacketNumber, // 20
+		BlockTypeCongestion,        // 21
+		BlockTypePadding,           // 254
 	}
 }
 

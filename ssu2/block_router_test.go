@@ -46,10 +46,10 @@ func TestBlockTypeName(t *testing.T) {
 	}
 }
 
-// TestAllBlockTypes verifies AllBlockTypes returns all 20 defined types.
+// TestAllBlockTypes verifies AllBlockTypes returns all defined types.
 func TestAllBlockTypes(t *testing.T) {
 	allTypes := AllBlockTypes()
-	assert.Len(t, allTypes, 19) // 19 because we skip undefined 11 and 14
+	assert.Len(t, allTypes, 22) // 22: types 0-10, 12-13, 15-21, 254 (skip 14)
 
 	// Verify specific types are included
 	typeSet := make(map[uint8]bool)
@@ -68,6 +68,7 @@ func TestAllBlockTypes(t *testing.T) {
 	assert.True(t, typeSet[BlockTypeRelayResponse])
 	assert.True(t, typeSet[BlockTypeRelayIntro])
 	assert.True(t, typeSet[BlockTypePeerTest])
+	assert.True(t, typeSet[BlockTypeNextNonce])
 	assert.True(t, typeSet[BlockTypeACK])
 	assert.True(t, typeSet[BlockTypeAddress])
 	assert.True(t, typeSet[BlockTypeRelayTagRequest])
@@ -75,6 +76,8 @@ func TestAllBlockTypes(t *testing.T) {
 	assert.True(t, typeSet[BlockTypeNewToken])
 	assert.True(t, typeSet[BlockTypePathChallenge])
 	assert.True(t, typeSet[BlockTypePathResponse])
+	assert.True(t, typeSet[BlockTypeFirstPacketNumber])
+	assert.True(t, typeSet[BlockTypeCongestion])
 	assert.True(t, typeSet[BlockTypePadding])
 }
 

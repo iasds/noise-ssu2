@@ -1113,12 +1113,12 @@ func TestDataHandler_AllBlockTypesExplicitlyHandled(t *testing.T) {
 		data      []byte
 	}{
 		{BlockTypeDateTime, "DateTime", make([]byte, 7)},       // minDateTimeSize = 7
-		{BlockTypeOptions, "Options", make([]byte, 15)},        // minOptionsSize = 15
+		{BlockTypeOptions, "Options", make([]byte, 15)},        // minOptionsSize = 12
 		{BlockTypeRouterInfo, "RouterInfo", make([]byte, 100)}, // Variable
 		{BlockTypeI2NPMessage, "I2NPMessage", []byte("test i2np message")},
 		{BlockTypeFirstFragment, "FirstFragment", append([]byte{0, 0, 0, 1, 0x00, 0, 100}, make([]byte, 50)...)},
 		{BlockTypeFollowOnFragment, "FollowOnFragment", append([]byte{0x02, 0, 0, 0, 0, 0, 1}, make([]byte, 50)...)},
-		{BlockTypeTermination, "Termination", make([]byte, 9)},         // minTerminationSize = 9
+		{BlockTypeTermination, "Termination", make([]byte, 5)},         // minTerminationSize = 5
 		{BlockTypeRelayRequest, "RelayRequest", make([]byte, 50)},      // Variable
 		{BlockTypeRelayResponse, "RelayResponse", make([]byte, 50)},    // Variable
 		{BlockTypeRelayIntro, "RelayIntro", make([]byte, 50)},          // Variable

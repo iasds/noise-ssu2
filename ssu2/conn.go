@@ -179,16 +179,8 @@ func NewSSU2Conn(
 		}
 	}
 
-	// Build Noise prologue from the initiator's connection ID.
-	// For the initiator, this is our own connection ID.
-	// For the responder, this is the initiator's ID received in the SessionRequest header.
-	var prologueConnID uint64
-	if initiator {
-		prologueConnID = connID
-	} else {
-		prologueConnID = config.InitiatorConnectionID
-	}
-	prologue := buildSSU2Prologue(prologueConnID)
+	// Build Noise prologue — per spec, prologue is null (empty).
+	prologue := buildSSU2Prologue()
 
 	// Create handshake handler with prologue binding
 	handshakeHandler, err := NewHandshakeHandler(initiator, staticKey, remoteStaticKey, prologue)
@@ -248,9 +240,8 @@ func messageTypeToHeaderType(msgType uint8) HeaderType {
 	case MessageTypeSessionCreated:
 		return HeaderTypeSessionCreated
 	case MessageTypeSessionConfirmed:
-		// KDF keys are not yet available when SessionConfirmed is sent.
-		// Use intro keys (same as SessionRequest) for consistency.
-		return HeaderTypeSessionRequest
+		// SessionConfirmed uses KDF-derived keys per spec.
+		return HeaderTypeSessionConfirmed
 	case MessageTypeRetry:
 		return HeaderTypeRetry
 	case MessageTypeTokenRequest:
@@ -573,15 +564,12 @@ func (h *SSU2Conn) Close() error {
 		// Send Termination block (best effort)
 		termBlock := &SSU2Block{
 			Type: BlockTypeTermination,
-			Data: make([]byte, 9), // 1 byte reason + 8 bytes timestamp
+			Data: make([]byte, 5), // 1 byte reason + 4 bytes valid-after-time (seconds)
 		}
 		// Reason: 0 (normal close)
 		termBlock.Data[0] = 0
-		// Timestamp: current time in milliseconds
-		timestamp := uint64(time.Now().UnixMilli())
-		for i := 0; i < 8; i++ {
-			termBlock.Data[1+i] = byte(timestamp >> (56 - i*8))
-		}
+		// Valid-after-time: seconds since epoch, big-endian (4 bytes per spec)
+		binary.BigEndian.PutUint32(termBlock.Data[1:5], uint32(time.Now().Unix()))
 
 		// Create Data packet with termination block
 		pktNum := h.nextSendSequence()

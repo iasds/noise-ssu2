@@ -352,10 +352,27 @@ func TestHeaderProtectorManager_GetProtectorForType_SessionCreated(t *testing.T)
 
 	hpm, _ := NewHeaderProtectorManager(introKey, remoteIntroKey, true)
 
+	// SessionCreated requires KDF-derived keys per spec
+	kdf1 := createTestKey()
+	kdf2 := createTestKey()
+	require.NoError(t, hpm.SetKDFKeys(kdf1, kdf2))
+
 	hp, err := hpm.GetProtectorForType(HeaderTypeSessionCreated)
 	require.NoError(t, err)
 	require.NotNil(t, hp)
 	assert.Equal(t, HeaderTypeSessionCreated, hp.GetHeaderType())
+}
+
+func TestHeaderProtectorManager_GetProtectorForType_SessionCreated_MissingKDFKeys(t *testing.T) {
+	introKey := createTestKey()
+	remoteIntroKey := createTestKey()
+
+	hpm, _ := NewHeaderProtectorManager(introKey, remoteIntroKey, true)
+
+	hp, err := hpm.GetProtectorForType(HeaderTypeSessionCreated)
+	assert.Error(t, err)
+	assert.Nil(t, hp)
+	assert.Contains(t, err.Error(), "KDF-derived k_header_2 required")
 }
 
 func TestHeaderProtectorManager_GetProtectorForType_Data_MissingKDFKeys(t *testing.T) {

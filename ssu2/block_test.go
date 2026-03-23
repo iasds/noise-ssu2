@@ -104,12 +104,12 @@ func TestSSU2Block_Serialize_Invalid(t *testing.T) {
 		},
 		{
 			name:       "Options too short",
-			block:      NewSSU2Block(BlockTypeOptions, make([]byte, 14)),
+			block:      NewSSU2Block(BlockTypeOptions, make([]byte, 11)),
 			wantErrMsg: "Options block too short",
 		},
 		{
 			name:       "Termination too short",
-			block:      NewSSU2Block(BlockTypeTermination, make([]byte, 8)),
+			block:      NewSSU2Block(BlockTypeTermination, make([]byte, 4)),
 			wantErrMsg: "Termination block too short",
 		},
 		{
@@ -611,12 +611,12 @@ func TestSSU2Block_AllBlockTypes(t *testing.T) {
 		minSize   int
 	}{
 		{"DateTime", BlockTypeDateTime, 4},
-		{"Options", BlockTypeOptions, 15},
+		{"Options", BlockTypeOptions, 12},
 		{"RouterInfo", BlockTypeRouterInfo, 0},
 		{"I2NP", BlockTypeI2NPMessage, 0},
 		{"FirstFragment", BlockTypeFirstFragment, 0},
 		{"FollowOnFragment", BlockTypeFollowOnFragment, 0},
-		{"Termination", BlockTypeTermination, 9},
+		{"Termination", BlockTypeTermination, 5},
 		{"RelayRequest", BlockTypeRelayRequest, 0},
 		{"RelayResponse", BlockTypeRelayResponse, 0},
 		{"RelayIntro", BlockTypeRelayIntro, 0},

@@ -3,6 +3,7 @@ package ssu2
 import (
 	"encoding/binary"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/samber/oops"
@@ -476,12 +477,12 @@ func (h *DataHandler) CleanupExpiredFragments(timeout time.Duration) int {
 // GetStats returns a copy of current statistics.
 func (h *DataHandler) GetStats() DataHandlerStats {
 	return DataHandlerStats{
-		MessagesReceived:    h.stats.MessagesReceived,
-		FragmentsReceived:   h.stats.FragmentsReceived,
-		MessagesReassembled: h.stats.MessagesReassembled,
-		MessagesDropped:     h.stats.MessagesDropped,
-		BlocksProcessed:     h.stats.BlocksProcessed,
-		UnknownBlocks:       h.stats.UnknownBlocks,
+		MessagesReceived:    atomic.LoadUint64(&h.stats.MessagesReceived),
+		FragmentsReceived:   atomic.LoadUint64(&h.stats.FragmentsReceived),
+		MessagesReassembled: atomic.LoadUint64(&h.stats.MessagesReassembled),
+		MessagesDropped:     atomic.LoadUint64(&h.stats.MessagesDropped),
+		BlocksProcessed:     atomic.LoadUint64(&h.stats.BlocksProcessed),
+		UnknownBlocks:       atomic.LoadUint64(&h.stats.UnknownBlocks),
 	}
 }
 
@@ -513,8 +514,7 @@ done:
 
 // incrementStat atomically increments a statistic counter.
 func (h *DataHandler) incrementStat(stat *uint64) {
-	// Simple increment - for production use atomic operations
-	*stat++
+	atomic.AddUint64(stat, 1)
 }
 
 // === Block Type Handler Methods ===

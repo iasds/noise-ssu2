@@ -633,16 +633,8 @@ func TestSSU2ProtocolName_MatchesSpec(t *testing.T) {
 func TestBuildSSU2Prologue_ReturnsNil(t *testing.T) {
 	// Per the SSU2 spec, the prologue is null (empty).
 	// MixHash(null prologue) → h = SHA256(h)
-	result := buildSSU2Prologue(12345)
+	result := buildSSU2Prologue()
 	assert.Nil(t, result, "SSU2 prologue must be nil per spec")
-}
-
-func TestBuildSSU2Prologue_IgnoresConnID(t *testing.T) {
-	// The connection ID parameter should not affect the result.
-	r1 := buildSSU2Prologue(0)
-	r2 := buildSSU2Prologue(99999)
-	assert.Nil(t, r1)
-	assert.Nil(t, r2)
 }
 
 // C-3 regression tests: header key derivation
