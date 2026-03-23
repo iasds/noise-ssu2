@@ -47,9 +47,13 @@ func TestRelay6StepProcess(t *testing.T) {
 	t.Log("Step 1: Alice creates RelayRequest to reach Charlie via Bob")
 
 	relayRequest := &RelayRequestBlock{
-		Nonce:      12345,
-		SignedData: makeSignedData(),
-		Flag:       0x00,
+		Nonce:     12345,
+		RelayTag:  aliceRelayTag,
+		Timestamp: uint32(time.Now().Unix()),
+		Version:   2,
+		AlicePort: uint16(alice.addr.Port),
+		AliceIP:   alice.addr.IP.To4(),
+		Signature: makeTestSignature(),
 	}
 
 	requestBlock, err := EncodeRelayRequest(relayRequest)
@@ -60,8 +64,8 @@ func TestRelay6StepProcess(t *testing.T) {
 	decodedRequest, err := DecodeRelayRequest(requestBlock)
 	require.NoError(t, err)
 	assert.Equal(t, relayRequest.Nonce, decodedRequest.Nonce)
-	assert.Equal(t, relayRequest.SignedData, decodedRequest.SignedData)
-	assert.Equal(t, relayRequest.Flag, decodedRequest.Flag)
+	assert.Equal(t, relayRequest.RelayTag, decodedRequest.RelayTag)
+	assert.Equal(t, relayRequest.Signature, decodedRequest.Signature)
 	t.Log("Step 1 complete: RelayRequest encoded and decoded successfully")
 
 	// === Step 2: Bob → Charlie: RelayIntro ===
@@ -163,31 +167,30 @@ func TestRelayRequestEncoding(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name: "valid_with_fragment",
+			name: "valid_ipv4",
 			request: &RelayRequestBlock{
-				Nonce:              0xDEADBEEF,
-				SignedData:         makeSignedData(),
-				Flag:               0x01,
-				RouterInfoFragment: []byte("verification-token"),
+				Nonce:     0xDEADBEEF,
+				RelayTag:  55555,
+				Timestamp: 1700000000,
+				Version:   2,
+				AlicePort: 9000,
+				AliceIP:   net.IPv4(10, 0, 0, 1).To4(),
+				Signature: makeTestSignature(),
 			},
 			wantErr: false,
 		},
 		{
-			name: "valid_without_fragment",
+			name: "valid_ipv6",
 			request: &RelayRequestBlock{
-				Nonce:      1,
-				SignedData: makeSignedData(),
-				Flag:       0x00,
+				Nonce:     1,
+				RelayTag:  77777,
+				Timestamp: 1700000000,
+				Version:   2,
+				AlicePort: 12345,
+				AliceIP:   net.ParseIP("2001:db8::1"),
+				Signature: makeTestSignature(),
 			},
 			wantErr: false,
-		},
-		{
-			name: "invalid_signed_data_short",
-			request: &RelayRequestBlock{
-				Nonce:      1,
-				SignedData: make([]byte, 16), // Too short
-			},
-			wantErr: true,
 		},
 		{
 			name:    "nil_request",
@@ -211,9 +214,12 @@ func TestRelayRequestEncoding(t *testing.T) {
 			require.NoError(t, err)
 
 			assert.Equal(t, tc.request.Nonce, decoded.Nonce)
-			assert.Equal(t, tc.request.SignedData, decoded.SignedData)
-			assert.Equal(t, tc.request.Flag, decoded.Flag)
-			assert.Equal(t, tc.request.RouterInfoFragment, decoded.RouterInfoFragment)
+			assert.Equal(t, tc.request.RelayTag, decoded.RelayTag)
+			assert.Equal(t, tc.request.Timestamp, decoded.Timestamp)
+			assert.Equal(t, tc.request.Version, decoded.Version)
+			assert.Equal(t, tc.request.AlicePort, decoded.AlicePort)
+			assert.True(t, tc.request.AliceIP.Equal(decoded.AliceIP))
+			assert.Equal(t, tc.request.Signature, decoded.Signature)
 		})
 	}
 }
@@ -503,10 +509,13 @@ func TestRelayMessageRoundTrip(t *testing.T) {
 
 	// Create a complete relay request with all fields
 	originalRequest := &RelayRequestBlock{
-		Nonce:              0xFEDCBA98,
-		SignedData:         makeSignedData(),
-		Flag:               0x03,
-		RouterInfoFragment: []byte("authentication-token-data-here"),
+		Nonce:     0xFEDCBA98,
+		RelayTag:  44444,
+		Timestamp: 1700000000,
+		Version:   2,
+		AlicePort: 9000,
+		AliceIP:   net.IPv4(192, 168, 1, 1).To4(),
+		Signature: makeTestSignature(),
 	}
 
 	// Encode → Serialize → Deserialize → Decode
@@ -526,9 +535,12 @@ func TestRelayMessageRoundTrip(t *testing.T) {
 
 	// Verify all fields match
 	assert.Equal(t, originalRequest.Nonce, decoded.Nonce)
-	assert.Equal(t, originalRequest.SignedData, decoded.SignedData)
-	assert.Equal(t, originalRequest.Flag, decoded.Flag)
-	assert.Equal(t, originalRequest.RouterInfoFragment, decoded.RouterInfoFragment)
+	assert.Equal(t, originalRequest.RelayTag, decoded.RelayTag)
+	assert.Equal(t, originalRequest.Timestamp, decoded.Timestamp)
+	assert.Equal(t, originalRequest.Version, decoded.Version)
+	assert.Equal(t, originalRequest.AlicePort, decoded.AlicePort)
+	assert.True(t, originalRequest.AliceIP.Equal(decoded.AliceIP))
+	assert.Equal(t, originalRequest.Signature, decoded.Signature)
 }
 
 // relayTestPeer represents a peer for relay integration testing.

@@ -1,6 +1,7 @@
 package ssu2
 
 import (
+	"encoding/binary"
 	"net"
 	"testing"
 
@@ -8,7 +9,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// makeTestSignature returns a deterministic 64-byte Ed25519-size signature for tests.
+func makeTestSignature() []byte {
+	data := make([]byte, 64)
+	for i := range data {
+		data[i] = byte(i)
+	}
+	return data
+}
+
 // makeSignedData returns a deterministic 32-byte signed relay data blob for tests.
+// Used by RelayResponse tests.
 func makeSignedData() []byte {
 	data := make([]byte, 32)
 	for i := range data {
@@ -20,30 +31,40 @@ func makeSignedData() []byte {
 // TestEncodeRelayRequest_Valid tests encoding a valid relay request.
 func TestEncodeRelayRequest_Valid(t *testing.T) {
 	req := &RelayRequestBlock{
-		Nonce:              12345,
-		SignedData:         makeSignedData(),
-		Flag:               0x01,
-		RouterInfoFragment: []byte{0xAA, 0xBB, 0xCC},
+		Flag:      0x00,
+		Nonce:     12345,
+		RelayTag:  99999,
+		Timestamp: 1700000000,
+		Version:   2,
+		AlicePort: 9000,
+		AliceIP:   net.IPv4(192, 168, 1, 1).To4(),
+		Signature: makeTestSignature(),
 	}
 
 	block, err := EncodeRelayRequest(req)
 	require.NoError(t, err)
 	assert.NotNil(t, block)
 	assert.Equal(t, BlockTypeRelayRequest, block.Type)
-	assert.Equal(t, 40, len(block.Data)) // 4+32+1+3
+	// flag(1)+nonce(4)+relay_tag(4)+timestamp(4)+ver(1)+asz(1)+port(2)+ip(4)+sig(64) = 85
+	assert.Equal(t, 85, len(block.Data))
 }
 
-// TestEncodeRelayRequest_NoFragment tests encoding relay request without RI fragment.
-func TestEncodeRelayRequest_NoFragment(t *testing.T) {
+// TestEncodeRelayRequest_IPv6 tests encoding relay request with IPv6.
+func TestEncodeRelayRequest_IPv6(t *testing.T) {
 	req := &RelayRequestBlock{
-		Nonce:      12345,
-		SignedData: makeSignedData(),
-		Flag:       0x00,
+		Nonce:     12345,
+		RelayTag:  99999,
+		Timestamp: 1700000000,
+		Version:   2,
+		AlicePort: 9000,
+		AliceIP:   net.ParseIP("2001:db8::1"),
+		Signature: makeTestSignature(),
 	}
 
 	block, err := EncodeRelayRequest(req)
 	require.NoError(t, err)
-	assert.Equal(t, 37, len(block.Data)) // 4+32+1
+	// flag(1)+nonce(4)+relay_tag(4)+timestamp(4)+ver(1)+asz(1)+port(2)+ip(16)+sig(64) = 97
+	assert.Equal(t, 97, len(block.Data))
 }
 
 // TestEncodeRelayRequest_NilBlock tests encoding nil request.
@@ -54,26 +75,45 @@ func TestEncodeRelayRequest_NilBlock(t *testing.T) {
 	assert.Contains(t, err.Error(), "nil")
 }
 
-// TestEncodeRelayRequest_InvalidSignedData tests invalid signed data size.
-func TestEncodeRelayRequest_InvalidSignedData(t *testing.T) {
+// TestEncodeRelayRequest_WireFormat tests exact wire format bytes.
+func TestEncodeRelayRequest_WireFormat(t *testing.T) {
 	req := &RelayRequestBlock{
-		Nonce:      12345,
-		SignedData: []byte{1, 2, 3}, // Wrong size
+		Flag:      0x00,
+		Nonce:     0x00003039, // 12345
+		RelayTag:  0x0001869F, // 99999
+		Timestamp: 0x6554F900, // 1700000000 (approximate)
+		Version:   2,
+		AlicePort: 9000,
+		AliceIP:   net.IPv4(10, 0, 0, 1).To4(),
+		Signature: []byte{0xAA, 0xBB},
 	}
 
 	block, err := EncodeRelayRequest(req)
-	assert.Error(t, err)
-	assert.Nil(t, block)
-	assert.Contains(t, err.Error(), "32 bytes")
+	require.NoError(t, err)
+
+	d := block.Data
+	assert.Equal(t, byte(0x00), d[0])                                     // flag
+	assert.Equal(t, uint32(0x00003039), binary.BigEndian.Uint32(d[1:5]))  // nonce
+	assert.Equal(t, uint32(0x0001869F), binary.BigEndian.Uint32(d[5:9]))  // relay_tag
+	assert.Equal(t, uint32(0x6554F900), binary.BigEndian.Uint32(d[9:13])) // timestamp
+	assert.Equal(t, byte(2), d[13])                                       // ver
+	assert.Equal(t, byte(6), d[14])                                       // asz (IPv4)
+	assert.Equal(t, uint16(9000), binary.BigEndian.Uint16(d[15:17]))      // port
+	assert.Equal(t, []byte{10, 0, 0, 1}, d[17:21])                        // IP
+	assert.Equal(t, []byte{0xAA, 0xBB}, d[21:23])                         // signature
 }
 
 // TestDecodeRelayRequest_Valid tests decoding a valid relay request.
 func TestDecodeRelayRequest_Valid(t *testing.T) {
 	original := &RelayRequestBlock{
-		Nonce:              12345,
-		SignedData:         makeSignedData(),
-		Flag:               0x01,
-		RouterInfoFragment: []byte{0xAA, 0xBB, 0xCC},
+		Flag:      0x00,
+		Nonce:     12345,
+		RelayTag:  99999,
+		Timestamp: 1700000000,
+		Version:   2,
+		AlicePort: 9000,
+		AliceIP:   net.IPv4(192, 168, 1, 1).To4(),
+		Signature: makeTestSignature(),
 	}
 
 	block, err := EncodeRelayRequest(original)
@@ -81,10 +121,14 @@ func TestDecodeRelayRequest_Valid(t *testing.T) {
 
 	decoded, err := DecodeRelayRequest(block)
 	require.NoError(t, err)
-	assert.Equal(t, original.Nonce, decoded.Nonce)
-	assert.Equal(t, original.SignedData, decoded.SignedData)
 	assert.Equal(t, original.Flag, decoded.Flag)
-	assert.Equal(t, original.RouterInfoFragment, decoded.RouterInfoFragment)
+	assert.Equal(t, original.Nonce, decoded.Nonce)
+	assert.Equal(t, original.RelayTag, decoded.RelayTag)
+	assert.Equal(t, original.Timestamp, decoded.Timestamp)
+	assert.Equal(t, original.Version, decoded.Version)
+	assert.Equal(t, original.AlicePort, decoded.AlicePort)
+	assert.True(t, original.AliceIP.Equal(decoded.AliceIP))
+	assert.Equal(t, original.Signature, decoded.Signature)
 }
 
 // TestDecodeRelayRequest_NilBlock tests decoding nil block.
@@ -112,13 +156,28 @@ func TestDecodeRelayRequest_WrongType(t *testing.T) {
 func TestDecodeRelayRequest_TooShort(t *testing.T) {
 	block := &SSU2Block{
 		Type: BlockTypeRelayRequest,
-		Data: make([]byte, 20), // Too short
+		Data: make([]byte, 10), // Too short
 	}
 
 	decoded, err := DecodeRelayRequest(block)
 	assert.Error(t, err)
 	assert.Nil(t, decoded)
 	assert.Contains(t, err.Error(), "too short")
+}
+
+// TestDecodeRelayRequest_InvalidAsz tests decoding with invalid asz value.
+func TestDecodeRelayRequest_InvalidAsz(t *testing.T) {
+	data := make([]byte, 30)
+	data[14] = 10 // invalid asz (not 6 or 18)
+	block := &SSU2Block{
+		Type: BlockTypeRelayRequest,
+		Data: data,
+	}
+
+	decoded, err := DecodeRelayRequest(block)
+	assert.Error(t, err)
+	assert.Nil(t, decoded)
+	assert.Contains(t, err.Error(), "invalid asz")
 }
 
 // TestEncodeRelayResponse_Success tests encoding successful relay response.
@@ -612,10 +671,14 @@ func TestRelayBlocks_RoundTrip(t *testing.T) {
 	// Test RelayRequest
 	t.Run("RelayRequest", func(t *testing.T) {
 		req := &RelayRequestBlock{
-			Nonce:              99999,
-			SignedData:         makeSignedData(),
-			Flag:               0x02,
-			RouterInfoFragment: []byte{1, 2, 3, 4, 5},
+			Flag:      0x00,
+			Nonce:     99999,
+			RelayTag:  55555,
+			Timestamp: 1700000000,
+			Version:   2,
+			AlicePort: 9000,
+			AliceIP:   net.IPv4(10, 0, 0, 1).To4(),
+			Signature: makeTestSignature(),
 		}
 
 		block, err := EncodeRelayRequest(req)
@@ -625,9 +688,12 @@ func TestRelayBlocks_RoundTrip(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Equal(t, req.Nonce, decoded.Nonce)
-		assert.Equal(t, req.SignedData, decoded.SignedData)
-		assert.Equal(t, req.Flag, decoded.Flag)
-		assert.Equal(t, req.RouterInfoFragment, decoded.RouterInfoFragment)
+		assert.Equal(t, req.RelayTag, decoded.RelayTag)
+		assert.Equal(t, req.Timestamp, decoded.Timestamp)
+		assert.Equal(t, req.Version, decoded.Version)
+		assert.Equal(t, req.AlicePort, decoded.AlicePort)
+		assert.True(t, req.AliceIP.Equal(decoded.AliceIP))
+		assert.Equal(t, req.Signature, decoded.Signature)
 	})
 
 	// Test RelayResponse

@@ -369,17 +369,21 @@ func TestPeerTest_BlockEncoding(t *testing.T) {
 
 	// Create test blocks for each message type
 	nonce := uint32(12345)
-	signedData := make([]byte, 32)
-	for i := range signedData {
-		signedData[i] = byte(i)
+	sig := make([]byte, 64)
+	for i := range sig {
+		sig[i] = byte(i)
 	}
+	aliceIP := net.IPv4(192, 168, 1, 1).To4()
 
 	// Message 1: Request
 	requestBlock := &PeerTestBlock{
 		MessageCode: PeerTestRequest,
 		Nonce:       nonce,
 		Version:     2,
-		SignedData:  signedData,
+		Timestamp:   1700000000,
+		AlicePort:   9000,
+		AliceIP:     aliceIP,
+		Signature:   sig,
 	}
 
 	ssu2Block, err := EncodePeerTestBlock(requestBlock)
@@ -389,7 +393,7 @@ func TestPeerTest_BlockEncoding(t *testing.T) {
 	require.NoError(t, err, "Should decode request block")
 	assert.Equal(t, PeerTestRequest, decodedRequest.MessageCode)
 	assert.Equal(t, nonce, decodedRequest.Nonce)
-	assert.Equal(t, signedData, decodedRequest.SignedData)
+	assert.Equal(t, sig, decodedRequest.Signature)
 
 	// Message 5: Probe
 	probeBlock := &PeerTestBlock{
@@ -397,7 +401,9 @@ func TestPeerTest_BlockEncoding(t *testing.T) {
 		Nonce:       nonce,
 		Timestamp:   1234567890,
 		Version:     2,
-		SignedData:  signedData,
+		AlicePort:   9000,
+		AliceIP:     aliceIP,
+		Signature:   sig,
 	}
 
 	ssu2Block, err = EncodePeerTestBlock(probeBlock)
@@ -408,7 +414,7 @@ func TestPeerTest_BlockEncoding(t *testing.T) {
 	assert.Equal(t, PeerTestProbe, decodedProbe.MessageCode)
 	assert.Equal(t, nonce, decodedProbe.Nonce)
 	assert.Equal(t, uint32(1234567890), decodedProbe.Timestamp)
-	assert.Equal(t, signedData, decodedProbe.SignedData)
+	assert.Equal(t, sig, decodedProbe.Signature)
 }
 
 // setupPeerForTest creates a test peer with PeerTestManager.

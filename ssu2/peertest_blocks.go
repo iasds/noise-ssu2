@@ -75,49 +75,58 @@ func (c PeerTestMessageCode) String() string {
 }
 
 // PeerTestBlock represents a peer test message (Type 10, Block 10).
-// The wire format is fixed for all message types per the SSU2 specification:
+// Wire format per SSU2 spec:
 //
-//	Byte 0:     msg (message number 1-7)
-//	Byte 1:     status code (for msg 4, 5, 6, 7; 0 otherwise)
-//	Bytes 2-5:  nonce (4 bytes)
-//	Bytes 6-9:  timestamp (seconds since epoch; for msg 2, 5; 0 otherwise)
-//	Byte 10:    version (2)
-//	Bytes 11+:  signed data (varies by message number)
+//	Byte 0:       msg (message number 1-7)
+//	Byte 1:       code (status/reason code)
+//	Byte 2:       flag (unused, set to 0)
+//	Bytes 3-34:   router hash (32 bytes, only for messages 2 and 4)
+//	Next 1 byte:  ver (protocol version, should be 2)
+//	Next 4 bytes: nonce (big-endian)
+//	Next 4 bytes: timestamp (seconds since epoch, big-endian)
+//	Next 1 byte:  asz (endpoint size: 6 for IPv4, 18 for IPv6)
+//	Next 2 bytes: AlicePort (big-endian)
+//	Next asz-2:   AliceIP (4 or 16 bytes)
+//	Remaining:    signature (variable length; optional for messages 5-7)
 type PeerTestBlock struct {
 	// MessageCode identifies which of the 7 messages this is (1 byte)
 	MessageCode PeerTestMessageCode
 
-	// StatusCode is the status/result code (for messages 4, 5, 6, 7)
-	StatusCode uint8
+	// Code is the status/reason code (1 byte)
+	Code uint8
+
+	// Flag is reserved for future use (1 byte, must be 0)
+	Flag uint8
+
+	// RouterHash is the 32-byte hash (only for messages 2 and 4)
+	RouterHash []byte
+
+	// Version is the peer test protocol version (should be 2)
+	Version uint8
 
 	// Nonce uniquely identifies the test session (4 bytes)
 	Nonce uint32
 
 	// Timestamp is seconds since epoch (4 bytes)
-	// Present in messages 2 and 5; 0 otherwise
 	Timestamp uint32
 
-	// Version is the peer test protocol version (should be 2)
-	Version uint8
+	// AlicePort is Alice's port number
+	AlicePort uint16
 
-	// SignedData is the opaque signed data blob (varies by message number)
-	SignedData []byte
+	// AliceIP is Alice's IP address (4 bytes IPv4 or 16 bytes IPv6)
+	AliceIP []byte
+
+	// Signature is the Ed25519 (or other) signature (variable length)
+	// Optional for messages 5-7.
+	Signature []byte
 }
 
-// EncodePeerTestBlock encodes a PeerTest block to wire format.
-//
-// Wire format (fixed for all message types):
-//
-//	[Msg:1][StatusCode:1][Nonce:4][Timestamp:4][Version:1][SignedData:variable]
-//
-// Minimum encoded size is 11 bytes (header only, no signed data).
-//
-// Parameters:
-//   - block: PeerTestBlock data to encode
-//
-// Returns:
-//   - *SSU2Block: Encoded block ready for transmission
-//   - error: If validation fails
+// hasRouterHash returns true if this message code includes a 32-byte router hash.
+func (b *PeerTestBlock) hasRouterHash() bool {
+	return b.MessageCode == PeerTestRelay || b.MessageCode == PeerTestResult
+}
+
+// EncodePeerTestBlock encodes a PeerTest block to wire format per the SSU2 spec.
 func EncodePeerTestBlock(block *PeerTestBlock) (*SSU2Block, error) {
 	if block == nil {
 		return nil, oops.Errorf("PeerTestBlock is nil")
@@ -127,31 +136,58 @@ func EncodePeerTestBlock(block *PeerTestBlock) (*SSU2Block, error) {
 		return nil, oops.Errorf("invalid message code: %d (must be 1-7)", block.MessageCode)
 	}
 
-	// Fixed header: msg(1) + status(1) + nonce(4) + timestamp(4) + version(1) = 11
-	dataSize := 11 + len(block.SignedData)
+	ipLen := len(block.AliceIP)
+	if ipLen != 4 && ipLen != 16 {
+		return nil, oops.Errorf("invalid AliceIP length: %d (must be 4 or 16)", ipLen)
+	}
+	asz := uint8(2 + ipLen) // port(2) + IP
+
+	// Calculate total size: msg(1)+code(1)+flag(1) + [hash(32)] + ver(1)+nonce(4)+timestamp(4)+asz(1)+port(2)+ip(ipLen)+sig
+	dataSize := 3 // msg + code + flag
+	if block.hasRouterHash() {
+		dataSize += 32
+	}
+	dataSize += 1 + 4 + 4 + 1 + 2 + ipLen + len(block.Signature) // ver+nonce+ts+asz+port+ip+sig
+
 	data := make([]byte, dataSize)
+	off := 0
 
-	data[0] = uint8(block.MessageCode)
-	data[1] = block.StatusCode
-	binary.BigEndian.PutUint32(data[2:6], block.Nonce)
-	binary.BigEndian.PutUint32(data[6:10], block.Timestamp)
-	data[10] = block.Version
+	data[off] = uint8(block.MessageCode)
+	off++
+	data[off] = block.Code
+	off++
+	data[off] = block.Flag
+	off++
 
-	if len(block.SignedData) > 0 {
-		copy(data[11:], block.SignedData)
+	if block.hasRouterHash() {
+		if len(block.RouterHash) != 32 {
+			return nil, oops.Errorf("RouterHash must be 32 bytes for message %d", block.MessageCode)
+		}
+		copy(data[off:off+32], block.RouterHash)
+		off += 32
+	}
+
+	data[off] = block.Version
+	off++
+	binary.BigEndian.PutUint32(data[off:off+4], block.Nonce)
+	off += 4
+	binary.BigEndian.PutUint32(data[off:off+4], block.Timestamp)
+	off += 4
+	data[off] = asz
+	off++
+	binary.BigEndian.PutUint16(data[off:off+2], block.AlicePort)
+	off += 2
+	copy(data[off:off+ipLen], block.AliceIP)
+	off += ipLen
+
+	if len(block.Signature) > 0 {
+		copy(data[off:], block.Signature)
 	}
 
 	return NewSSU2Block(BlockTypePeerTest, data), nil
 }
 
-// DecodePeerTestBlock decodes a PeerTest block from wire format.
-//
-// Parameters:
-//   - ssu2Block: SSU2Block with Type 10
-//
-// Returns:
-//   - *PeerTestBlock: Decoded peer test message
-//   - error: If decoding fails or validation fails
+// DecodePeerTestBlock decodes a PeerTest block from wire format per the SSU2 spec.
 func DecodePeerTestBlock(ssu2Block *SSU2Block) (*PeerTestBlock, error) {
 	if ssu2Block == nil {
 		return nil, oops.Errorf("block is nil")
@@ -162,25 +198,68 @@ func DecodePeerTestBlock(ssu2Block *SSU2Block) (*PeerTestBlock, error) {
 	}
 
 	data := ssu2Block.Data
-	if len(data) < 11 {
-		return nil, oops.Errorf("PeerTest block too short: %d bytes (minimum 11)", len(data))
+	// Minimum: msg(1)+code(1)+flag(1)+ver(1)+nonce(4)+timestamp(4)+asz(1)+port(2)+ip(4) = 19
+	if len(data) < 19 {
+		return nil, oops.Errorf("PeerTest block too short: %d bytes (minimum 19)", len(data))
 	}
 
-	block := &PeerTestBlock{
-		MessageCode: PeerTestMessageCode(data[0]),
-		StatusCode:  data[1],
-		Nonce:       binary.BigEndian.Uint32(data[2:6]),
-		Timestamp:   binary.BigEndian.Uint32(data[6:10]),
-		Version:     data[10],
-	}
+	block := &PeerTestBlock{}
+	off := 0
+
+	block.MessageCode = PeerTestMessageCode(data[off])
+	off++
+	block.Code = data[off]
+	off++
+	block.Flag = data[off]
+	off++
 
 	if block.MessageCode < 1 || block.MessageCode > 7 {
 		return nil, oops.Errorf("invalid message code: %d (must be 1-7)", block.MessageCode)
 	}
 
-	if len(data) > 11 {
-		block.SignedData = make([]byte, len(data)-11)
-		copy(block.SignedData, data[11:])
+	// Messages 2 and 4 include a 32-byte router hash
+	if block.hasRouterHash() {
+		if len(data) < off+32 {
+			return nil, oops.Errorf("PeerTest block too short for router hash: %d bytes", len(data))
+		}
+		block.RouterHash = make([]byte, 32)
+		copy(block.RouterHash, data[off:off+32])
+		off += 32
+	}
+
+	// Remaining minimum: ver(1)+nonce(4)+timestamp(4)+asz(1)+port(2)+ip(4) = 16
+	if len(data) < off+16 {
+		return nil, oops.Errorf("PeerTest block too short for signed data: %d bytes at offset %d", len(data), off)
+	}
+
+	block.Version = data[off]
+	off++
+	block.Nonce = binary.BigEndian.Uint32(data[off : off+4])
+	off += 4
+	block.Timestamp = binary.BigEndian.Uint32(data[off : off+4])
+	off += 4
+
+	asz := data[off]
+	off++
+	if asz != 6 && asz != 18 {
+		return nil, oops.Errorf("invalid asz: %d (must be 6 or 18)", asz)
+	}
+
+	ipLen := int(asz) - 2
+	if len(data) < off+2+ipLen {
+		return nil, oops.Errorf("PeerTest block too short for address: %d bytes", len(data))
+	}
+
+	block.AlicePort = binary.BigEndian.Uint16(data[off : off+2])
+	off += 2
+	block.AliceIP = make([]byte, ipLen)
+	copy(block.AliceIP, data[off:off+ipLen])
+	off += ipLen
+
+	// Remaining bytes are signature (optional for messages 5-7)
+	if off < len(data) {
+		block.Signature = make([]byte, len(data)-off)
+		copy(block.Signature, data[off:])
 	}
 
 	return block, nil

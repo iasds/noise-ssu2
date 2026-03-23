@@ -153,10 +153,11 @@ type SSU2Conn struct {
 
 // PendingPacket tracks an outbound packet awaiting acknowledgment.
 type PendingPacket struct {
-	Packet    *SSU2Packet
-	SentTime  time.Time
-	Retries   int
-	NextRetry time.Time
+	Packet           *SSU2Packet
+	PlaintextPayload []byte // pre-encryption payload for retransmit
+	SentTime         time.Time
+	Retries          int
+	NextRetry        time.Time
 }
 
 // NewSSU2Conn creates a new SSU2 connection.
@@ -767,9 +768,26 @@ func (h *SSU2Conn) retransmitExpired() {
 		backoff := rto * time.Duration(1<<pp.Retries)
 		pp.NextRetry = now.Add(backoff)
 
+		// Per spec: retransmissions must use a fresh packet number.
+		newPktNum := h.nextSendSequence()
+		hdr := make([]byte, ShortHeaderSize)
+		binary.BigEndian.PutUint64(hdr[0:8], h.config.ConnectionID)
+		binary.BigEndian.PutUint32(hdr[8:12], newPktNum)
+		newPacket := &SSU2Packet{
+			MessageType:  MessageTypeData,
+			PacketNumber: newPktNum,
+			Header:       hdr,
+			MAC:          make([]byte, MACSize),
+			Payload:      make([]byte, len(pp.PlaintextPayload)),
+		}
+		copy(newPacket.Payload, pp.PlaintextPayload)
+
+		// Remove old entry; sendPacketDirect will track the new one.
+		delete(h.pendingPackets, pn)
+
 		// Best-effort re-enqueue; drop if sendQueue is full
 		select {
-		case h.sendQueue <- pp.Packet:
+		case h.sendQueue <- newPacket:
 		default:
 		}
 	}
@@ -828,18 +846,20 @@ func (h *SSU2Conn) parseInboundPacket(data []byte, addr net.Addr) *SSU2Packet {
 		return nil
 	}
 
-	h.cipherMutex.RLock()
+	h.cipherMutex.Lock()
 	cipher := h.recvCipher
-	h.cipherMutex.RUnlock()
-
 	if cipher != nil && packet.MessageType == MessageTypeData && len(packet.Payload) > 0 {
-		decrypted, err := cipher.Decrypt(nil, nil, packet.Payload)
+		// Per SSU2 spec: nonce is the packet number, AD is the 16-byte header.
+		cipher.SetNonce(uint64(packet.PacketNumber))
+		decrypted, err := cipher.Decrypt(nil, packet.Header[:ShortHeaderSize], packet.Payload)
 		if err != nil {
+			h.cipherMutex.Unlock()
 			h.decryptErrors.Add(1)
 			return nil
 		}
 		packet.Payload = decrypted
 	}
+	h.cipherMutex.Unlock()
 
 	h.updateActivity()
 	return packet
@@ -863,9 +883,15 @@ func (h *SSU2Conn) keepaliveLoop() {
 			if timeSinceActivity >= h.config.KeepaliveInterval {
 				// Send ACK as keepalive (empty ACK)
 				if ack, err := h.ackHandler.GenerateACK(); err == nil && ack != nil {
+					pktNum := h.nextSendSequence()
+					hdr := make([]byte, ShortHeaderSize)
+					binary.BigEndian.PutUint64(hdr[0:8], h.config.ConnectionID)
+					binary.BigEndian.PutUint32(hdr[8:12], pktNum)
 					packet := &SSU2Packet{
 						MessageType:  MessageTypeData,
-						PacketNumber: h.nextSendSequence(),
+						PacketNumber: pktNum,
+						Header:       hdr,
+						MAC:          make([]byte, MACSize),
 					}
 					payload, _ := SerializeBlocks([]*SSU2Block{ack})
 					packet.Payload = payload
@@ -891,18 +917,26 @@ func (h *SSU2Conn) keepaliveLoop() {
 // sendPacketDirect sends a packet directly to the peer.
 // For data packets in the established state, the payload is encrypted with AEAD.
 func (h *SSU2Conn) sendPacketDirect(packet *SSU2Packet) error {
-	// Encrypt payload for data packets when cipher states are available
-	h.cipherMutex.RLock()
-	cipher := h.sendCipher
-	h.cipherMutex.RUnlock()
+	// Save plaintext payload before encryption for potential retransmit.
+	var plaintextPayload []byte
 
+	// Encrypt payload for data packets when cipher states are available.
+	// Lock is exclusive because SetNonce+Encrypt must be atomic.
+	h.cipherMutex.Lock()
+	cipher := h.sendCipher
 	if cipher != nil && packet.MessageType == MessageTypeData && len(packet.Payload) > 0 {
-		encrypted, err := cipher.Encrypt(nil, nil, packet.Payload)
+		plaintextPayload = make([]byte, len(packet.Payload))
+		copy(plaintextPayload, packet.Payload)
+		// Per SSU2 spec: nonce is the packet number, AD is the 16-byte header.
+		cipher.SetNonce(uint64(packet.PacketNumber))
+		encrypted, err := cipher.Encrypt(nil, packet.Header[:ShortHeaderSize], packet.Payload)
 		if err != nil {
+			h.cipherMutex.Unlock()
 			return oops.Wrapf(err, "failed to encrypt payload")
 		}
 		packet.Payload = encrypted
 	}
+	h.cipherMutex.Unlock()
 
 	// Serialize packet
 	data, err := packet.Serialize()
@@ -931,10 +965,11 @@ func (h *SSU2Conn) sendPacketDirect(packet *SSU2Packet) error {
 	if packet.MessageType == MessageTypeData && packet.PacketNumber > 0 {
 		h.pendingMutex.Lock()
 		h.pendingPackets[packet.PacketNumber] = &PendingPacket{
-			Packet:    packet,
-			SentTime:  time.Now(),
-			Retries:   0,
-			NextRetry: time.Now().Add(h.rttEstimator.GetRTO()),
+			Packet:           packet,
+			PlaintextPayload: plaintextPayload,
+			SentTime:         time.Now(),
+			Retries:          0,
+			NextRetry:        time.Now().Add(h.rttEstimator.GetRTO()),
 		}
 		h.pendingMutex.Unlock()
 	}

@@ -2,6 +2,7 @@ package ssu2
 
 import (
 	"encoding/binary"
+	"net"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -31,361 +32,232 @@ func TestPeerTestMessageCode_String(t *testing.T) {
 	}
 }
 
+// helper to build a valid PeerTestBlock for a given message code.
+func makePeerTestBlock(msg PeerTestMessageCode) *PeerTestBlock {
+	b := &PeerTestBlock{
+		MessageCode: msg,
+		Code:        0,
+		Flag:        0,
+		Version:     2,
+		Nonce:       0x12345678,
+		Timestamp:   1700000000,
+		AlicePort:   9000,
+		AliceIP:     net.IPv4(192, 168, 1, 1).To4(),
+		Signature:   make([]byte, 64),
+	}
+	if b.hasRouterHash() {
+		b.RouterHash = make([]byte, 32)
+		for i := range b.RouterHash {
+			b.RouterHash[i] = byte(i)
+		}
+	}
+	return b
+}
+
 // TestEncodePeerTestBlock_AllMessages tests encoding each message type.
 func TestEncodePeerTestBlock_AllMessages(t *testing.T) {
-	signedData := make([]byte, 32)
-	for i := range signedData {
-		signedData[i] = byte(i)
-	}
-
-	tests := []struct {
-		name  string
-		block *PeerTestBlock
-	}{
-		{
-			name: "Message1_Request",
-			block: &PeerTestBlock{
-				MessageCode: PeerTestRequest,
-				Nonce:       0x12345678,
-				Version:     2,
-				SignedData:  signedData,
-			},
-		},
-		{
-			name: "Message2_Relay",
-			block: &PeerTestBlock{
-				MessageCode: PeerTestRelay,
-				Nonce:       0xAABBCCDD,
-				Timestamp:   1234567890,
-				Version:     2,
-				SignedData:  signedData,
-			},
-		},
-		{
-			name: "Message3_Response",
-			block: &PeerTestBlock{
-				MessageCode: PeerTestResponse,
-				Nonce:       0x11223344,
-				Version:     2,
-			},
-		},
-		{
-			name: "Message4_Result",
-			block: &PeerTestBlock{
-				MessageCode: PeerTestResult,
-				StatusCode:  0x01,
-				Nonce:       0x55667788,
-				Version:     2,
-				SignedData:  signedData,
-			},
-		},
-		{
-			name: "Message5_Probe",
-			block: &PeerTestBlock{
-				MessageCode: PeerTestProbe,
-				StatusCode:  0x00,
-				Nonce:       0xDEADBEEF,
-				Timestamp:   1286608618,
-				Version:     2,
-				SignedData:  signedData,
-			},
-		},
-		{
-			name: "Message6_Reply",
-			block: &PeerTestBlock{
-				MessageCode: PeerTestReply,
-				StatusCode:  0x02,
-				Nonce:       0xCAFEBABE,
-				Version:     2,
-			},
-		},
-		{
-			name: "Message7_Confirmation",
-			block: &PeerTestBlock{
-				MessageCode: PeerTestConfirmation,
-				StatusCode:  0x00,
-				Nonce:       0x99887766,
-				Version:     2,
-				SignedData:  signedData,
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			encoded, err := EncodePeerTestBlock(tt.block)
+	for msg := PeerTestRequest; msg <= PeerTestConfirmation; msg++ {
+		t.Run(msg.String(), func(t *testing.T) {
+			block := makePeerTestBlock(msg)
+			encoded, err := EncodePeerTestBlock(block)
 			require.NoError(t, err)
 			require.NotNil(t, encoded)
 			assert.Equal(t, BlockTypePeerTest, encoded.Type)
 
-			// Verify fixed header layout
-			assert.Equal(t, uint8(tt.block.MessageCode), encoded.Data[0])
-			assert.Equal(t, tt.block.StatusCode, encoded.Data[1])
-			nonce := binary.BigEndian.Uint32(encoded.Data[2:6])
-			assert.Equal(t, tt.block.Nonce, nonce)
-			timestamp := binary.BigEndian.Uint32(encoded.Data[6:10])
-			assert.Equal(t, tt.block.Timestamp, timestamp)
-			assert.Equal(t, tt.block.Version, encoded.Data[10])
+			d := encoded.Data
+			assert.Equal(t, uint8(msg), d[0])
+			assert.Equal(t, block.Code, d[1])
+			assert.Equal(t, block.Flag, d[2])
 
-			// Verify signed data
-			if len(tt.block.SignedData) > 0 {
-				assert.Equal(t, tt.block.SignedData, encoded.Data[11:])
-				assert.Equal(t, 11+len(tt.block.SignedData), len(encoded.Data))
-			} else {
-				assert.Equal(t, 11, len(encoded.Data))
+			off := 3
+			if block.hasRouterHash() {
+				assert.Equal(t, block.RouterHash, d[off:off+32])
+				off += 32
 			}
+			assert.Equal(t, block.Version, d[off])
+			off++
+			assert.Equal(t, block.Nonce, binary.BigEndian.Uint32(d[off:off+4]))
+			off += 4
+			assert.Equal(t, block.Timestamp, binary.BigEndian.Uint32(d[off:off+4]))
+			off += 4
+			assert.Equal(t, uint8(6), d[off]) // asz for IPv4
+			off++
+			assert.Equal(t, block.AlicePort, binary.BigEndian.Uint16(d[off:off+2]))
+			off += 2
+			assert.Equal(t, block.AliceIP, d[off:off+4])
+			off += 4
+			assert.Equal(t, block.Signature, d[off:])
 		})
 	}
 }
 
-// TestEncodePeerTestBlock_NilBlock tests error handling for nil block.
+// TestEncodePeerTestBlock_IPv6 tests encoding with IPv6 address.
+func TestEncodePeerTestBlock_IPv6(t *testing.T) {
+	block := makePeerTestBlock(PeerTestRequest)
+	block.AliceIP = net.ParseIP("2001:db8::1").To16()
+	encoded, err := EncodePeerTestBlock(block)
+	require.NoError(t, err)
+
+	// asz should be 18 for IPv6
+	off := 3 + 1 + 4 + 4 // msg+code+flag + ver+nonce+ts
+	assert.Equal(t, uint8(18), encoded.Data[off])
+}
+
+// TestEncodePeerTestBlock_NilBlock tests error for nil input.
 func TestEncodePeerTestBlock_NilBlock(t *testing.T) {
 	_, err := EncodePeerTestBlock(nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "PeerTestBlock is nil")
 }
 
-// TestEncodePeerTestBlock_InvalidMessageCode tests error handling for invalid message code.
+// TestEncodePeerTestBlock_InvalidMessageCode tests error for bad code.
 func TestEncodePeerTestBlock_InvalidMessageCode(t *testing.T) {
-	block := &PeerTestBlock{
-		MessageCode: PeerTestMessageCode(99),
-		Nonce:       0x12345678,
-		Version:     2,
-	}
-
+	block := makePeerTestBlock(PeerTestRequest)
+	block.MessageCode = 99
 	_, err := EncodePeerTestBlock(block)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid message code")
 }
 
-// TestDecodePeerTestBlock_AllMessages tests decoding each message type.
-func TestDecodePeerTestBlock_AllMessages(t *testing.T) {
-	signedData := make([]byte, 20)
-	for i := range signedData {
-		signedData[i] = byte(i + 100)
-	}
-
-	tests := []struct {
-		name       string
-		msg        uint8
-		status     uint8
-		nonce      uint32
-		timestamp  uint32
-		version    uint8
-		signedData []byte
-	}{
-		{"Msg1_Request", 1, 0, 0x12345678, 0, 2, signedData},
-		{"Msg2_Relay", 2, 0, 0xAABBCCDD, 1234567890, 2, signedData},
-		{"Msg3_Response", 3, 0, 0x11223344, 0, 2, nil},
-		{"Msg4_Result", 4, 1, 0x55667788, 0, 2, signedData},
-		{"Msg5_Probe", 5, 0, 0xDEADBEEF, 1286608618, 2, signedData},
-		{"Msg6_Reply", 6, 2, 0xCAFEBABE, 0, 2, nil},
-		{"Msg7_Confirmation", 7, 0, 0x99887766, 0, 2, signedData},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			data := make([]byte, 11+len(tt.signedData))
-			data[0] = tt.msg
-			data[1] = tt.status
-			binary.BigEndian.PutUint32(data[2:6], tt.nonce)
-			binary.BigEndian.PutUint32(data[6:10], tt.timestamp)
-			data[10] = tt.version
-			if len(tt.signedData) > 0 {
-				copy(data[11:], tt.signedData)
-			}
-
-			ssu2Block := NewSSU2Block(BlockTypePeerTest, data)
-			decoded, err := DecodePeerTestBlock(ssu2Block)
-			require.NoError(t, err)
-			require.NotNil(t, decoded)
-
-			assert.Equal(t, PeerTestMessageCode(tt.msg), decoded.MessageCode)
-			assert.Equal(t, tt.status, decoded.StatusCode)
-			assert.Equal(t, tt.nonce, decoded.Nonce)
-			assert.Equal(t, tt.timestamp, decoded.Timestamp)
-			assert.Equal(t, tt.version, decoded.Version)
-
-			if len(tt.signedData) > 0 {
-				assert.Equal(t, tt.signedData, decoded.SignedData)
-			} else {
-				assert.Nil(t, decoded.SignedData)
-			}
-		})
-	}
+// TestEncodePeerTestBlock_InvalidIP tests error for bad IP length.
+func TestEncodePeerTestBlock_InvalidIP(t *testing.T) {
+	block := makePeerTestBlock(PeerTestRequest)
+	block.AliceIP = []byte{1, 2, 3} // invalid
+	_, err := EncodePeerTestBlock(block)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid AliceIP length")
 }
 
-// TestDecodePeerTestBlock_NilBlock tests error handling for nil block.
+// TestEncodePeerTestBlock_MissingHash tests error for msg 2 without hash.
+func TestEncodePeerTestBlock_MissingHash(t *testing.T) {
+	block := makePeerTestBlock(PeerTestRelay)
+	block.RouterHash = nil
+	_, err := EncodePeerTestBlock(block)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "RouterHash must be 32 bytes")
+}
+
+// TestDecodePeerTestBlock_Msg1 tests decoding a message 1 (no hash).
+func TestDecodePeerTestBlock_Msg1(t *testing.T) {
+	block := makePeerTestBlock(PeerTestRequest)
+	encoded, err := EncodePeerTestBlock(block)
+	require.NoError(t, err)
+
+	decoded, err := DecodePeerTestBlock(encoded)
+	require.NoError(t, err)
+	assert.Equal(t, PeerTestRequest, decoded.MessageCode)
+	assert.Equal(t, block.Nonce, decoded.Nonce)
+	assert.Equal(t, block.Timestamp, decoded.Timestamp)
+	assert.Equal(t, block.AlicePort, decoded.AlicePort)
+	assert.Equal(t, block.AliceIP, decoded.AliceIP)
+	assert.Nil(t, decoded.RouterHash)
+}
+
+// TestDecodePeerTestBlock_Msg2 tests decoding message 2 (with hash).
+func TestDecodePeerTestBlock_Msg2(t *testing.T) {
+	block := makePeerTestBlock(PeerTestRelay)
+	encoded, err := EncodePeerTestBlock(block)
+	require.NoError(t, err)
+
+	decoded, err := DecodePeerTestBlock(encoded)
+	require.NoError(t, err)
+	assert.Equal(t, PeerTestRelay, decoded.MessageCode)
+	assert.Equal(t, block.RouterHash, decoded.RouterHash)
+	assert.Equal(t, block.Nonce, decoded.Nonce)
+}
+
+// TestDecodePeerTestBlock_NilBlock tests error for nil input.
 func TestDecodePeerTestBlock_NilBlock(t *testing.T) {
 	_, err := DecodePeerTestBlock(nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "block is nil")
 }
 
-// TestDecodePeerTestBlock_WrongBlockType tests error handling for wrong block type.
+// TestDecodePeerTestBlock_WrongBlockType tests error for wrong type.
 func TestDecodePeerTestBlock_WrongBlockType(t *testing.T) {
-	ssu2Block := &SSU2Block{
-		Type: BlockTypeRelayRequest,
-		Data: make([]byte, 11),
-	}
-
+	ssu2Block := &SSU2Block{Type: BlockTypeRelayRequest, Data: make([]byte, 20)}
 	_, err := DecodePeerTestBlock(ssu2Block)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid block type")
 }
 
-// TestDecodePeerTestBlock_TooShort tests error handling for insufficient data.
+// TestDecodePeerTestBlock_TooShort tests error for short data.
 func TestDecodePeerTestBlock_TooShort(t *testing.T) {
-	ssu2Block := &SSU2Block{
-		Type: BlockTypePeerTest,
-		Data: make([]byte, 5), // Need at least 11
-	}
-
+	ssu2Block := &SSU2Block{Type: BlockTypePeerTest, Data: make([]byte, 5)}
 	_, err := DecodePeerTestBlock(ssu2Block)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "too short")
 }
 
-// TestDecodePeerTestBlock_InvalidMessageCode tests error handling for invalid message code.
+// TestDecodePeerTestBlock_InvalidMessageCode tests error for bad code.
 func TestDecodePeerTestBlock_InvalidMessageCode(t *testing.T) {
-	data := make([]byte, 11)
-	data[0] = 99 // Invalid code
-
+	data := make([]byte, 19)
+	data[0] = 99
+	data[12] = 6 // asz
 	ssu2Block := NewSSU2Block(BlockTypePeerTest, data)
-
 	_, err := DecodePeerTestBlock(ssu2Block)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid message code")
 }
 
-// TestEncodeDecode_RoundTrip tests encode/decode round trip for all message types.
+// TestDecodePeerTestBlock_InvalidAsz tests error for bad asz value.
+func TestDecodePeerTestBlock_InvalidAsz(t *testing.T) {
+	// Build a valid msg 1 then corrupt the asz byte
+	block := makePeerTestBlock(PeerTestRequest)
+	encoded, err := EncodePeerTestBlock(block)
+	require.NoError(t, err)
+
+	// asz is at offset 3 + 1 + 4 + 4 = 12 within data
+	encoded.Data[12] = 10 // invalid asz
+	_, err = DecodePeerTestBlock(encoded)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid asz")
+}
+
+// TestEncodeDecode_RoundTrip tests round-trip for all message types.
 func TestEncodeDecode_RoundTrip(t *testing.T) {
-	signedData := make([]byte, 48)
-	for i := range signedData {
-		signedData[i] = byte(i)
-	}
+	for msg := PeerTestRequest; msg <= PeerTestConfirmation; msg++ {
+		t.Run(msg.String(), func(t *testing.T) {
+			block := makePeerTestBlock(msg)
+			if msg == PeerTestResult {
+				block.Code = 1
+			}
 
-	tests := []struct {
-		name  string
-		block *PeerTestBlock
-	}{
-		{
-			name: "Message1",
-			block: &PeerTestBlock{
-				MessageCode: PeerTestRequest,
-				Nonce:       0x12345678,
-				Version:     2,
-				SignedData:  signedData,
-			},
-		},
-		{
-			name: "Message2",
-			block: &PeerTestBlock{
-				MessageCode: PeerTestRelay,
-				Nonce:       0xAABBCCDD,
-				Timestamp:   1234567890,
-				Version:     2,
-				SignedData:  signedData,
-			},
-		},
-		{
-			name: "Message3",
-			block: &PeerTestBlock{
-				MessageCode: PeerTestResponse,
-				Nonce:       0x11223344,
-				Version:     2,
-			},
-		},
-		{
-			name: "Message4",
-			block: &PeerTestBlock{
-				MessageCode: PeerTestResult,
-				StatusCode:  1,
-				Nonce:       0x55667788,
-				Version:     2,
-				SignedData:  signedData,
-			},
-		},
-		{
-			name: "Message5",
-			block: &PeerTestBlock{
-				MessageCode: PeerTestProbe,
-				Nonce:       0xDEADBEEF,
-				Timestamp:   1286608618,
-				Version:     2,
-				SignedData:  signedData,
-			},
-		},
-		{
-			name: "Message6",
-			block: &PeerTestBlock{
-				MessageCode: PeerTestReply,
-				StatusCode:  2,
-				Nonce:       0xCAFEBABE,
-				Version:     2,
-			},
-		},
-		{
-			name: "Message7",
-			block: &PeerTestBlock{
-				MessageCode: PeerTestConfirmation,
-				Nonce:       0x99887766,
-				Version:     2,
-				SignedData:  signedData,
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			encoded, err := EncodePeerTestBlock(tt.block)
+			encoded, err := EncodePeerTestBlock(block)
 			require.NoError(t, err)
 
 			decoded, err := DecodePeerTestBlock(encoded)
 			require.NoError(t, err)
 
-			assert.Equal(t, tt.block.MessageCode, decoded.MessageCode)
-			assert.Equal(t, tt.block.StatusCode, decoded.StatusCode)
-			assert.Equal(t, tt.block.Nonce, decoded.Nonce)
-			assert.Equal(t, tt.block.Timestamp, decoded.Timestamp)
-			assert.Equal(t, tt.block.Version, decoded.Version)
+			assert.Equal(t, block.MessageCode, decoded.MessageCode)
+			assert.Equal(t, block.Code, decoded.Code)
+			assert.Equal(t, block.Flag, decoded.Flag)
+			assert.Equal(t, block.Version, decoded.Version)
+			assert.Equal(t, block.Nonce, decoded.Nonce)
+			assert.Equal(t, block.Timestamp, decoded.Timestamp)
+			assert.Equal(t, block.AlicePort, decoded.AlicePort)
+			assert.Equal(t, block.AliceIP, decoded.AliceIP)
 
-			if len(tt.block.SignedData) > 0 {
-				assert.Equal(t, tt.block.SignedData, decoded.SignedData)
+			if block.hasRouterHash() {
+				assert.Equal(t, block.RouterHash, decoded.RouterHash)
 			} else {
-				assert.Nil(t, decoded.SignedData)
+				assert.Nil(t, decoded.RouterHash)
 			}
+
+			assert.Equal(t, block.Signature, decoded.Signature)
 		})
 	}
 }
 
-// TestDecodePeerTestBlock_HeaderOnly tests decoding with no signed data.
-func TestDecodePeerTestBlock_HeaderOnly(t *testing.T) {
-	data := make([]byte, 11)
-	data[0] = uint8(PeerTestResponse)
-	data[1] = 0 // status
-	binary.BigEndian.PutUint32(data[2:6], 0x11223344)
-	data[10] = 2 // version
-
-	ssu2Block := NewSSU2Block(BlockTypePeerTest, data)
-	decoded, err := DecodePeerTestBlock(ssu2Block)
-	require.NoError(t, err)
-	assert.Equal(t, PeerTestResponse, decoded.MessageCode)
-	assert.Equal(t, uint32(0x11223344), decoded.Nonce)
-	assert.Equal(t, uint8(2), decoded.Version)
-	assert.Nil(t, decoded.SignedData)
-}
-
-// TestEncodePeerTestBlock_NoSignedData tests encoding with empty signed data.
-func TestEncodePeerTestBlock_NoSignedData(t *testing.T) {
-	block := &PeerTestBlock{
-		MessageCode: PeerTestReply,
-		StatusCode:  3,
-		Nonce:       0xCAFEBABE,
-		Version:     2,
-	}
-
+// TestEncodePeerTestBlock_NoSignature tests encoding without signature.
+func TestEncodePeerTestBlock_NoSignature(t *testing.T) {
+	block := makePeerTestBlock(PeerTestProbe)
+	block.Signature = nil
 	encoded, err := EncodePeerTestBlock(block)
 	require.NoError(t, err)
-	assert.Equal(t, 11, len(encoded.Data))
+
+	decoded, err := DecodePeerTestBlock(encoded)
+	require.NoError(t, err)
+	assert.Nil(t, decoded.Signature)
+	assert.Equal(t, block.Nonce, decoded.Nonce)
 }

@@ -214,6 +214,11 @@ func (p *SSU2Packet) Deserialize(data []byte) error {
 	p.MAC = make([]byte, MACSize)
 	copy(p.MAC, data[macStart:])
 
+	// Extract packet number from header bytes 8-11 (big-endian).
+	// Both short (16-byte) and long (32-byte) headers store the packet
+	// number at this offset per the SSU2 spec.
+	p.PacketNumber = binary.BigEndian.Uint32(p.Header[8:12])
+
 	// Set timestamp to now (received time)
 	p.Timestamp = time.Now()
 

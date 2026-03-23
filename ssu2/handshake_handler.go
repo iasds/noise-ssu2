@@ -390,6 +390,21 @@ func (h *HandshakeHandler) CreateSessionConfirmed(connID uint64, packetNumber ui
 	header := make([]byte, 16)
 	binary.BigEndian.PutUint64(header[0:8], connID)
 	binary.BigEndian.PutUint32(header[8:12], packetNumber)
+	header[12] = MessageTypeSessionConfirmed
+	// frag field: bits 7-4 = fragment number (0), bits 3-0 = total fragments (1)
+	header[13] = 0x01
+
+	// Check that the encrypted payload fits in a single packet.
+	// Total data size = static key (32) + payload + 2 MACs (32) = payload + 64.
+	// Available space per packet = MTU - IP header (40 IPv6 worst case) - UDP (8) - SSU2 header (16) = MTU - 64.
+	// Use conservative default MTU of 1280 (IPv6 minimum).
+	const minMTU = 1280
+	const perPacketOverhead = 64 // IP(40) + UDP(8) + header(16)
+	maxPayloadPerPacket := minMTU - perPacketOverhead
+	totalDataSize := len(payload) + 64 // static key + two MACs
+	if totalDataSize > maxPayloadPerPacket {
+		return nil, oops.Errorf("SessionConfirmed payload too large for single packet (%d bytes, max %d); fragmentation not yet implemented", totalDataSize, maxPayloadPerPacket)
+	}
 
 	// MixHash(header) binds the header into the handshake hash.
 	h.handshakeState.MixHash(header)
@@ -450,6 +465,18 @@ func (h *HandshakeHandler) ProcessSessionConfirmed(packet *SSU2Packet) error {
 
 	// MixHash(header) per SSU2 spec §KDF — binds the short header into
 	// the handshake hash before processing the Noise message.
+	//
+	// Check frag field (byte 13): bits 7-4 = fragment number, bits 3-0 = total fragments.
+	// We only support single-fragment SessionConfirmed for now.
+	if len(packet.Header) >= 14 {
+		fragByte := packet.Header[13]
+		totalFrags := fragByte & 0x0F
+		fragNum := (fragByte >> 4) & 0x0F
+		if totalFrags > 1 || fragNum > 0 {
+			return oops.Errorf("fragmented SessionConfirmed not yet supported (fragment %d of %d)", fragNum, totalFrags)
+		}
+	}
+
 	h.handshakeState.MixHash(packet.Header)
 
 	// Reconstruct Noise handshake message from payload + MAC
