@@ -6,10 +6,9 @@ import (
 )
 
 // Congestion control constants per SSU2 specification.
-// NOTE: This is a simplified TCP Reno model (slow start + congestion avoidance
-// + recovery). The SSU2 spec references RFC 9002 (QUIC Loss Detection and
-// Congestion Control) which includes persistent congestion detection, ECN
-// support, and pacing. A future revision should align with RFC 9002.
+// This implements a hybrid model: TCP Reno slow start / congestion avoidance
+// with RFC 9002 persistent congestion detection (§7.6). The SSU2 spec
+// references RFC 9002 (QUIC Loss Detection and Congestion Control).
 const (
 	// MinCongestionWindow is the minimum congestion window per SSU2 spec (1280 bytes)
 	MinCongestionWindow = 1280
@@ -22,6 +21,15 @@ const (
 
 	// SlowStartThreshold is the initial ssthresh (start in slow start mode)
 	InitialSlowStartThreshold = MaxCongestionWindow
+
+	// persistentCongestionMultiplier is the kPersistentCongestionThreshold
+	// from RFC 9002 §7.6.2. If all packets sent within a time span of
+	// 3 * (smoothed_rtt + 4 * rttvar + timerGranularity) are lost, a
+	// persistent congestion event is declared.
+	persistentCongestionMultiplier = 3
+
+	// timerGranularity is the system timer granularity (RFC 9002 uses 1ms).
+	timerGranularity = time.Millisecond
 )
 
 // CongestionState represents the current congestion control state
@@ -294,6 +302,34 @@ func (cc *CongestionController) ExitRecovery() {
 		cc.state = CongestionAvoidance
 		cc.bytesAcked = 0
 	}
+}
+
+// PersistentCongestionThreshold returns the duration after which sustained
+// packet loss is considered persistent congestion (RFC 9002 §7.6.2).
+// threshold = persistentCongestionMultiplier * (smoothed_rtt + max(4*rttvar, timerGranularity))
+func (cc *CongestionController) PersistentCongestionThreshold() time.Duration {
+	cc.mutex.RLock()
+	defer cc.mutex.RUnlock()
+
+	if cc.rttEstimator == nil {
+		return 3 * time.Second // Safe default when no RTT yet
+	}
+	rto := cc.rttEstimator.GetRTO()
+	return time.Duration(persistentCongestionMultiplier) * rto
+}
+
+// OnPersistentCongestion handles a persistent congestion event per RFC 9002 §7.6.2.
+// All outstanding data is assumed lost. The congestion window is collapsed to
+// the minimum (2 * MinCongestionWindow per RFC 9002) and slow start is re-entered.
+func (cc *CongestionController) OnPersistentCongestion() {
+	cc.mutex.Lock()
+	defer cc.mutex.Unlock()
+
+	cc.cwnd = 2 * MinCongestionWindow
+	cc.ssthresh = cc.cwnd
+	cc.bytesInFlight = 0
+	cc.bytesAcked = 0
+	cc.state = SlowStart
 }
 
 // Reset returns the controller to initial state.
