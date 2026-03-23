@@ -498,9 +498,8 @@ func TestSSU2Config_WithModifiers(t *testing.T) {
 	config, _ := NewSSU2Config(routerHash, false)
 
 	// Create a mock modifier (using existing ChaCha modifier for testing)
-	customIV := make([]byte, 8)
-	modifier1, _ := NewChaChaObfuscationModifier("custom1", routerHash, customIV)
-	modifier2, _ := NewChaChaObfuscationModifier("custom2", routerHash, customIV)
+	modifier1, _ := NewChaChaObfuscationModifier("custom1", routerHash)
+	modifier2, _ := NewChaChaObfuscationModifier("custom2", routerHash)
 
 	config.WithModifiers(modifier1, modifier2)
 

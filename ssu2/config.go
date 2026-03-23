@@ -543,18 +543,26 @@ func (sc *SSU2Config) setupSSU2Modifiers() ([]handshake.HandshakeModifier, error
 }
 
 // createChaChaModifierIfEnabled creates a ChaCha20 obfuscation modifier if enabled.
+// Per SSU2 spec, the ChaCha20 key is Bob's intro key:
+//   - Initiator uses RemoteIntroKey (Bob's intro key)
+//   - Responder uses IntroKey (own intro key, which IS Bob's intro key)
 func (sc *SSU2Config) createChaChaModifierIfEnabled() (handshake.HandshakeModifier, error) {
 	if !sc.EnableChaChaObfuscation {
 		return nil, nil
 	}
 
-	iv := sc.ObfuscationIV
-	if iv == nil {
-		// Derive IV from router hash (last 8 bytes)
-		iv = sc.RouterHash[24:]
+	// Select the correct intro key based on role
+	var introKey []byte
+	if sc.Initiator && len(sc.RemoteIntroKey) == 32 {
+		introKey = sc.RemoteIntroKey
+	} else if !sc.Initiator && len(sc.IntroKey) == 32 {
+		introKey = sc.IntroKey
+	} else {
+		// Fallback to router hash for backward compatibility
+		introKey = sc.RouterHash
 	}
 
-	chachaModifier, err := NewChaChaObfuscationModifier("ssu2-chacha", sc.RouterHash, iv)
+	chachaModifier, err := NewChaChaObfuscationModifier("ssu2-chacha", introKey)
 	if err != nil {
 		return nil, oops.
 			Code("CHACHA_MODIFIER_FAILED").

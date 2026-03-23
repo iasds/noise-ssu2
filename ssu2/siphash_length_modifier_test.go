@@ -286,12 +286,8 @@ func TestSSU2LengthModifier_Integration(t *testing.T) {
 	for i := range routerHash {
 		routerHash[i] = byte(i)
 	}
-	iv := make([]byte, 8)
-	for i := range iv {
-		iv[i] = byte(i + 32)
-	}
 
-	chachaModifier, err := NewChaChaObfuscationModifier("ssu2-chacha", routerHash, iv)
+	chachaModifier, err := NewChaChaObfuscationModifier("ssu2-chacha", routerHash)
 	require.NoError(t, err)
 
 	// Test that SipHash is only for data phase, ChaCha is for handshake

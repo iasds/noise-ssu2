@@ -9,70 +9,54 @@ import (
 
 // ChaChaObfuscationModifier implements SSU2's ChaCha20-based ephemeral key obfuscation.
 // This modifier encrypts/decrypts the X and Y ephemeral keys in messages 1 and 2
-// using ChaCha20 stream cipher with the router hash as key and published IV.
+// using ChaCha20 stream cipher per the SSU2 spec:
 //
-// NOTE: The SSU2 spec defines obfuscation using ChaCha20 with key=intro_key and
-// 12-byte nonces (n=0 for message 1, n=1 for message 2). This implementation
-// uses routerHash as the key and zero-pads the 8-byte IV to 12 bytes. These
-// differences should be reconciled with the spec for interoperability.
+//	SessionRequest:  ChaCha20(key=Bob's intro key, nonce=1, data)
+//	SessionCreated:  ChaCha20(key=Bob's intro key, nonce=1, data)
 type ChaChaObfuscationModifier struct {
-	name        string
-	routerHash  []byte // 32-byte router hash (RH_B)
-	iv          []byte // 8-byte IV from network database
-	chachaState []byte // ChaCha20 state for message 2 (derived IV)
+	name     string
+	introKey []byte // 32-byte intro key (Bob's intro key per SSU2 spec)
 }
 
+// nonce1 is the 12-byte little-endian encoding of n=1, used for all SSU2
+// ChaCha20 obfuscation per the spec.
+var nonce1 = []byte{1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+
 // NewChaChaObfuscationModifier creates a new ChaCha20 obfuscation modifier for SSU2.
-// routerHash must be 32 bytes (RH_B), iv must be 8 bytes from network database.
+// introKey must be 32 bytes (Bob's intro key per the SSU2 spec).
 // Returns error if parameters are invalid.
-func NewChaChaObfuscationModifier(name string, routerHash, iv []byte) (*ChaChaObfuscationModifier, error) {
-	if len(routerHash) != 32 {
+func NewChaChaObfuscationModifier(name string, introKey []byte) (*ChaChaObfuscationModifier, error) {
+	if len(introKey) != 32 {
 		return nil, oops.
-			Code("INVALID_ROUTER_HASH").
+			Code("INVALID_INTRO_KEY").
 			In("ssu2").
-			With("hash_length", len(routerHash)).
-			Errorf("router hash must be exactly 32 bytes")
+			With("key_length", len(introKey)).
+			Errorf("intro key must be exactly 32 bytes")
 	}
 
-	if len(iv) != 8 {
-		return nil, oops.
-			Code("INVALID_IV").
-			In("ssu2").
-			With("iv_length", len(iv)).
-			Errorf("IV must be exactly 8 bytes")
-	}
-
-	// Make defensive copies to prevent external modification
-	hash := make([]byte, 32)
-	copy(hash, routerHash)
-
-	initIV := make([]byte, 8)
-	copy(initIV, iv)
+	// Make defensive copy to prevent external modification
+	key := make([]byte, 32)
+	copy(key, introKey)
 
 	return &ChaChaObfuscationModifier{
-		name:       name,
-		routerHash: hash,
-		iv:         initIV,
+		name:     name,
+		introKey: key,
 	}, nil
 }
 
 // ModifyOutbound applies ChaCha20 obfuscation to ephemeral keys in handshake messages.
-// Message 1: XOR X key with ChaCha20(routerHash, iv)
-// Message 2: XOR Y key with ChaCha20(routerHash, derived_iv)
-// Message 3+: No obfuscation (like NTCP2)
+// Message 1: XOR X key with ChaCha20(introKey, n=1)
+// Message 2: XOR Y key with ChaCha20(introKey, n=1)
+// Message 3+: No obfuscation
 func (com *ChaChaObfuscationModifier) ModifyOutbound(phase handshake.HandshakePhase, data []byte) ([]byte, error) {
-	// Only apply to 32-byte ephemeral keys (X or Y values)
 	if len(data) != 32 {
 		return data, nil
 	}
 
 	switch phase {
-	case handshake.PhaseInitial:
-		return com.encryptMessage1(data)
-	case handshake.PhaseExchange:
-		return com.encryptMessage2(data)
+	case handshake.PhaseInitial, handshake.PhaseExchange:
+		return com.applyChacha(data)
 	default:
-		// Message 3 and beyond: no ChaCha20 obfuscation
 		return data, nil
 	}
 }
@@ -80,18 +64,14 @@ func (com *ChaChaObfuscationModifier) ModifyOutbound(phase handshake.HandshakePh
 // ModifyInbound removes ChaCha20 obfuscation from ephemeral keys in handshake messages.
 // ChaCha20 is symmetric (XOR-based), so encryption and decryption are identical.
 func (com *ChaChaObfuscationModifier) ModifyInbound(phase handshake.HandshakePhase, data []byte) ([]byte, error) {
-	// Only apply to 32-byte ephemeral keys (X or Y values)
 	if len(data) != 32 {
 		return data, nil
 	}
 
 	switch phase {
-	case handshake.PhaseInitial:
-		return com.decryptMessage1(data)
-	case handshake.PhaseExchange:
-		return com.decryptMessage2(data)
+	case handshake.PhaseInitial, handshake.PhaseExchange:
+		return com.applyChacha(data)
 	default:
-		// Message 3 and beyond: no ChaCha20 obfuscation
 		return data, nil
 	}
 }
@@ -101,12 +81,9 @@ func (com *ChaChaObfuscationModifier) Name() string {
 	return com.name
 }
 
-// applyChacha creates a ChaCha20 cipher from the given nonce and XORs 32 bytes of data.
-func (com *ChaChaObfuscationModifier) applyChacha(nonceSource []byte, data []byte) ([]byte, error) {
-	nonce := make([]byte, chacha20.NonceSize)
-	copy(nonce, nonceSource)
-
-	cipher, err := chacha20.NewUnauthenticatedCipher(com.routerHash, nonce)
+// applyChacha creates a ChaCha20 cipher with fixed nonce n=1 and XORs 32 bytes of data.
+func (com *ChaChaObfuscationModifier) applyChacha(data []byte) ([]byte, error) {
+	cipher, err := chacha20.NewUnauthenticatedCipher(com.introKey, nonce1)
 	if err != nil {
 		return nil, oops.
 			Code("CHACHA20_CIPHER_CREATION_FAILED").
@@ -121,53 +98,8 @@ func (com *ChaChaObfuscationModifier) applyChacha(nonceSource []byte, data []byt
 	return result, nil
 }
 
-// encryptMessage1 encrypts message 1 using published IV.
-func (com *ChaChaObfuscationModifier) encryptMessage1(data []byte) ([]byte, error) {
-	result, err := com.applyChacha(com.iv, data)
-	if err != nil {
-		return nil, err
-	}
-
-	// Save derived state for message 2 (last 8 bytes of encrypted data)
-	com.chachaState = make([]byte, 8)
-	copy(com.chachaState, result[24:32])
-
-	return result, nil
-}
-
-// encryptMessage2 encrypts message 2 using derived IV from message 1.
-func (com *ChaChaObfuscationModifier) encryptMessage2(data []byte) ([]byte, error) {
-	if com.chachaState == nil {
-		return nil, oops.
-			Code("MISSING_CHACHA_STATE").
-			In("ssu2").
-			With("modifier_name", com.name).
-			Errorf("ChaCha20 state not available for message 2")
-	}
-
-	return com.applyChacha(com.chachaState, data)
-}
-
-// decryptMessage1 decrypts message 1 using published IV.
-// Must save state from encrypted data for message 2 decryption.
-func (com *ChaChaObfuscationModifier) decryptMessage1(encryptedData []byte) ([]byte, error) {
-	// Save derived state BEFORE decryption (from last 8 bytes of encrypted data)
-	com.chachaState = make([]byte, 8)
-	copy(com.chachaState, encryptedData[24:32])
-
-	return com.applyChacha(com.iv, encryptedData)
-}
-
-// decryptMessage2 decrypts message 2 using derived IV from message 1.
-// Identical to encryptMessage2 due to XOR symmetry.
-func (com *ChaChaObfuscationModifier) decryptMessage2(data []byte) ([]byte, error) {
-	return com.encryptMessage2(data)
-}
-
 // Close releases resources and zeroes sensitive key material.
 func (com *ChaChaObfuscationModifier) Close() error {
-	internal.SecureZero(com.routerHash)
-	internal.SecureZero(com.iv)
-	internal.SecureZero(com.chachaState)
+	internal.SecureZero(com.introKey)
 	return nil
 }

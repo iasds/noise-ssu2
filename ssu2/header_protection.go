@@ -446,8 +446,8 @@ func (hpm *HeaderProtectorManager) keysForIntroProtected() (k1, k2 []byte, err e
 }
 
 // keysForSessionCreatedRetry returns keys for SessionCreated or Retry packets.
-// Retry uses the sender's intro key for both; SessionCreated uses KDF-derived k2
-// when available, falling back to the intro key.
+// Retry uses the sender's intro key for both k1 and k2.
+// SessionCreated uses the intro key for k1 and requires KDF-derived k2 per spec.
 func (hpm *HeaderProtectorManager) keysForSessionCreatedRetry(headerType HeaderType) (k1, k2 []byte, err error) {
 	base := hpm.introKey
 	if hpm.isInitiator {
@@ -461,10 +461,15 @@ func (hpm *HeaderProtectorManager) keysForSessionCreatedRetry(headerType HeaderT
 	}
 
 	k1 = base
-	if headerType == HeaderTypeRetry || len(hpm.kdfHeader2) != HeaderKeySize {
+	if headerType == HeaderTypeRetry {
 		k2 = base
-	} else {
+	} else if len(hpm.kdfHeader2) == HeaderKeySize {
 		k2 = hpm.kdfHeader2
+	} else {
+		return nil, nil, oops.
+			Code("MISSING_KDF_KEY").
+			In("ssu2").
+			Errorf("KDF-derived k_header_2 required for SessionCreated per spec")
 	}
 	return k1, k2, nil
 }

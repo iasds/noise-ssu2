@@ -15,76 +15,53 @@ func TestNewChaChaObfuscationModifier(t *testing.T) {
 	tests := []struct {
 		name        string
 		modName     string
-		routerHash  []byte
-		iv          []byte
+		introKey    []byte
 		expectError bool
 		errorCode   string
 	}{
 		{
 			name:        "valid parameters",
 			modName:     "test-chacha",
-			routerHash:  make([]byte, 32),
-			iv:          make([]byte, 8),
+			introKey:    make([]byte, 32),
 			expectError: false,
 		},
 		{
-			name:        "invalid router hash - too short",
+			name:        "invalid intro key - too short",
 			modName:     "test-chacha",
-			routerHash:  make([]byte, 31),
-			iv:          make([]byte, 8),
+			introKey:    make([]byte, 31),
 			expectError: true,
-			errorCode:   "INVALID_ROUTER_HASH",
+			errorCode:   "INVALID_INTRO_KEY",
 		},
 		{
-			name:        "invalid router hash - too long",
+			name:        "invalid intro key - too long",
 			modName:     "test-chacha",
-			routerHash:  make([]byte, 33),
-			iv:          make([]byte, 8),
+			introKey:    make([]byte, 33),
 			expectError: true,
-			errorCode:   "INVALID_ROUTER_HASH",
+			errorCode:   "INVALID_INTRO_KEY",
 		},
 		{
-			name:        "invalid IV - too short",
+			name:        "empty intro key",
 			modName:     "test-chacha",
-			routerHash:  make([]byte, 32),
-			iv:          make([]byte, 7),
+			introKey:    []byte{},
 			expectError: true,
-			errorCode:   "INVALID_IV",
+			errorCode:   "INVALID_INTRO_KEY",
 		},
 		{
-			name:        "invalid IV - too long",
+			name:        "nil intro key",
 			modName:     "test-chacha",
-			routerHash:  make([]byte, 32),
-			iv:          make([]byte, 9),
+			introKey:    nil,
 			expectError: true,
-			errorCode:   "INVALID_IV",
-		},
-		{
-			name:        "empty router hash",
-			modName:     "test-chacha",
-			routerHash:  []byte{},
-			iv:          make([]byte, 8),
-			expectError: true,
-			errorCode:   "INVALID_ROUTER_HASH",
-		},
-		{
-			name:        "nil router hash",
-			modName:     "test-chacha",
-			routerHash:  nil,
-			iv:          make([]byte, 8),
-			expectError: true,
-			errorCode:   "INVALID_ROUTER_HASH",
+			errorCode:   "INVALID_INTRO_KEY",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mod, err := NewChaChaObfuscationModifier(tt.modName, tt.routerHash, tt.iv)
+			mod, err := NewChaChaObfuscationModifier(tt.modName, tt.introKey)
 
 			if tt.expectError {
 				assert.Error(t, err)
 				assert.Nil(t, mod)
-				// Error code checking would require oops error inspection
 			} else {
 				assert.NoError(t, err)
 				assert.NotNil(t, mod)
@@ -96,42 +73,29 @@ func TestNewChaChaObfuscationModifier(t *testing.T) {
 
 // TestChaChaObfuscationModifier_DefensiveCopy verifies defensive copying
 func TestChaChaObfuscationModifier_DefensiveCopy(t *testing.T) {
-	routerHash := make([]byte, 32)
-	iv := make([]byte, 8)
-
-	// Fill with test data
-	for i := range routerHash {
-		routerHash[i] = byte(i)
-	}
-	for i := range iv {
-		iv[i] = byte(i + 100)
+	introKey := make([]byte, 32)
+	for i := range introKey {
+		introKey[i] = byte(i)
 	}
 
-	mod, err := NewChaChaObfuscationModifier("test", routerHash, iv)
+	mod, err := NewChaChaObfuscationModifier("test", introKey)
 	require.NoError(t, err)
 
-	// Modify original slices
-	routerHash[0] = 0xFF
-	iv[0] = 0xFF
+	// Modify original slice
+	introKey[0] = 0xFF
 
-	// Verify modifier's internal copies are unchanged
-	assert.NotEqual(t, byte(0xFF), mod.routerHash[0])
-	assert.NotEqual(t, byte(0xFF), mod.iv[0])
-	assert.Equal(t, byte(0), mod.routerHash[0])
-	assert.Equal(t, byte(100), mod.iv[0])
+	// Verify modifier's internal copy is unchanged
+	assert.NotEqual(t, byte(0xFF), mod.introKey[0])
+	assert.Equal(t, byte(0), mod.introKey[0])
 }
 
 // TestChaChaObfuscationModifier_Roundtrip tests encryption/decryption roundtrip
 func TestChaChaObfuscationModifier_Roundtrip(t *testing.T) {
-	// Create modifier with random key and IV
-	routerHash := make([]byte, 32)
-	iv := make([]byte, 8)
-	_, err := rand.Read(routerHash)
-	require.NoError(t, err)
-	_, err = rand.Read(iv)
+	introKey := make([]byte, 32)
+	_, err := rand.Read(introKey)
 	require.NoError(t, err)
 
-	mod, err := NewChaChaObfuscationModifier("test-roundtrip", routerHash, iv)
+	mod, err := NewChaChaObfuscationModifier("test-roundtrip", introKey)
 	require.NoError(t, err)
 
 	// Test message 1 (PhaseInitial)
@@ -143,19 +107,17 @@ func TestChaChaObfuscationModifier_Roundtrip(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, encrypted1)
 	assert.Len(t, encrypted1, 32)
-
-	// Verify encryption changed the data
 	assert.False(t, bytes.Equal(original1, encrypted1), "encrypted data should differ from original")
 
 	// Create new modifier for decryption (simulates receiver)
-	modDecrypt, err := NewChaChaObfuscationModifier("test-decrypt", routerHash, iv)
+	modDecrypt, err := NewChaChaObfuscationModifier("test-decrypt", introKey)
 	require.NoError(t, err)
 
 	decrypted1, err := modDecrypt.ModifyInbound(handshake.PhaseInitial, encrypted1)
 	require.NoError(t, err)
 	assert.Equal(t, original1, decrypted1, "decrypted should match original")
 
-	// Test message 2 (PhaseExchange) using same modifier instances
+	// Test message 2 (PhaseExchange) - uses same key and nonce per spec
 	original2 := make([]byte, 32)
 	_, err = rand.Read(original2)
 	require.NoError(t, err)
@@ -164,7 +126,6 @@ func TestChaChaObfuscationModifier_Roundtrip(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, encrypted2)
 	assert.Len(t, encrypted2, 32)
-
 	assert.False(t, bytes.Equal(original2, encrypted2), "encrypted data should differ from original")
 
 	decrypted2, err := modDecrypt.ModifyInbound(handshake.PhaseExchange, encrypted2)
@@ -174,14 +135,11 @@ func TestChaChaObfuscationModifier_Roundtrip(t *testing.T) {
 
 // TestChaChaObfuscationModifier_PhaseSpecific tests phase-specific behavior
 func TestChaChaObfuscationModifier_PhaseSpecific(t *testing.T) {
-	routerHash := make([]byte, 32)
-	iv := make([]byte, 8)
-	_, err := rand.Read(routerHash)
-	require.NoError(t, err)
-	_, err = rand.Read(iv)
+	introKey := make([]byte, 32)
+	_, err := rand.Read(introKey)
 	require.NoError(t, err)
 
-	mod, err := NewChaChaObfuscationModifier("test-phase", routerHash, iv)
+	mod, err := NewChaChaObfuscationModifier("test-phase", introKey)
 	require.NoError(t, err)
 
 	data := make([]byte, 32)
@@ -193,7 +151,7 @@ func TestChaChaObfuscationModifier_PhaseSpecific(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, bytes.Equal(data, result))
 
-	// Test PhaseExchange - should encrypt (requires PhaseInitial first)
+	// Test PhaseExchange - should encrypt
 	result2, err := mod.ModifyOutbound(handshake.PhaseExchange, data)
 	require.NoError(t, err)
 	assert.False(t, bytes.Equal(data, result2))
@@ -206,10 +164,9 @@ func TestChaChaObfuscationModifier_PhaseSpecific(t *testing.T) {
 
 // TestChaChaObfuscationModifier_NonEphemeralKey tests handling of non-32-byte data
 func TestChaChaObfuscationModifier_NonEphemeralKey(t *testing.T) {
-	routerHash := make([]byte, 32)
-	iv := make([]byte, 8)
+	introKey := make([]byte, 32)
 
-	mod, err := NewChaChaObfuscationModifier("test-size", routerHash, iv)
+	mod, err := NewChaChaObfuscationModifier("test-size", introKey)
 	require.NoError(t, err)
 
 	testCases := []int{0, 1, 16, 31, 33, 64, 128}
@@ -219,7 +176,6 @@ func TestChaChaObfuscationModifier_NonEphemeralKey(t *testing.T) {
 			data := make([]byte, size)
 			_, _ = rand.Read(data)
 
-			// Should pass through unchanged for non-32-byte data
 			result, err := mod.ModifyOutbound(handshake.PhaseInitial, data)
 			require.NoError(t, err)
 			assert.True(t, bytes.Equal(data, result), "non-32-byte data should pass through unchanged")
@@ -227,143 +183,75 @@ func TestChaChaObfuscationModifier_NonEphemeralKey(t *testing.T) {
 	}
 }
 
-// TestChaChaObfuscationModifier_StateManagement tests state handling across messages
-func TestChaChaObfuscationModifier_StateManagement(t *testing.T) {
-	routerHash := make([]byte, 32)
-	iv := make([]byte, 8)
-	_, err := rand.Read(routerHash)
-	require.NoError(t, err)
-	_, err = rand.Read(iv)
+// TestChaChaObfuscationModifier_FixedNonce tests that the modifier uses nonce n=1 per SSU2 spec
+func TestChaChaObfuscationModifier_FixedNonce(t *testing.T) {
+	introKey := make([]byte, 32)
+	_, err := rand.Read(introKey)
 	require.NoError(t, err)
 
-	mod, err := NewChaChaObfuscationModifier("test-state", routerHash, iv)
+	mod, err := NewChaChaObfuscationModifier("test-nonce", introKey)
 	require.NoError(t, err)
 
-	// Initially, ChaCha state should be nil
-	assert.Nil(t, mod.chachaState)
-
-	// After message 1, state should be set
 	data := make([]byte, 32)
 	_, err = rand.Read(data)
 	require.NoError(t, err)
 
-	_, err = mod.ModifyOutbound(handshake.PhaseInitial, data)
-	require.NoError(t, err)
-	assert.NotNil(t, mod.chachaState, "ChaCha state should be set after message 1")
-	assert.Len(t, mod.chachaState, 8, "ChaCha state should be 8 bytes")
-
-	// Message 2 should succeed with state available
-	_, err = mod.ModifyOutbound(handshake.PhaseExchange, data)
-	require.NoError(t, err)
-}
-
-// TestChaChaObfuscationModifier_MissingState tests error when state is missing
-func TestChaChaObfuscationModifier_MissingState(t *testing.T) {
-	routerHash := make([]byte, 32)
-	iv := make([]byte, 8)
-
-	mod, err := NewChaChaObfuscationModifier("test-missing-state", routerHash, iv)
+	// Message 1 and message 2 with same data should produce same output
+	// because both use the same key and nonce n=1
+	enc1, err := mod.ModifyOutbound(handshake.PhaseInitial, data)
 	require.NoError(t, err)
 
-	data := make([]byte, 32)
+	enc2, err := mod.ModifyOutbound(handshake.PhaseExchange, data)
+	require.NoError(t, err)
 
-	// Try message 2 without calling message 1 first
-	_, err = mod.ModifyOutbound(handshake.PhaseExchange, data)
-	assert.Error(t, err, "should error when ChaCha state is missing")
+	assert.Equal(t, enc1, enc2, "same key+nonce should produce same output for same input")
 }
 
 // TestChaChaObfuscationModifier_DifferentKeys tests that different keys produce different output
 func TestChaChaObfuscationModifier_DifferentKeys(t *testing.T) {
-	iv := make([]byte, 8)
-	_, err := rand.Read(iv)
+	introKey1 := make([]byte, 32)
+	introKey2 := make([]byte, 32)
+	_, err := rand.Read(introKey1)
+	require.NoError(t, err)
+	_, err = rand.Read(introKey2)
 	require.NoError(t, err)
 
-	// Create two modifiers with different router hashes
-	routerHash1 := make([]byte, 32)
-	routerHash2 := make([]byte, 32)
-	_, err = rand.Read(routerHash1)
-	require.NoError(t, err)
-	_, err = rand.Read(routerHash2)
+	mod1, err := NewChaChaObfuscationModifier("mod1", introKey1)
 	require.NoError(t, err)
 
-	mod1, err := NewChaChaObfuscationModifier("mod1", routerHash1, iv)
-	require.NoError(t, err)
-
-	mod2, err := NewChaChaObfuscationModifier("mod2", routerHash2, iv)
+	mod2, err := NewChaChaObfuscationModifier("mod2", introKey2)
 	require.NoError(t, err)
 
 	data := make([]byte, 32)
 	_, err = rand.Read(data)
 	require.NoError(t, err)
 
-	// Encrypt with both modifiers
 	encrypted1, err := mod1.ModifyOutbound(handshake.PhaseInitial, data)
 	require.NoError(t, err)
 
 	encrypted2, err := mod2.ModifyOutbound(handshake.PhaseInitial, data)
 	require.NoError(t, err)
 
-	// Different keys should produce different ciphertext
 	assert.False(t, bytes.Equal(encrypted1, encrypted2), "different keys should produce different output")
-}
-
-// TestChaChaObfuscationModifier_DifferentIVs tests that different IVs produce different output
-func TestChaChaObfuscationModifier_DifferentIVs(t *testing.T) {
-	routerHash := make([]byte, 32)
-	_, err := rand.Read(routerHash)
-	require.NoError(t, err)
-
-	// Create two modifiers with different IVs
-	iv1 := make([]byte, 8)
-	iv2 := make([]byte, 8)
-	_, err = rand.Read(iv1)
-	require.NoError(t, err)
-	_, err = rand.Read(iv2)
-	require.NoError(t, err)
-
-	mod1, err := NewChaChaObfuscationModifier("mod1", routerHash, iv1)
-	require.NoError(t, err)
-
-	mod2, err := NewChaChaObfuscationModifier("mod2", routerHash, iv2)
-	require.NoError(t, err)
-
-	data := make([]byte, 32)
-	_, err = rand.Read(data)
-	require.NoError(t, err)
-
-	// Encrypt with both modifiers
-	encrypted1, err := mod1.ModifyOutbound(handshake.PhaseInitial, data)
-	require.NoError(t, err)
-
-	encrypted2, err := mod2.ModifyOutbound(handshake.PhaseInitial, data)
-	require.NoError(t, err)
-
-	// Different IVs should produce different ciphertext
-	assert.False(t, bytes.Equal(encrypted1, encrypted2), "different IVs should produce different output")
 }
 
 // TestChaChaObfuscationModifier_SymmetricOperation tests that ChaCha20 encryption and decryption are identical
 func TestChaChaObfuscationModifier_SymmetricOperation(t *testing.T) {
-	routerHash := make([]byte, 32)
-	iv := make([]byte, 8)
-	_, err := rand.Read(routerHash)
-	require.NoError(t, err)
-	_, err = rand.Read(iv)
+	introKey := make([]byte, 32)
+	_, err := rand.Read(introKey)
 	require.NoError(t, err)
 
-	mod, err := NewChaChaObfuscationModifier("test-symmetric", routerHash, iv)
+	mod, err := NewChaChaObfuscationModifier("test-symmetric", introKey)
 	require.NoError(t, err)
 
 	data := make([]byte, 32)
 	_, err = rand.Read(data)
 	require.NoError(t, err)
 
-	// ModifyOutbound and ModifyInbound should produce same result (XOR property)
 	encrypted, err := mod.ModifyOutbound(handshake.PhaseInitial, data)
 	require.NoError(t, err)
 
-	// Reset state for fair comparison
-	mod2, err := NewChaChaObfuscationModifier("test-symmetric2", routerHash, iv)
+	mod2, err := NewChaChaObfuscationModifier("test-symmetric2", introKey)
 	require.NoError(t, err)
 
 	decrypted, err := mod2.ModifyInbound(handshake.PhaseInitial, data)
@@ -374,12 +262,10 @@ func TestChaChaObfuscationModifier_SymmetricOperation(t *testing.T) {
 
 // BenchmarkChaChaObfuscation benchmarks the ChaCha20 obfuscation performance
 func BenchmarkChaChaObfuscation(b *testing.B) {
-	routerHash := make([]byte, 32)
-	iv := make([]byte, 8)
-	_, _ = rand.Read(routerHash)
-	_, _ = rand.Read(iv)
+	introKey := make([]byte, 32)
+	_, _ = rand.Read(introKey)
 
-	mod, _ := NewChaChaObfuscationModifier("bench", routerHash, iv)
+	mod, _ := NewChaChaObfuscationModifier("bench", introKey)
 	data := make([]byte, 32)
 	_, _ = rand.Read(data)
 
