@@ -41,7 +41,7 @@ const (
 	BlockTypeNextNonce         uint8 = 11  // Nonce rekeying (8 bytes)
 	BlockTypeACK               uint8 = 12  // Acknowledgment (5+ bytes)
 	BlockTypeAddress           uint8 = 13  // Address block (9 or 21 bytes)
-	BlockTypeIntroKey          uint8 = 14  // Introduction key (32 bytes)
+	BlockTypeReserved14        uint8 = 14  // Reserved per spec (do not use)
 	BlockTypeRelayTagRequest   uint8 = 15  // Request relay tag (3 bytes)
 	BlockTypeRelayTag          uint8 = 16  // Relay tag assignment (7 bytes)
 	BlockTypeNewToken          uint8 = 17  // New session token (15 bytes)
@@ -60,10 +60,10 @@ const (
 	minTerminationSize       = 9     // Termination data
 	minNextNonceSize         = 8     // Next nonce (8 bytes)
 	minACKSize               = 5     // ACK data
-	minIntroKeySize          = 32    // Introduction key (32 bytes)
-	minAddressSizeIPv4       = 9     // IPv4 address
-	minAddressSizeIPv6       = 21    // IPv6 address
-	minRelayTagRequestSize   = 3     // Relay tag request data
+	minReserved14Size        = 0     // Reserved block type (no data expected)
+	minAddressSizeIPv4       = 6     // IPv4 address: port(2) + IP(4)
+	minAddressSizeIPv6       = 18    // IPv6 address: port(2) + IP(16)
+	minRelayTagRequestSize   = 0     // Relay tag request (empty data per spec)
 	minRelayTagSize          = 7     // Relay tag data
 	minNewTokenSize          = 12    // New token data: 4 expiration + 8 token
 	minFirstPacketNumberSize = 4     // Initial packet number (4 bytes)
@@ -169,7 +169,7 @@ var blockMinSizes = map[uint8]int{
 	BlockTypeTermination:       minTerminationSize,
 	BlockTypeNextNonce:         minNextNonceSize,
 	BlockTypeACK:               minACKSize,
-	BlockTypeIntroKey:          minIntroKeySize,
+	BlockTypeReserved14:        minReserved14Size,
 	BlockTypeAddress:           minAddressSizeIPv4,
 	BlockTypeRelayTagRequest:   minRelayTagRequestSize,
 	BlockTypeRelayTag:          minRelayTagSize,
@@ -294,7 +294,7 @@ func IsKnownBlockType(blockType uint8) bool {
 		BlockTypeNextNonce,
 		BlockTypeACK,
 		BlockTypeAddress,
-		BlockTypeIntroKey,
+		BlockTypeReserved14,
 		BlockTypeRelayTagRequest,
 		BlockTypeRelayTag,
 		BlockTypeNewToken,
@@ -340,8 +340,8 @@ func GetBlockTypeName(blockType uint8) string {
 		return "ACK"
 	case BlockTypeAddress:
 		return "Address"
-	case BlockTypeIntroKey:
-		return "IntroKey"
+	case BlockTypeReserved14:
+		return "Reserved14"
 	case BlockTypeRelayTagRequest:
 		return "RelayTagRequest"
 	case BlockTypeRelayTag:

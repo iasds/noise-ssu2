@@ -69,8 +69,8 @@ const (
 // Size constraints from SSU2.md
 const (
 	MinPacketSize     = 40   // Minimum valid packet size
-	MaxPacketSizeIPv4 = 1472 // Maximum for IPv4
-	MaxPacketSizeIPv6 = 1452 // Maximum for IPv6
+	MaxPacketSizeIPv4 = 1472 // 1500 Ethernet MTU - 20 IPv4 header - 8 UDP header
+	MaxPacketSizeIPv6 = 1452 // 1500 Ethernet MTU - 40 IPv6 header - 8 UDP header
 )
 
 // NewSSU2Packet creates a new SSU2 packet with the specified message type.

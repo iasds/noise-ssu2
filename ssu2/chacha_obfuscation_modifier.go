@@ -10,7 +10,11 @@ import (
 // ChaChaObfuscationModifier implements SSU2's ChaCha20-based ephemeral key obfuscation.
 // This modifier encrypts/decrypts the X and Y ephemeral keys in messages 1 and 2
 // using ChaCha20 stream cipher with the router hash as key and published IV.
-// Key differences from NTCP2's AES: 8-byte IV, XOR-based stream cipher vs block cipher.
+//
+// NOTE: The SSU2 spec defines obfuscation using ChaCha20 with key=intro_key and
+// 12-byte nonces (n=0 for message 1, n=1 for message 2). This implementation
+// uses routerHash as the key and zero-pads the 8-byte IV to 12 bytes. These
+// differences should be reconciled with the spec for interoperability.
 type ChaChaObfuscationModifier struct {
 	name        string
 	routerHash  []byte // 32-byte router hash (RH_B)

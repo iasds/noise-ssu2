@@ -497,6 +497,7 @@ func (sc *SSU2Config) createBaseConnConfig() *noise.ConnConfig {
 		Pattern:          sc.Pattern,
 		Initiator:        sc.Initiator,
 		StaticKey:        make([]byte, len(sc.StaticKey)),
+		ProtocolName:     []byte(SSU2ProtocolName),
 		HandshakeTimeout: sc.HandshakeTimeout,
 		ReadTimeout:      sc.ReadTimeout,
 		WriteTimeout:     sc.WriteTimeout,

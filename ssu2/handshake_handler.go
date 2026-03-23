@@ -1,18 +1,22 @@
 package ssu2
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
-	"io"
 	"time"
 
 	"github.com/go-i2p/go-noise/internal/replaycache"
 	"github.com/go-i2p/noise"
 	"github.com/samber/oops"
 	"golang.org/x/crypto/curve25519"
-	"golang.org/x/crypto/hkdf"
 )
+
+// SSU2ProtocolName is the Noise protocol name for SSU2, as defined in the
+// I2P SSU2 specification. It indicates the XK pattern with ChaCha20
+// obfuscation and three modified handshake messages.
+const SSU2ProtocolName = "Noise_XKchaobfse+hs1+hs2+hs3_25519_ChaChaPoly_SHA256"
 
 // HandshakeHandler manages SSU2 handshake message processing using the XK pattern.
 // The XK pattern provides forward secrecy and responder authentication:
@@ -58,14 +62,16 @@ type HandshakeHandler struct {
 	replayCache *replaycache.TTLCache
 }
 
-// buildSSU2Prologue constructs the Noise prologue for SSU2 handshakes.
-// The prologue binds the handshake to the initiator's connection ID,
-// preventing replay of handshake messages across different sessions.
-func buildSSU2Prologue(initiatorConnID uint64) []byte {
-	prologue := make([]byte, 12) // "SSU2" + 8-byte connection ID
-	copy(prologue[0:4], []byte("SSU2"))
-	binary.BigEndian.PutUint64(prologue[4:12], initiatorConnID)
-	return prologue
+// buildSSU2Prologue returns the Noise prologue for SSU2 handshakes.
+// Per the SSU2 specification, the prologue is null (empty):
+//
+//	// MixHash(null prologue)
+//	h = SHA256(h);
+//
+// The connection ID is NOT part of the prologue; it is bound to the
+// handshake via header MixHash operations for each message.
+func buildSSU2Prologue(_ uint64) []byte {
+	return nil
 }
 
 // NewHandshakeHandler creates a new SSU2 handshake handler.
@@ -89,11 +95,12 @@ func NewHandshakeHandler(initiator bool, staticKey, remoteStaticKey, prologue []
 	cs := noise.NewCipherSuite(noise.DH25519, noise.CipherChaChaPoly, noise.HashSHA256)
 
 	config := noise.Config{
-		CipherSuite: cs,
-		Random:      rand.Reader,
-		Pattern:     noise.HandshakeXK,
-		Initiator:   initiator,
-		Prologue:    prologue,
+		CipherSuite:  cs,
+		Random:       rand.Reader,
+		Pattern:      noise.HandshakeXK,
+		Initiator:    initiator,
+		Prologue:     prologue,
+		ProtocolName: []byte(SSU2ProtocolName),
 		StaticKeypair: noise.DHKey{
 			Private: copyBytes(staticKey),
 			Public:  derivePublicKey(staticKey),
@@ -155,11 +162,12 @@ func NewHandshakeHandlerWithKeys(initiator bool, staticKeypair noise.DHKey, remo
 	cs := noise.NewCipherSuite(noise.DH25519, noise.CipherChaChaPoly, noise.HashSHA256)
 
 	config := noise.Config{
-		CipherSuite: cs,
-		Random:      rand.Reader,
-		Pattern:     noise.HandshakeXK,
-		Initiator:   initiator,
-		Prologue:    prologue,
+		CipherSuite:  cs,
+		Random:       rand.Reader,
+		Pattern:      noise.HandshakeXK,
+		Initiator:    initiator,
+		Prologue:     prologue,
+		ProtocolName: []byte(SSU2ProtocolName),
 		StaticKeypair: noise.DHKey{
 			Private: copyBytes(staticKeypair.Private),
 			Public:  copyBytes(staticKeypair.Public),
@@ -285,7 +293,7 @@ func (h *HandshakeHandler) ProcessSessionRequest(packet *SSU2Packet) ([]byte, er
 // - Ephemeral key (32 bytes)
 // - Encrypted blocks (DateTime, Options)
 //
-// XK pattern: ← e, ee, se
+// XK pattern: ← e, ee
 func (h *HandshakeHandler) CreateSessionCreated(sourceConnID, destConnID uint64) (*SSU2Packet, error) {
 	if h.initiator {
 		return nil, oops.Errorf("only responder can create SessionCreated")
@@ -569,24 +577,70 @@ func (h *HandshakeHandler) updateCipherStates(cs1, cs2 *noise.CipherState) {
 	}
 }
 
-// DeriveHeaderKeys derives header protection keys from the completed handshake.
-// Uses HKDF-SHA256 with the handshake hash (channel binding) as IKM.
-// Returns two 32-byte keys for use with HeaderProtectorManager.SetKDFKeys.
-func (h *HandshakeHandler) DeriveHeaderKeys() (k1, k2 []byte, err error) {
-	hash := h.handshakeState.ChannelBinding()
-	if hash == nil {
-		return nil, nil, oops.Errorf("handshake not complete: no channel binding available")
+// DeriveHeaderKeys derives data-phase header protection keys from the
+// completed handshake per the SSU2 specification:
+//
+//	keydata = HKDF(key, ZEROLEN, "HKDFSSU2DataKeys", 64)
+//	k_data       = keydata[0:31]
+//	k_header_2   = keydata[32:63]
+//
+// where "key" is the split cipher key for each direction (k_ab or k_ba).
+// Returns the send-direction k_header_2 and recv-direction k_header_2.
+// The caller supplies intro keys separately for k_header_1 (receiver's
+// intro key per spec).
+func (h *HandshakeHandler) DeriveHeaderKeys() (sendKHeader2, recvKHeader2 []byte, err error) {
+	if h.sendCipher == nil || h.recvCipher == nil {
+		return nil, nil, oops.Errorf("handshake not complete: cipher states not available")
 	}
-	reader := hkdf.New(sha256.New, hash, nil, []byte("ssu2-header-protection"))
-	k1 = make([]byte, 32)
-	k2 = make([]byte, 32)
-	if _, err := io.ReadFull(reader, k1); err != nil {
-		return nil, nil, oops.Wrapf(err, "failed to derive k_header_1")
+
+	sendKHeader2, err = deriveDataPhaseHeaderKey(h.sendCipher)
+	if err != nil {
+		return nil, nil, oops.Wrapf(err, "failed to derive send k_header_2")
 	}
-	if _, err := io.ReadFull(reader, k2); err != nil {
-		return nil, nil, oops.Wrapf(err, "failed to derive k_header_2")
+
+	recvKHeader2, err = deriveDataPhaseHeaderKey(h.recvCipher)
+	if err != nil {
+		return nil, nil, oops.Wrapf(err, "failed to derive recv k_header_2")
 	}
-	return k1, k2, nil
+
+	return sendKHeader2, recvKHeader2, nil
+}
+
+// deriveDataPhaseHeaderKey derives k_header_2 for the data phase from a
+// split cipher key using the SSU2 spec's two-step HKDF:
+//
+//	temp_key = HMAC-SHA256(key, ZEROLEN)
+//	keydata  = HMAC-SHA256(temp_key, "HKDFSSU2DataKeys" || 0x01)  // first 32 bytes
+//
+// A second round produces the next 32 bytes:
+//
+//	keydata2 = HMAC-SHA256(temp_key, keydata || "HKDFSSU2DataKeys" || 0x02)
+//
+// k_data = keydata[0:31], k_header_2 = keydata2 (second 32 bytes).
+func deriveDataPhaseHeaderKey(cs *noise.CipherState) ([]byte, error) {
+	key := cs.UnsafeKey()
+
+	info := []byte("HKDFSSU2DataKeys")
+
+	// HKDF-Extract: temp_key = HMAC-SHA256(salt=key, ikm=zerolen)
+	mac := hmac.New(sha256.New, key[:])
+	// ikm = zerolen (write nothing)
+	tempKey := mac.Sum(nil)
+
+	// HKDF-Expand T(1) = HMAC-SHA256(temp_key, info || 0x01) → k_data (32 bytes)
+	mac = hmac.New(sha256.New, tempKey)
+	mac.Write(info)
+	mac.Write([]byte{0x01})
+	t1 := mac.Sum(nil) // k_data — not used here but needed for T(2)
+
+	// HKDF-Expand T(2) = HMAC-SHA256(temp_key, T(1) || info || 0x02) → k_header_2 (32 bytes)
+	mac = hmac.New(sha256.New, tempKey)
+	mac.Write(t1)
+	mac.Write(info)
+	mac.Write([]byte{0x02})
+	kHeader2 := mac.Sum(nil)
+
+	return kHeader2, nil
 }
 
 // Close releases resources held by the HandshakeHandler, including the

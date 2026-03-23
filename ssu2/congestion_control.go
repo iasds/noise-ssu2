@@ -5,7 +5,11 @@ import (
 	"time"
 )
 
-// Congestion control constants per SSU2 specification
+// Congestion control constants per SSU2 specification.
+// NOTE: This is a simplified TCP Reno model (slow start + congestion avoidance
+// + recovery). The SSU2 spec references RFC 9002 (QUIC Loss Detection and
+// Congestion Control) which includes persistent congestion detection, ECN
+// support, and pacing. A future revision should align with RFC 9002.
 const (
 	// MinCongestionWindow is the minimum congestion window per SSU2 spec (1280 bytes)
 	MinCongestionWindow = 1280

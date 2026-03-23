@@ -27,7 +27,7 @@ type TokenCache struct {
 
 // Token represents a retry token issued to a specific address.
 type Token struct {
-	Value     []byte       // Token value (32 bytes)
+	Value     []byte       // Token value (8 bytes)
 	Address   *net.UDPAddr // UDP address this token was issued to
 	CreatedAt time.Time    // When token was created
 }
