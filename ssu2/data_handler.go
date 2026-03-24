@@ -94,6 +94,14 @@ type DataHandlerCallbacks struct {
 	// OnNextNonce is called when a NextNonce block is received.
 	// The newNonce is the 8-byte value signaling the peer's next send nonce.
 	OnNextNonce func(newNonce uint64) error
+
+	// OnFirstPacketNumber is called when a FirstPacketNumber block is received.
+	// packetNumber is the initial packet number for the data phase.
+	OnFirstPacketNumber func(packetNumber uint32) error
+
+	// OnCongestion is called when a Congestion block is received.
+	// level is the congestion experience level byte.
+	OnCongestion func(level uint8) error
 }
 
 // DataHandlerStats tracks statistics for monitoring and debugging.
@@ -236,6 +244,10 @@ func (h *DataHandler) dispatchNonCriticalBlock(block *SSU2Block) {
 		err = h.handleACK(block)
 	case BlockTypeNextNonce:
 		err = h.handleNextNonce(block.Data)
+	case BlockTypeFirstPacketNumber:
+		err = h.handleFirstPacketNumber(block.Data)
+	case BlockTypeCongestion:
+		err = h.handleCongestion(block.Data)
 	default:
 		h.incrementStat(&h.stats.UnknownBlocks)
 		log.WithFields(map[string]interface{}{
@@ -572,6 +584,40 @@ func (h *DataHandler) handleNextNonce(data []byte) error {
 	cbs := h.getCallbacks()
 	if cbs.OnNextNonce != nil {
 		return cbs.OnNextNonce(newNonce)
+	}
+
+	return nil
+}
+
+func (h *DataHandler) handleFirstPacketNumber(data []byte) error {
+	if len(data) < 4 {
+		return oops.Errorf("FirstPacketNumber block too short: %d bytes, need 4", len(data))
+	}
+
+	packetNumber := binary.BigEndian.Uint32(data[0:4])
+
+	log.WithField("packetNumber", packetNumber).Debug("Received FirstPacketNumber block")
+
+	cbs := h.getCallbacks()
+	if cbs.OnFirstPacketNumber != nil {
+		return cbs.OnFirstPacketNumber(packetNumber)
+	}
+
+	return nil
+}
+
+func (h *DataHandler) handleCongestion(data []byte) error {
+	if len(data) < 1 {
+		return oops.Errorf("Congestion block too short: %d bytes, need 1", len(data))
+	}
+
+	level := data[0]
+
+	log.WithField("level", level).Debug("Received Congestion block")
+
+	cbs := h.getCallbacks()
+	if cbs.OnCongestion != nil {
+		return cbs.OnCongestion(level)
 	}
 
 	return nil

@@ -1134,6 +1134,10 @@ func (h *SSU2Conn) sendPacketDirect(packet *SSU2Packet) error {
 		plaintextPayload = make([]byte, len(packet.Payload))
 		copy(plaintextPayload, packet.Payload)
 		// Per SSU2 spec: nonce is the packet number, AD is the 16-byte header.
+		// The message type byte (header[12]) must be set before AEAD encryption
+		// so that the AD matches what the receiver will see after deserialization.
+		// Serialize() also writes this byte, but that runs after encryption.
+		packet.Header[12] = packet.MessageType
 		cipher.SetNonce(uint64(packet.PacketNumber))
 		encrypted, err := cipher.Encrypt(nil, packet.Header[:ShortHeaderSize], packet.Payload)
 		if err != nil {

@@ -86,9 +86,11 @@ type HandshakeHandler struct {
 // The connection ID is NOT part of the prologue; it is bound to the
 // handshake via header MixHash operations for each message.
 //
-// NOTE: For Retry sessions the spec may require different prologue
-// handling (e.g., binding the Retry token). This should be revisited
-// when Retry/token-based sessions are fully implemented.
+// For Retry sessions, the retry token is placed in the Session Request
+// header (bytes 24-31) and bound via MixHash(header), not via the
+// prologue. The spec confirms: "mixHash() the header (except for Retry)"
+// — meaning the Retry message itself skips MixHash, but the subsequent
+// Session Request (with token) does MixHash its header, binding the token.
 func buildSSU2Prologue() []byte {
 	return nil
 }
