@@ -6,12 +6,12 @@ import (
 )
 
 // Congestion control constants per SSU2 specification.
-// This implements a hybrid model: TCP Reno slow start / congestion avoidance
-// with RFC 9002 persistent congestion detection (§7.6). The SSU2 spec
-// references RFC 9002 (QUIC Loss Detection and Congestion Control).
+// This implements Westwood+ congestion control with RFC 9002 persistent
+// congestion detection (§7.6). Westwood+ uses bandwidth estimation to set
+// ssthresh on loss, providing better performance over lossy links than
+// Reno's simple CWND/2 multiplicative decrease.
 //
-// NOTE: The spec recommends Westwood+ or similar for better performance over
-// lossy links typical of I2P. Future versions should consider Westwood+ or BBR.
+// The SSU2 spec recommends Westwood+ or similar for I2P's lossy overlay links.
 const (
 	// MinCongestionWindow is the minimum congestion window per SSU2 spec (1280 bytes)
 	MinCongestionWindow = 1280
@@ -33,6 +33,10 @@ const (
 
 	// timerGranularity is the system timer granularity (RFC 9002 uses 1ms).
 	timerGranularity = time.Millisecond
+
+	// bweAlpha is the EWMA smoothing factor for bandwidth estimation.
+	// Westwood+ uses 7/8 old + 1/8 new.
+	bweAlpha = 0.875
 )
 
 // CongestionState represents the current congestion control state
@@ -64,15 +68,16 @@ func (s CongestionState) String() string {
 }
 
 // CongestionController manages congestion window for SSU2 connections.
-// It implements a simplified TCP-style congestion control with:
+// It implements Westwood+ congestion control with:
 //   - Slow Start: Exponential growth until ssthresh or loss
 //   - Congestion Avoidance: Linear growth after ssthresh
 //   - Fast Recovery: Quick recovery from packet loss
+//   - Bandwidth Estimation: ACK-clocked BWE for smarter loss response
+//
+// On loss, ssthresh = max(BWE * minRTT, MinCWND) instead of Reno's cwnd/2,
+// yielding better throughput on lossy I2P overlay links.
 //
 // The controller is thread-safe and can be used concurrently.
-//
-// Per SSU2 spec, the minimum congestion window is 1280 bytes to ensure
-// at least one minimum-sized packet can always be sent.
 type CongestionController struct {
 	// cwnd is the congestion window in bytes
 	cwnd int
@@ -92,6 +97,13 @@ type CongestionController struct {
 
 	// bytesInFlight tracks unacknowledged bytes currently sent
 	bytesInFlight int
+
+	// bandwidthEstimate is the Westwood+ EWMA bandwidth estimate (bytes/sec).
+	bandwidthEstimate float64
+
+	// lastAckTime is the timestamp of the most recent ACK, used to compute
+	// per-ACK bandwidth samples for the Westwood+ BWE filter.
+	lastAckTime time.Time
 
 	// mutex protects all fields for concurrent access
 	mutex sync.RWMutex
@@ -172,10 +184,8 @@ func (cc *CongestionController) OnPacketSent(packetSize int) {
 }
 
 // OnAck processes an acknowledgment for the specified number of bytes.
-// This implements CWND growth based on the current state:
-//   - SlowStart: Increase CWND by ackedBytes (exponential growth)
-//   - CongestionAvoidance: Increase CWND by MSS per RTT (linear growth)
-//   - Recovery: Stay in recovery until all loss is recovered
+// This implements CWND growth based on the current state and updates the
+// Westwood+ bandwidth estimate from ACK inter-arrival times.
 func (cc *CongestionController) OnAck(ackedBytes int) {
 	if ackedBytes <= 0 {
 		return
@@ -183,6 +193,21 @@ func (cc *CongestionController) OnAck(ackedBytes int) {
 
 	cc.mutex.Lock()
 	defer cc.mutex.Unlock()
+
+	// Update Westwood+ bandwidth estimate from ACK timing.
+	now := time.Now()
+	if !cc.lastAckTime.IsZero() {
+		dt := now.Sub(cc.lastAckTime).Seconds()
+		if dt > 0 {
+			sample := float64(ackedBytes) / dt
+			if cc.bandwidthEstimate == 0 {
+				cc.bandwidthEstimate = sample
+			} else {
+				cc.bandwidthEstimate = bweAlpha*cc.bandwidthEstimate + (1-bweAlpha)*sample
+			}
+		}
+	}
+	cc.lastAckTime = now
 
 	// Decrease bytes in flight
 	cc.bytesInFlight -= ackedBytes
@@ -242,10 +267,9 @@ func (cc *CongestionController) handleCongestionAvoidanceAck(ackedBytes int) {
 }
 
 // OnPacketLoss handles a detected packet loss event.
-// This implements multiplicative decrease:
-//   - Set ssthresh to max(CWND/2, MinCWND)
-//   - Set CWND to ssthresh (or MinCWND in severe cases)
-//   - Enter recovery state
+// Westwood+ sets ssthresh = max(BWE * minRTT, MinCWND) instead of Reno's
+// cwnd/2, providing a more accurate window estimate based on measured
+// throughput. Falls back to cwnd/2 when no BWE is available.
 func (cc *CongestionController) OnPacketLoss() {
 	cc.mutex.Lock()
 	defer cc.mutex.Unlock()
@@ -255,13 +279,10 @@ func (cc *CongestionController) OnPacketLoss() {
 		return
 	}
 
-	// Multiplicative decrease: ssthresh = max(cwnd/2, min_cwnd)
-	cc.ssthresh = cc.cwnd / 2
-	if cc.ssthresh < MinCongestionWindow {
-		cc.ssthresh = MinCongestionWindow
-	}
+	// Westwood+ ssthresh: BWE × minRTT
+	cc.ssthresh = cc.westwoodSSThresh()
 
-	// Set CWND to ssthresh (standard Reno behavior)
+	// Set CWND to ssthresh
 	cc.cwnd = cc.ssthresh
 
 	// Enter recovery state
@@ -270,19 +291,13 @@ func (cc *CongestionController) OnPacketLoss() {
 }
 
 // OnRetransmissionTimeout handles an RTO event (more severe than packet loss).
-// This resets to slow start with minimal CWND:
-//   - Set ssthresh to max(CWND/2, MinCWND)
-//   - Set CWND to MinCWND
-//   - Enter slow start
+// Uses Westwood+ BWE for ssthresh, then resets to slow start with MinCWND.
 func (cc *CongestionController) OnRetransmissionTimeout() {
 	cc.mutex.Lock()
 	defer cc.mutex.Unlock()
 
-	// Multiplicative decrease for ssthresh
-	cc.ssthresh = cc.cwnd / 2
-	if cc.ssthresh < MinCongestionWindow {
-		cc.ssthresh = MinCongestionWindow
-	}
+	// Westwood+ ssthresh from bandwidth estimate
+	cc.ssthresh = cc.westwoodSSThresh()
 
 	// Reset CWND to minimum (restart slow start)
 	cc.cwnd = MinCongestionWindow
@@ -293,6 +308,32 @@ func (cc *CongestionController) OnRetransmissionTimeout() {
 	// Enter slow start
 	cc.state = SlowStart
 	cc.bytesAcked = 0
+}
+
+// westwoodSSThresh computes ssthresh using Westwood+ bandwidth estimation:
+// ssthresh = max(BWE * minRTT, MinCWND). Falls back to cwnd/2 when BWE or
+// minRTT is unavailable. Caller must hold cc.mutex.
+func (cc *CongestionController) westwoodSSThresh() int {
+	if cc.bandwidthEstimate > 0 && cc.rttEstimator != nil {
+		minRTT := cc.rttEstimator.GetMinRTT()
+		if minRTT > 0 {
+			bwWindow := int(cc.bandwidthEstimate * minRTT.Seconds())
+			if bwWindow < MinCongestionWindow {
+				return MinCongestionWindow
+			}
+			if bwWindow > cc.cwnd {
+				// BWE overestimate; cap at cwnd to avoid inflation
+				return cc.cwnd
+			}
+			return bwWindow
+		}
+	}
+	// Fallback: Reno-style cwnd/2
+	half := cc.cwnd / 2
+	if half < MinCongestionWindow {
+		return MinCongestionWindow
+	}
+	return half
 }
 
 // ExitRecovery transitions from recovery state to congestion avoidance.
@@ -346,6 +387,8 @@ func (cc *CongestionController) Reset() {
 	cc.state = SlowStart
 	cc.bytesAcked = 0
 	cc.bytesInFlight = 0
+	cc.bandwidthEstimate = 0
+	cc.lastAckTime = time.Time{}
 }
 
 // GetStats returns current congestion control statistics.
@@ -354,19 +397,21 @@ func (cc *CongestionController) GetStats() CongestionStats {
 	defer cc.mutex.RUnlock()
 
 	return CongestionStats{
-		CWND:          cc.cwnd,
-		SSThresh:      cc.ssthresh,
-		State:         cc.state,
-		BytesInFlight: cc.bytesInFlight,
+		CWND:              cc.cwnd,
+		SSThresh:          cc.ssthresh,
+		State:             cc.state,
+		BytesInFlight:     cc.bytesInFlight,
+		BandwidthEstimate: cc.bandwidthEstimate,
 	}
 }
 
 // CongestionStats contains a snapshot of congestion control state.
 type CongestionStats struct {
-	CWND          int
-	SSThresh      int
-	State         CongestionState
-	BytesInFlight int
+	CWND              int
+	SSThresh          int
+	State             CongestionState
+	BytesInFlight     int
+	BandwidthEstimate float64 // bytes/sec, Westwood+
 }
 
 // UpdateRTTEstimator sets or replaces the RTT estimator.

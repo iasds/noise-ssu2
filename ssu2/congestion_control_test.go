@@ -481,3 +481,87 @@ func TestCongestionController_Constants(t *testing.T) {
 	// Per SSU2 spec: Minimum congestion window: 1280 bytes
 	assert.Equal(t, 1280, MinCongestionWindow)
 }
+
+// --- Westwood+ Bandwidth Estimation Tests (G-6) ---
+
+func TestCongestionController_BWE_UpdatedOnAck(t *testing.T) {
+	rtt := NewRTTEstimator()
+	rtt.Update(50 * time.Millisecond)
+	cc := NewCongestionController(rtt)
+
+	// First ACK sets lastAckTime; second ACK produces a BWE sample.
+	cc.OnPacketSent(5000)
+	cc.OnAck(5000)
+	time.Sleep(10 * time.Millisecond)
+	cc.OnPacketSent(5000)
+	cc.OnAck(5000)
+
+	stats := cc.GetStats()
+	assert.Greater(t, stats.BandwidthEstimate, 0.0, "BWE should be positive after second ACK")
+}
+
+func TestCongestionController_BWE_SSThreshOnLoss(t *testing.T) {
+	rtt := NewRTTEstimator()
+	rtt.Update(100 * time.Millisecond)
+	cc := NewCongestionController(rtt)
+
+	// Build up a BWE by sending and acking data with a small delay.
+	for i := 0; i < 10; i++ {
+		cc.OnPacketSent(1280)
+		time.Sleep(5 * time.Millisecond)
+		cc.OnAck(1280)
+	}
+
+	cwndBefore := cc.GetCWND()
+	cc.OnPacketLoss()
+
+	// Westwood+ ssthresh should be BWE*minRTT, not necessarily cwnd/2
+	ssthresh := cc.GetSSThresh()
+	assert.GreaterOrEqual(t, ssthresh, MinCongestionWindow)
+	assert.LessOrEqual(t, ssthresh, cwndBefore)
+}
+
+func TestCongestionController_BWE_FallbackNoEstimator(t *testing.T) {
+	// Without RTT estimator, falls back to Reno-style cwnd/2
+	cc := NewCongestionController(nil)
+	cc.SetCWND(20000)
+
+	cc.OnPacketLoss()
+	assert.Equal(t, 10000, cc.GetSSThresh(), "should fall back to cwnd/2")
+	assert.Equal(t, 10000, cc.GetCWND())
+}
+
+func TestCongestionController_BWE_ResetClearsBWE(t *testing.T) {
+	rtt := NewRTTEstimator()
+	rtt.Update(50 * time.Millisecond)
+	cc := NewCongestionController(rtt)
+
+	// Two ACKs to generate a BWE.
+	cc.OnPacketSent(1280)
+	cc.OnAck(1280)
+	time.Sleep(5 * time.Millisecond)
+	cc.OnPacketSent(1280)
+	cc.OnAck(1280)
+	assert.Greater(t, cc.GetStats().BandwidthEstimate, 0.0)
+
+	cc.Reset()
+	assert.Equal(t, 0.0, cc.GetStats().BandwidthEstimate)
+}
+
+func TestCongestionController_BWE_RTOUsesBWE(t *testing.T) {
+	rtt := NewRTTEstimator()
+	rtt.Update(100 * time.Millisecond)
+	cc := NewCongestionController(rtt)
+
+	// Build BWE
+	for i := 0; i < 10; i++ {
+		cc.OnPacketSent(1280)
+		time.Sleep(5 * time.Millisecond)
+		cc.OnAck(1280)
+	}
+
+	cc.OnRetransmissionTimeout()
+	assert.Equal(t, MinCongestionWindow, cc.GetCWND())
+	assert.GreaterOrEqual(t, cc.GetSSThresh(), MinCongestionWindow)
+	assert.Equal(t, SlowStart, cc.GetState())
+}

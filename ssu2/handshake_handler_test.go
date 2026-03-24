@@ -882,10 +882,10 @@ func TestFixedPointClamp(t *testing.T) {
 func TestParseOptionsBlock(t *testing.T) {
 	data := make([]byte, 15)
 	binary.BigEndian.PutUint16(data[0:2], 2)
-	data[2] = floatToFixedPoint(1.0)  // tmin
-	data[3] = floatToFixedPoint(3.5)  // tmax
-	data[4] = floatToFixedPoint(0.5)  // rmin
-	data[5] = floatToFixedPoint(2.0)  // rmax
+	data[2] = floatToFixedPoint(1.0)            // tmin
+	data[3] = floatToFixedPoint(3.5)            // tmax
+	data[4] = floatToFixedPoint(0.5)            // rmin
+	data[5] = floatToFixedPoint(2.0)            // rmax
 	binary.BigEndian.PutUint16(data[6:8], 100)  // tdummy
 	binary.BigEndian.PutUint16(data[8:10], 200) // rdummy
 	binary.BigEndian.PutUint16(data[10:12], 50) // tdelay
@@ -980,10 +980,10 @@ func TestNegotiatedPadding_BothPresent(t *testing.T) {
 	assert.InDelta(t, 2.0, neg.RMaxRatio, 0.0625)
 
 	// Dummy: min of each pair
-	assert.Equal(t, uint16(80), neg.TDummy)   // min(local.TDummy=100, peer.RDummy=80)
-	assert.Equal(t, uint16(150), neg.RDummy)  // min(local.RDummy=200, peer.TDummy=150)
-	assert.Equal(t, uint16(50), neg.TDelay)   // min(local.TDelay=50, peer.RDelay=70)
-	assert.Equal(t, uint16(30), neg.RDelay)   // min(local.RDelay=60, peer.TDelay=30)
+	assert.Equal(t, uint16(80), neg.TDummy)  // min(local.TDummy=100, peer.RDummy=80)
+	assert.Equal(t, uint16(150), neg.RDummy) // min(local.RDummy=200, peer.TDummy=150)
+	assert.Equal(t, uint16(50), neg.TDelay)  // min(local.TDelay=50, peer.RDelay=70)
+	assert.Equal(t, uint16(30), neg.RDelay)  // min(local.RDelay=60, peer.TDelay=30)
 }
 
 func TestNegotiatedPadding_NilPeer(t *testing.T) {
