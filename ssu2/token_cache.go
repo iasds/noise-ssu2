@@ -15,14 +15,20 @@ import (
 // The NewToken block (Type 17) carries: 4-byte expiration + 8-byte token = 12 bytes of data.
 const TokenSize = 8
 
+// MaxTokenCacheSize is the maximum number of tokens that can be stored.
+// This prevents unbounded growth from peers rapidly changing addresses.
+const MaxTokenCacheSize = 10000
+
 // TokenCache manages tokens for SSU2 retry mechanism.
 // Tokens are used to prevent address spoofing attacks during connection establishment.
 // Per SSU2 specification, tokens are short-lived (typically 60 seconds) and tied to
-// a specific UDP address.
+// a specific UDP address. The cache enforces a maximum size of MaxTokenCacheSize
+// entries; when full, the oldest token is evicted.
 type TokenCache struct {
-	tokens map[string]*Token // Key: address string, Value: token data
-	ttl    time.Duration     // Token time-to-live
-	mutex  sync.RWMutex
+	tokens  map[string]*Token // Key: address string, Value: token data
+	ttl     time.Duration     // Token time-to-live
+	maxSize int               // Maximum number of cached tokens
+	mutex   sync.RWMutex
 }
 
 // Token represents a retry token issued to a specific address.
@@ -40,8 +46,9 @@ func NewTokenCache(ttl time.Duration) *TokenCache {
 	}
 
 	return &TokenCache{
-		tokens: make(map[string]*Token),
-		ttl:    ttl,
+		tokens:  make(map[string]*Token),
+		ttl:     ttl,
+		maxSize: MaxTokenCacheSize,
 	}
 }
 
@@ -74,6 +81,11 @@ func (tc *TokenCache) GenerateToken(addr *net.UDPAddr) ([]byte, error) {
 
 	tc.mutex.Lock()
 	defer tc.mutex.Unlock()
+
+	// Evict oldest token if at capacity
+	if len(tc.tokens) >= tc.maxSize {
+		tc.evictOldestLocked()
+	}
 
 	// Store token keyed by address string
 	tc.tokens[addr.String()] = token
@@ -182,6 +194,26 @@ func (tc *TokenCache) InvalidateAddress(addr *net.UDPAddr) {
 	tc.mutex.Lock()
 	defer tc.mutex.Unlock()
 	delete(tc.tokens, key)
+}
+
+// evictOldestLocked removes the oldest token from the cache.
+// Caller must hold tc.mutex.
+func (tc *TokenCache) evictOldestLocked() {
+	var oldestKey string
+	var oldestTime time.Time
+	first := true
+
+	for key, token := range tc.tokens {
+		if first || token.CreatedAt.Before(oldestTime) {
+			oldestKey = key
+			oldestTime = token.CreatedAt
+			first = false
+		}
+	}
+
+	if !first {
+		delete(tc.tokens, oldestKey)
+	}
 }
 
 // GetTTL returns the token time-to-live duration.

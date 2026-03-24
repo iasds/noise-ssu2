@@ -91,7 +91,7 @@ func TestCongestionController_AvailableWindow(t *testing.T) {
 
 	t.Run("partial window after sending", func(t *testing.T) {
 		cc := NewCongestionController(nil)
-		sent := 5000
+		sent := InitialCongestionWindow / 2
 		cc.OnPacketSent(sent)
 
 		expected := InitialCongestionWindow - sent

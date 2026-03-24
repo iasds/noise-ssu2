@@ -12,7 +12,9 @@ import (
 // It manages hole punch attempts with state tracking, retries, and timeout handling.
 //
 // The HolePunch message (type 11) uses the same wire format as RelayIntro:
-//   [Flag:1][SenderHash:32][Nonce:4][RelayTag:4][Timestamp:4][Ver:1][Asz:1][Port:2][IP:asz-2]
+//
+//	[Flag:1][SenderHash:32][Nonce:4][RelayTag:4][Timestamp:4][Ver:1][Asz:1][Port:2][IP:asz-2]
+//
 // See RelayIntroBlock in relay_blocks.go for the encoder/decoder.
 //
 // Design rationale:

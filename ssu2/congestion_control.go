@@ -16,8 +16,9 @@ const (
 	// MinCongestionWindow is the minimum congestion window per SSU2 spec (1280 bytes)
 	MinCongestionWindow = 1280
 
-	// InitialCongestionWindow is the initial CWND (10 * MSS is common, using min MTU)
-	InitialCongestionWindow = MinCongestionWindow * 10
+	// InitialCongestionWindow is the initial CWND per SSU2 spec: 3×MTU.
+	// Using IPv4 MTU (1472) as the baseline gives 4416 bytes.
+	InitialCongestionWindow = MaxPacketSizeIPv4 * 3
 
 	// MaxCongestionWindow is the maximum CWND to prevent memory exhaustion
 	MaxCongestionWindow = 1024 * 1024 // 1 MB
