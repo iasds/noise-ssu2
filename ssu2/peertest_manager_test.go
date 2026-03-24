@@ -537,3 +537,80 @@ func TestPeerTestManager_DefensiveCopy(t *testing.T) {
 	assert.Equal(t, TestRequested, test2.State)
 	assert.Equal(t, 8080, test2.BobAddr.Port)
 }
+
+// TestPeerTestManager_InitiatePeerTest_ZeroPort tests that port 0 is rejected.
+func TestPeerTestManager_InitiatePeerTest_ZeroPort(t *testing.T) {
+	listener := createMockListener(t)
+	defer listener.Close()
+
+	ptm := NewPeerTestManager(listener)
+
+	bobAddr := &net.UDPAddr{IP: net.IPv4(192, 168, 1, 1), Port: 0}
+	nonce, err := ptm.InitiatePeerTest(bobAddr)
+	assert.Error(t, err)
+	assert.Zero(t, nonce)
+	assert.Contains(t, err.Error(), "invalid source port")
+}
+
+// TestPeerTestManager_CreateRelayTest_ZeroPort tests that port 0 is rejected.
+func TestPeerTestManager_CreateRelayTest_ZeroPort(t *testing.T) {
+	listener := createMockListener(t)
+	defer listener.Close()
+
+	ptm := NewPeerTestManager(listener)
+
+	aliceAddr := &net.UDPAddr{IP: net.IPv4(192, 168, 1, 1), Port: 0}
+	charlieAddr := &net.UDPAddr{IP: net.IPv4(10, 0, 0, 1), Port: 9090}
+
+	_, err := ptm.CreateRelayTest(42, aliceAddr, charlieAddr)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid source port")
+
+	// Charlie zero port also rejected
+	aliceAddr.Port = 8080
+	charlieAddr.Port = 0
+	_, err = ptm.CreateRelayTest(43, aliceAddr, charlieAddr)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid source port")
+}
+
+// TestPeerTestManager_CreateResponderTest_ZeroPort tests that port 0 is rejected.
+func TestPeerTestManager_CreateResponderTest_ZeroPort(t *testing.T) {
+	listener := createMockListener(t)
+	defer listener.Close()
+
+	ptm := NewPeerTestManager(listener)
+
+	aliceAddr := &net.UDPAddr{IP: net.IPv4(192, 168, 1, 1), Port: 0}
+	bobAddr := &net.UDPAddr{IP: net.IPv4(10, 0, 0, 1), Port: 9090}
+
+	err := ptm.CreateResponderTest(42, aliceAddr, bobAddr)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid source port")
+
+	// Bob zero port also rejected
+	aliceAddr.Port = 8080
+	bobAddr.Port = 0
+	err = ptm.CreateResponderTest(43, aliceAddr, bobAddr)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid source port")
+}
+
+// TestPeerTestManager_SetAliceAddr_ZeroPort tests that port 0 is rejected.
+func TestPeerTestManager_SetAliceAddr_ZeroPort(t *testing.T) {
+	listener := createMockListener(t)
+	defer listener.Close()
+
+	ptm := NewPeerTestManager(listener)
+
+	// First create a test
+	bobAddr := &net.UDPAddr{IP: net.IPv4(192, 168, 1, 1), Port: 8080}
+	nonce, err := ptm.InitiatePeerTest(bobAddr)
+	require.NoError(t, err)
+
+	// Now try to set alice addr with port 0
+	badAddr := &net.UDPAddr{IP: net.IPv4(10, 0, 0, 1), Port: 0}
+	err = ptm.SetAliceAddr(nonce, badAddr)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid source port")
+}

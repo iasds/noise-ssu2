@@ -285,6 +285,20 @@ func SelectWorstNATType(nat1, nat2 NATType) NATType {
 	return nat2 // nat2 is more restrictive
 }
 
+// IsValidSourcePort checks if a UDP address has a valid (non-reserved) source port.
+//
+// Port 0 is reserved by IANA and must not appear in peer test messages.
+// Accepting port 0 could allow crafted packets to bypass connectivity checks
+// or cause subtle failures in NAT traversal logic.
+//
+// Returns true if addr is non-nil and port is in the range [1, 65535].
+func IsValidSourcePort(addr *net.UDPAddr) bool {
+	if addr == nil {
+		return false
+	}
+	return addr.Port > 0
+}
+
 // DescribeNATCapabilities returns a human-readable description
 // of what connectivity is possible with the given NAT type.
 //

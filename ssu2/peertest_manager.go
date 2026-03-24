@@ -267,6 +267,13 @@ func (ptm *PeerTestManager) InitiatePeerTest(bobAddr *net.UDPAddr) (uint32, erro
 			In("peertest_manager").
 			Errorf("bob address cannot be nil")
 	}
+	if !IsValidSourcePort(bobAddr) {
+		return 0, oops.
+			Code("INVALID_PORT").
+			In("peertest_manager").
+			With("port", bobAddr.Port).
+			Errorf("bob address has invalid source port %d", bobAddr.Port)
+	}
 
 	// Generate cryptographically random nonce
 	var nonceBytes [4]byte
@@ -582,11 +589,25 @@ func (ptm *PeerTestManager) CreateRelayTest(nonce uint32, aliceAddr, charlieAddr
 			In("peertest_manager").
 			Errorf("alice address cannot be nil")
 	}
+	if !IsValidSourcePort(aliceAddr) {
+		return 0, oops.
+			Code("INVALID_PORT").
+			In("peertest_manager").
+			With("port", aliceAddr.Port).
+			Errorf("alice address has invalid source port %d", aliceAddr.Port)
+	}
 	if charlieAddr == nil {
 		return 0, oops.
 			Code("INVALID_ADDRESS").
 			In("peertest_manager").
 			Errorf("charlie address cannot be nil")
+	}
+	if !IsValidSourcePort(charlieAddr) {
+		return 0, oops.
+			Code("INVALID_PORT").
+			In("peertest_manager").
+			With("port", charlieAddr.Port).
+			Errorf("charlie address has invalid source port %d", charlieAddr.Port)
 	}
 
 	ptm.mutex.Lock()
@@ -631,11 +652,25 @@ func (ptm *PeerTestManager) CreateResponderTest(nonce uint32, aliceAddr, bobAddr
 			In("peertest_manager").
 			Errorf("alice address cannot be nil")
 	}
+	if !IsValidSourcePort(aliceAddr) {
+		return oops.
+			Code("INVALID_PORT").
+			In("peertest_manager").
+			With("port", aliceAddr.Port).
+			Errorf("alice address has invalid source port %d", aliceAddr.Port)
+	}
 	if bobAddr == nil {
 		return oops.
 			Code("INVALID_ADDRESS").
 			In("peertest_manager").
 			Errorf("bob address cannot be nil")
+	}
+	if !IsValidSourcePort(bobAddr) {
+		return oops.
+			Code("INVALID_PORT").
+			In("peertest_manager").
+			With("port", bobAddr.Port).
+			Errorf("bob address has invalid source port %d", bobAddr.Port)
 	}
 
 	ptm.mutex.Lock()
@@ -672,6 +707,13 @@ func (ptm *PeerTestManager) SetAliceAddr(nonce uint32, addr *net.UDPAddr) error 
 			Code("INVALID_ADDRESS").
 			In("peertest_manager").
 			Errorf("address cannot be nil")
+	}
+	if !IsValidSourcePort(addr) {
+		return oops.
+			Code("INVALID_PORT").
+			In("peertest_manager").
+			With("port", addr.Port).
+			Errorf("alice address has invalid source port %d", addr.Port)
 	}
 	return ptm.withTest(nonce, func(test *PeerTest) {
 		test.AliceAddr = addr

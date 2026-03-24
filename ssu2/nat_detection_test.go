@@ -580,3 +580,45 @@ func TestNATDetectionIntegration(t *testing.T) {
 		assert.Equal(t, 1, CompareNATTypes(NATSymmetric, NATCone))
 	})
 }
+
+// TestIsValidSourcePort tests source port validation.
+func TestIsValidSourcePort(t *testing.T) {
+	tests := []struct {
+		name     string
+		addr     *net.UDPAddr
+		expected bool
+	}{
+		{
+			name:     "valid port",
+			addr:     &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 8080},
+			expected: true,
+		},
+		{
+			name:     "port zero",
+			addr:     &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 0},
+			expected: false,
+		},
+		{
+			name:     "nil address",
+			addr:     nil,
+			expected: false,
+		},
+		{
+			name:     "max port",
+			addr:     &net.UDPAddr{IP: net.ParseIP("10.0.0.1"), Port: 65535},
+			expected: true,
+		},
+		{
+			name:     "port one",
+			addr:     &net.UDPAddr{IP: net.ParseIP("10.0.0.1"), Port: 1},
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := IsValidSourcePort(tt.addr)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
