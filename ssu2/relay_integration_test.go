@@ -72,10 +72,15 @@ func TestRelay6StepProcess(t *testing.T) {
 	t.Log("Step 2: Bob creates RelayIntro to forward Alice's info to Charlie")
 
 	relayIntro := &RelayIntroBlock{
+		Flag:            0,
 		AliceRouterHash: alice.routerHash,
+		Nonce:           relayRequest.Nonce,
 		AliceRelayTag:   aliceRelayTag,
-		AliceAddress:    alice.addr,
 		Timestamp:       uint32(time.Now().Unix()),
+		Version:         2,
+		AlicePort:       uint16(alice.addr.Port),
+		AliceIP:         alice.addr.IP,
+		Signature:       make([]byte, 64),
 	}
 
 	introBlock, err := EncodeRelayIntro(relayIntro)
@@ -86,7 +91,7 @@ func TestRelay6StepProcess(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, relayIntro.AliceRouterHash, decodedIntro.AliceRouterHash)
 	assert.Equal(t, relayIntro.AliceRelayTag, decodedIntro.AliceRelayTag)
-	assert.Equal(t, relayIntro.AliceAddress.String(), decodedIntro.AliceAddress.String())
+	assert.Equal(t, relayIntro.Nonce, decodedIntro.Nonce)
 	t.Log("Step 2 complete: RelayIntro encoded and decoded successfully")
 
 	// === Step 3: Charlie → Bob: RelayResponse ===
@@ -297,8 +302,11 @@ func TestRelayIntroEncoding(t *testing.T) {
 			intro: &RelayIntroBlock{
 				AliceRouterHash: make([]byte, 32),
 				AliceRelayTag:   99999,
-				AliceAddress:    &net.UDPAddr{IP: net.IPv4(10, 0, 0, 1), Port: 12345},
+				AlicePort:       12345,
+				AliceIP:         net.IPv4(10, 0, 0, 1),
+				Version:         2,
 				Timestamp:       uint32(time.Now().Unix()),
+				Signature:       make([]byte, 64),
 			},
 			wantErr: false,
 		},
@@ -307,8 +315,11 @@ func TestRelayIntroEncoding(t *testing.T) {
 			intro: &RelayIntroBlock{
 				AliceRouterHash: make([]byte, 32),
 				AliceRelayTag:   88888,
-				AliceAddress:    &net.UDPAddr{IP: net.ParseIP("::1"), Port: 54321},
+				AlicePort:       54321,
+				AliceIP:         net.ParseIP("::1"),
+				Version:         2,
 				Timestamp:       uint32(time.Now().Unix()),
+				Signature:       make([]byte, 64),
 			},
 			wantErr: false,
 		},
@@ -335,7 +346,7 @@ func TestRelayIntroEncoding(t *testing.T) {
 
 			assert.Equal(t, tc.intro.AliceRouterHash, decoded.AliceRouterHash)
 			assert.Equal(t, tc.intro.AliceRelayTag, decoded.AliceRelayTag)
-			assert.Equal(t, tc.intro.AliceAddress.Port, decoded.AliceAddress.Port)
+			assert.Equal(t, tc.intro.AlicePort, decoded.AlicePort)
 			assert.Equal(t, tc.intro.Timestamp, decoded.Timestamp)
 		})
 	}

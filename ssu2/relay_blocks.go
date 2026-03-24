@@ -76,25 +76,47 @@ type RelayResponseBlock struct {
 
 // RelayIntroBlock represents a relay introduction (Type 9).
 // Bob sends this to Charlie to introduce Alice.
+//
+// Wire format per SSU2 spec:
+//
+//	[flag:1][AliceRouterHash:32][nonce:4][relay_tag:4][timestamp:4]
+//	[ver:1][asz:1][AlicePort:2][AliceIP:asz-2][signature:varies]
 type RelayIntroBlock struct {
+	// Flag is a 1-byte flag field (unused, set to 0)
+	Flag uint8
+
 	// AliceRouterHash is Alice's 32-byte router identity hash
 	AliceRouterHash []byte
 
-	// AliceRelayTag is the tag Alice will use (4 bytes)
-	AliceRelayTag uint32
+	// Nonce uniquely identifies this relay request (4 bytes, forwarded from Alice)
+	Nonce uint32
 
-	// AliceAddress is Alice's UDP address as seen by Bob
-	AliceAddress *net.UDPAddr
+	// AliceRelayTag is the itag from Charlie's RI (4 bytes)
+	AliceRelayTag uint32
 
 	// Timestamp is when the intro was created (4 bytes, seconds since epoch)
 	Timestamp uint32
+
+	// Version is the SSU version for the introduction (1=SSU1, 2=SSU2)
+	Version uint8
+
+	// AlicePort is Alice's port number (2 bytes, big endian)
+	AlicePort uint16
+
+	// AliceIP is Alice's IP address (4 bytes IPv4 or 16 bytes IPv6)
+	AliceIP net.IP
+
+	// Signature is the variable-length signature (64 bytes for Ed25519)
+	Signature []byte
 }
 
 // RelayTagRequestBlock represents a relay tag request (Type 15).
 // Request allocation of a relay tag from an introducer.
 type RelayTagRequestBlock struct {
-	// Nonce uniquely identifies this request (4 bytes)
-	// Minimum 3 bytes per ssu2.rst, we use 4 for alignment
+	// Nonce uniquely identifies this request (4 bytes).
+	// The spec says the data portion is "3 bytes minimum". This implementation
+	// always encodes 4 bytes but accepts 3- or 4-byte nonces when decoding,
+	// for interoperability with peers using only 3 bytes.
 	Nonce uint32
 }
 
@@ -280,62 +302,49 @@ func DecodeRelayResponse(block *SSU2Block) (*RelayResponseBlock, error) {
 
 // EncodeRelayIntro encodes a RelayIntro block to wire format.
 //
-// Wire format:
+// Wire format per SSU2 spec:
 //
-//	[AliceRouterHash:32][AliceRelayTag:4][Timestamp:4][AddressType:1][Address:variable]
-//
-// Address encoding:
-//
-//	IPv4: [IP:4][Port:2]
-//	IPv6: [IP:16][Port:2]
-//
-// Parameters:
-//   - intro: RelayIntro data to encode
-//
-// Returns:
-//   - *SSU2Block: Encoded block ready for transmission
-//   - error: If validation fails
+//	[flag:1][AliceRouterHash:32][nonce:4][relay_tag:4][timestamp:4]
+//	[ver:1][asz:1][AlicePort:2][AliceIP:asz-2][signature:varies]
 func EncodeRelayIntro(intro *RelayIntroBlock) (*SSU2Block, error) {
 	if intro == nil {
 		return nil, oops.Errorf("RelayIntroBlock is nil")
 	}
 
-	// Validate router hash
 	if len(intro.AliceRouterHash) != 32 {
 		return nil, oops.Errorf("AliceRouterHash must be 32 bytes, got %d", len(intro.AliceRouterHash))
 	}
 
-	// Validate address
-	if intro.AliceAddress == nil {
-		return nil, oops.Errorf("AliceAddress is nil")
-	}
-
-	// Calculate size
-	dataSize := 32 + 4 + 4 + 1 // hash + tag + timestamp + addrType
-	isIPv4 := intro.AliceAddress.IP.To4() != nil
-	if isIPv4 {
-		dataSize += 6 // IPv4(4) + port(2)
+	ip4 := intro.AliceIP.To4()
+	var ipBytes []byte
+	var asz uint8
+	if ip4 != nil {
+		ipBytes = ip4
+		asz = 6 // port(2) + IPv4(4)
 	} else {
-		dataSize += 18 // IPv6(16) + port(2)
+		ip6 := intro.AliceIP.To16()
+		if ip6 == nil {
+			return nil, oops.Errorf("invalid AliceIP")
+		}
+		ipBytes = ip6
+		asz = 18 // port(2) + IPv6(16)
 	}
 
+	// flag(1) + hash(32) + nonce(4) + relay_tag(4) + timestamp(4) + ver(1) + asz(1) + port(2) + ip + signature
+	dataSize := 1 + 32 + 4 + 4 + 4 + 1 + 1 + 2 + len(ipBytes) + len(intro.Signature)
 	data := make([]byte, dataSize)
 
-	// Encode fixed fields
-	copy(data[0:32], intro.AliceRouterHash)
-	binary.BigEndian.PutUint32(data[32:36], intro.AliceRelayTag)
-	binary.BigEndian.PutUint32(data[36:40], intro.Timestamp)
-
-	// Encode address
-	if isIPv4 {
-		data[40] = 4 // IPv4
-		ip4 := intro.AliceAddress.IP.To4()
-		copy(data[41:45], ip4)
-		binary.BigEndian.PutUint16(data[45:47], uint16(intro.AliceAddress.Port))
-	} else {
-		data[40] = 6 // IPv6
-		copy(data[41:57], intro.AliceAddress.IP.To16())
-		binary.BigEndian.PutUint16(data[57:59], uint16(intro.AliceAddress.Port))
+	data[0] = intro.Flag
+	copy(data[1:33], intro.AliceRouterHash)
+	binary.BigEndian.PutUint32(data[33:37], intro.Nonce)
+	binary.BigEndian.PutUint32(data[37:41], intro.AliceRelayTag)
+	binary.BigEndian.PutUint32(data[41:45], intro.Timestamp)
+	data[45] = intro.Version
+	data[46] = asz
+	binary.BigEndian.PutUint16(data[47:49], intro.AlicePort)
+	copy(data[49:49+len(ipBytes)], ipBytes)
+	if len(intro.Signature) > 0 {
+		copy(data[49+len(ipBytes):], intro.Signature)
 	}
 
 	return NewSSU2Block(BlockTypeRelayIntro, data), nil
@@ -343,12 +352,10 @@ func EncodeRelayIntro(intro *RelayIntroBlock) (*SSU2Block, error) {
 
 // DecodeRelayIntro decodes a RelayIntro block from wire format.
 //
-// Parameters:
-//   - block: SSU2Block with Type 9
+// Wire format per SSU2 spec:
 //
-// Returns:
-//   - *RelayIntroBlock: Decoded relay intro
-//   - error: If decoding fails or validation fails
+//	[flag:1][AliceRouterHash:32][nonce:4][relay_tag:4][timestamp:4]
+//	[ver:1][asz:1][AlicePort:2][AliceIP:asz-2][signature:varies]
 func DecodeRelayIntro(block *SSU2Block) (*RelayIntroBlock, error) {
 	if block == nil {
 		return nil, oops.Errorf("block is nil")
@@ -359,46 +366,49 @@ func DecodeRelayIntro(block *SSU2Block) (*RelayIntroBlock, error) {
 	}
 
 	data := block.Data
-	if len(data) < 47 {
-		return nil, oops.Errorf("RelayIntro block too short: %d bytes (minimum 47)", len(data))
+	// Minimum: flag(1)+hash(32)+nonce(4)+tag(4)+timestamp(4)+ver(1)+asz(1)+port(2)+ip(4) = 53
+	if len(data) < 53 {
+		return nil, oops.Errorf("RelayIntro block too short: %d bytes (minimum 53)", len(data))
 	}
 
-	// Decode fixed fields
+	flag := data[0]
 	routerHash := make([]byte, 32)
-	copy(routerHash, data[0:32])
-	relayTag := binary.BigEndian.Uint32(data[32:36])
-	timestamp := binary.BigEndian.Uint32(data[36:40])
-	addrType := data[40]
+	copy(routerHash, data[1:33])
+	nonce := binary.BigEndian.Uint32(data[33:37])
+	relayTag := binary.BigEndian.Uint32(data[37:41])
+	timestamp := binary.BigEndian.Uint32(data[41:45])
+	ver := data[45]
+	asz := data[46]
+	port := binary.BigEndian.Uint16(data[47:49])
 
-	// Decode address based on type
-	var addr *net.UDPAddr
-	if addrType == 4 {
-		// IPv4
-		if len(data) < 47 {
-			return nil, oops.Errorf("RelayIntro IPv4 block too short: %d bytes (expected 47)", len(data))
-		}
-		ip := net.IP(make([]byte, 4))
-		copy(ip, data[41:45])
-		port := binary.BigEndian.Uint16(data[45:47])
-		addr = &net.UDPAddr{IP: ip, Port: int(port)}
-	} else if addrType == 6 {
-		// IPv6
-		if len(data) < 59 {
-			return nil, oops.Errorf("RelayIntro IPv6 block too short: %d bytes (expected 59)", len(data))
-		}
-		ip := net.IP(make([]byte, 16))
-		copy(ip, data[41:57])
-		port := binary.BigEndian.Uint16(data[57:59])
-		addr = &net.UDPAddr{IP: ip, Port: int(port)}
-	} else {
-		return nil, oops.Errorf("invalid address type: %d (expected 4 or 6)", addrType)
+	if asz != 6 && asz != 18 {
+		return nil, oops.Errorf("invalid asz: %d (expected 6 or 18)", asz)
+	}
+
+	ipLen := int(asz) - 2
+	if len(data) < 49+ipLen {
+		return nil, oops.Errorf("RelayIntro block too short for IP: need %d, have %d", 49+ipLen, len(data))
+	}
+
+	ip := make([]byte, ipLen)
+	copy(ip, data[49:49+ipLen])
+
+	var sig []byte
+	if len(data) > 49+ipLen {
+		sig = make([]byte, len(data)-(49+ipLen))
+		copy(sig, data[49+ipLen:])
 	}
 
 	return &RelayIntroBlock{
+		Flag:            flag,
 		AliceRouterHash: routerHash,
+		Nonce:           nonce,
 		AliceRelayTag:   relayTag,
-		AliceAddress:    addr,
 		Timestamp:       timestamp,
+		Version:         ver,
+		AlicePort:       port,
+		AliceIP:         net.IP(ip),
+		Signature:       sig,
 	}, nil
 }
 

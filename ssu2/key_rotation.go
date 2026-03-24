@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-i2p/go-noise/internal"
 	"github.com/samber/oops"
 )
 
@@ -352,6 +353,9 @@ func (krm *KeyRotationManager) rotateStaticKeyLocked() ([]byte, error) {
 	}
 	oldKey.Successor = krm.staticKey
 
+	// Zero retired key material
+	internal.SecureZero(oldKey.Key)
+
 	// Notify callback
 	if krm.onRotation != nil {
 		go krm.onRotation("static", oldKey, krm.staticKey)
@@ -415,6 +419,9 @@ func (krm *KeyRotationManager) rotateIntroKeyLocked() ([]byte, error) {
 		IsPublished: oldKey.IsPublished,
 	}
 	oldKey.Successor = krm.introKey
+
+	// Zero retired key material
+	internal.SecureZero(oldKey.Key)
 
 	// Notify callback
 	if krm.onRotation != nil {

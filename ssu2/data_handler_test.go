@@ -329,14 +329,13 @@ func TestDataHandler_FirstFragment_Duplicate(t *testing.T) {
 	_, err = handler.ProcessDataPacket(packet)
 	require.NoError(t, err)
 
-	// Process duplicate first fragment
+	// Process duplicate first fragment — retransmissions are silently accepted
 	_, err = handler.ProcessDataPacket(packet)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "duplicate first fragment")
+	require.NoError(t, err)
 
-	// Verify stats - only the second (duplicate) first fragment is dropped
+	// Verify stats - duplicate first fragment is not counted as dropped
 	stats := handler.GetStats()
-	assert.Equal(t, uint64(1), stats.MessagesDropped)
+	assert.Equal(t, uint64(0), stats.MessagesDropped)
 }
 
 func TestDataHandler_FollowOnFragment(t *testing.T) {

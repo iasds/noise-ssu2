@@ -187,16 +187,19 @@ func FuzzDecodeRelayResponse(f *testing.F) {
 
 // FuzzDecodeRelayIntro fuzzes RelayIntro block decoding.
 func FuzzDecodeRelayIntro(f *testing.F) {
-	// Valid relay intro: hash(32) + tag(4) + timestamp(4) + addr
-	valid := make([]byte, 52)
+	// Valid relay intro per spec: flag(1)+hash(32)+nonce(4)+tag(4)+ts(4)+ver(1)+asz(1)+port(2)+ip(4) = 53
+	valid := make([]byte, 56) // type(1)+len(2)+data(53)
 	valid[0] = BlockTypeRelayIntro
-	binary.BigEndian.PutUint16(valid[1:3], 49) // Length
-	copy(valid[3:35], make([]byte, 32))        // Router hash
-	binary.BigEndian.PutUint32(valid[35:39], 12345)
-	binary.BigEndian.PutUint32(valid[39:43], 1234567890)
-	valid[43] = 0x04                               // IPv4
-	copy(valid[44:48], []byte{10, 0, 0, 1})        // IP
-	binary.BigEndian.PutUint16(valid[48:50], 8080) // Port
+	binary.BigEndian.PutUint16(valid[1:3], 53)           // Length
+	valid[3] = 0                                         // Flag
+	copy(valid[4:36], make([]byte, 32))                  // Router hash
+	binary.BigEndian.PutUint32(valid[36:40], 42)         // Nonce
+	binary.BigEndian.PutUint32(valid[40:44], 12345)      // Relay tag
+	binary.BigEndian.PutUint32(valid[44:48], 1234567890) // Timestamp
+	valid[48] = 2                                        // Version
+	valid[49] = 6                                        // Asz (port(2)+IPv4(4))
+	binary.BigEndian.PutUint16(valid[50:52], 8080)       // Port
+	copy(valid[52:56], []byte{10, 0, 0, 1})              // IP
 	f.Add(valid)
 
 	f.Fuzz(func(t *testing.T, data []byte) {

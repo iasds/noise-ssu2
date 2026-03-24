@@ -268,6 +268,8 @@ func NewSSU2Conn(
 		conn.headerProtector = hpm
 	}
 
+	conn.dataHandler.StartReaper()
+
 	return conn, nil
 }
 
@@ -828,6 +830,11 @@ func (h *SSU2Conn) Close() error {
 			h.keepaliveTimer.Stop()
 		}
 
+		// Stop fragment reaper
+		if h.dataHandler != nil {
+			h.dataHandler.Close()
+		}
+
 		// Close channels to signal goroutines to exit
 		close(h.closeChan)
 
@@ -1031,11 +1038,15 @@ func (h *SSU2Conn) recvLoop() {
 
 // parseInboundPacket validates the source address, deserializes, and decrypts an
 // inbound UDP datagram. Returns nil if the packet should be dropped.
+// Supports connection migration: if a packet from a new address passes AEAD
+// verification, the remote address is updated (per spec §Connection Migration).
 func (h *SSU2Conn) parseInboundPacket(data []byte, addr net.Addr) *SSU2Packet {
 	udpAddr, ok := addr.(*net.UDPAddr)
-	if !ok || !udpAddr.IP.Equal(h.remoteAddr.IP) || udpAddr.Port != h.remoteAddr.Port {
+	if !ok {
 		return nil
 	}
+
+	addrChanged := !udpAddr.IP.Equal(h.remoteAddr.IP) || udpAddr.Port != h.remoteAddr.Port
 
 	// Decrypt header protection before parsing
 	if h.headerProtector != nil {
@@ -1067,6 +1078,11 @@ func (h *SSU2Conn) parseInboundPacket(data []byte, addr net.Addr) *SSU2Packet {
 	}
 	h.cipherMutex.Unlock()
 
+	// If the address changed but AEAD passed, migrate the connection
+	if addrChanged {
+		h.remoteAddr = udpAddr
+	}
+
 	h.updateActivity()
 	return packet
 }
@@ -1087,8 +1103,17 @@ func (h *SSU2Conn) keepaliveLoop() {
 
 			// Check if we need to send keepalive
 			if timeSinceActivity >= h.config.KeepaliveInterval {
-				// Send ACK as keepalive (empty ACK)
+				// Send ACK + DateTime as keepalive per spec recommendation
+				blocks := make([]*SSU2Block, 0, 2)
 				if ack, err := h.ackHandler.GenerateACK(); err == nil && ack != nil {
+					blocks = append(blocks, ack)
+				}
+				// Include DateTime block per spec: Data messages "should" include DateTime
+				dtData := make([]byte, 4)
+				binary.BigEndian.PutUint32(dtData, uint32(time.Now().Unix()))
+				blocks = append(blocks, NewSSU2Block(BlockTypeDateTime, dtData))
+
+				if len(blocks) > 0 {
 					pktNum := h.nextSendSequence()
 					hdr := make([]byte, ShortHeaderSize)
 					binary.BigEndian.PutUint64(hdr[0:8], h.config.ConnectionID)
@@ -1099,7 +1124,7 @@ func (h *SSU2Conn) keepaliveLoop() {
 						Header:       hdr,
 						MAC:          make([]byte, MACSize),
 					}
-					payload, _ := SerializeBlocks([]*SSU2Block{ack})
+					payload, _ := SerializeBlocks(blocks)
 					packet.Payload = payload
 					_ = h.sendPacketDirect(packet)
 				}
@@ -1189,13 +1214,20 @@ func (h *SSU2Conn) sendPacketDirect(packet *SSU2Packet) error {
 
 // processInboundPacket processes a received packet.
 func (h *SSU2Conn) processInboundPacket(packet *SSU2Packet) {
-	// Record for ACK
-	if packet.PacketNumber > 0 {
-		h.ackHandler.RecordReceived(packet.PacketNumber)
-	}
-
 	switch packet.MessageType {
 	case MessageTypeData:
+		// Enforce receive window: reject duplicate, old, and out-of-window packets
+		if h.recvWindow != nil {
+			if _, err := h.recvWindow.Insert(packet); err != nil {
+				return // silently drop
+			}
+		}
+
+		// Record for ACK only after window acceptance
+		if packet.PacketNumber > 0 {
+			h.ackHandler.RecordReceived(packet.PacketNumber)
+		}
+
 		h.validDataPacketsReceived.Add(1)
 		// Check immediate-ack flag: header byte 13, bit 0
 		if len(packet.Header) > 13 && packet.Header[13]&0x01 != 0 {
@@ -1203,6 +1235,10 @@ func (h *SSU2Conn) processInboundPacket(packet *SSU2Packet) {
 		}
 		h.processDataPacket(packet)
 	case MessageTypeSessionRequest, MessageTypeSessionCreated, MessageTypeSessionConfirmed:
+		// Handshake packets bypass receive window
+		if packet.PacketNumber > 0 {
+			h.ackHandler.RecordReceived(packet.PacketNumber)
+		}
 		select {
 		case h.recvQueue <- packet:
 		default:

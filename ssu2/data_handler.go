@@ -39,6 +39,13 @@ type DataHandler struct {
 
 	// callbacks for specific block types
 	callbacks DataHandlerCallbacks
+
+	// fragmentTimeout is the duration after which incomplete fragment sets
+	// are discarded. Per the spec, fragments should be cleaned up after a timeout.
+	fragmentTimeout time.Duration
+
+	// stopReaper signals the reaper goroutine to exit
+	stopReaper chan struct{}
 }
 
 // DataHandlerCallbacks defines optional callbacks for block types
@@ -135,9 +142,51 @@ func NewDataHandler(queueSize int) *DataHandler {
 	}
 
 	return &DataHandler{
-		messageQueue: make(chan []byte, queueSize),
-		fragments:    make(map[uint32]*FragmentSet),
-		blockRouter:  NewBlockRouter(),
+		messageQueue:    make(chan []byte, queueSize),
+		fragments:       make(map[uint32]*FragmentSet),
+		blockRouter:     NewBlockRouter(),
+		fragmentTimeout: 10 * time.Second,
+		stopReaper:      make(chan struct{}),
+	}
+}
+
+// StartReaper launches a background goroutine that periodically removes
+// incomplete fragment sets older than fragmentTimeout.
+func (h *DataHandler) StartReaper() {
+	go func() {
+		ticker := time.NewTicker(h.fragmentTimeout / 2)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-h.stopReaper:
+				return
+			case <-ticker.C:
+				h.cleanupStaleFragments()
+			}
+		}
+	}()
+}
+
+// Close stops the fragment reaper goroutine.
+func (h *DataHandler) Close() {
+	select {
+	case <-h.stopReaper:
+	default:
+		close(h.stopReaper)
+	}
+}
+
+// cleanupStaleFragments removes fragment sets that have exceeded the timeout.
+func (h *DataHandler) cleanupStaleFragments() {
+	h.mutex.Lock()
+	defer h.mutex.Unlock()
+
+	now := time.Now()
+	for id, fs := range h.fragments {
+		if now.Sub(fs.LastUpdate) > h.fragmentTimeout {
+			h.incrementStat(&h.stats.MessagesDropped)
+			delete(h.fragments, id)
+		}
 	}
 }
 
@@ -302,10 +351,9 @@ func (h *DataHandler) handleFirstFragment(data []byte) error {
 	h.mutex.Lock()
 	defer h.mutex.Unlock()
 
-	// Check if we already have this message ID
+	// Check if we already have this message ID — silently accept retransmissions
 	if _, exists := h.fragments[messageID]; exists {
-		h.incrementStat(&h.stats.MessagesDropped)
-		return oops.Errorf("duplicate first fragment for message ID %d", messageID)
+		return nil
 	}
 
 	// Create new fragment set

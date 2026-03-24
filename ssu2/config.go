@@ -160,7 +160,7 @@ func NewSSU2Config(routerHash []byte, initiator bool) (*SSU2Config, error) {
 		HandshakeRetries:        3,
 		RetryBackoff:            1 * time.Second,
 		EnableChaChaObfuscation: true,
-		EnableSipHashLength:     true,
+		EnableSipHashLength:     false,
 		MTU:                     1280, // IPv6 minimum
 		MaxPacketSize:           1500, // Standard Ethernet
 		EnableFragmentation:     false,

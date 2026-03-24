@@ -30,7 +30,7 @@ func TestNewSSU2Config(t *testing.T) {
 		assert.Equal(t, 3, config.HandshakeRetries)
 		assert.Equal(t, 1*time.Second, config.RetryBackoff)
 		assert.True(t, config.EnableChaChaObfuscation)
-		assert.True(t, config.EnableSipHashLength)
+		assert.False(t, config.EnableSipHashLength)
 		assert.Equal(t, 1280, config.MTU)
 		assert.Equal(t, 1500, config.MaxPacketSize)
 		assert.False(t, config.EnableFragmentation)

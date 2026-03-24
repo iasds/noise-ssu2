@@ -22,9 +22,9 @@ type ChaChaObfuscationModifier struct {
 	introKey []byte // 32-byte intro key (Bob's intro key per SSU2 spec)
 }
 
-// nonce1 is the 12-byte little-endian encoding of n=1, used for all SSU2
-// ChaCha20 obfuscation per the spec.
-var nonce1 = []byte{1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+// nonce0 is the 12-byte all-zero nonce used for SSU2 ChaCha20 header
+// obfuscation per the spec (§Header Encryption).
+var nonce0 = make([]byte, 12)
 
 // NewChaChaObfuscationModifier creates a new ChaCha20 obfuscation modifier for SSU2.
 // introKey must be 32 bytes (Bob's intro key per the SSU2 spec).
@@ -86,10 +86,10 @@ func (com *ChaChaObfuscationModifier) Name() string {
 	return com.name
 }
 
-// applyChacha creates a ChaCha20 cipher with fixed nonce n=1 and XORs the data.
+// applyChacha creates a ChaCha20 cipher with an all-zero nonce and XORs the data.
 // Supports 48-byte (spec-compliant) and 32-byte (ephemeral-only) inputs.
 func (com *ChaChaObfuscationModifier) applyChacha(data []byte) ([]byte, error) {
-	cipher, err := chacha20.NewUnauthenticatedCipher(com.introKey, nonce1)
+	cipher, err := chacha20.NewUnauthenticatedCipher(com.introKey, nonce0)
 	if err != nil {
 		return nil, oops.
 			Code("CHACHA20_CIPHER_CREATION_FAILED").

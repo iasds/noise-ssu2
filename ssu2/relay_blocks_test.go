@@ -308,40 +308,48 @@ func TestEncodeRelayIntro_IPv4(t *testing.T) {
 	for i := range routerHash {
 		routerHash[i] = byte(i)
 	}
+	sig := make([]byte, 64)
 
 	intro := &RelayIntroBlock{
+		Flag:            0,
 		AliceRouterHash: routerHash,
+		Nonce:           99,
 		AliceRelayTag:   12345,
-		AliceAddress: &net.UDPAddr{
-			IP:   net.ParseIP("10.0.0.1"),
-			Port: 9000,
-		},
-		Timestamp: 1234567890,
+		Timestamp:       1234567890,
+		Version:         2,
+		AlicePort:       9000,
+		AliceIP:         net.ParseIP("10.0.0.1"),
+		Signature:       sig,
 	}
 
 	block, err := EncodeRelayIntro(intro)
 	require.NoError(t, err)
 	assert.NotNil(t, block)
 	assert.Equal(t, BlockTypeRelayIntro, block.Type)
-	assert.Equal(t, 47, len(block.Data)) // 32+4+4+1+4+2
+	// flag(1)+hash(32)+nonce(4)+tag(4)+ts(4)+ver(1)+asz(1)+port(2)+ip(4)+sig(64) = 117
+	assert.Equal(t, 117, len(block.Data))
 }
 
 // TestEncodeRelayIntro_IPv6 tests encoding relay intro with IPv6.
 func TestEncodeRelayIntro_IPv6(t *testing.T) {
 	routerHash := make([]byte, 32)
+	sig := make([]byte, 64)
 	intro := &RelayIntroBlock{
+		Flag:            0,
 		AliceRouterHash: routerHash,
+		Nonce:           99,
 		AliceRelayTag:   12345,
-		AliceAddress: &net.UDPAddr{
-			IP:   net.ParseIP("2001:db8::1"),
-			Port: 9000,
-		},
-		Timestamp: 1234567890,
+		Timestamp:       1234567890,
+		Version:         2,
+		AlicePort:       9000,
+		AliceIP:         net.ParseIP("2001:db8::1"),
+		Signature:       sig,
 	}
 
 	block, err := EncodeRelayIntro(intro)
 	require.NoError(t, err)
-	assert.Equal(t, 59, len(block.Data)) // 32+4+4+1+16+2
+	// flag(1)+hash(32)+nonce(4)+tag(4)+ts(4)+ver(1)+asz(1)+port(2)+ip(16)+sig(64) = 129
+	assert.Equal(t, 129, len(block.Data))
 }
 
 // TestEncodeRelayIntro_NilBlock tests encoding nil intro.
@@ -357,11 +365,9 @@ func TestEncodeRelayIntro_InvalidRouterHash(t *testing.T) {
 	intro := &RelayIntroBlock{
 		AliceRouterHash: []byte{1, 2, 3}, // Wrong size
 		AliceRelayTag:   12345,
-		AliceAddress: &net.UDPAddr{
-			IP:   net.ParseIP("10.0.0.1"),
-			Port: 9000,
-		},
-		Timestamp: 1234567890,
+		AlicePort:       9000,
+		AliceIP:         net.ParseIP("10.0.0.1"),
+		Timestamp:       1234567890,
 	}
 
 	block, err := EncodeRelayIntro(intro)
@@ -370,20 +376,19 @@ func TestEncodeRelayIntro_InvalidRouterHash(t *testing.T) {
 	assert.Contains(t, err.Error(), "32 bytes")
 }
 
-// TestEncodeRelayIntro_NilAddress tests encoding with nil address.
-func TestEncodeRelayIntro_NilAddress(t *testing.T) {
+// TestEncodeRelayIntro_NilIP tests encoding with nil IP.
+func TestEncodeRelayIntro_NilIP(t *testing.T) {
 	routerHash := make([]byte, 32)
 	intro := &RelayIntroBlock{
 		AliceRouterHash: routerHash,
 		AliceRelayTag:   12345,
-		AliceAddress:    nil, // Invalid
+		AliceIP:         nil,
 		Timestamp:       1234567890,
 	}
 
 	block, err := EncodeRelayIntro(intro)
 	assert.Error(t, err)
 	assert.Nil(t, block)
-	assert.Contains(t, err.Error(), "nil")
 }
 
 // TestDecodeRelayIntro_IPv4 tests decoding relay intro with IPv4.
@@ -392,15 +397,21 @@ func TestDecodeRelayIntro_IPv4(t *testing.T) {
 	for i := range routerHash {
 		routerHash[i] = byte(i)
 	}
+	sig := make([]byte, 64)
+	for i := range sig {
+		sig[i] = byte(i + 100)
+	}
 
 	original := &RelayIntroBlock{
+		Flag:            0,
 		AliceRouterHash: routerHash,
+		Nonce:           42,
 		AliceRelayTag:   12345,
-		AliceAddress: &net.UDPAddr{
-			IP:   net.ParseIP("10.0.0.1"),
-			Port: 9000,
-		},
-		Timestamp: 1234567890,
+		Timestamp:       1234567890,
+		Version:         2,
+		AlicePort:       9000,
+		AliceIP:         net.ParseIP("10.0.0.1"),
+		Signature:       sig,
 	}
 
 	block, err := EncodeRelayIntro(original)
@@ -408,25 +419,31 @@ func TestDecodeRelayIntro_IPv4(t *testing.T) {
 
 	decoded, err := DecodeRelayIntro(block)
 	require.NoError(t, err)
+	assert.Equal(t, original.Flag, decoded.Flag)
 	assert.Equal(t, original.AliceRouterHash, decoded.AliceRouterHash)
+	assert.Equal(t, original.Nonce, decoded.Nonce)
 	assert.Equal(t, original.AliceRelayTag, decoded.AliceRelayTag)
 	assert.Equal(t, original.Timestamp, decoded.Timestamp)
-	assert.NotNil(t, decoded.AliceAddress)
-	assert.True(t, original.AliceAddress.IP.Equal(decoded.AliceAddress.IP))
-	assert.Equal(t, original.AliceAddress.Port, decoded.AliceAddress.Port)
+	assert.Equal(t, original.Version, decoded.Version)
+	assert.Equal(t, original.AlicePort, decoded.AlicePort)
+	assert.True(t, original.AliceIP.Equal(decoded.AliceIP))
+	assert.Equal(t, original.Signature, decoded.Signature)
 }
 
 // TestDecodeRelayIntro_IPv6 tests decoding relay intro with IPv6.
 func TestDecodeRelayIntro_IPv6(t *testing.T) {
 	routerHash := make([]byte, 32)
+	sig := make([]byte, 64)
 	original := &RelayIntroBlock{
+		Flag:            0,
 		AliceRouterHash: routerHash,
+		Nonce:           42,
 		AliceRelayTag:   12345,
-		AliceAddress: &net.UDPAddr{
-			IP:   net.ParseIP("2001:db8::1"),
-			Port: 9000,
-		},
-		Timestamp: 1234567890,
+		Timestamp:       1234567890,
+		Version:         2,
+		AlicePort:       9000,
+		AliceIP:         net.ParseIP("2001:db8::1"),
+		Signature:       sig,
 	}
 
 	block, err := EncodeRelayIntro(original)
@@ -434,8 +451,10 @@ func TestDecodeRelayIntro_IPv6(t *testing.T) {
 
 	decoded, err := DecodeRelayIntro(block)
 	require.NoError(t, err)
-	assert.True(t, original.AliceAddress.IP.Equal(decoded.AliceAddress.IP))
-	assert.Equal(t, original.AliceAddress.Port, decoded.AliceAddress.Port)
+	assert.True(t, original.AliceIP.Equal(decoded.AliceIP))
+	assert.Equal(t, original.AlicePort, decoded.AlicePort)
+	assert.Equal(t, original.Nonce, decoded.Nonce)
+	assert.Equal(t, original.Version, decoded.Version)
 }
 
 // TestDecodeRelayIntro_NilBlock tests decoding nil block.
@@ -450,7 +469,7 @@ func TestDecodeRelayIntro_NilBlock(t *testing.T) {
 func TestDecodeRelayIntro_WrongType(t *testing.T) {
 	block := &SSU2Block{
 		Type: BlockTypeRelayRequest,
-		Data: make([]byte, 50),
+		Data: make([]byte, 60),
 	}
 
 	decoded, err := DecodeRelayIntro(block)
@@ -472,10 +491,10 @@ func TestDecodeRelayIntro_TooShort(t *testing.T) {
 	assert.Contains(t, err.Error(), "too short")
 }
 
-// TestDecodeRelayIntro_InvalidAddressType tests invalid address type.
-func TestDecodeRelayIntro_InvalidAddressType(t *testing.T) {
-	data := make([]byte, 47)
-	data[40] = 99 // Invalid address type
+// TestDecodeRelayIntro_InvalidAsz tests invalid asz value.
+func TestDecodeRelayIntro_InvalidAsz(t *testing.T) {
+	data := make([]byte, 55)
+	data[46] = 99 // Invalid asz
 
 	block := &SSU2Block{
 		Type: BlockTypeRelayIntro,
@@ -485,7 +504,7 @@ func TestDecodeRelayIntro_InvalidAddressType(t *testing.T) {
 	decoded, err := DecodeRelayIntro(block)
 	assert.Error(t, err)
 	assert.Nil(t, decoded)
-	assert.Contains(t, err.Error(), "invalid address type")
+	assert.Contains(t, err.Error(), "invalid asz")
 }
 
 // TestEncodeRelayTagRequest_Valid tests encoding valid relay tag request.
@@ -718,14 +737,15 @@ func TestRelayBlocks_RoundTrip(t *testing.T) {
 	// Test RelayIntro
 	t.Run("RelayIntro", func(t *testing.T) {
 		routerHash := make([]byte, 32)
+		sig := make([]byte, 64)
 		intro := &RelayIntroBlock{
 			AliceRouterHash: routerHash,
 			AliceRelayTag:   55555,
-			AliceAddress: &net.UDPAddr{
-				IP:   net.ParseIP("192.168.100.50"),
-				Port: 54321,
-			},
-			Timestamp: 1700000000,
+			AlicePort:       54321,
+			AliceIP:         net.ParseIP("192.168.100.50"),
+			Timestamp:       1700000000,
+			Version:         2,
+			Signature:       sig,
 		}
 
 		block, err := EncodeRelayIntro(intro)
@@ -737,8 +757,8 @@ func TestRelayBlocks_RoundTrip(t *testing.T) {
 		assert.Equal(t, intro.AliceRouterHash, decoded.AliceRouterHash)
 		assert.Equal(t, intro.AliceRelayTag, decoded.AliceRelayTag)
 		assert.Equal(t, intro.Timestamp, decoded.Timestamp)
-		assert.True(t, intro.AliceAddress.IP.Equal(decoded.AliceAddress.IP))
-		assert.Equal(t, intro.AliceAddress.Port, decoded.AliceAddress.Port)
+		assert.True(t, intro.AliceIP.Equal(decoded.AliceIP))
+		assert.Equal(t, intro.AlicePort, decoded.AlicePort)
 	})
 
 	// Test RelayTagRequest

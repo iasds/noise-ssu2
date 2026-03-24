@@ -2,6 +2,7 @@ package ssu2
 
 import (
 	"encoding/binary"
+	"net"
 
 	"github.com/samber/oops"
 )
@@ -263,4 +264,33 @@ func DecodePeerTestBlock(ssu2Block *SSU2Block) (*PeerTestBlock, error) {
 	}
 
 	return block, nil
+}
+
+// ValidateSourceAddress verifies that the IP/port embedded in a PeerTest block
+// matches the actual UDP source address. Per the spec, Charlie must verify that
+// the claimed Alice address matches the packet source to prevent amplification attacks.
+func (b *PeerTestBlock) ValidateSourceAddress(sourceAddr *net.UDPAddr) error {
+	if sourceAddr == nil {
+		return oops.Errorf("source address is nil")
+	}
+	if b.AliceIP == nil {
+		return oops.Errorf("PeerTest block has no Alice IP")
+	}
+
+	claimedIP := net.IP(b.AliceIP)
+	if !claimedIP.Equal(sourceAddr.IP) {
+		return oops.
+			Code("ADDRESS_MISMATCH").
+			With("claimed_ip", claimedIP.String()).
+			With("source_ip", sourceAddr.IP.String()).
+			Errorf("peer test claimed IP does not match source")
+	}
+	if b.AlicePort != uint16(sourceAddr.Port) {
+		return oops.
+			Code("PORT_MISMATCH").
+			With("claimed_port", b.AlicePort).
+			With("source_port", sourceAddr.Port).
+			Errorf("peer test claimed port does not match source")
+	}
+	return nil
 }

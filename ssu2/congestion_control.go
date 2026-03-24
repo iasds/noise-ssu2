@@ -77,6 +77,9 @@ func (s CongestionState) String() string {
 // On loss, ssthresh = max(BWE * minRTT, MinCWND) instead of Reno's cwnd/2,
 // yielding better throughput on lossy I2P overlay links.
 //
+// NOTE: ECN (Explicit Congestion Notification) is not implemented. The SSU2
+// spec lists ECN as optional. A future version may add ECN support.
+//
 // The controller is thread-safe and can be used concurrently.
 type CongestionController struct {
 	// cwnd is the congestion window in bytes

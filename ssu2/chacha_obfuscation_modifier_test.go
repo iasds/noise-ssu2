@@ -183,7 +183,7 @@ func TestChaChaObfuscationModifier_NonEphemeralKey(t *testing.T) {
 	}
 }
 
-// TestChaChaObfuscationModifier_FixedNonce tests that the modifier uses nonce n=1 per SSU2 spec
+// TestChaChaObfuscationModifier_FixedNonce tests that the modifier uses all-zero nonce per SSU2 spec
 func TestChaChaObfuscationModifier_FixedNonce(t *testing.T) {
 	introKey := make([]byte, 32)
 	_, err := rand.Read(introKey)
@@ -197,7 +197,7 @@ func TestChaChaObfuscationModifier_FixedNonce(t *testing.T) {
 	require.NoError(t, err)
 
 	// Message 1 and message 2 with same data should produce same output
-	// because both use the same key and nonce n=1
+	// because both use the same key and all-zero nonce
 	enc1, err := mod.ModifyOutbound(handshake.PhaseInitial, data)
 	require.NoError(t, err)
 

@@ -74,14 +74,22 @@ func NewReceiveWindow(expected uint32, maxSize int) *ReceiveWindow {
 	}
 }
 
+// seqBefore returns true when a is before b in the packet number space,
+// handling uint32 wrap-around via half-space comparison.
+func seqBefore(a, b uint32) bool {
+	return int32(a-b) < 0
+}
+
 // Insert adds a packet to the receive window and returns any packets that can now
 // be processed in order. The returned slice contains packets in sequence, starting
 // with the newly inserted packet if it was the expected one.
 //
 // Behavior:
 //   - If pktNum == expected: return immediately plus any consecutive buffered packets
-//   - If pktNum > expected: buffer for later (if window not full)
-//   - If pktNum < expected: reject as duplicate/old packet
+//   - If pktNum is ahead of expected: buffer for later (if window not full)
+//   - If pktNum is behind expected: reject as duplicate/old packet
+//
+// Handles uint32 packet number wrap-around correctly.
 //
 // Thread-safe: can be called concurrently from multiple goroutines.
 //
@@ -99,17 +107,15 @@ func (rw *ReceiveWindow) Insert(packet *SSU2Packet) ([]*SSU2Packet, error) {
 	pktNum := packet.PacketNumber
 
 	// Case 1: Old or duplicate packet (already processed)
-	if pktNum < rw.expected {
+	if seqBefore(pktNum, rw.expected) {
 		return nil, oops.
 			With("packetNumber", pktNum).
 			With("expected", rw.expected).
 			Errorf("packet already processed (old or duplicate)")
 	}
 
-	// Case 2: Expected packet - but check if it's already buffered (shouldn't happen normally)
+	// Case 2: Expected packet
 	if pktNum == rw.expected {
-		// Check if we somehow already have this packet buffered
-		// This can happen if SetExpected was called while packets were buffered
 		if _, exists := rw.window[pktNum]; exists {
 			return nil, oops.
 				With("packetNumber", pktNum).
@@ -120,14 +126,14 @@ func (rw *ReceiveWindow) Insert(packet *SSU2Packet) ([]*SSU2Packet, error) {
 		ready := []*SSU2Packet{packet}
 		rw.expected++
 
-		// Check if we can release buffered packets
+		// Release consecutive buffered packets (naturally wraps at uint32 boundary)
 		for {
 			if buffered, exists := rw.window[rw.expected]; exists {
 				ready = append(ready, buffered)
 				delete(rw.window, rw.expected)
 				rw.expected++
 			} else {
-				break // Gap in sequence, stop releasing
+				break
 			}
 		}
 
@@ -135,7 +141,6 @@ func (rw *ReceiveWindow) Insert(packet *SSU2Packet) ([]*SSU2Packet, error) {
 	}
 
 	// Case 3: Future packet - buffer it
-	// First check if already buffered (duplicate of future packet)
 	if _, exists := rw.window[pktNum]; exists {
 		return nil, oops.
 			With("packetNumber", pktNum).
@@ -143,7 +148,6 @@ func (rw *ReceiveWindow) Insert(packet *SSU2Packet) ([]*SSU2Packet, error) {
 			Errorf("duplicate future packet")
 	}
 
-	// Check window size limit
 	if len(rw.window) >= rw.maxSize {
 		return nil, oops.
 			With("packetNumber", pktNum).
@@ -153,9 +157,8 @@ func (rw *ReceiveWindow) Insert(packet *SSU2Packet) ([]*SSU2Packet, error) {
 			Errorf("receive window full")
 	}
 
-	// Buffer the packet
 	rw.window[pktNum] = packet
-	return []*SSU2Packet{}, nil // Empty slice, no packets ready yet
+	return []*SSU2Packet{}, nil
 }
 
 // GetExpected returns the next expected packet number.
@@ -185,7 +188,7 @@ func (rw *ReceiveWindow) SetExpected(expected uint32) {
 
 	// Discard any buffered packets before the new expected number
 	for pktNum := range rw.window {
-		if pktNum < expected {
+		if seqBefore(pktNum, expected) {
 			delete(rw.window, pktNum)
 		}
 	}
