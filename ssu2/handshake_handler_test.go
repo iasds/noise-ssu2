@@ -850,3 +850,170 @@ func TestCreateSessionConfirmedFragments_NotReady(t *testing.T) {
 	assert.Error(t, err)
 	assert.Nil(t, packets)
 }
+
+// --- G-3: Options Block Padding Negotiation Tests ---
+
+func TestFixedPointRoundTrip(t *testing.T) {
+	cases := []struct {
+		val float64
+	}{
+		{0.0},
+		{1.0},
+		{0.5},
+		{15.9375}, // max
+		{3.25},
+		{7.0625},
+	}
+	for _, tc := range cases {
+		b := floatToFixedPoint(tc.val)
+		got := fixedPointToFloat(b)
+		assert.InDelta(t, tc.val, got, 0.0625, "roundtrip for %f", tc.val)
+	}
+}
+
+func TestFixedPointClamp(t *testing.T) {
+	// Negative clamps to 0
+	assert.Equal(t, byte(0x00), floatToFixedPoint(-1.0))
+	// > 15.9375 clamps to 15.9375
+	b := floatToFixedPoint(20.0)
+	assert.InDelta(t, 15.9375, fixedPointToFloat(b), 0.0625)
+}
+
+func TestParseOptionsBlock(t *testing.T) {
+	data := make([]byte, 15)
+	binary.BigEndian.PutUint16(data[0:2], 2)
+	data[2] = floatToFixedPoint(1.0)  // tmin
+	data[3] = floatToFixedPoint(3.5)  // tmax
+	data[4] = floatToFixedPoint(0.5)  // rmin
+	data[5] = floatToFixedPoint(2.0)  // rmax
+	binary.BigEndian.PutUint16(data[6:8], 100)  // tdummy
+	binary.BigEndian.PutUint16(data[8:10], 200) // rdummy
+	binary.BigEndian.PutUint16(data[10:12], 50) // tdelay
+	binary.BigEndian.PutUint16(data[12:14], 75) // rdelay
+	data[14] = 0x01                             // flags
+
+	opts, err := ParseOptionsBlock(data)
+	require.NoError(t, err)
+	assert.Equal(t, uint16(2), opts.Version)
+	assert.InDelta(t, 1.0, opts.TMinRatio, 0.0625)
+	assert.InDelta(t, 3.5, opts.TMaxRatio, 0.0625)
+	assert.InDelta(t, 0.5, opts.RMinRatio, 0.0625)
+	assert.InDelta(t, 2.0, opts.RMaxRatio, 0.0625)
+	assert.Equal(t, uint16(100), opts.TDummy)
+	assert.Equal(t, uint16(200), opts.RDummy)
+	assert.Equal(t, uint16(50), opts.TDelay)
+	assert.Equal(t, uint16(75), opts.RDelay)
+	assert.Equal(t, uint8(0x01), opts.Flags)
+}
+
+func TestParseOptionsBlock_TooShort(t *testing.T) {
+	_, err := ParseOptionsBlock(make([]byte, 10))
+	assert.Error(t, err)
+}
+
+func TestOptionsSerializeRoundTrip(t *testing.T) {
+	original := &OptionsParams{
+		Version:   2,
+		TMinRatio: 1.0,
+		TMaxRatio: 4.0,
+		RMinRatio: 0.5,
+		RMaxRatio: 2.0,
+		TDummy:    300,
+		RDummy:    400,
+		TDelay:    100,
+		RDelay:    200,
+		Flags:     0x03,
+	}
+	data := original.Serialize()
+	assert.Len(t, data, 15)
+
+	parsed, err := ParseOptionsBlock(data)
+	require.NoError(t, err)
+	assert.Equal(t, original.Version, parsed.Version)
+	assert.InDelta(t, original.TMinRatio, parsed.TMinRatio, 0.0625)
+	assert.InDelta(t, original.TMaxRatio, parsed.TMaxRatio, 0.0625)
+	assert.InDelta(t, original.RMinRatio, parsed.RMinRatio, 0.0625)
+	assert.InDelta(t, original.RMaxRatio, parsed.RMaxRatio, 0.0625)
+	assert.Equal(t, original.TDummy, parsed.TDummy)
+	assert.Equal(t, original.RDummy, parsed.RDummy)
+	assert.Equal(t, original.TDelay, parsed.TDelay)
+	assert.Equal(t, original.RDelay, parsed.RDelay)
+	assert.Equal(t, original.Flags, parsed.Flags)
+}
+
+func TestNegotiatedPadding_BothPresent(t *testing.T) {
+	h, _, _, _ := setupHandshakePair(t)
+
+	h.SetLocalOptions(&OptionsParams{
+		Version:   2,
+		TMinRatio: 0.5,
+		TMaxRatio: 4.0,
+		RMinRatio: 1.0,
+		RMaxRatio: 3.0,
+		TDummy:    100,
+		RDummy:    200,
+		TDelay:    50,
+		RDelay:    60,
+	})
+	// Simulated peer options (peer's transmit = our receive, peer's receive = our transmit)
+	h.peerOptions = &OptionsParams{
+		Version:   2,
+		TMinRatio: 0.0,
+		TMaxRatio: 2.0,
+		RMinRatio: 1.0,
+		RMaxRatio: 5.0,
+		TDummy:    150,
+		RDummy:    80,
+		TDelay:    30,
+		RDelay:    70,
+	}
+
+	neg := h.NegotiatedPadding()
+	require.NotNil(t, neg)
+
+	// Our send: max(local.TMin=0.5, peer.RMin=1.0)=1.0, min(local.TMax=4.0, peer.RMax=5.0)=4.0
+	assert.InDelta(t, 1.0, neg.TMinRatio, 0.0625)
+	assert.InDelta(t, 4.0, neg.TMaxRatio, 0.0625)
+
+	// Our recv: max(local.RMin=1.0, peer.TMin=0.0)=1.0, min(local.RMax=3.0, peer.TMax=2.0)=2.0
+	assert.InDelta(t, 1.0, neg.RMinRatio, 0.0625)
+	assert.InDelta(t, 2.0, neg.RMaxRatio, 0.0625)
+
+	// Dummy: min of each pair
+	assert.Equal(t, uint16(80), neg.TDummy)   // min(local.TDummy=100, peer.RDummy=80)
+	assert.Equal(t, uint16(150), neg.RDummy)  // min(local.RDummy=200, peer.TDummy=150)
+	assert.Equal(t, uint16(50), neg.TDelay)   // min(local.TDelay=50, peer.RDelay=70)
+	assert.Equal(t, uint16(30), neg.RDelay)   // min(local.RDelay=60, peer.TDelay=30)
+}
+
+func TestNegotiatedPadding_NilPeer(t *testing.T) {
+	h, _, _, _ := setupHandshakePair(t)
+	h.SetLocalOptions(&OptionsParams{Version: 2, TMaxRatio: 1.0})
+	assert.Nil(t, h.NegotiatedPadding(), "should be nil when peer options missing")
+}
+
+func TestExtractPeerOptions_Handshake(t *testing.T) {
+	initiator, responder, _, _ := setupHandshakePair(t)
+
+	// Set local options on both sides
+	initiator.SetLocalOptions(&OptionsParams{Version: 2, TMaxRatio: 2.0, RMaxRatio: 3.0})
+	responder.SetLocalOptions(&OptionsParams{Version: 2, TMaxRatio: 1.5, RMaxRatio: 4.0})
+
+	// SessionRequest: initiator sends, responder receives + extracts options
+	sessionReq, err := initiator.CreateSessionRequest(1111, 2222)
+	require.NoError(t, err)
+
+	_, err = responder.ProcessSessionRequest(sessionReq)
+	require.NoError(t, err)
+	require.NotNil(t, responder.PeerOptions(), "responder should have peer options after SessionRequest")
+	assert.InDelta(t, 2.0, responder.PeerOptions().TMaxRatio, 0.0625)
+
+	// SessionCreated: responder sends, initiator receives + extracts options
+	sessionCreated, err := responder.CreateSessionCreated(2222, 1111)
+	require.NoError(t, err)
+
+	err = initiator.ProcessSessionCreated(sessionCreated)
+	require.NoError(t, err)
+	require.NotNil(t, initiator.PeerOptions(), "initiator should have peer options after SessionCreated")
+	assert.InDelta(t, 1.5, initiator.PeerOptions().TMaxRatio, 0.0625)
+}

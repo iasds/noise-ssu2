@@ -68,6 +68,13 @@ type HandshakeHandler struct {
 	// replayCache detects replayed handshake messages per SSU2 spec.
 	// Only used by responders to protect ProcessSessionRequest.
 	replayCache *replaycache.TTLCache
+
+	// localOptions are this peer's padding parameters, sent in Options blocks.
+	localOptions *OptionsParams
+
+	// peerOptions are the remote peer's padding parameters, parsed from
+	// received Options blocks during handshake.
+	peerOptions *OptionsParams
 }
 
 // buildSSU2Prologue returns the Noise prologue for SSU2 handshakes.
@@ -311,6 +318,9 @@ func (h *HandshakeHandler) ProcessSessionRequest(packet *SSU2Packet) ([]byte, er
 		return nil, err
 	}
 
+	// Extract peer's Options block for padding negotiation (G-3).
+	h.extractPeerOptions(blocks)
+
 	// Note: In the XK pattern, the initiator's static key is transmitted encrypted,
 	// but the noise library doesn't expose it via PeerStatic() on the responder side.
 	// The static key is used internally for DH operations to establish the session.
@@ -390,6 +400,9 @@ func (h *HandshakeHandler) ProcessSessionCreated(packet *SSU2Packet) error {
 	if err := h.validateHandshakeBlocks(blocks, MessageTypeSessionCreated); err != nil {
 		return err
 	}
+
+	// Extract peer's Options block for padding negotiation (G-3).
+	h.extractPeerOptions(blocks)
 
 	return nil
 }
@@ -559,6 +572,161 @@ func (h *HandshakeHandler) GetRemoteStaticKey() []byte {
 	return copyBytes(h.remoteStaticKey)
 }
 
+// OptionsParams holds the parsed or configured values from an SSU2 Options
+// block (Type 1, 15 bytes). Padding ratios use 4.4 fixed-point encoding
+// where the value = integerPart + fractionPart/16 (range 0.0–15.9375).
+type OptionsParams struct {
+	Version   uint16  // protocol version (currently 2)
+	TMinRatio float64 // transmit padding minimum ratio
+	TMaxRatio float64 // transmit padding maximum ratio
+	RMinRatio float64 // receive padding minimum ratio
+	RMaxRatio float64 // receive padding maximum ratio
+	TDummy    uint16  // transmit dummy traffic rate
+	RDummy    uint16  // receive dummy traffic rate
+	TDelay    uint16  // transmit delay (ms)
+	RDelay    uint16  // receive delay (ms)
+	Flags     uint8
+}
+
+// fixedPointToFloat decodes a 4.4 fixed-point byte: upper nibble is the
+// integer part, lower nibble is the fractional part (sixteenths).
+func fixedPointToFloat(b byte) float64 {
+	return float64(b>>4) + float64(b&0x0F)/16.0
+}
+
+// floatToFixedPoint encodes a float as a 4.4 fixed-point byte.
+func floatToFixedPoint(f float64) byte {
+	if f < 0 {
+		f = 0
+	}
+	if f > 15.9375 {
+		f = 15.9375
+	}
+	intPart := int(f)
+	fracPart := int((f - float64(intPart)) * 16)
+	return byte(intPart<<4 | fracPart)
+}
+
+// ParseOptionsBlock decodes a 15-byte Options block into OptionsParams.
+func ParseOptionsBlock(data []byte) (*OptionsParams, error) {
+	if len(data) < 15 {
+		return nil, oops.Errorf("Options block too short: %d bytes, need 15", len(data))
+	}
+	return &OptionsParams{
+		Version:   binary.BigEndian.Uint16(data[0:2]),
+		TMinRatio: fixedPointToFloat(data[2]),
+		TMaxRatio: fixedPointToFloat(data[3]),
+		RMinRatio: fixedPointToFloat(data[4]),
+		RMaxRatio: fixedPointToFloat(data[5]),
+		TDummy:    binary.BigEndian.Uint16(data[6:8]),
+		RDummy:    binary.BigEndian.Uint16(data[8:10]),
+		TDelay:    binary.BigEndian.Uint16(data[10:12]),
+		RDelay:    binary.BigEndian.Uint16(data[12:14]),
+		Flags:     data[14],
+	}, nil
+}
+
+// Serialize encodes OptionsParams into a 15-byte Options block.
+func (o *OptionsParams) Serialize() []byte {
+	data := make([]byte, 15)
+	binary.BigEndian.PutUint16(data[0:2], o.Version)
+	data[2] = floatToFixedPoint(o.TMinRatio)
+	data[3] = floatToFixedPoint(o.TMaxRatio)
+	data[4] = floatToFixedPoint(o.RMinRatio)
+	data[5] = floatToFixedPoint(o.RMaxRatio)
+	binary.BigEndian.PutUint16(data[6:8], o.TDummy)
+	binary.BigEndian.PutUint16(data[8:10], o.RDummy)
+	binary.BigEndian.PutUint16(data[10:12], o.TDelay)
+	binary.BigEndian.PutUint16(data[12:14], o.RDelay)
+	data[14] = o.Flags
+	return data
+}
+
+// SetLocalOptions sets the local padding parameters that will be advertised
+// in outbound Options blocks during handshake.
+func (h *HandshakeHandler) SetLocalOptions(opts *OptionsParams) {
+	h.localOptions = opts
+}
+
+// PeerOptions returns the remote peer's Options parameters parsed during
+// the handshake, or nil if no Options block was received.
+func (h *HandshakeHandler) PeerOptions() *OptionsParams {
+	return h.peerOptions
+}
+
+// NegotiatedPadding returns the padding parameters that both peers agree on.
+// Per SSU2 spec, the initiator's transmit ratios are the responder's receive
+// constraints and vice versa. The negotiated range is the intersection of
+// both peers' preferences: max of minimums, min of maximums.
+// Returns nil if either side has not provided options.
+func (h *HandshakeHandler) NegotiatedPadding() *OptionsParams {
+	local := h.localOptions
+	peer := h.peerOptions
+	if local == nil || peer == nil {
+		return nil
+	}
+	// The peer's transmit limits constrain what we receive, and our transmit
+	// limits constrain what the peer receives. Negotiate the overlap.
+	negotiated := &OptionsParams{Version: 2}
+
+	// Our send padding: bounded by our tmin/tmax AND peer's rmin/rmax
+	negotiated.TMinRatio = max44(local.TMinRatio, peer.RMinRatio)
+	negotiated.TMaxRatio = min44(local.TMaxRatio, peer.RMaxRatio)
+	if negotiated.TMaxRatio < negotiated.TMinRatio {
+		negotiated.TMaxRatio = negotiated.TMinRatio
+	}
+
+	// Our receive padding: bounded by our rmin/rmax AND peer's tmin/tmax
+	negotiated.RMinRatio = max44(local.RMinRatio, peer.TMinRatio)
+	negotiated.RMaxRatio = min44(local.RMaxRatio, peer.TMaxRatio)
+	if negotiated.RMaxRatio < negotiated.RMinRatio {
+		negotiated.RMaxRatio = negotiated.RMinRatio
+	}
+
+	// Dummy traffic and delay: use the smaller of the two peers' values
+	negotiated.TDummy = minU16(local.TDummy, peer.RDummy)
+	negotiated.RDummy = minU16(local.RDummy, peer.TDummy)
+	negotiated.TDelay = minU16(local.TDelay, peer.RDelay)
+	negotiated.RDelay = minU16(local.RDelay, peer.TDelay)
+
+	return negotiated
+}
+
+func max44(a, b float64) float64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func min44(a, b float64) float64 {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func minU16(a, b uint16) uint16 {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// extractPeerOptions scans deserialized handshake blocks for an Options block
+// and stores the parsed result in h.peerOptions.
+func (h *HandshakeHandler) extractPeerOptions(blocks []*SSU2Block) {
+	for _, block := range blocks {
+		if block.Type == BlockTypeOptions && len(block.Data) >= 15 {
+			opts, err := ParseOptionsBlock(block.Data)
+			if err == nil {
+				h.peerOptions = opts
+			}
+			return
+		}
+	}
+}
+
 // createHandshakeBlocks creates the standard blocks for handshake messages.
 // Currently creates DateTime block with current timestamp.
 func (h *HandshakeHandler) createHandshakeBlocks(messageType uint8) []*SSU2Block {
@@ -573,28 +741,14 @@ func (h *HandshakeHandler) createHandshakeBlocks(messageType uint8) []*SSU2Block
 
 	// Options block (Type 1) - SHOULD be included per SSU2 spec
 	// Communicates version and padding negotiation parameters.
-	//
-	// NOTE: All padding ratios, dummy traffic rates, delays, and flags are
-	// zeroed. This means no padding negotiation occurs and the peer's padding
-	// preferences are ignored. Future work should parse the peer's Options
-	// block and negotiate padding parameters for traffic analysis resistance.
-	// Spec-defined layout (15 bytes):
-	//   Bytes 0-1:   version (uint16 big-endian, currently 2)
-	//   Byte 2:      tmin  (fixed-point 4.4 transmit padding minimum ratio)
-	//   Byte 3:      tmax  (fixed-point 4.4 transmit padding maximum ratio)
-	//   Byte 4:      rmin  (fixed-point 4.4 receive padding minimum ratio)
-	//   Byte 5:      rmax  (fixed-point 4.4 receive padding maximum ratio)
-	//   Bytes 6-7:   tdummy (transmit dummy traffic rate)
-	//   Bytes 8-9:   rdummy (receive dummy traffic rate)
-	//   Bytes 10-11: tdelay (transmit delay)
-	//   Bytes 12-13: rdelay (receive delay)
-	//   Byte 14:     flags
-	optData := make([]byte, 15)
-	binary.BigEndian.PutUint16(optData[0:2], 2) // SSU2 version 2
-	// Bytes 2-5: padding ratios (4.4 fixed-point) — 0 = no constraints
-	// Bytes 6-13: dummy traffic rates and delays — 0 = none
-	// Byte 14: flags — 0 = no flags set
-	blocks = append(blocks, NewSSU2Block(BlockTypeOptions, optData))
+	// If localOptions has been set, encode those values; otherwise send zeroes.
+	if h.localOptions != nil {
+		blocks = append(blocks, NewSSU2Block(BlockTypeOptions, h.localOptions.Serialize()))
+	} else {
+		optData := make([]byte, 15)
+		binary.BigEndian.PutUint16(optData[0:2], 2) // SSU2 version 2
+		blocks = append(blocks, NewSSU2Block(BlockTypeOptions, optData))
+	}
 
 	return blocks
 }

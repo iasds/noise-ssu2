@@ -218,6 +218,16 @@ func NewSSU2Conn(
 		return nil, oops.Wrapf(err, "failed to create handshake handler")
 	}
 
+	// Populate local Options from config so the handshake advertises our
+	// padding preferences to the peer (G-3).
+	handshakeHandler.SetLocalOptions(&OptionsParams{
+		Version:   2,
+		TMinRatio: 0, // we allow any transmit padding
+		TMaxRatio: config.PaddingRatio,
+		RMinRatio: 0,
+		RMaxRatio: config.PaddingRatio,
+	})
+
 	// Create SSU2 address from config
 	role := "initiator"
 	if !initiator {
@@ -527,6 +537,19 @@ func (h *SSU2Conn) finalizeHandshake() error {
 	h.stateMutex.Lock()
 	h.state = StateEstablished
 	h.stateMutex.Unlock()
+
+	// Apply negotiated padding parameters (G-3). If the peer sent an
+	// Options block, the negotiated values override the local defaults.
+	if negotiated := h.handshakeHandler.NegotiatedPadding(); negotiated != nil {
+		h.config.PaddingRatio = negotiated.TMaxRatio
+		if negotiated.TMinRatio > 0 {
+			minBytes := int(negotiated.TMinRatio * float64(h.config.MTU))
+			if minBytes > h.config.MinPaddingSize {
+				h.config.MinPaddingSize = minBytes
+			}
+		}
+	}
+
 	h.startDataLoops()
 	return nil
 }
