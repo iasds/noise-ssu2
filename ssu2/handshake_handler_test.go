@@ -717,3 +717,136 @@ func TestDeriveHeaderKeys_Deterministic(t *testing.T) {
 	assert.Len(t, k1, 32)
 	assert.Len(t, k2, 32)
 }
+
+// SessionConfirmed fragmentation tests
+
+func TestCreateSessionConfirmedFragments_SinglePacket(t *testing.T) {
+	initiator, responder, _, _ := setupHandshakePair(t)
+
+	// Complete handshake up to message 2
+	req, err := initiator.CreateSessionRequest(11111, 22222)
+	require.NoError(t, err)
+	_, err = responder.ProcessSessionRequest(req)
+	require.NoError(t, err)
+	created, err := responder.CreateSessionCreated(33333, 44444)
+	require.NoError(t, err)
+	err = initiator.ProcessSessionCreated(created)
+	require.NoError(t, err)
+
+	// Small payload should produce a single fragment
+	fragments, err := initiator.CreateSessionConfirmedFragments(55555, 1, nil)
+	require.NoError(t, err)
+	require.Len(t, fragments, 1)
+
+	pkt := fragments[0]
+	assert.Equal(t, MessageTypeSessionConfirmed, pkt.MessageType)
+	assert.Len(t, pkt.Header, ShortHeaderSize)
+	assert.Equal(t, uint32(1), pkt.PacketNumber)
+	// frag byte: fragment 0 of 1
+	assert.Equal(t, byte(0x01), pkt.Header[13])
+}
+
+func TestCreateSessionConfirmedFragments_RoundTrip(t *testing.T) {
+	initiator, responder, _, _ := setupHandshakePair(t)
+
+	req, err := initiator.CreateSessionRequest(11111, 22222)
+	require.NoError(t, err)
+	_, err = responder.ProcessSessionRequest(req)
+	require.NoError(t, err)
+	created, err := responder.CreateSessionCreated(33333, 44444)
+	require.NoError(t, err)
+	err = initiator.ProcessSessionCreated(created)
+	require.NoError(t, err)
+
+	// Use nil RouterInfo for single-fragment round-trip
+	fragments, err := initiator.CreateSessionConfirmedFragments(55555, 1, nil)
+	require.NoError(t, err)
+
+	err = responder.ProcessSessionConfirmedFragments(fragments)
+	require.NoError(t, err)
+
+	assert.True(t, initiator.IsHandshakeComplete())
+	assert.True(t, responder.IsHandshakeComplete())
+}
+
+func TestCreateSessionConfirmedFragments_LargePayload(t *testing.T) {
+	initiator, responder, _, _ := setupHandshakePair(t)
+
+	req, err := initiator.CreateSessionRequest(11111, 22222)
+	require.NoError(t, err)
+	_, err = responder.ProcessSessionRequest(req)
+	require.NoError(t, err)
+	created, err := responder.CreateSessionCreated(33333, 44444)
+	require.NoError(t, err)
+	err = initiator.ProcessSessionCreated(created)
+	require.NoError(t, err)
+
+	// Create a large RouterInfo that forces fragmentation.
+	// Max per packet is 1216 bytes. Noise overhead is ~64 bytes (static key + MACs).
+	// So payload > 1152 bytes should trigger fragmentation.
+	largeRouterInfo := make([]byte, 1500)
+	for i := range largeRouterInfo {
+		largeRouterInfo[i] = byte(i % 256)
+	}
+
+	fragments, err := initiator.CreateSessionConfirmedFragments(55555, 1, largeRouterInfo)
+	require.NoError(t, err)
+	require.Greater(t, len(fragments), 1, "should produce multiple fragments")
+
+	// Validate fragment headers
+	for i, frag := range fragments {
+		assert.Equal(t, MessageTypeSessionConfirmed, frag.MessageType)
+		assert.Len(t, frag.Header, ShortHeaderSize)
+		assert.Equal(t, uint32(1+uint32(i)), frag.PacketNumber)
+
+		// Check frag byte
+		fragNum := int((frag.Header[13] >> 4) & 0x0F)
+		totalFrags := int(frag.Header[13] & 0x0F)
+		assert.Equal(t, i, fragNum)
+		assert.Equal(t, len(fragments), totalFrags)
+	}
+
+	// Verify the responder can process the fragments
+	err = responder.ProcessSessionConfirmedFragments(fragments)
+	require.NoError(t, err)
+
+	assert.True(t, initiator.IsHandshakeComplete())
+	assert.True(t, responder.IsHandshakeComplete())
+}
+
+func TestProcessSessionConfirmedFragments_Errors(t *testing.T) {
+	initiator, responder, _, _ := setupHandshakePair(t)
+
+	// Test: initiator cannot process
+	err := initiator.ProcessSessionConfirmedFragments(nil)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "initiator cannot process")
+
+	// Test: empty fragments
+	err = responder.ProcessSessionConfirmedFragments(nil)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "no SessionConfirmed fragments")
+
+	// Test: empty slice
+	err = responder.ProcessSessionConfirmedFragments([]*SSU2Packet{})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "no SessionConfirmed fragments")
+}
+
+func TestCreateSessionConfirmedFragments_ResponderError(t *testing.T) {
+	_, responder, _, _ := setupHandshakePair(t)
+
+	packets, err := responder.CreateSessionConfirmedFragments(11111, 1, nil)
+	assert.Error(t, err)
+	assert.Nil(t, packets)
+	assert.Contains(t, err.Error(), "only initiator")
+}
+
+func TestCreateSessionConfirmedFragments_NotReady(t *testing.T) {
+	initiator, _, _, _ := setupHandshakePair(t)
+
+	// Try without completing prior messages
+	packets, err := initiator.CreateSessionConfirmedFragments(11111, 1, nil)
+	assert.Error(t, err)
+	assert.Nil(t, packets)
+}

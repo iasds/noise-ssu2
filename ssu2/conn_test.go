@@ -635,3 +635,132 @@ func TestCopyBytes(t *testing.T) {
 	assert.Equal(t, byte(1), data[0])
 	assert.Equal(t, byte(99), copied[0])
 }
+
+// I2NP fragmentation tests
+
+func TestBuildI2NPFragmentBlocks_SmallPayload(t *testing.T) {
+	config := createTestConfig(t)
+	dh, err := noise.DH25519.GenerateKeypair(nil)
+	require.NoError(t, err)
+	dh2, err := noise.DH25519.GenerateKeypair(nil)
+	require.NoError(t, err)
+	config.StaticKey = dh.Private
+	config.RemoteRouterHash = dh2.Public
+
+	mockConn := newMockPacketConn(&net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1234})
+	remoteAddr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 5678}
+
+	conn, err := NewSSU2Conn(mockConn, remoteAddr, config, true, dh.Private, dh2.Public)
+	require.NoError(t, err)
+
+	// A small payload that fits in one fragment
+	data := make([]byte, 100)
+	maxBlockData := config.MTU - 80 - minBlockHeaderSize
+	blocks, err := conn.buildI2NPFragmentBlocks(data, maxBlockData)
+	require.NoError(t, err)
+
+	// Should produce at least 2 blocks: FirstFragment + FollowOnFragment (isLast)
+	require.GreaterOrEqual(t, len(blocks), 1)
+
+	// First block should be FirstFragment
+	assert.Equal(t, BlockTypeFirstFragment, blocks[0].Type)
+	// First 9 bytes are I2NP header
+	require.GreaterOrEqual(t, len(blocks[0].Data), 9)
+
+	// Last block should be FollowOnFragment with isLast bit
+	if len(blocks) > 1 {
+		lastBlock := blocks[len(blocks)-1]
+		assert.Equal(t, BlockTypeFollowOnFragment, lastBlock.Type)
+		fragInfo := lastBlock.Data[0]
+		assert.True(t, fragInfo&0x01 != 0, "last fragment should have isLast bit set")
+	}
+}
+
+func TestBuildI2NPFragmentBlocks_LargePayload(t *testing.T) {
+	config := createTestConfig(t)
+	dh, err := noise.DH25519.GenerateKeypair(nil)
+	require.NoError(t, err)
+	dh2, err := noise.DH25519.GenerateKeypair(nil)
+	require.NoError(t, err)
+	config.StaticKey = dh.Private
+	config.RemoteRouterHash = dh2.Public
+
+	mockConn := newMockPacketConn(&net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1234})
+	remoteAddr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 5678}
+
+	conn, err := NewSSU2Conn(mockConn, remoteAddr, config, true, dh.Private, dh2.Public)
+	require.NoError(t, err)
+
+	// A large payload that requires multiple fragments
+	data := make([]byte, 5000)
+	for i := range data {
+		data[i] = byte(i % 256)
+	}
+
+	maxBlockData := config.MTU - 80 - minBlockHeaderSize
+	blocks, err := conn.buildI2NPFragmentBlocks(data, maxBlockData)
+	require.NoError(t, err)
+	require.Greater(t, len(blocks), 1, "large payload should produce multiple fragments")
+
+	// First block is FirstFragment
+	assert.Equal(t, BlockTypeFirstFragment, blocks[0].Type)
+
+	// Remaining blocks are FollowOnFragment
+	for i := 1; i < len(blocks); i++ {
+		assert.Equal(t, BlockTypeFollowOnFragment, blocks[i].Type)
+		fragInfo := blocks[i].Data[0]
+		fragNum := fragInfo >> 1
+		assert.Equal(t, uint8(i), fragNum, "fragment number should match index")
+	}
+
+	// Last block should have isLast bit
+	lastBlock := blocks[len(blocks)-1]
+	assert.True(t, lastBlock.Data[0]&0x01 != 0, "last fragment should have isLast bit")
+
+	// Verify total data integrity: all the payload fragments should
+	// reconstruct the original data.
+	var reconstructed []byte
+	// From first fragment: skip 9-byte I2NP header
+	reconstructed = append(reconstructed, blocks[0].Data[9:]...)
+	// From follow-on fragments: skip 5-byte header
+	for i := 1; i < len(blocks); i++ {
+		reconstructed = append(reconstructed, blocks[i].Data[5:]...)
+	}
+	assert.Equal(t, data, reconstructed, "reconstructed data should match original")
+
+	// Verify no block exceeds maxBlockData
+	for i, block := range blocks {
+		assert.LessOrEqual(t, len(block.Data), maxBlockData, "block %d exceeds max block data", i)
+	}
+}
+
+func TestBuildI2NPFragmentBlocks_MessageIDConsistent(t *testing.T) {
+	config := createTestConfig(t)
+	dh, err := noise.DH25519.GenerateKeypair(nil)
+	require.NoError(t, err)
+	dh2, err := noise.DH25519.GenerateKeypair(nil)
+	require.NoError(t, err)
+	config.StaticKey = dh.Private
+	config.RemoteRouterHash = dh2.Public
+
+	mockConn := newMockPacketConn(&net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1234})
+	remoteAddr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 5678}
+
+	conn, err := NewSSU2Conn(mockConn, remoteAddr, config, true, dh.Private, dh2.Public)
+	require.NoError(t, err)
+
+	data := make([]byte, 3000)
+	maxBlockData := config.MTU - 80 - minBlockHeaderSize
+	blocks, err := conn.buildI2NPFragmentBlocks(data, maxBlockData)
+	require.NoError(t, err)
+	require.Greater(t, len(blocks), 1)
+
+	// Extract message ID from first fragment
+	firstMsgID := blocks[0].Data[1:5]
+
+	// All follow-on fragments should have the same message ID
+	for i := 1; i < len(blocks); i++ {
+		followMsgID := blocks[i].Data[1:5]
+		assert.Equal(t, firstMsgID, followMsgID, "fragment %d should have same message ID", i)
+	}
+}

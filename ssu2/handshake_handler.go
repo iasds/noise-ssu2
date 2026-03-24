@@ -436,12 +436,9 @@ func (h *HandshakeHandler) CreateSessionConfirmed(connID uint64, packetNumber ui
 	// Total data size = static key (32) + payload + 2 MACs (32) = payload + 64.
 	// Available space per packet = MTU - IP header (40 IPv6 worst case) - UDP (8) - SSU2 header (16) = MTU - 64.
 	// Use conservative default MTU of 1280 (IPv6 minimum).
-	const minMTU = 1280
-	const perPacketOverhead = 64 // IP(40) + UDP(8) + header(16)
-	maxPayloadPerPacket := minMTU - perPacketOverhead
 	totalDataSize := len(payload) + 64 // static key + two MACs
-	if totalDataSize > maxPayloadPerPacket {
-		return nil, oops.Errorf("SessionConfirmed payload too large for single packet (%d bytes, max %d); fragmentation not yet implemented", totalDataSize, maxPayloadPerPacket)
+	if totalDataSize > sessionConfirmedMaxPerPacket {
+		return nil, oops.Errorf("SessionConfirmed payload too large for single packet (%d bytes, max %d); use CreateSessionConfirmedFragments instead", totalDataSize, sessionConfirmedMaxPerPacket)
 	}
 
 	// MixHash(header) binds the header into the handshake hash.
@@ -505,13 +502,13 @@ func (h *HandshakeHandler) ProcessSessionConfirmed(packet *SSU2Packet) error {
 	// the handshake hash before processing the Noise message.
 	//
 	// Check frag field (byte 13): bits 7-4 = fragment number, bits 3-0 = total fragments.
-	// We only support single-fragment SessionConfirmed for now.
+	// For fragmented messages, use ProcessSessionConfirmedFragments instead.
 	if len(packet.Header) >= 14 {
 		fragByte := packet.Header[13]
 		totalFrags := fragByte & 0x0F
 		fragNum := (fragByte >> 4) & 0x0F
 		if totalFrags > 1 || fragNum > 0 {
-			return oops.Errorf("fragmented SessionConfirmed not yet supported (fragment %d of %d)", fragNum, totalFrags)
+			return oops.Errorf("fragmented SessionConfirmed: use ProcessSessionConfirmedFragments (fragment %d of %d)", fragNum, totalFrags)
 		}
 	}
 
@@ -799,6 +796,188 @@ func deriveDataPhaseKeys(cs *noise.CipherState) (kData, kHeader2 []byte, err err
 	kHeader2 = mac.Sum(nil)
 
 	return kData, kHeader2, nil
+}
+
+// SessionConfirmed fragmentation constants per SSU2 spec.
+const (
+	// sessionConfirmedMinMTU is the IPv6 minimum MTU used for conservative sizing.
+	sessionConfirmedMinMTU = 1280
+
+	// sessionConfirmedPerPacketOverhead = IP(40) + UDP(8) + SSU2 header(16).
+	sessionConfirmedPerPacketOverhead = 64
+
+	// sessionConfirmedMaxPerPacket is the maximum ciphertext bytes per fragment.
+	sessionConfirmedMaxPerPacket = sessionConfirmedMinMTU - sessionConfirmedPerPacketOverhead
+
+	// sessionConfirmedMaxFragments is the maximum fragment count (4-bit field).
+	sessionConfirmedMaxFragments = 15
+)
+
+// CreateSessionConfirmedFragments creates one or more SessionConfirmed packets.
+// When the payload fits in a single packet, it returns a slice of length 1
+// (identical to CreateSessionConfirmed). When the Noise ciphertext exceeds
+// the per-packet limit, it splits the ciphertext across multiple fragments
+// using the frag field at header byte 13 (bits 7-4 = fragment number,
+// bits 3-0 = total fragments) per SSU2 spec §Session Confirmed.
+//
+// Only the first fragment's header is MixHash'd into the handshake. Subsequent
+// fragment headers carry the same connection ID with incrementing packet numbers.
+func (h *HandshakeHandler) CreateSessionConfirmedFragments(connID uint64, packetNumber uint32, routerInfo []byte) ([]*SSU2Packet, error) {
+	if !h.initiator {
+		return nil, oops.Errorf("only initiator can create SessionConfirmed")
+	}
+	if h.handshakeState.MessageIndex() != 2 {
+		return nil, oops.Errorf("handshake not ready for SessionConfirmed: expected message index 2, got %d", h.handshakeState.MessageIndex())
+	}
+
+	var blocks []*SSU2Block
+	if len(routerInfo) > 0 {
+		blocks = append(blocks, NewSSU2Block(BlockTypeRouterInfo, routerInfo))
+	}
+
+	payload, err := SerializeBlocks(blocks)
+	if err != nil {
+		return nil, oops.Wrapf(err, "failed to serialize SessionConfirmed blocks")
+	}
+
+	// Build the first fragment's 16-byte header for MixHash (before Noise).
+	// Fragment count and frag number will be filled in after we know total size.
+	// Compute expected ciphertext size to determine fragment count before MixHash.
+	// Noise XK message 3 (→ s, se) encrypts: static_key(32+16 MAC) + payload(+16 MAC).
+	expectedCiphertextSize := len(payload) + 64
+	totalFrags := (expectedCiphertextSize + sessionConfirmedMaxPerPacket - 1) / sessionConfirmedMaxPerPacket
+	if totalFrags < 1 {
+		totalFrags = 1
+	}
+	if totalFrags > sessionConfirmedMaxFragments {
+		return nil, oops.Errorf("SessionConfirmed requires %d fragments, max %d", totalFrags, sessionConfirmedMaxFragments)
+	}
+
+	// Build the first fragment's 16-byte header for MixHash (before Noise).
+	header := make([]byte, ShortHeaderSize)
+	binary.BigEndian.PutUint64(header[0:8], connID)
+	binary.BigEndian.PutUint32(header[8:12], packetNumber)
+	header[12] = MessageTypeSessionConfirmed
+	// frag byte: fragment 0 of totalFrags
+	header[13] = byte(0<<4) | byte(totalFrags)
+
+	// MixHash(header) — only the first fragment's header is mixed.
+	h.handshakeState.MixHash(header)
+
+	ciphertext, cs1, cs2, err := h.handshakeState.WriteMessage(nil, payload)
+	if err != nil {
+		return nil, oops.Wrapf(err, "failed to create SessionConfirmed handshake message")
+	}
+	h.updateCipherStates(cs1, cs2)
+
+	packets := make([]*SSU2Packet, 0, totalFrags)
+	offset := 0
+	for i := 0; i < totalFrags; i++ {
+		end := offset + sessionConfirmedMaxPerPacket
+		if end > len(ciphertext) {
+			end = len(ciphertext)
+		}
+		chunk := ciphertext[offset:end]
+
+		fragHeader := make([]byte, ShortHeaderSize)
+		binary.BigEndian.PutUint64(fragHeader[0:8], connID)
+		binary.BigEndian.PutUint32(fragHeader[8:12], packetNumber+uint32(i))
+		fragHeader[12] = MessageTypeSessionConfirmed
+		fragHeader[13] = byte(i<<4) | byte(totalFrags)
+
+		// For the last fragment, separate trailing MAC (16 bytes).
+		var pktPayload, mac []byte
+		if i == totalFrags-1 && len(chunk) >= MACSize {
+			pktPayload = chunk[:len(chunk)-MACSize]
+			mac = chunk[len(chunk)-MACSize:]
+		} else {
+			pktPayload = chunk
+			mac = make([]byte, MACSize)
+		}
+
+		packets = append(packets, &SSU2Packet{
+			Header:       fragHeader,
+			EphemeralKey: nil,
+			Payload:      pktPayload,
+			MAC:          mac,
+			MessageType:  MessageTypeSessionConfirmed,
+			PacketNumber: packetNumber + uint32(i),
+		})
+		offset = end
+	}
+
+	// Fragment 0 uses the header that was MixHash'd.
+	packets[0].Header = header
+
+	return packets, nil
+}
+
+// ProcessSessionConfirmedFragments reassembles and processes a fragmented
+// SessionConfirmed message. The packets slice must contain all fragments
+// ordered by fragment number (0 .. totalFrags-1).
+//
+// For a single-fragment message, this behaves identically to ProcessSessionConfirmed.
+func (h *HandshakeHandler) ProcessSessionConfirmedFragments(packets []*SSU2Packet) error {
+	if h.initiator {
+		return oops.Errorf("initiator cannot process SessionConfirmed")
+	}
+	if len(packets) == 0 {
+		return oops.Errorf("no SessionConfirmed fragments provided")
+	}
+
+	// Verify handshake state.
+	if h.handshakeState.MessageIndex() != 2 {
+		return oops.Errorf("handshake not ready for SessionConfirmed: expected message index 2, got %d", h.handshakeState.MessageIndex())
+	}
+
+	// Validate fragment ordering and completeness.
+	totalFrags := int(packets[0].Header[13] & 0x0F)
+	if totalFrags < 1 {
+		totalFrags = 1
+	}
+	if len(packets) != totalFrags {
+		return oops.Errorf("expected %d fragments, got %d", totalFrags, len(packets))
+	}
+	for i, pkt := range packets {
+		if pkt.MessageType != MessageTypeSessionConfirmed {
+			return oops.Errorf("fragment %d: expected SessionConfirmed (type 2), got type %d", i, pkt.MessageType)
+		}
+		fragNum := int((pkt.Header[13] >> 4) & 0x0F)
+		if fragNum != i {
+			return oops.Errorf("fragment %d: unexpected fragment number %d", i, fragNum)
+		}
+	}
+
+	// MixHash(header) — only the first fragment's header is mixed.
+	h.handshakeState.MixHash(packets[0].Header)
+
+	// Reassemble the Noise ciphertext from all fragments.
+	// Each fragment contributes Payload bytes; the last fragment also has the MAC.
+	totalSize := 0
+	for _, pkt := range packets {
+		totalSize += len(pkt.Payload)
+	}
+	totalSize += len(packets[len(packets)-1].MAC)
+
+	noiseMessage := make([]byte, 0, totalSize)
+	for i, pkt := range packets {
+		noiseMessage = append(noiseMessage, pkt.Payload...)
+		if i == len(packets)-1 {
+			noiseMessage = append(noiseMessage, pkt.MAC...)
+		}
+	}
+
+	_, cs1, cs2, err := h.handshakeState.ReadMessage(nil, noiseMessage)
+	if err != nil {
+		return oops.Wrapf(err, "failed to process SessionConfirmed handshake message")
+	}
+	h.updateCipherStates(cs1, cs2)
+
+	if ps := h.handshakeState.PeerStatic(); len(ps) > 0 {
+		h.remoteStaticKey = copyBytes(ps)
+	}
+
+	return nil
 }
 
 // Close releases resources held by the HandshakeHandler, including the

@@ -2,6 +2,7 @@ package ssu2
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
 	"net"
@@ -398,14 +399,18 @@ func (h *SSU2Conn) handshakeInitiator(ctx context.Context) error {
 		}
 	}
 
-	// Step 4: Create and send SessionConfirmed (3rd XK message) with RouterInfo
-	sessionConfirmed, err := h.handshakeHandler.CreateSessionConfirmed(h.config.ConnectionID, 1, h.config.RouterHash)
+	// Step 4: Create and send SessionConfirmed (3rd XK message) with RouterInfo.
+	// Use CreateSessionConfirmedFragments to support large RouterInfo that
+	// requires splitting across multiple packets per SSU2 spec §Session Confirmed.
+	fragments, err := h.handshakeHandler.CreateSessionConfirmedFragments(h.config.ConnectionID, 1, h.config.RouterHash)
 	if err != nil {
 		return oops.Wrapf(err, "failed to create SessionConfirmed")
 	}
 
-	if err := h.sendPacketDirect(sessionConfirmed); err != nil {
-		return oops.Wrapf(err, "failed to send SessionConfirmed")
+	for _, frag := range fragments {
+		if err := h.sendPacketDirect(frag); err != nil {
+			return oops.Wrapf(err, "failed to send SessionConfirmed fragment")
+		}
 	}
 
 	// Step 5: Finalize handshake
@@ -471,8 +476,26 @@ func (h *SSU2Conn) handshakeResponder(ctx context.Context) error {
 		return oops.Errorf("expected SessionConfirmed, got type %d", sessionConfirmed.MessageType)
 	}
 
-	// Step 5: Process SessionConfirmed
-	if err := h.handshakeHandler.ProcessSessionConfirmed(sessionConfirmed); err != nil {
+	// Collect additional fragments if the first packet indicates fragmentation.
+	fragments := []*SSU2Packet{sessionConfirmed}
+	if len(sessionConfirmed.Header) >= 14 {
+		totalFrags := int(sessionConfirmed.Header[13] & 0x0F)
+		if totalFrags > 1 {
+			for i := 1; i < totalFrags; i++ {
+				frag, fErr := h.receivePacketWithTimeout(ctx, h.config.HandshakeTimeout)
+				if fErr != nil {
+					return oops.Wrapf(fErr, "failed to receive SessionConfirmed fragment %d of %d", i, totalFrags)
+				}
+				if frag.MessageType != MessageTypeSessionConfirmed {
+					return oops.Errorf("expected SessionConfirmed fragment, got type %d", frag.MessageType)
+				}
+				fragments = append(fragments, frag)
+			}
+		}
+	}
+
+	// Step 5: Process SessionConfirmed (all fragments)
+	if err := h.handshakeHandler.ProcessSessionConfirmedFragments(fragments); err != nil {
 		return oops.Wrapf(err, "failed to process SessionConfirmed")
 	}
 
@@ -584,22 +607,112 @@ func (h *SSU2Conn) Read(b []byte) (int, error) {
 }
 
 // Write implements net.Conn.Write.
-// Writes data to the connection, fragmenting if needed.
+// Writes data to the connection. If the data exceeds the per-packet payload
+// capacity (determined by MTU), it is automatically split into FirstFragment
+// and FollowOnFragment blocks per SSU2 spec §FirstFragment/§FollowOnFragment.
 func (h *SSU2Conn) Write(b []byte) (int, error) {
 	if err := h.validateReadyForIO(); err != nil {
 		return 0, err
 	}
 
-	// Create I2NP message block
-	block := &SSU2Block{
-		Type: BlockTypeI2NPMessage,
-		Data: copyBytes(b),
+	// Maximum block data that fits in a single Data packet.
+	// Available = MTU - IP(40) - UDP(8) - SSU2_header(16) - AEAD_MAC(16) - block_TLV(3)
+	maxBlockData := h.config.MTU - 80 - minBlockHeaderSize
+
+	if len(b)+minBlockHeaderSize <= maxBlockData+minBlockHeaderSize {
+		// Fits in a single I2NP message block
+		block := &SSU2Block{
+			Type: BlockTypeI2NPMessage,
+			Data: copyBytes(b),
+		}
+		if err := h.writeBlock(block); err != nil {
+			return 0, err
+		}
+		return len(b), nil
 	}
 
-	if err := h.writeBlock(block); err != nil {
+	// Fragment the message using FirstFragment + FollowOnFragment blocks.
+	blocks, err := h.buildI2NPFragmentBlocks(b, maxBlockData)
+	if err != nil {
+		return 0, oops.Wrapf(err, "failed to build I2NP fragment blocks")
+	}
+
+	if err := h.WriteBlocks(blocks); err != nil {
 		return 0, err
 	}
 	return len(b), nil
+}
+
+// buildI2NPFragmentBlocks splits a large I2NP message into FirstFragment and
+// FollowOnFragment blocks per SSU2 spec.
+//
+// FirstFragment (type 4): I2NPType(1) + MessageID(4) + ShortExpiry(4) + data
+// FollowOnFragment (type 5): FragInfo(1) + MessageID(4) + data
+func (h *SSU2Conn) buildI2NPFragmentBlocks(data []byte, maxBlockData int) ([]*SSU2Block, error) {
+	const (
+		firstFragHeaderSize    = 9 // type(1) + msgID(4) + shortExpiry(4)
+		followOnFragHeaderSize = 5 // fragInfo(1) + msgID(4)
+	)
+
+	// Generate a random message ID for fragment correlation.
+	var msgIDBuf [4]byte
+	if _, err := rand.Read(msgIDBuf[:]); err != nil {
+		return nil, oops.Wrapf(err, "failed to generate fragment message ID")
+	}
+	messageID := binary.BigEndian.Uint32(msgIDBuf[:])
+
+	// I2NP type: use first byte if present, else 0.
+	var i2npType uint8
+	if len(data) > 0 {
+		i2npType = data[0]
+	}
+	// Short expiration: current time + 120 seconds, in seconds since epoch.
+	shortExpiry := uint32(time.Now().Unix()) + 120
+
+	maxFirstData := maxBlockData - firstFragHeaderSize
+	if maxFirstData <= 0 {
+		return nil, oops.Errorf("MTU too small for fragmentation")
+	}
+
+	end := maxFirstData
+	if end > len(data) {
+		end = len(data)
+	}
+
+	// Build FirstFragment block.
+	firstData := make([]byte, firstFragHeaderSize+end)
+	firstData[0] = i2npType
+	binary.BigEndian.PutUint32(firstData[1:5], messageID)
+	binary.BigEndian.PutUint32(firstData[5:9], shortExpiry)
+	copy(firstData[9:], data[:end])
+
+	blocks := []*SSU2Block{{Type: BlockTypeFirstFragment, Data: firstData}}
+	offset := end
+	fragNum := uint8(1)
+
+	maxFollowData := maxBlockData - followOnFragHeaderSize
+	for offset < len(data) {
+		fEnd := offset + maxFollowData
+		if fEnd > len(data) {
+			fEnd = len(data)
+		}
+		isLast := fEnd == len(data)
+		fragInfo := fragNum << 1
+		if isLast {
+			fragInfo |= 0x01
+		}
+
+		followData := make([]byte, followOnFragHeaderSize+(fEnd-offset))
+		followData[0] = fragInfo
+		binary.BigEndian.PutUint32(followData[1:5], messageID)
+		copy(followData[5:], data[offset:fEnd])
+
+		blocks = append(blocks, &SSU2Block{Type: BlockTypeFollowOnFragment, Data: followData})
+		offset = fEnd
+		fragNum++
+	}
+
+	return blocks, nil
 }
 
 // WriteBlocks sends the provided SSU2 blocks as individual Data packets (one
