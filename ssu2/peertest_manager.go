@@ -109,10 +109,27 @@ func (s PeerTestState) String() string {
 	}
 }
 
+// NonceConnectionIDs derives deterministic connection IDs from a 4-byte nonce
+// per spec: dest = (uint64(nonce) << 32) | uint64(nonce), src = ^dest.
+// Used for out-of-session PeerTest (messages 5-7) and HolePunch packets.
+func NonceConnectionIDs(nonce uint32) (dest, src uint64) {
+	dest = (uint64(nonce) << 32) | uint64(nonce)
+	src = ^dest
+	return dest, src
+}
+
 // PeerTest represents an active peer test operation.
 type PeerTest struct {
 	// Nonce uniquely identifies this test
 	Nonce uint32
+
+	// DestConnectionID is the nonce-derived destination connection ID
+	// for out-of-session PeerTest packets (messages 5-7).
+	DestConnectionID uint64
+
+	// SrcConnectionID is the nonce-derived source connection ID
+	// for out-of-session PeerTest packets (messages 5-7).
+	SrcConnectionID uint64
 
 	// Role is this peer's role in the test
 	Role PeerTestRole
@@ -279,14 +296,19 @@ func (ptm *PeerTestManager) InitiatePeerTest(bobAddr *net.UDPAddr) (uint32, erro
 			Errorf("nonce already in use")
 	}
 
+	// Derive deterministic connection IDs from nonce per spec
+	destConnID, srcConnID := NonceConnectionIDs(nonce)
+
 	// Create peer test
 	test := &PeerTest{
-		Nonce:     nonce,
-		Role:      RoleInitiator,
-		State:     TestRequested,
-		BobAddr:   bobAddr,
-		StartTime: time.Now(),
-		Timeouts:  make([]time.Time, 7), // 7 messages in protocol
+		Nonce:            nonce,
+		DestConnectionID: destConnID,
+		SrcConnectionID:  srcConnID,
+		Role:             RoleInitiator,
+		State:            TestRequested,
+		BobAddr:          bobAddr,
+		StartTime:        time.Now(),
+		Timeouts:         make([]time.Time, 7), // 7 messages in protocol
 	}
 
 	// Set timeout for first message (60 seconds per I2P spec)

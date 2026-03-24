@@ -101,15 +101,14 @@ func TestHolePunchCoordinator_InitiateHolePunch_MultipleAttempts(t *testing.T) {
 	remoteAddr1 := &net.UDPAddr{IP: net.ParseIP("203.0.113.1"), Port: 8887}
 	remoteAddr2 := &net.UDPAddr{IP: net.ParseIP("203.0.113.3"), Port: 8889}
 	introducerAddr := &net.UDPAddr{IP: net.ParseIP("203.0.113.2"), Port: 8888}
-	relayTag := uint32(0x12345678)
 
-	sessionID1, err := hpc.InitiateHolePunch(remoteAddr1, introducerAddr, relayTag)
+	sessionID1, err := hpc.InitiateHolePunch(remoteAddr1, introducerAddr, uint32(0x12345678))
 	require.NoError(t, err)
 
-	sessionID2, err := hpc.InitiateHolePunch(remoteAddr2, introducerAddr, relayTag)
+	sessionID2, err := hpc.InitiateHolePunch(remoteAddr2, introducerAddr, uint32(0x87654321))
 	require.NoError(t, err)
 
-	// Session IDs should be different
+	// Session IDs should be different (derived from different relay tags)
 	assert.NotEqual(t, sessionID1, sessionID2)
 
 	// Both attempts should exist
@@ -581,28 +580,27 @@ func TestHolePunchCoordinator_GetStats(t *testing.T) {
 
 	remoteAddr := &net.UDPAddr{IP: net.ParseIP("203.0.113.1"), Port: 8887}
 	introducerAddr := &net.UDPAddr{IP: net.ParseIP("203.0.113.2"), Port: 8888}
-	relayTag := uint32(0x12345678)
 
 	// Create multiple attempts in different states
-	_, err := hpc.InitiateHolePunch(remoteAddr, introducerAddr, relayTag)
+	_, err := hpc.InitiateHolePunch(remoteAddr, introducerAddr, uint32(0x12345671))
 	require.NoError(t, err)
 
-	sessionID2, err := hpc.InitiateHolePunch(remoteAddr, introducerAddr, relayTag)
+	sessionID2, err := hpc.InitiateHolePunch(remoteAddr, introducerAddr, uint32(0x12345672))
 	require.NoError(t, err)
 	err = hpc.SendHolePunch(sessionID2, remoteAddr)
 	require.NoError(t, err)
 
-	sessionID3, err := hpc.InitiateHolePunch(remoteAddr, introducerAddr, relayTag)
+	sessionID3, err := hpc.InitiateHolePunch(remoteAddr, introducerAddr, uint32(0x12345673))
 	require.NoError(t, err)
 	err = hpc.HandleHolePunch(sessionID3, remoteAddr)
 	require.NoError(t, err)
 
-	sessionID4, err := hpc.InitiateHolePunch(remoteAddr, introducerAddr, relayTag)
+	sessionID4, err := hpc.InitiateHolePunch(remoteAddr, introducerAddr, uint32(0x12345674))
 	require.NoError(t, err)
 	err = hpc.CompleteHolePunch(sessionID4)
 	require.NoError(t, err)
 
-	sessionID5, err := hpc.InitiateHolePunch(remoteAddr, introducerAddr, relayTag)
+	sessionID5, err := hpc.InitiateHolePunch(remoteAddr, introducerAddr, uint32(0x12345675))
 	require.NoError(t, err)
 	err = hpc.FailHolePunch(sessionID5, assert.AnError)
 	require.NoError(t, err)
@@ -668,7 +666,7 @@ func TestHolePunchCoordinator_ConcurrentOperations(t *testing.T) {
 
 			remoteAddr := &net.UDPAddr{IP: net.ParseIP("203.0.113.1"), Port: 8887 + index}
 			introducerAddr := &net.UDPAddr{IP: net.ParseIP("203.0.113.2"), Port: 8888}
-			relayTag := uint32(0x12345678)
+			relayTag := uint32(index + 1) // unique relay tag per goroutine
 
 			sessionID, err := hpc.InitiateHolePunch(remoteAddr, introducerAddr, relayTag)
 			if err == nil {

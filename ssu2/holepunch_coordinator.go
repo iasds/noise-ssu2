@@ -1,8 +1,6 @@
 package ssu2
 
 import (
-	"crypto/rand"
-	"encoding/binary"
 	"net"
 	"sync"
 	"time"
@@ -142,28 +140,16 @@ func (hpc *HolePunchCoordinator) InitiateHolePunch(remoteAddr, introducerAddr *n
 			Errorf("relay tag cannot be zero")
 	}
 
-	// Generate cryptographically random session ID
-	var sessionIDBytes [8]byte
-	if _, err := rand.Read(sessionIDBytes[:]); err != nil {
-		return 0, oops.
-			Code("RANDOM_GENERATION_FAILED").
-			In("holepunch_coordinator").
-			With("error", err.Error()).
-			Wrapf(err, "failed to generate session ID")
-	}
-	sessionID := binary.BigEndian.Uint64(sessionIDBytes[:])
-
-	// Ensure non-zero
-	if sessionID == 0 {
-		sessionID = 1
-	}
+	// Derive connection IDs deterministically from relay nonce per spec:
+	// dest = (uint64(nonce) << 32) | uint64(nonce), src = ^dest
+	destConnID, _ := NonceConnectionIDs(relayTag)
 
 	hpc.mutex.Lock()
 	defer hpc.mutex.Unlock()
 
 	// Create attempt
 	attempt := &HolePunchAttempt{
-		SessionID:  sessionID,
+		SessionID:  destConnID,
 		RemoteAddr: remoteAddr,
 		Introducer: introducerAddr,
 		State:      HolePunchRequested,
@@ -172,19 +158,19 @@ func (hpc *HolePunchCoordinator) InitiateHolePunch(remoteAddr, introducerAddr *n
 		RelayTag:   relayTag,
 	}
 
-	hpc.attempts[sessionID] = attempt
+	hpc.attempts[destConnID] = attempt
 
 	// Register with relay manager
-	if err := hpc.manager.AddPendingSession(sessionID, remoteAddr, introducerAddr, relayTag); err != nil {
-		delete(hpc.attempts, sessionID)
+	if err := hpc.manager.AddPendingSession(destConnID, remoteAddr, introducerAddr, relayTag); err != nil {
+		delete(hpc.attempts, destConnID)
 		return 0, oops.
 			Code("PENDING_SESSION_FAILED").
 			In("holepunch_coordinator").
-			With("session_id", sessionID).
+			With("session_id", destConnID).
 			Wrapf(err, "failed to register pending session")
 	}
 
-	return sessionID, nil
+	return destConnID, nil
 }
 
 // lookupAttempt validates inputs and returns the attempt under lock.

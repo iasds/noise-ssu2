@@ -37,6 +37,9 @@ type PathValidator struct {
 	// challenges tracks active path validation attempts by challenge ID
 	challenges map[uint64]*PathChallenge
 
+	// tokenCache is the optional token cache for invalidation on migration
+	tokenCache *TokenCache
+
 	// mutex protects the challenges map
 	mutex sync.RWMutex
 }
@@ -122,6 +125,12 @@ func NewPathValidator(conn PathValidationConn) *PathValidator {
 		conn:       conn,
 		challenges: make(map[uint64]*PathChallenge),
 	}
+}
+
+// SetTokenCache sets the token cache used for invalidation when a path migrates.
+// Per spec, tokens are bound to an IP:port and must be invalidated on address change.
+func (pv *PathValidator) SetTokenCache(tc *TokenCache) {
+	pv.tokenCache = tc
 }
 
 // InitiatePathValidation starts path validation for a new address.
@@ -311,6 +320,14 @@ func (pv *PathValidator) ValidatePath(challengeID uint64) error {
 
 	if challenge.State != ChallengeValidated {
 		return oops.Errorf("challenge %d not validated (state: %v)", challengeID, challenge.State)
+	}
+
+	// Invalidate tokens bound to the old address before migration
+	if pv.tokenCache != nil {
+		oldAddr := pv.conn.GetRemoteAddr()
+		if oldAddr != nil {
+			pv.tokenCache.InvalidateAddress(oldAddr)
+		}
 	}
 
 	// Update connection remote address

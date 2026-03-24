@@ -350,11 +350,21 @@ type HeaderProtectorManager struct {
 	// remoteIntroKey is the remote router's intro key (used for outgoing packets)
 	remoteIntroKey []byte
 
-	// kdfHeader1 is the k_header_1 derived from handshake KDF
-	kdfHeader1 []byte
+	// sendDataHeader2 is k_header_2 for outbound Data packets, derived per
+	// "HKDFSSU2DataKeys" from the send cipher key (k_ab for initiator).
+	sendDataHeader2 []byte
 
-	// kdfHeader2 is the k_header_2 derived from handshake KDF
-	kdfHeader2 []byte
+	// recvDataHeader2 is k_header_2 for inbound Data packets, derived per
+	// "HKDFSSU2DataKeys" from the recv cipher key (k_ba for initiator).
+	recvDataHeader2 []byte
+
+	// sessCreateHeader2 is k_header_2 for SessionCreated, derived from
+	// chainKey after message 1 with info \"SessCreateHeader\"
+	sessCreateHeader2 []byte
+
+	// sessionConfirmedHeader2 is k_header_2 for SessionConfirmed, derived
+	// from chainKey after message 2 with info \"SessionConfirmed\"
+	sessionConfirmedHeader2 []byte
 
 	// current is the current header protector
 	current *HeaderProtector
@@ -463,13 +473,13 @@ func (hpm *HeaderProtectorManager) keysForSessionCreatedRetry(headerType HeaderT
 	k1 = base
 	if headerType == HeaderTypeRetry {
 		k2 = base
-	} else if len(hpm.kdfHeader2) == HeaderKeySize {
-		k2 = hpm.kdfHeader2
+	} else if len(hpm.sessCreateHeader2) == HeaderKeySize {
+		k2 = hpm.sessCreateHeader2
 	} else {
 		return nil, nil, oops.
 			Code("MISSING_KDF_KEY").
 			In("ssu2").
-			Errorf("KDF-derived k_header_2 required for SessionCreated per spec")
+			Errorf("SessCreateHeader k_header_2 required for SessionCreated per spec")
 	}
 	return k1, k2, nil
 }
@@ -491,52 +501,94 @@ func (hpm *HeaderProtectorManager) keysForKDFProtected(headerType HeaderType) (k
 		} else {
 			k1 = hpm.introKey
 		}
-		if len(hpm.kdfHeader2) != HeaderKeySize {
+		if len(hpm.sessionConfirmedHeader2) != HeaderKeySize {
 			return nil, nil, oops.
 				Code("MISSING_KDF_KEY").
 				In("ssu2").
-				Errorf("KDF-derived k_header_2 required for SessionConfirmed")
+				Errorf("SessionConfirmed k_header_2 required (from \"SessionConfirmed\" KDF)")
 		}
-		return k1, hpm.kdfHeader2, nil
+		return k1, hpm.sessionConfirmedHeader2, nil
 	}
 
-	// Data phase: both keys are KDF-derived
-	if len(hpm.kdfHeader1) != HeaderKeySize || len(hpm.kdfHeader2) != HeaderKeySize {
+	// Data phase: k_header_1 = receiver's intro key per spec.
+	// Direction-dependent keys are returned for the outbound (encrypt) path.
+	// For inbound, getDataInboundKeys() is used directly.
+	if len(hpm.remoteIntroKey) != HeaderKeySize {
+		return nil, nil, oops.
+			Code("MISSING_REMOTE_INTRO_KEY").
+			In("ssu2").
+			Errorf("remote intro key required for Data phase k_header_1")
+	}
+	if len(hpm.sendDataHeader2) != HeaderKeySize {
 		return nil, nil, oops.
 			Code("MISSING_KDF_KEYS").
 			In("ssu2").
-			With("header_type", headerType).
-			Errorf("KDF-derived keys required for Data packets")
+			Errorf("send data k_header_2 required for Data packets")
 	}
-	return hpm.kdfHeader1, hpm.kdfHeader2, nil
+	return hpm.remoteIntroKey, hpm.sendDataHeader2, nil
 }
 
-// SetKDFKeys sets the KDF-derived header protection keys.
-// These are derived from the Noise handshake and used for Session Confirmed and Data packets.
-func (hpm *HeaderProtectorManager) SetKDFKeys(kHeader1, kHeader2 []byte) error {
-	if len(kHeader1) != HeaderKeySize {
+// SetKDFKeys sets the KDF-derived header protection keys for the data phase.
+// sendKH2 is the k_header_2 for outbound Data packets.
+// recvKH2 is the k_header_2 for inbound Data packets.
+func (hpm *HeaderProtectorManager) SetKDFKeys(sendKH2, recvKH2 []byte) error {
+	if len(sendKH2) != HeaderKeySize {
 		return oops.
 			Code("INVALID_KEY_SIZE").
 			In("ssu2").
-			With("key", "kHeader1").
-			Errorf("kHeader1 must be exactly %d bytes", HeaderKeySize)
+			With("key", "sendKH2").
+			Errorf("sendKH2 must be exactly %d bytes", HeaderKeySize)
 	}
-	if len(kHeader2) != HeaderKeySize {
+	if len(recvKH2) != HeaderKeySize {
 		return oops.
 			Code("INVALID_KEY_SIZE").
 			In("ssu2").
-			With("key", "kHeader2").
-			Errorf("kHeader2 must be exactly %d bytes", HeaderKeySize)
+			With("key", "recvKH2").
+			Errorf("recvKH2 must be exactly %d bytes", HeaderKeySize)
 	}
 
 	hpm.mu.Lock()
 	defer hpm.mu.Unlock()
 
-	hpm.kdfHeader1 = make([]byte, HeaderKeySize)
-	hpm.kdfHeader2 = make([]byte, HeaderKeySize)
-	copy(hpm.kdfHeader1, kHeader1)
-	copy(hpm.kdfHeader2, kHeader2)
+	hpm.sendDataHeader2 = make([]byte, HeaderKeySize)
+	hpm.recvDataHeader2 = make([]byte, HeaderKeySize)
+	copy(hpm.sendDataHeader2, sendKH2)
+	copy(hpm.recvDataHeader2, recvKH2)
 
+	return nil
+}
+
+// SetSessCreateHeaderKey sets the k_header_2 for SessionCreated header
+// protection, derived from the chainKey after handshake message 1 using
+// info string "SessCreateHeader".
+func (hpm *HeaderProtectorManager) SetSessCreateHeaderKey(key []byte) error {
+	if len(key) != HeaderKeySize {
+		return oops.
+			Code("INVALID_KEY_SIZE").
+			In("ssu2").
+			Errorf("SessCreateHeader key must be exactly %d bytes", HeaderKeySize)
+	}
+	hpm.mu.Lock()
+	defer hpm.mu.Unlock()
+	hpm.sessCreateHeader2 = make([]byte, HeaderKeySize)
+	copy(hpm.sessCreateHeader2, key)
+	return nil
+}
+
+// SetSessionConfirmedHeaderKey sets the k_header_2 for SessionConfirmed
+// header protection, derived from the chainKey after handshake message 2
+// using info string "SessionConfirmed".
+func (hpm *HeaderProtectorManager) SetSessionConfirmedHeaderKey(key []byte) error {
+	if len(key) != HeaderKeySize {
+		return oops.
+			Code("INVALID_KEY_SIZE").
+			In("ssu2").
+			Errorf("SessionConfirmed header key must be exactly %d bytes", HeaderKeySize)
+	}
+	hpm.mu.Lock()
+	defer hpm.mu.Unlock()
+	hpm.sessionConfirmedHeader2 = make([]byte, HeaderKeySize)
+	copy(hpm.sessionConfirmedHeader2, key)
 	return nil
 }
 
@@ -572,13 +624,46 @@ func (hpm *HeaderProtectorManager) EncryptOutboundHeader(packet []byte, headerTy
 }
 
 // DecryptInboundHeader decrypts the header of an inbound packet.
-// Automatically selects the correct keys based on header type.
+// For Data packets, uses direction-aware inbound keys (introKey + recvDataHeader2).
+// For other types, uses the standard key selection via GetProtectorForType.
 func (hpm *HeaderProtectorManager) DecryptInboundHeader(packet []byte, headerType HeaderType) error {
+	if headerType == HeaderTypeData {
+		hpm.mu.RLock()
+		k1, k2, err := hpm.getDataInboundKeys()
+		hpm.mu.RUnlock()
+		if err != nil {
+			return err
+		}
+		protector, err := NewHeaderProtector(k1, k2, headerType)
+		if err != nil {
+			return err
+		}
+		return protector.DecryptHeader(packet)
+	}
 	protector, err := hpm.GetProtectorForType(headerType)
 	if err != nil {
 		return err
 	}
 	return protector.DecryptHeader(packet)
+}
+
+// getDataInboundKeys returns the keys for decrypting inbound Data packets.
+// k_header_1 = our intro key (we are the receiver), k_header_2 = recv-direction KDF key.
+// Must be called with hpm.mu held (at least RLock).
+func (hpm *HeaderProtectorManager) getDataInboundKeys() (k1, k2 []byte, err error) {
+	if len(hpm.introKey) != HeaderKeySize {
+		return nil, nil, oops.
+			Code("MISSING_INTRO_KEY").
+			In("ssu2").
+			Errorf("own intro key required for inbound Data k_header_1")
+	}
+	if len(hpm.recvDataHeader2) != HeaderKeySize {
+		return nil, nil, oops.
+			Code("MISSING_KDF_KEYS").
+			In("ssu2").
+			Errorf("recv data k_header_2 required for inbound Data packets")
+	}
+	return hpm.introKey, hpm.recvDataHeader2, nil
 }
 
 // ExtractConnectionID extracts the destination connection ID from a decrypted header.

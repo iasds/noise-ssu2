@@ -57,6 +57,14 @@ type HandshakeHandler struct {
 	sendCipher *noise.CipherState
 	recvCipher *noise.CipherState
 
+	// sessCreateHeaderKey is k_header_2 for SessionCreated, derived from
+	// chainKey after message 1 (→ e, es) with info "SessCreateHeader".
+	sessCreateHeaderKey []byte
+
+	// sessionConfirmedHeaderKey is k_header_2 for SessionConfirmed, derived
+	// from chainKey after message 2 (← e, ee) with info "SessionConfirmed".
+	sessionConfirmedHeaderKey []byte
+
 	// replayCache detects replayed handshake messages per SSU2 spec.
 	// Only used by responders to protect ProcessSessionRequest.
 	replayCache *replaycache.TTLCache
@@ -284,6 +292,11 @@ func (h *HandshakeHandler) ProcessSessionRequest(packet *SSU2Packet) ([]byte, er
 		return nil, oops.Wrapf(err, "failed to process SessionRequest handshake message")
 	}
 
+	// After processing message 1 (→ e, es), derive "SessCreateHeader" from
+	// the intermediate chainKey per SSU2 spec §KDF for Session Request.
+	h.sessCreateHeaderKey = deriveIntermediateHeaderKey(
+		h.handshakeState.ChainingKey(), "SessCreateHeader")
+
 	// Store cipher states
 	h.updateCipherStates(cs1, cs2)
 
@@ -358,6 +371,11 @@ func (h *HandshakeHandler) ProcessSessionCreated(packet *SSU2Packet) error {
 	if err != nil {
 		return oops.Wrapf(err, "failed to process SessionCreated handshake message")
 	}
+
+	// After processing message 2 (← e, ee), derive "SessionConfirmed" from
+	// the intermediate chainKey per SSU2 spec §KDF for Session Created.
+	h.sessionConfirmedHeaderKey = deriveIntermediateHeaderKey(
+		h.handshakeState.ChainingKey(), "SessionConfirmed")
 
 	// Store cipher states (handshake now complete)
 	h.updateCipherStates(cs1, cs2)
@@ -644,6 +662,20 @@ func (h *HandshakeHandler) buildHandshakePacket(blocks []*SSU2Block, msgType uin
 		return nil, oops.Errorf("invalid handshake message: too short (%d bytes)", len(ciphertext))
 	}
 
+	// Derive intermediate header keys from the chaining key at this point
+	// in the handshake. These keys are used for header protection of the
+	// NEXT message type in the handshake flow:
+	// - After message 1 (SessionRequest, → e, es): derive "SessCreateHeader"
+	// - After message 2 (SessionCreated, ← e, ee): derive "SessionConfirmed"
+	switch msgType {
+	case MessageTypeSessionRequest:
+		h.sessCreateHeaderKey = deriveIntermediateHeaderKey(
+			h.handshakeState.ChainingKey(), "SessCreateHeader")
+	case MessageTypeSessionCreated:
+		h.sessionConfirmedHeaderKey = deriveIntermediateHeaderKey(
+			h.handshakeState.ChainingKey(), "SessionConfirmed")
+	}
+
 	packet := &SSU2Packet{
 		Header:       header,
 		EphemeralKey: copyBytes(ciphertext[:32]),
@@ -668,47 +700,82 @@ func (h *HandshakeHandler) updateCipherStates(cs1, cs2 *noise.CipherState) {
 	}
 }
 
-// DeriveHeaderKeys derives data-phase header protection keys from the
-// completed handshake per the SSU2 specification:
+// DeriveHeaderKeys derives data-phase keys from the completed handshake per
+// the SSU2 specification:
 //
 //	keydata = HKDF(key, ZEROLEN, "HKDFSSU2DataKeys", 64)
 //	k_data       = keydata[0:31]
 //	k_header_2   = keydata[32:63]
 //
 // where "key" is the split cipher key for each direction (k_ab or k_ba).
+// This method installs k_data into each cipher state (replacing the raw
+// split key) so that data-phase AEAD uses the spec-mandated derived key.
 // Returns the send-direction k_header_2 and recv-direction k_header_2.
-// The caller supplies intro keys separately for k_header_1 (receiver's
-// intro key per spec).
 func (h *HandshakeHandler) DeriveHeaderKeys() (sendKHeader2, recvKHeader2 []byte, err error) {
 	if h.sendCipher == nil || h.recvCipher == nil {
 		return nil, nil, oops.Errorf("handshake not complete: cipher states not available")
 	}
 
-	sendKHeader2, err = deriveDataPhaseHeaderKey(h.sendCipher)
+	sendKData, sendKHeader2, err := deriveDataPhaseKeys(h.sendCipher)
 	if err != nil {
-		return nil, nil, oops.Wrapf(err, "failed to derive send k_header_2")
+		return nil, nil, oops.Wrapf(err, "failed to derive send data-phase keys")
 	}
 
-	recvKHeader2, err = deriveDataPhaseHeaderKey(h.recvCipher)
+	recvKData, recvKHeader2, err := deriveDataPhaseKeys(h.recvCipher)
 	if err != nil {
-		return nil, nil, oops.Wrapf(err, "failed to derive recv k_header_2")
+		return nil, nil, oops.Wrapf(err, "failed to derive recv data-phase keys")
 	}
+
+	// Install k_data as the AEAD encryption key per SSU2 spec §KDF for
+	// data phase. The raw split keys (k_ab/k_ba) must NOT be used directly.
+	var sendKey, recvKey [32]byte
+	copy(sendKey[:], sendKData)
+	copy(recvKey[:], recvKData)
+	h.sendCipher.UnsafeSetKey(sendKey)
+	h.recvCipher.UnsafeSetKey(recvKey)
 
 	return sendKHeader2, recvKHeader2, nil
 }
 
-// deriveDataPhaseHeaderKey derives k_header_2 for the data phase from a
-// split cipher key using the SSU2 spec's two-step HKDF:
+// SessCreateHeaderKey returns the k_header_2 for SessionCreated, derived from
+// the chaining key after handshake message 1 (→ e, es) using the info string
+// "SessCreateHeader". Returns nil if the key has not yet been derived.
+func (h *HandshakeHandler) SessCreateHeaderKey() []byte {
+	return copyBytes(h.sessCreateHeaderKey)
+}
+
+// SessionConfirmedHeaderKey returns the k_header_2 for SessionConfirmed,
+// derived from the chaining key after handshake message 2 (← e, ee) using
+// the info string "SessionConfirmed". Returns nil if not yet derived.
+func (h *HandshakeHandler) SessionConfirmedHeaderKey() []byte {
+	return copyBytes(h.sessionConfirmedHeaderKey)
+}
+
+// deriveIntermediateHeaderKey derives a header protection key from the
+// handshake's current chaining key using the SSU2 spec's HKDF pattern:
+//
+//	temp_key = HMAC-SHA256(salt=chainKey, ikm=ZEROLEN)
+//	key      = HMAC-SHA256(temp_key, info || 0x01)
+func deriveIntermediateHeaderKey(chainKey []byte, info string) []byte {
+	mac := hmac.New(sha256.New, chainKey)
+	tempKey := mac.Sum(nil)
+
+	mac = hmac.New(sha256.New, tempKey)
+	mac.Write([]byte(info))
+	mac.Write([]byte{0x01})
+	return mac.Sum(nil)
+}
+
+// deriveDataPhaseKeys derives both k_data and k_header_2 for the data phase
+// from a split cipher key using the SSU2 spec's two-step HKDF:
 //
 //	temp_key = HMAC-SHA256(key, ZEROLEN)
-//	keydata  = HMAC-SHA256(temp_key, "HKDFSSU2DataKeys" || 0x01)  // first 32 bytes
+//	k_data   = HMAC-SHA256(temp_key, "HKDFSSU2DataKeys" || 0x01)  // first 32 bytes
+//	k_header_2 = HMAC-SHA256(temp_key, k_data || "HKDFSSU2DataKeys" || 0x02)
 //
-// A second round produces the next 32 bytes:
-//
-//	keydata2 = HMAC-SHA256(temp_key, keydata || "HKDFSSU2DataKeys" || 0x02)
-//
-// k_data = keydata[0:31], k_header_2 = keydata2 (second 32 bytes).
-func deriveDataPhaseHeaderKey(cs *noise.CipherState) ([]byte, error) {
+// Per spec, k_data replaces the raw split key for AEAD encryption,
+// and k_header_2 is used for data-phase header protection.
+func deriveDataPhaseKeys(cs *noise.CipherState) (kData, kHeader2 []byte, err error) {
 	key := cs.UnsafeKey()
 
 	info := []byte("HKDFSSU2DataKeys")
@@ -722,16 +789,16 @@ func deriveDataPhaseHeaderKey(cs *noise.CipherState) ([]byte, error) {
 	mac = hmac.New(sha256.New, tempKey)
 	mac.Write(info)
 	mac.Write([]byte{0x01})
-	t1 := mac.Sum(nil) // k_data — not used here but needed for T(2)
+	kData = mac.Sum(nil)
 
 	// HKDF-Expand T(2) = HMAC-SHA256(temp_key, T(1) || info || 0x02) → k_header_2 (32 bytes)
 	mac = hmac.New(sha256.New, tempKey)
-	mac.Write(t1)
+	mac.Write(kData)
 	mac.Write(info)
 	mac.Write([]byte{0x02})
-	kHeader2 := mac.Sum(nil)
+	kHeader2 = mac.Sum(nil)
 
-	return kHeader2, nil
+	return kData, kHeader2, nil
 }
 
 // Close releases resources held by the HandshakeHandler, including the

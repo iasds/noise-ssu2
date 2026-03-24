@@ -335,6 +335,16 @@ func (h *SSU2Conn) handshakeInitiator(ctx context.Context) error {
 		return oops.Wrapf(err, "failed to create SessionRequest")
 	}
 
+	// After message 1 (→ e, es), install the SessCreateHeader key so the
+	// HeaderProtectorManager can decrypt the incoming SessionCreated header.
+	if h.headerProtector != nil {
+		if k := h.handshakeHandler.SessCreateHeaderKey(); len(k) > 0 {
+			if err := h.headerProtector.SetSessCreateHeaderKey(k); err != nil {
+				return oops.Wrapf(err, "failed to set SessCreateHeader key")
+			}
+		}
+	}
+
 	// Step 2: Send SessionRequest and wait for SessionCreated, with retransmit.
 	// Per spec: handshake packets are retransmitted whole with identical contents.
 	if err := h.sendPacketDirect(sessionRequest); err != nil {
@@ -378,6 +388,16 @@ func (h *SSU2Conn) handshakeInitiator(ctx context.Context) error {
 		return oops.Wrapf(err, "failed to process SessionCreated")
 	}
 
+	// After message 2 (← e, ee), install the SessionConfirmed header key so
+	// the HeaderProtectorManager can encrypt the outgoing SessionConfirmed header.
+	if h.headerProtector != nil {
+		if k := h.handshakeHandler.SessionConfirmedHeaderKey(); len(k) > 0 {
+			if err := h.headerProtector.SetSessionConfirmedHeaderKey(k); err != nil {
+				return oops.Wrapf(err, "failed to set SessionConfirmed header key")
+			}
+		}
+	}
+
 	// Step 4: Create and send SessionConfirmed (3rd XK message) with RouterInfo
 	sessionConfirmed, err := h.handshakeHandler.CreateSessionConfirmed(h.config.ConnectionID, 1, h.config.RouterHash)
 	if err != nil {
@@ -410,10 +430,30 @@ func (h *SSU2Conn) handshakeResponder(ctx context.Context) error {
 		return oops.Wrapf(err, "failed to process SessionRequest")
 	}
 
+	// After message 1 (→ e, es), install the SessCreateHeader key so the
+	// HeaderProtectorManager can encrypt the outgoing SessionCreated header.
+	if h.headerProtector != nil {
+		if k := h.handshakeHandler.SessCreateHeaderKey(); len(k) > 0 {
+			if err := h.headerProtector.SetSessCreateHeaderKey(k); err != nil {
+				return oops.Wrapf(err, "failed to set SessCreateHeader key")
+			}
+		}
+	}
+
 	// Step 3: Create and send SessionCreated
 	sessionCreated, err := h.handshakeHandler.CreateSessionCreated(0, h.config.ConnectionID)
 	if err != nil {
 		return oops.Wrapf(err, "failed to create SessionCreated")
+	}
+
+	// After message 2 (← e, ee), install the SessionConfirmed header key so
+	// the HeaderProtectorManager can decrypt the incoming SessionConfirmed header.
+	if h.headerProtector != nil {
+		if k := h.handshakeHandler.SessionConfirmedHeaderKey(); len(k) > 0 {
+			if err := h.headerProtector.SetSessionConfirmedHeaderKey(k); err != nil {
+				return oops.Wrapf(err, "failed to set SessionConfirmed header key")
+			}
+		}
 	}
 
 	if err := h.sendPacketDirect(sessionCreated); err != nil {

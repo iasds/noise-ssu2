@@ -352,10 +352,9 @@ func TestHeaderProtectorManager_GetProtectorForType_SessionCreated(t *testing.T)
 
 	hpm, _ := NewHeaderProtectorManager(introKey, remoteIntroKey, true)
 
-	// SessionCreated requires KDF-derived keys per spec
-	kdf1 := createTestKey()
-	kdf2 := createTestKey()
-	require.NoError(t, hpm.SetKDFKeys(kdf1, kdf2))
+	// SessionCreated requires SessCreateHeader key per spec
+	sessCreateKey := createTestKey()
+	require.NoError(t, hpm.SetSessCreateHeaderKey(sessCreateKey))
 
 	hp, err := hpm.GetProtectorForType(HeaderTypeSessionCreated)
 	require.NoError(t, err)
@@ -372,24 +371,26 @@ func TestHeaderProtectorManager_GetProtectorForType_SessionCreated_MissingKDFKey
 	hp, err := hpm.GetProtectorForType(HeaderTypeSessionCreated)
 	assert.Error(t, err)
 	assert.Nil(t, hp)
-	assert.Contains(t, err.Error(), "KDF-derived k_header_2 required")
+	assert.Contains(t, err.Error(), "SessCreateHeader k_header_2 required")
 }
 
 func TestHeaderProtectorManager_GetProtectorForType_Data_MissingKDFKeys(t *testing.T) {
 	introKey := createTestKey()
+	remoteIntroKey := createTestKey()
 
-	hpm, _ := NewHeaderProtectorManager(introKey, nil, true)
+	hpm, _ := NewHeaderProtectorManager(introKey, remoteIntroKey, true)
 
 	hp, err := hpm.GetProtectorForType(HeaderTypeData)
 	assert.Error(t, err)
 	assert.Nil(t, hp)
-	assert.Contains(t, err.Error(), "KDF-derived keys required")
+	assert.Contains(t, err.Error(), "send data k_header_2 required")
 }
 
 func TestHeaderProtectorManager_SetKDFKeys(t *testing.T) {
 	introKey := createTestKey()
+	remoteIntroKey := createTestKey()
 
-	hpm, _ := NewHeaderProtectorManager(introKey, nil, true)
+	hpm, _ := NewHeaderProtectorManager(introKey, remoteIntroKey, true)
 
 	kdf1 := createTestKey()
 	kdf2 := createTestKey()
@@ -397,7 +398,7 @@ func TestHeaderProtectorManager_SetKDFKeys(t *testing.T) {
 	err := hpm.SetKDFKeys(kdf1, kdf2)
 	require.NoError(t, err)
 
-	// Now Data type should work
+	// Now Data type should work (outbound uses remoteIntroKey + sendDataHeader2)
 	hp, err := hpm.GetProtectorForType(HeaderTypeData)
 	require.NoError(t, err)
 	require.NotNil(t, hp)
@@ -410,11 +411,11 @@ func TestHeaderProtectorManager_SetKDFKeys_InvalidSize(t *testing.T) {
 
 	err := hpm.SetKDFKeys(make([]byte, 16), createTestKey())
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "kHeader1")
+	assert.Contains(t, err.Error(), "sendKH2")
 
 	err = hpm.SetKDFKeys(createTestKey(), make([]byte, 16))
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "kHeader2")
+	assert.Contains(t, err.Error(), "recvKH2")
 }
 
 func TestHeaderProtectorManager_SetRemoteIntroKey(t *testing.T) {
@@ -748,10 +749,13 @@ func TestHeaderProtectorManager_SessionConfirmed_WithKDFKeys(t *testing.T) {
 	// Initiator: k_header_1 = remoteIntroKey (bik per spec)
 	hpm, _ := NewHeaderProtectorManager(introKey, remoteIntroKey, true)
 
-	// Set KDF keys (only kdfHeader2 is needed for SessionConfirmed)
+	// Set KDF keys for data phase
 	kdf1 := createTestKey()
 	kdf2 := createTestKey()
 	hpm.SetKDFKeys(kdf1, kdf2)
+	// Set SessionConfirmed header key (derived from "SessionConfirmed" KDF per spec)
+	sessConfKey := createTestKey()
+	hpm.SetSessionConfirmedHeaderKey(sessConfKey)
 
 	hp, err := hpm.GetProtectorForType(HeaderTypeSessionConfirmed)
 	require.NoError(t, err)
@@ -761,6 +765,7 @@ func TestHeaderProtectorManager_SessionConfirmed_WithKDFKeys(t *testing.T) {
 	// Responder: k_header_1 = introKey (own intro key = bik per spec)
 	hpmResp, _ := NewHeaderProtectorManager(introKey, remoteIntroKey, false)
 	hpmResp.SetKDFKeys(kdf1, kdf2)
+	hpmResp.SetSessionConfirmedHeaderKey(sessConfKey)
 
 	hpResp, err := hpmResp.GetProtectorForType(HeaderTypeSessionConfirmed)
 	require.NoError(t, err)
@@ -804,6 +809,9 @@ func TestHeaderProtectorManager_AllTypes_Responder(t *testing.T) {
 
 	hpm, _ := NewHeaderProtectorManager(introKey, remoteIntroKey, false)
 	hpm.SetKDFKeys(kdf1, kdf2)
+	// Set intermediate header keys per spec
+	hpm.SetSessCreateHeaderKey(createTestKey())
+	hpm.SetSessionConfirmedHeaderKey(createTestKey())
 
 	// Session Request as responder (receiving)
 	hp, err := hpm.GetProtectorForType(HeaderTypeSessionRequest)

@@ -171,6 +171,19 @@ func (tc *TokenCache) Clear() {
 	tc.tokens = make(map[string]*Token)
 }
 
+// InvalidateAddress removes any token associated with the given address.
+// Per spec, tokens are bound to an IP:port pair and must be invalidated
+// when a connection migrates to a new address.
+func (tc *TokenCache) InvalidateAddress(addr *net.UDPAddr) {
+	if addr == nil {
+		return
+	}
+	key := addr.String()
+	tc.mutex.Lock()
+	defer tc.mutex.Unlock()
+	delete(tc.tokens, key)
+}
+
 // GetTTL returns the token time-to-live duration.
 func (tc *TokenCache) GetTTL() time.Duration {
 	return tc.ttl
