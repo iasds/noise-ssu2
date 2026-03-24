@@ -255,8 +255,9 @@ func (p *SSU2Packet) validate() error {
 		totalSize += len(p.EphemeralKey)
 	}
 
-	if totalSize > MaxPacketSizeIPv4 {
-		return oops.Errorf("packet too large: %d bytes (maximum %d for IPv4)", totalSize, MaxPacketSizeIPv4)
+	if totalSize > MaxPacketSizeIPv6 {
+		return oops.Errorf("packet too large: %d bytes (maximum %d for IPv6, %d for IPv4)",
+			totalSize, MaxPacketSizeIPv6, MaxPacketSizeIPv4)
 	}
 
 	return nil

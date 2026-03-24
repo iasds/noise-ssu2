@@ -752,15 +752,15 @@ func BenchmarkSSU2Packet_RoundTrip(b *testing.B) {
 func TestSSU2Packet_LargePayload(t *testing.T) {
 	pkt := NewSSU2Packet(MessageTypeData, 0)
 	pkt.Header = make([]byte, ShortHeaderSize)
-	// Maximum payload = MaxPacketSizeIPv4 - header - MAC
-	maxPayloadSize := MaxPacketSizeIPv4 - ShortHeaderSize - MACSize
+	// Maximum payload = MaxPacketSizeIPv6 - header - MAC (IPv6 is the stricter limit)
+	maxPayloadSize := MaxPacketSizeIPv6 - ShortHeaderSize - MACSize
 	pkt.Payload = make([]byte, maxPayloadSize)
 	pkt.MAC = make([]byte, MACSize)
 
 	// Should serialize successfully at max size
 	data, err := pkt.Serialize()
 	require.NoError(t, err)
-	assert.Equal(t, MaxPacketSizeIPv4, len(data))
+	assert.Equal(t, MaxPacketSizeIPv6, len(data))
 
 	// Should deserialize successfully
 	restored := NewSSU2Packet(MessageTypeData, 0)

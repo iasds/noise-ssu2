@@ -635,6 +635,15 @@ func (h *SSU2Conn) Read(b []byte) (int, error) {
 // Writes data to the connection. If the data exceeds the per-packet payload
 // capacity (determined by MTU), it is automatically split into FirstFragment
 // and FollowOnFragment blocks per SSU2 spec §FirstFragment/§FollowOnFragment.
+//
+// For unfragmented messages, b is sent as-is in a BlockTypeI2NPMessage block.
+// Per the SSU2 spec, block type 3 (I2NP) data must already contain the 9-byte
+// I2NP short header: [I2NPType:1][MessageID:4][ShortExpiry:4] followed by the
+// message body. The caller is responsible for prepending this header.
+//
+// For fragmented messages, the implementation generates its own MessageID and
+// ShortExpiry for the FirstFragment/FollowOnFragment blocks, treating b[0] as
+// the I2NP type byte and the rest as body data.
 func (h *SSU2Conn) Write(b []byte) (int, error) {
 	if err := h.validateReadyForIO(); err != nil {
 		return 0, err

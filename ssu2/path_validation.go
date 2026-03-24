@@ -276,23 +276,22 @@ func (pv *PathValidator) HandlePathResponse(block *SSU2Block, fromAddr *net.UDPA
 		return oops.Wrapf(err, "failed to decode path response")
 	}
 
-	// Find matching challenge
+	// Find matching challenge, verify address, and mark validated — all under one lock
 	pv.mutex.Lock()
 	challenge, exists := pv.challenges[challengeID]
-	pv.mutex.Unlock()
-
 	if !exists {
+		pv.mutex.Unlock()
 		return oops.Errorf("no matching challenge for ID %d", challengeID)
 	}
 
 	// Verify response came from expected address
 	if challenge.NewAddr.String() != fromAddr.String() {
+		pv.mutex.Unlock()
 		return oops.Errorf("path response from unexpected address: expected %v, got %v",
 			challenge.NewAddr, fromAddr)
 	}
 
 	// Mark as validated
-	pv.mutex.Lock()
 	challenge.State = ChallengeValidated
 	pv.mutex.Unlock()
 
@@ -312,15 +311,18 @@ func (pv *PathValidator) HandlePathResponse(block *SSU2Block, fromAddr *net.UDPA
 func (pv *PathValidator) ValidatePath(challengeID uint64) error {
 	pv.mutex.Lock()
 	challenge, exists := pv.challenges[challengeID]
-	pv.mutex.Unlock()
-
 	if !exists {
+		pv.mutex.Unlock()
 		return oops.Errorf("no challenge found for ID %d", challengeID)
 	}
 
 	if challenge.State != ChallengeValidated {
+		pv.mutex.Unlock()
 		return oops.Errorf("challenge %d not validated (state: %v)", challengeID, challenge.State)
 	}
+
+	newAddr := challenge.NewAddr
+	pv.mutex.Unlock()
 
 	// Invalidate tokens bound to the old address before migration
 	if pv.tokenCache != nil {
@@ -331,12 +333,12 @@ func (pv *PathValidator) ValidatePath(challengeID uint64) error {
 	}
 
 	// Update connection remote address
-	if err := pv.conn.SetRemoteAddr(challenge.NewAddr); err != nil {
+	if err := pv.conn.SetRemoteAddr(newAddr); err != nil {
 		pv.FailPath(challengeID, err)
 		return oops.Wrapf(err, "failed to set remote address")
 	}
 
-	// Clean up challenge
+	// Clean up challenge after successful migration
 	pv.mutex.Lock()
 	delete(pv.challenges, challengeID)
 	pv.mutex.Unlock()
