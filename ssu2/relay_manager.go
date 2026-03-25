@@ -10,7 +10,7 @@ import (
 	"github.com/samber/oops"
 )
 
-// RelayManager manages relay connections and introducer services for NAT traversal.
+// RelayResponseTokenTTL is the maximum lifetime for a relay response token.\n// Per SSU2 spec, \"The token must be used immediately by Alice in the Session Request.\"\n// We enforce a 10-second window to allow for network latency while still\n// requiring near-immediate use.\nconst RelayResponseTokenTTL = 10 * time.Second\n\n// RelayManager manages relay connections and introducer services for NAT traversal.
 // It handles relay tag allocation, introducer registration, and relay request processing.
 //
 // Design rationale:

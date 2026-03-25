@@ -107,8 +107,8 @@ type DataHandlerCallbacks struct {
 	OnFirstPacketNumber func(packetNumber uint32) error
 
 	// OnCongestion is called when a Congestion block is received.
-	// level is the congestion experience level byte.
-	OnCongestion func(level uint8) error
+	// flags is the congestion flag byte per spec: bit 0 = request immediate ACK, bit 1 = ECN.
+	OnCongestion func(flags uint8) error
 }
 
 // DataHandlerStats tracks statistics for monitoring and debugging.
@@ -659,13 +659,13 @@ func (h *DataHandler) handleCongestion(data []byte) error {
 		return oops.Errorf("Congestion block too short: %d bytes, need 1", len(data))
 	}
 
-	level := data[0]
+	flags := data[0]
 
-	log.WithField("level", level).Debug("Received Congestion block")
+	log.WithField("flags", flags).Debug("Received Congestion block")
 
 	cbs := h.getCallbacks()
 	if cbs.OnCongestion != nil {
-		return cbs.OnCongestion(level)
+		return cbs.OnCongestion(flags)
 	}
 
 	return nil

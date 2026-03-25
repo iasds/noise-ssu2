@@ -68,14 +68,6 @@ type SSU2Config struct {
 	// If nil, will be derived from router hash (recommended)
 	ObfuscationIV []byte
 
-	// EnableSipHashLength enables SipHash-based frame length obfuscation
-	// Default: true (recommended for production)
-	EnableSipHashLength bool
-
-	// SipHashKeys are the k1, k2 keys for SipHash length obfuscation
-	// If empty, will be derived during handshake
-	SipHashKeys [2]uint64
-
 	// MTU is the Maximum Transmission Unit for UDP packets
 	// Default: 1280 bytes (IPv6 minimum MTU)
 	// Range: 1280-1500 bytes
@@ -158,9 +150,8 @@ func NewSSU2Config(routerHash []byte, initiator bool) (*SSU2Config, error) {
 		ReadTimeout:             0, // No timeout by default
 		WriteTimeout:            0, // No timeout by default
 		HandshakeRetries:        3,
-		RetryBackoff:            1 * time.Second,
+		RetryBackoff:            1250 * time.Millisecond,
 		EnableChaChaObfuscation: true,
-		EnableSipHashLength:     false,
 		MTU:                     1280, // IPv6 minimum
 		MaxPacketSize:           1500, // Standard Ethernet
 		EnableFragmentation:     false,
@@ -238,17 +229,6 @@ func (sc *SSU2Config) WithChaChaObfuscation(enabled bool, customIV []byte) *SSU2
 	if len(customIV) == 8 {
 		sc.ObfuscationIV = make([]byte, 8)
 		copy(sc.ObfuscationIV, customIV)
-	}
-	return sc
-}
-
-// WithSipHashLength enables or disables SipHash-based frame length obfuscation.
-// When enabled with custom keys, both k1 and k2 must be provided.
-func (sc *SSU2Config) WithSipHashLength(enabled bool, k1, k2 uint64) *SSU2Config {
-	sc.EnableSipHashLength = enabled
-	if enabled && (k1 != 0 || k2 != 0) {
-		sc.SipHashKeys[0] = k1
-		sc.SipHashKeys[1] = k2
 	}
 	return sc
 }
@@ -533,11 +513,6 @@ func (sc *SSU2Config) setupSSU2Modifiers() ([]handshake.HandshakeModifier, error
 		modifiers = append(modifiers, paddingModifier)
 	}
 
-	sipModifier := sc.createSipHashModifierIfEnabled()
-	if sipModifier != nil {
-		modifiers = append(modifiers, sipModifier)
-	}
-
 	modifiers = append(modifiers, sc.Modifiers...)
 	return modifiers, nil
 }
@@ -593,13 +568,4 @@ func (sc *SSU2Config) createPaddingModifierIfEnabled() (handshake.HandshakeModif
 			Wrap(err)
 	}
 	return paddingModifier, nil
-}
-
-// createSipHashModifierIfEnabled creates a SipHash length modifier if enabled.
-func (sc *SSU2Config) createSipHashModifierIfEnabled() handshake.HandshakeModifier {
-	if !sc.EnableSipHashLength {
-		return nil
-	}
-	// SipHash keys will be set up during handshake if not provided
-	return NewSSU2LengthModifier("ssu2-siphash", sc.SipHashKeys, 0)
 }

@@ -98,9 +98,15 @@ func TestRelay6StepProcess(t *testing.T) {
 	t.Log("Step 3: Charlie creates RelayResponse acknowledging intro")
 
 	charlieResponse := &RelayResponseBlock{
-		Nonce:      relayRequest.Nonce, // Echo original nonce
-		StatusCode: 0,                  // Success
-		SignedData: []byte("charlie-signed-data-placeholder!"),
+		Flag:        0,
+		Code:        0,
+		Nonce:       relayRequest.Nonce, // Echo original nonce
+		Timestamp:   1700000000,
+		Version:     2,
+		CharliePort: 9000,
+		CharlieIP:   net.IPv4(10, 0, 0, 1).To4(),
+		Signature:   make([]byte, 64),
+		Token:       make([]byte, 8),
 	}
 
 	responseBlock, err := EncodeRelayResponse(charlieResponse)
@@ -110,17 +116,23 @@ func TestRelay6StepProcess(t *testing.T) {
 	decodedResponse, err := DecodeRelayResponse(responseBlock)
 	require.NoError(t, err)
 	assert.Equal(t, charlieResponse.Nonce, decodedResponse.Nonce)
-	assert.Equal(t, uint8(0), decodedResponse.StatusCode) // Success
-	assert.NotNil(t, decodedResponse.SignedData)
+	assert.Equal(t, uint8(0), decodedResponse.Code) // Success
+	assert.NotNil(t, decodedResponse.Token)
 	t.Log("Step 3 complete: Charlie's RelayResponse encoded and decoded successfully")
 
 	// === Step 4: Bob → Alice: RelayResponse ===
 	t.Log("Step 4: Bob forwards RelayResponse to Alice")
 
 	bobToAliceResponse := &RelayResponseBlock{
-		Nonce:      relayRequest.Nonce,
-		StatusCode: 0, // Success
-		SignedData: []byte("charlie-signed-data-placeholder!"),
+		Flag:        0,
+		Code:        0,
+		Nonce:       relayRequest.Nonce,
+		Timestamp:   1700000000,
+		Version:     2,
+		CharliePort: 9000,
+		CharlieIP:   net.IPv4(10, 0, 0, 1).To4(),
+		Signature:   make([]byte, 64),
+		Token:       make([]byte, 8),
 	}
 
 	forwardBlock, err := EncodeRelayResponse(bobToAliceResponse)
@@ -129,7 +141,7 @@ func TestRelay6StepProcess(t *testing.T) {
 	decodedForward, err := DecodeRelayResponse(forwardBlock)
 	require.NoError(t, err)
 	assert.Equal(t, bobToAliceResponse.Nonce, decodedForward.Nonce)
-	assert.Equal(t, bobToAliceResponse.SignedData, decodedForward.SignedData)
+	assert.Equal(t, bobToAliceResponse.Token, decodedForward.Token)
 	t.Log("Step 4 complete: Bob forwarded RelayResponse to Alice")
 
 	// === Step 5: Charlie → Alice: HolePunch ===
@@ -237,28 +249,41 @@ func TestRelayResponseEncoding(t *testing.T) {
 		wantErr  bool
 	}{
 		{
-			name: "success_with_signed_data",
+			name: "accepted_ipv4",
 			response: &RelayResponseBlock{
-				Nonce:      12345,
-				StatusCode: 0,
-				SignedData: makeSignedData(),
+				Flag:        0,
+				Code:        0,
+				Nonce:       12345,
+				Timestamp:   1700000000,
+				Version:     2,
+				CharliePort: 9000,
+				CharlieIP:   net.IPv4(10, 0, 0, 1).To4(),
+				Signature:   makeSignedData(),
+				Token:       make([]byte, 8),
 			},
 			wantErr: false,
 		},
 		{
-			name: "success_with_large_signed_data",
+			name: "accepted_ipv6",
 			response: &RelayResponseBlock{
-				Nonce:      12345,
-				StatusCode: 0,
-				SignedData: make([]byte, 64),
+				Flag:        0,
+				Code:        0,
+				Nonce:       12345,
+				Timestamp:   1700000000,
+				Version:     2,
+				CharliePort: 9000,
+				CharlieIP:   net.ParseIP("2001:db8::1"),
+				Signature:   make([]byte, 64),
+				Token:       make([]byte, 8),
 			},
 			wantErr: false,
 		},
 		{
-			name: "failure_no_signed_data",
+			name: "bob_rejection",
 			response: &RelayResponseBlock{
-				Nonce:      12345,
-				StatusCode: 1, // Failure
+				Flag:  0,
+				Code:  1, // Bob rejection
+				Nonce: 12345,
 			},
 			wantErr: false,
 		},
@@ -284,8 +309,11 @@ func TestRelayResponseEncoding(t *testing.T) {
 			require.NoError(t, err)
 
 			assert.Equal(t, tc.response.Nonce, decoded.Nonce)
-			assert.Equal(t, tc.response.StatusCode, decoded.StatusCode)
-			assert.Equal(t, tc.response.SignedData, decoded.SignedData)
+			assert.Equal(t, tc.response.Code, decoded.Code)
+			if tc.response.Code == 0 {
+				assert.Equal(t, tc.response.Token, decoded.Token)
+				assert.Equal(t, tc.response.Signature, decoded.Signature)
+			}
 		})
 	}
 }
@@ -440,8 +468,9 @@ func TestRelayFlowWithErrors(t *testing.T) {
 
 		for _, code := range failureCodes {
 			response := &RelayResponseBlock{
-				Nonce:      12345,
-				StatusCode: code,
+				Flag:  0,
+				Code:  code,
+				Nonce: 12345,
 			}
 
 			block, err := EncodeRelayResponse(response)
@@ -450,8 +479,8 @@ func TestRelayFlowWithErrors(t *testing.T) {
 			decoded, err := DecodeRelayResponse(block)
 			require.NoError(t, err)
 
-			assert.Equal(t, code, decoded.StatusCode)
-			assert.Nil(t, decoded.SignedData)
+			assert.Equal(t, code, decoded.Code)
+			assert.Nil(t, decoded.Token)
 		}
 	})
 }

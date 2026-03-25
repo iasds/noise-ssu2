@@ -3,7 +3,37 @@ package ssu2
 import (
 	"sync"
 	"time"
+
+	"github.com/samber/oops"
 )
+
+// Congestion block flag bits per SSU2 spec §Congestion block.
+const (
+	// CongestionFlagRequestACK requests the peer send an immediate ACK (bit 0).
+	CongestionFlagRequestACK uint8 = 1 << 0
+
+	// CongestionFlagECN signals Explicit Congestion Notification (bit 1).
+	CongestionFlagECN uint8 = 1 << 1
+)
+
+// EncodeCongestionBlock creates a Congestion block (type 21) with the given flags.
+func EncodeCongestionBlock(flags uint8) *SSU2Block {
+	return NewSSU2Block(BlockTypeCongestion, []byte{flags})
+}
+
+// DecodeCongestionBlock parses a Congestion block and returns the flag byte.
+func DecodeCongestionBlock(block *SSU2Block) (uint8, error) {
+	if block == nil {
+		return 0, oops.Errorf("block is nil")
+	}
+	if block.Type != BlockTypeCongestion {
+		return 0, oops.Errorf("invalid block type: expected %d, got %d", BlockTypeCongestion, block.Type)
+	}
+	if len(block.Data) < 1 {
+		return 0, oops.Errorf("Congestion block too short: %d bytes (minimum 1)", len(block.Data))
+	}
+	return block.Data[0], nil
+}
 
 // Congestion control constants per SSU2 specification.
 // This implements Westwood+ congestion control with RFC 9002 persistent

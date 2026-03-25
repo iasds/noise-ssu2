@@ -59,19 +59,51 @@ type RelayRequestBlock struct {
 //
 // Wire format per SSU2 spec:
 //
-//	[Nonce:4][StatusCode:1][SignedData:variable]
+//	[Flag:1][Code:1][Nonce:4]
+//
+// When Code == 0 (accepted by Charlie), additional fields follow:
+//
+//	[Timestamp:4][Ver:1][Csz:1][CharliePort:2][CharlieIP:csz-2][Signature:varies][Token:8]
+//
+// When Code >= 64 (rejected by Charlie), additional fields follow:
+//
+//	[Timestamp:4][Ver:1][Csz:1][CharliePort:2][CharlieIP:csz-2][Signature:varies]
+//
+// When Code 1-63 (rejected by Bob), no additional fields.
 type RelayResponseBlock struct {
+	// Flag is a 1-byte flag field (unused, set to 0)
+	Flag uint8
+
+	// Code indicates success or failure reason (1 byte)
+	// 0 = accepted, 1-63 = rejected by Bob, 64+ = rejected by Charlie
+	Code uint8
+
 	// Nonce matches the nonce from RelayRequest (4 bytes)
 	Nonce uint32
 
-	// StatusCode indicates success or failure reason (1 byte)
-	// 0 = success, non-zero = various error codes
-	StatusCode uint8
+	// Timestamp is Unix timestamp in seconds (4 bytes).
+	// Present when Code == 0 or Code >= 64.
+	Timestamp uint32
 
-	// SignedData is Charlie's signed response data (variable length).
-	// Present when StatusCode is 0 (success); contains Charlie's address
-	// and signature.
-	SignedData []byte
+	// Version is the SSU version (1 byte).
+	// Present when Code == 0 or Code >= 64.
+	Version uint8
+
+	// CharliePort is Charlie's port number (2 bytes).
+	// Present when Code == 0 or Code >= 64 with csz > 0.
+	CharliePort uint16
+
+	// CharlieIP is Charlie's IP address.
+	// Present when Code == 0 or Code >= 64 with csz > 0.
+	CharlieIP net.IP
+
+	// Signature is the variable-length signature (typically 64 bytes for Ed25519).
+	// Present when Code == 0 or Code >= 64.
+	Signature []byte
+
+	// Token is the 8-byte session request token from Charlie.
+	// Only present when Code == 0 (accepted).
+	Token []byte
 }
 
 // RelayIntroBlock represents a relay introduction (Type 9).
@@ -233,43 +265,106 @@ func DecodeRelayRequest(block *SSU2Block) (*RelayRequestBlock, error) {
 //
 // Wire format per SSU2 spec:
 //
-//	[Nonce:4][StatusCode:1][SignedData:variable]
+//	[Flag:1][Code:1][Nonce:4][...]
 //
-// Parameters:
-//   - resp: RelayResponse data to encode
-//
-// Returns:
-//   - *SSU2Block: Encoded block ready for transmission
-//   - error: If validation fails
+// For Code 0 (accepted): includes Timestamp, Ver, Csz, CharliePort, CharlieIP, Signature, Token.
+// For Code >= 64 (Charlie rejection): includes Timestamp, Ver, Csz, CharliePort, CharlieIP, Signature.
+// For Code 1-63 (Bob rejection): only Flag, Code, Nonce.
 func EncodeRelayResponse(resp *RelayResponseBlock) (*SSU2Block, error) {
 	if resp == nil {
 		return nil, oops.Errorf("RelayResponseBlock is nil")
 	}
 
-	// Size: nonce(4) + statusCode(1) + signedData
-	dataSize := 5 + len(resp.SignedData)
-	data := make([]byte, dataSize)
-
-	// Encode fields
-	binary.BigEndian.PutUint32(data[0:4], resp.Nonce)
-	data[4] = resp.StatusCode
-	if len(resp.SignedData) > 0 {
-		copy(data[5:], resp.SignedData)
+	if resp.Code == 0 {
+		return encodeRelayResponseAccepted(resp)
+	} else if resp.Code >= 64 {
+		return encodeRelayResponseCharlieRejection(resp)
 	}
+	// Bob rejection (code 1-63): flag(1) + code(1) + nonce(4)
+	data := make([]byte, 6)
+	data[0] = resp.Flag
+	data[1] = resp.Code
+	binary.BigEndian.PutUint32(data[2:6], resp.Nonce)
+	return NewSSU2Block(BlockTypeRelayResponse, data), nil
+}
 
+func encodeRelayResponseAccepted(resp *RelayResponseBlock) (*SSU2Block, error) {
+	ip4 := resp.CharlieIP.To4()
+	var ipBytes []byte
+	var csz uint8
+	if ip4 != nil {
+		ipBytes = ip4
+		csz = 6
+	} else {
+		ip6 := resp.CharlieIP.To16()
+		if ip6 == nil {
+			return nil, oops.Errorf("invalid CharlieIP for accepted response")
+		}
+		ipBytes = ip6
+		csz = 18
+	}
+	if len(resp.Token) != 8 {
+		return nil, oops.Errorf("token must be 8 bytes for accepted response, got %d", len(resp.Token))
+	}
+	// flag(1)+code(1)+nonce(4)+ts(4)+ver(1)+csz(1)+port(2)+ip+sig+token(8)
+	dataSize := 1 + 1 + 4 + 4 + 1 + 1 + 2 + len(ipBytes) + len(resp.Signature) + 8
+	data := make([]byte, dataSize)
+	data[0] = resp.Flag
+	data[1] = resp.Code
+	binary.BigEndian.PutUint32(data[2:6], resp.Nonce)
+	binary.BigEndian.PutUint32(data[6:10], resp.Timestamp)
+	data[10] = resp.Version
+	data[11] = csz
+	binary.BigEndian.PutUint16(data[12:14], resp.CharliePort)
+	copy(data[14:14+len(ipBytes)], ipBytes)
+	off := 14 + len(ipBytes)
+	copy(data[off:off+len(resp.Signature)], resp.Signature)
+	off += len(resp.Signature)
+	copy(data[off:off+8], resp.Token)
+	return NewSSU2Block(BlockTypeRelayResponse, data), nil
+}
+
+func encodeRelayResponseCharlieRejection(resp *RelayResponseBlock) (*SSU2Block, error) {
+	var ipBytes []byte
+	var csz uint8
+	if resp.CharlieIP != nil {
+		ip4 := resp.CharlieIP.To4()
+		if ip4 != nil {
+			ipBytes = ip4
+			csz = 6
+		} else {
+			ip6 := resp.CharlieIP.To16()
+			if ip6 != nil {
+				ipBytes = ip6
+				csz = 18
+			}
+		}
+	}
+	// flag(1)+code(1)+nonce(4)+ts(4)+ver(1)+csz(1)+[port(2)+ip]+sig
+	dataSize := 1 + 1 + 4 + 4 + 1 + 1 + len(resp.Signature)
+	if csz > 0 {
+		dataSize += 2 + len(ipBytes)
+	}
+	data := make([]byte, dataSize)
+	data[0] = resp.Flag
+	data[1] = resp.Code
+	binary.BigEndian.PutUint32(data[2:6], resp.Nonce)
+	binary.BigEndian.PutUint32(data[6:10], resp.Timestamp)
+	data[10] = resp.Version
+	data[11] = csz
+	off := 12
+	if csz > 0 {
+		binary.BigEndian.PutUint16(data[off:off+2], resp.CharliePort)
+		copy(data[off+2:off+2+len(ipBytes)], ipBytes)
+		off += 2 + len(ipBytes)
+	}
+	copy(data[off:], resp.Signature)
 	return NewSSU2Block(BlockTypeRelayResponse, data), nil
 }
 
 // DecodeRelayResponse decodes a RelayResponse block from wire format.
 //
-// Wire format: [Nonce:4][StatusCode:1][SignedData:variable]
-//
-// Parameters:
-//   - block: SSU2Block with Type 8
-//
-// Returns:
-//   - *RelayResponseBlock: Decoded relay response
-//   - error: If decoding fails or validation fails
+// Wire format: [Flag:1][Code:1][Nonce:4][...]
 func DecodeRelayResponse(block *SSU2Block) (*RelayResponseBlock, error) {
 	if block == nil {
 		return nil, oops.Errorf("block is nil")
@@ -280,24 +375,90 @@ func DecodeRelayResponse(block *SSU2Block) (*RelayResponseBlock, error) {
 	}
 
 	data := block.Data
-	if len(data) < 5 {
-		return nil, oops.Errorf("RelayResponse block too short: %d bytes (minimum 5)", len(data))
+	if len(data) < 6 {
+		return nil, oops.Errorf("RelayResponse block too short: %d bytes (minimum 6)", len(data))
 	}
 
-	nonce := binary.BigEndian.Uint32(data[0:4])
-	statusCode := data[4]
-
-	var signedData []byte
-	if len(data) > 5 {
-		signedData = make([]byte, len(data)-5)
-		copy(signedData, data[5:])
+	resp := &RelayResponseBlock{
+		Flag:  data[0],
+		Code:  data[1],
+		Nonce: binary.BigEndian.Uint32(data[2:6]),
 	}
 
-	return &RelayResponseBlock{
-		Nonce:      nonce,
-		StatusCode: statusCode,
-		SignedData: signedData,
-	}, nil
+	if resp.Code == 0 && len(data) > 6 {
+		return decodeRelayResponseAccepted(resp, data)
+	} else if resp.Code >= 64 && len(data) > 6 {
+		return decodeRelayResponseCharlieRejection(resp, data)
+	}
+	return resp, nil
+}
+
+func decodeRelayResponseAccepted(resp *RelayResponseBlock, data []byte) (*RelayResponseBlock, error) {
+	// Need at least: 6 + timestamp(4) + ver(1) + csz(1) = 12
+	if len(data) < 12 {
+		return nil, oops.Errorf("accepted RelayResponse too short: %d bytes", len(data))
+	}
+	resp.Timestamp = binary.BigEndian.Uint32(data[6:10])
+	resp.Version = data[10]
+	csz := data[11]
+	if csz != 0 && csz != 6 && csz != 18 {
+		return nil, oops.Errorf("invalid csz: %d (expected 0, 6, or 18)", csz)
+	}
+	off := 12
+	if csz > 0 {
+		if len(data) < off+int(csz) {
+			return nil, oops.Errorf("accepted RelayResponse too short for endpoint: need %d, have %d", off+int(csz), len(data))
+		}
+		resp.CharliePort = binary.BigEndian.Uint16(data[off : off+2])
+		ipLen := int(csz) - 2
+		ip := make([]byte, ipLen)
+		copy(ip, data[off+2:off+2+ipLen])
+		resp.CharlieIP = net.IP(ip)
+		off += int(csz)
+	}
+	// Remaining: signature + token(8)
+	remaining := len(data) - off
+	if remaining < 8 {
+		return nil, oops.Errorf("accepted RelayResponse too short for token: %d remaining bytes", remaining)
+	}
+	sigLen := remaining - 8
+	if sigLen > 0 {
+		resp.Signature = make([]byte, sigLen)
+		copy(resp.Signature, data[off:off+sigLen])
+		off += sigLen
+	}
+	resp.Token = make([]byte, 8)
+	copy(resp.Token, data[off:off+8])
+	return resp, nil
+}
+
+func decodeRelayResponseCharlieRejection(resp *RelayResponseBlock, data []byte) (*RelayResponseBlock, error) {
+	if len(data) < 12 {
+		return nil, oops.Errorf("Charlie rejection RelayResponse too short: %d bytes", len(data))
+	}
+	resp.Timestamp = binary.BigEndian.Uint32(data[6:10])
+	resp.Version = data[10]
+	csz := data[11]
+	if csz != 0 && csz != 6 && csz != 18 {
+		return nil, oops.Errorf("invalid csz: %d (expected 0, 6, or 18)", csz)
+	}
+	off := 12
+	if csz > 0 {
+		if len(data) < off+int(csz) {
+			return nil, oops.Errorf("Charlie rejection too short for endpoint: need %d, have %d", off+int(csz), len(data))
+		}
+		resp.CharliePort = binary.BigEndian.Uint16(data[off : off+2])
+		ipLen := int(csz) - 2
+		ip := make([]byte, ipLen)
+		copy(ip, data[off+2:off+2+ipLen])
+		resp.CharlieIP = net.IP(ip)
+		off += int(csz)
+	}
+	if len(data) > off {
+		resp.Signature = make([]byte, len(data)-off)
+		copy(resp.Signature, data[off:])
+	}
+	return resp, nil
 }
 
 // EncodeRelayIntro encodes a RelayIntro block to wire format.

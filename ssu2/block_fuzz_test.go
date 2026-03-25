@@ -158,21 +158,29 @@ func FuzzDecodeRelayRequest(f *testing.F) {
 
 // FuzzDecodeRelayResponse fuzzes RelayResponse block decoding.
 func FuzzDecodeRelayResponse(f *testing.F) {
-	// Valid relay response: nonce(4) + status(1) + signedData(variable)
-	valid := make([]byte, 40)
+	// Valid relay response per spec: flag(1)+code(1)+nonce(4)=6 minimum
+	// For code 0 (accepted): +ts(4)+ver(1)+csz(1)+port(2)+ip(4)+sig(0)+token(8)=26
+	valid := make([]byte, 29) // type(1)+size(2)+payload(26)
 	valid[0] = BlockTypeRelayResponse
-	binary.BigEndian.PutUint16(valid[1:3], 37) // Length = 4+1+32
-	binary.BigEndian.PutUint32(valid[3:7], 12345)
-	valid[7] = 0 // Success status
-	// bytes 8-39: signed data
+	binary.BigEndian.PutUint16(valid[1:3], 26) // Length
+	valid[3] = 0                               // flag
+	valid[4] = 0                               // code = accepted
+	binary.BigEndian.PutUint32(valid[5:9], 12345)
+	binary.BigEndian.PutUint32(valid[9:13], 1700000000) // timestamp
+	valid[13] = 2                                       // ver
+	valid[14] = 6                                       // csz (IPv4)
+	binary.BigEndian.PutUint16(valid[15:17], 9000)      // port
+	// bytes 17-20: IP (zeros ok)
+	// bytes 21-28: token (zeros ok)
 	f.Add(valid)
 
-	// Failure response (no signed data)
-	failure := make([]byte, 8)
+	// Bob rejection (code 1, minimal)
+	failure := make([]byte, 9) // type(1)+size(2)+payload(6)
 	failure[0] = BlockTypeRelayResponse
-	binary.BigEndian.PutUint16(failure[1:3], 5) // Length = 4+1
-	binary.BigEndian.PutUint32(failure[3:7], 12345)
-	failure[7] = 1 // Failure status
+	binary.BigEndian.PutUint16(failure[1:3], 6) // Length
+	failure[3] = 0                              // flag
+	failure[4] = 1                              // code = Bob rejection
+	binary.BigEndian.PutUint32(failure[5:9], 12345)
 	f.Add(failure)
 
 	f.Fuzz(func(t *testing.T, data []byte) {

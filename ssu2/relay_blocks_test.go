@@ -183,46 +183,75 @@ func TestDecodeRelayRequest_InvalidAsz(t *testing.T) {
 // TestEncodeRelayResponse_Success tests encoding successful relay response.
 func TestEncodeRelayResponse_Success(t *testing.T) {
 	resp := &RelayResponseBlock{
-		Nonce:      12345,
-		StatusCode: 0,
-		SignedData: []byte("charlie-signed-data-placeholder!"), // 32 bytes
+		Flag:        0,
+		Code:        0,
+		Nonce:       12345,
+		Timestamp:   1700000000,
+		Version:     2,
+		CharliePort: 9000,
+		CharlieIP:   net.IPv4(10, 0, 0, 1).To4(),
+		Signature:   makeTestSignature(), // 64 bytes
+		Token:       []byte{1, 2, 3, 4, 5, 6, 7, 8},
 	}
 
 	block, err := EncodeRelayResponse(resp)
 	require.NoError(t, err)
 	assert.NotNil(t, block)
 	assert.Equal(t, BlockTypeRelayResponse, block.Type)
-	assert.Equal(t, 37, len(block.Data)) // 4+1+32
+	// flag(1)+code(1)+nonce(4)+ts(4)+ver(1)+csz(1)+port(2)+ip(4)+sig(64)+token(8) = 90
+	assert.Equal(t, 90, len(block.Data))
 }
 
-// TestEncodeRelayResponse_SuccessLargeSignedData tests encoding relay response with larger signed data.
-func TestEncodeRelayResponse_SuccessLargeSignedData(t *testing.T) {
-	signedData := make([]byte, 64)
-	for i := range signedData {
-		signedData[i] = byte(i)
-	}
-
+// TestEncodeRelayResponse_SuccessIPv6 tests encoding accepted relay response with IPv6.
+func TestEncodeRelayResponse_SuccessIPv6(t *testing.T) {
 	resp := &RelayResponseBlock{
-		Nonce:      12345,
-		StatusCode: 0,
-		SignedData: signedData,
+		Flag:        0,
+		Code:        0,
+		Nonce:       12345,
+		Timestamp:   1700000000,
+		Version:     2,
+		CharliePort: 9000,
+		CharlieIP:   net.ParseIP("2001:db8::1"),
+		Signature:   makeTestSignature(),
+		Token:       []byte{1, 2, 3, 4, 5, 6, 7, 8},
 	}
 
 	block, err := EncodeRelayResponse(resp)
 	require.NoError(t, err)
-	assert.Equal(t, 69, len(block.Data)) // 4+1+64
+	// flag(1)+code(1)+nonce(4)+ts(4)+ver(1)+csz(1)+port(2)+ip(16)+sig(64)+token(8) = 102
+	assert.Equal(t, 102, len(block.Data))
 }
 
-// TestEncodeRelayResponse_Failure tests encoding failed relay response.
-func TestEncodeRelayResponse_Failure(t *testing.T) {
+// TestEncodeRelayResponse_BobRejection tests encoding Bob rejection response.
+func TestEncodeRelayResponse_BobRejection(t *testing.T) {
 	resp := &RelayResponseBlock{
-		Nonce:      12345,
-		StatusCode: 1, // Error
+		Flag:  0,
+		Code:  1, // Bob rejection
+		Nonce: 12345,
 	}
 
 	block, err := EncodeRelayResponse(resp)
 	require.NoError(t, err)
-	assert.Equal(t, 5, len(block.Data)) // 4+1 (no signed data)
+	assert.Equal(t, 6, len(block.Data)) // flag(1)+code(1)+nonce(4)
+}
+
+// TestEncodeRelayResponse_CharlieRejection tests encoding Charlie rejection response.
+func TestEncodeRelayResponse_CharlieRejection(t *testing.T) {
+	resp := &RelayResponseBlock{
+		Flag:        0,
+		Code:        64, // Charlie rejection
+		Nonce:       12345,
+		Timestamp:   1700000000,
+		Version:     2,
+		CharliePort: 9000,
+		CharlieIP:   net.IPv4(10, 0, 0, 1).To4(),
+		Signature:   makeTestSignature(),
+	}
+
+	block, err := EncodeRelayResponse(resp)
+	require.NoError(t, err)
+	// flag(1)+code(1)+nonce(4)+ts(4)+ver(1)+csz(1)+port(2)+ip(4)+sig(64) = 82
+	assert.Equal(t, 82, len(block.Data))
 }
 
 // TestEncodeRelayResponse_NilBlock tests encoding nil response.
@@ -236,9 +265,15 @@ func TestEncodeRelayResponse_NilBlock(t *testing.T) {
 // TestDecodeRelayResponse_Success tests decoding successful relay response.
 func TestDecodeRelayResponse_Success(t *testing.T) {
 	original := &RelayResponseBlock{
-		Nonce:      12345,
-		StatusCode: 0,
-		SignedData: []byte("charlie-signed-data-placeholder!"),
+		Flag:        0,
+		Code:        0,
+		Nonce:       12345,
+		Timestamp:   1700000000,
+		Version:     2,
+		CharliePort: 9000,
+		CharlieIP:   net.IPv4(10, 0, 0, 1).To4(),
+		Signature:   makeTestSignature(),
+		Token:       []byte{1, 2, 3, 4, 5, 6, 7, 8},
 	}
 
 	block, err := EncodeRelayResponse(original)
@@ -246,16 +281,23 @@ func TestDecodeRelayResponse_Success(t *testing.T) {
 
 	decoded, err := DecodeRelayResponse(block)
 	require.NoError(t, err)
+	assert.Equal(t, original.Flag, decoded.Flag)
+	assert.Equal(t, original.Code, decoded.Code)
 	assert.Equal(t, original.Nonce, decoded.Nonce)
-	assert.Equal(t, original.StatusCode, decoded.StatusCode)
-	assert.Equal(t, original.SignedData, decoded.SignedData)
+	assert.Equal(t, original.Timestamp, decoded.Timestamp)
+	assert.Equal(t, original.Version, decoded.Version)
+	assert.Equal(t, original.CharliePort, decoded.CharliePort)
+	assert.True(t, original.CharlieIP.Equal(decoded.CharlieIP))
+	assert.Equal(t, original.Signature, decoded.Signature)
+	assert.Equal(t, original.Token, decoded.Token)
 }
 
-// TestDecodeRelayResponse_Failure tests decoding failed relay response.
-func TestDecodeRelayResponse_Failure(t *testing.T) {
+// TestDecodeRelayResponse_BobRejection tests decoding Bob rejection response.
+func TestDecodeRelayResponse_BobRejection(t *testing.T) {
 	original := &RelayResponseBlock{
-		Nonce:      12345,
-		StatusCode: 1,
+		Flag:  0,
+		Code:  1,
+		Nonce: 12345,
 	}
 
 	block, err := EncodeRelayResponse(original)
@@ -264,8 +306,37 @@ func TestDecodeRelayResponse_Failure(t *testing.T) {
 	decoded, err := DecodeRelayResponse(block)
 	require.NoError(t, err)
 	assert.Equal(t, original.Nonce, decoded.Nonce)
-	assert.Equal(t, original.StatusCode, decoded.StatusCode)
-	assert.Nil(t, decoded.SignedData)
+	assert.Equal(t, original.Code, decoded.Code)
+	assert.Nil(t, decoded.Token)
+	assert.Nil(t, decoded.Signature)
+}
+
+// TestDecodeRelayResponse_CharlieRejection tests decoding Charlie rejection response.
+func TestDecodeRelayResponse_CharlieRejection(t *testing.T) {
+	original := &RelayResponseBlock{
+		Flag:        0,
+		Code:        64,
+		Nonce:       12345,
+		Timestamp:   1700000000,
+		Version:     2,
+		CharliePort: 9000,
+		CharlieIP:   net.IPv4(10, 0, 0, 1).To4(),
+		Signature:   makeTestSignature(),
+	}
+
+	block, err := EncodeRelayResponse(original)
+	require.NoError(t, err)
+
+	decoded, err := DecodeRelayResponse(block)
+	require.NoError(t, err)
+	assert.Equal(t, original.Code, decoded.Code)
+	assert.Equal(t, original.Nonce, decoded.Nonce)
+	assert.Equal(t, original.Timestamp, decoded.Timestamp)
+	assert.Equal(t, original.Version, decoded.Version)
+	assert.Equal(t, original.CharliePort, decoded.CharliePort)
+	assert.True(t, original.CharlieIP.Equal(decoded.CharlieIP))
+	assert.Equal(t, original.Signature, decoded.Signature)
+	assert.Nil(t, decoded.Token)
 }
 
 // TestDecodeRelayResponse_NilBlock tests decoding nil block.
@@ -293,7 +364,7 @@ func TestDecodeRelayResponse_WrongType(t *testing.T) {
 func TestDecodeRelayResponse_TooShort(t *testing.T) {
 	block := &SSU2Block{
 		Type: BlockTypeRelayResponse,
-		Data: make([]byte, 3), // Too short
+		Data: make([]byte, 4), // Too short (minimum 6)
 	}
 
 	decoded, err := DecodeRelayResponse(block)
@@ -718,9 +789,15 @@ func TestRelayBlocks_RoundTrip(t *testing.T) {
 	// Test RelayResponse
 	t.Run("RelayResponse", func(t *testing.T) {
 		resp := &RelayResponseBlock{
-			Nonce:      11111,
-			StatusCode: 0,
-			SignedData: []byte("charlie-signed-data-placeholder!"),
+			Flag:        0,
+			Code:        0,
+			Nonce:       11111,
+			Timestamp:   1700000000,
+			Version:     2,
+			CharliePort: 9000,
+			CharlieIP:   net.IPv4(10, 0, 0, 1).To4(),
+			Signature:   makeTestSignature(),
+			Token:       make([]byte, 8),
 		}
 
 		block, err := EncodeRelayResponse(resp)
@@ -730,8 +807,8 @@ func TestRelayBlocks_RoundTrip(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Equal(t, resp.Nonce, decoded.Nonce)
-		assert.Equal(t, resp.StatusCode, decoded.StatusCode)
-		assert.Equal(t, resp.SignedData, decoded.SignedData)
+		assert.Equal(t, resp.Code, decoded.Code)
+		assert.Equal(t, resp.Token, decoded.Token)
 	})
 
 	// Test RelayIntro

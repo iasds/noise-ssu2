@@ -28,9 +28,8 @@ func TestNewSSU2Config(t *testing.T) {
 		assert.Equal(t, time.Duration(0), config.ReadTimeout)
 		assert.Equal(t, time.Duration(0), config.WriteTimeout)
 		assert.Equal(t, 3, config.HandshakeRetries)
-		assert.Equal(t, 1*time.Second, config.RetryBackoff)
+		assert.Equal(t, 1250*time.Millisecond, config.RetryBackoff)
 		assert.True(t, config.EnableChaChaObfuscation)
-		assert.False(t, config.EnableSipHashLength)
 		assert.Equal(t, 1280, config.MTU)
 		assert.Equal(t, 1500, config.MaxPacketSize)
 		assert.False(t, config.EnableFragmentation)
@@ -99,7 +98,6 @@ func TestSSU2Config_BuilderPattern(t *testing.T) {
 		WithHandshakeRetries(5).
 		WithRetryBackoff(2*time.Second).
 		WithChaChaObfuscation(true, customIV).
-		WithSipHashLength(true, 0x1234567890ABCDEF, 0xFEDCBA0987654321).
 		WithMTU(1500).
 		WithPacketSettings(1600, true).
 		WithPaddingSettings(true, 10, 100, 2.5).
@@ -124,8 +122,6 @@ func TestSSU2Config_BuilderPattern(t *testing.T) {
 	assert.Equal(t, 2.5, config.PaddingRatio)
 	assert.Equal(t, uint64(12345), config.ConnectionID)
 	assert.Equal(t, 30*time.Second, config.KeepaliveInterval)
-	assert.Equal(t, uint64(0x1234567890ABCDEF), config.SipHashKeys[0])
-	assert.Equal(t, uint64(0xFEDCBA0987654321), config.SipHashKeys[1])
 }
 
 // TestSSU2Config_WithStaticKey verifies static key defensive copying.
@@ -447,13 +443,12 @@ func TestSSU2Config_ToConnConfig(t *testing.T) {
 
 		config.EnableChaChaObfuscation = true
 		config.PaddingEnabled = true
-		config.EnableSipHashLength = true
 
 		connConfig, err := config.ToConnConfig()
 		require.NoError(t, err)
 
-		// Should have ChaCha, Padding, and SipHash modifiers
-		assert.GreaterOrEqual(t, len(connConfig.Modifiers), 3)
+		// Should have ChaCha and Padding modifiers
+		assert.GreaterOrEqual(t, len(connConfig.Modifiers), 2)
 	})
 
 	t.Run("disabled modifiers are not created", func(t *testing.T) {
@@ -462,7 +457,6 @@ func TestSSU2Config_ToConnConfig(t *testing.T) {
 
 		config.EnableChaChaObfuscation = false
 		config.PaddingEnabled = false
-		config.EnableSipHashLength = false
 
 		connConfig, err := config.ToConnConfig()
 		require.NoError(t, err)
