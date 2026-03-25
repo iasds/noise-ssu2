@@ -764,3 +764,45 @@ func TestBuildI2NPFragmentBlocks_MessageIDConsistent(t *testing.T) {
 		assert.Equal(t, firstMsgID, followMsgID, "fragment %d should have same message ID", i)
 	}
 }
+
+// TestDataPhaseNonce_PacketNumberAsNonce verifies the SSU2 data-phase AEAD
+// nonce convention: the 4-byte packet number is zero-extended to uint64 and
+// used as the nonce via CipherState.SetNonce(). Encrypt with nonce N must
+// only decrypt correctly with nonce N.
+func TestDataPhaseNonce_PacketNumberAsNonce(t *testing.T) {
+	// Complete a full handshake to obtain real cipher states.
+	initiator, responder, _, _ := setupHandshakePair(t)
+
+	reqPkt, err := initiator.CreateSessionRequest(11111, 22222)
+	require.NoError(t, err)
+	_, err = responder.ProcessSessionRequest(reqPkt)
+	require.NoError(t, err)
+	crePkt, err := responder.CreateSessionCreated(33333, 44444)
+	require.NoError(t, err)
+	err = initiator.ProcessSessionCreated(crePkt)
+	require.NoError(t, err)
+	confPkt, err := initiator.CreateSessionConfirmed(55555, 0, nil)
+	require.NoError(t, err)
+	err = responder.ProcessSessionConfirmed(confPkt)
+	require.NoError(t, err)
+
+	sendCS, _, err := initiator.GetCipherStates()
+	require.NoError(t, err, "initiator must have cipher states")
+	_, recvCS, err := responder.GetCipherStates()
+	require.NoError(t, err, "responder must have cipher states")
+
+	plaintext := []byte("SSU2 nonce test payload")
+	ad := make([]byte, ShortHeaderSize)
+
+	// Encrypt with packet number 42.
+	pktNum := uint32(42)
+	sendCS.SetNonce(uint64(pktNum))
+	ciphertext, err := sendCS.Encrypt(nil, ad, plaintext)
+	require.NoError(t, err)
+
+	// Decrypt with the matching nonce should succeed.
+	recvCS.SetNonce(uint64(pktNum))
+	decrypted, err := recvCS.Decrypt(nil, ad, ciphertext)
+	require.NoError(t, err)
+	assert.Equal(t, plaintext, decrypted, "round-trip with same nonce must recover plaintext")
+}

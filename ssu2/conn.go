@@ -414,7 +414,8 @@ func (h *SSU2Conn) handshakeInitiator(ctx context.Context) error {
 	// Step 4: Create and send SessionConfirmed (3rd XK message) with RouterInfo.
 	// Use CreateSessionConfirmedFragments to support large RouterInfo that
 	// requires splitting across multiple packets per SSU2 spec §Session Confirmed.
-	fragments, err := h.handshakeHandler.CreateSessionConfirmedFragments(h.config.ConnectionID, 1, h.config.RouterHash)
+	// Per spec: "Packet Number :: 0 always, for all fragments, even if retransmitted."
+	fragments, err := h.handshakeHandler.CreateSessionConfirmedFragments(h.config.ConnectionID, 0, h.config.RouterHash)
 	if err != nil {
 		return oops.Wrapf(err, "failed to create SessionConfirmed")
 	}

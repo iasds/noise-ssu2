@@ -1052,7 +1052,8 @@ func (h *HandshakeHandler) CreateSessionConfirmedFragments(connID uint64, packet
 
 		fragHeader := make([]byte, ShortHeaderSize)
 		binary.BigEndian.PutUint64(fragHeader[0:8], connID)
-		binary.BigEndian.PutUint32(fragHeader[8:12], packetNumber+uint32(i))
+		// Per spec: "Packet Number :: 0 always, for all fragments, even if retransmitted."
+		binary.BigEndian.PutUint32(fragHeader[8:12], packetNumber)
 		fragHeader[12] = MessageTypeSessionConfirmed
 		fragHeader[13] = byte(i<<4) | byte(totalFrags)
 
@@ -1072,7 +1073,7 @@ func (h *HandshakeHandler) CreateSessionConfirmedFragments(connID uint64, packet
 			Payload:      pktPayload,
 			MAC:          mac,
 			MessageType:  MessageTypeSessionConfirmed,
-			PacketNumber: packetNumber + uint32(i),
+			PacketNumber: packetNumber,
 		})
 		offset = end
 	}

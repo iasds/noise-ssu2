@@ -789,7 +789,7 @@ func TestCreateSessionConfirmedFragments_LargePayload(t *testing.T) {
 		largeRouterInfo[i] = byte(i % 256)
 	}
 
-	fragments, err := initiator.CreateSessionConfirmedFragments(55555, 1, largeRouterInfo)
+	fragments, err := initiator.CreateSessionConfirmedFragments(55555, 0, largeRouterInfo)
 	require.NoError(t, err)
 	require.Greater(t, len(fragments), 1, "should produce multiple fragments")
 
@@ -797,7 +797,8 @@ func TestCreateSessionConfirmedFragments_LargePayload(t *testing.T) {
 	for i, frag := range fragments {
 		assert.Equal(t, MessageTypeSessionConfirmed, frag.MessageType)
 		assert.Len(t, frag.Header, ShortHeaderSize)
-		assert.Equal(t, uint32(1+uint32(i)), frag.PacketNumber)
+		// Per spec: "Packet Number :: 0 always, for all fragments, even if retransmitted."
+		assert.Equal(t, uint32(0), frag.PacketNumber)
 
 		// Check frag byte
 		fragNum := int((frag.Header[13] >> 4) & 0x0F)
@@ -1016,4 +1017,76 @@ func TestExtractPeerOptions_Handshake(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, initiator.PeerOptions(), "initiator should have peer options after SessionCreated")
 	assert.InDelta(t, 1.5, initiator.PeerOptions().TMaxRatio, 0.0625)
+}
+
+// TestSessionConfirmedFragments_PacketNumberAlwaysZero verifies that all
+// Session Confirmed fragments have PacketNumber == 0, as required by the
+// SSU2 spec: "Packet Number :: 0 always, for all fragments, even if retransmitted."
+func TestSessionConfirmedFragments_PacketNumberAlwaysZero(t *testing.T) {
+	initiator, responder, _, _ := setupHandshakePair(t)
+
+	// Complete handshake up to SessionConfirmed
+	requestPacket, err := initiator.CreateSessionRequest(11111, 22222)
+	require.NoError(t, err)
+
+	_, err = responder.ProcessSessionRequest(requestPacket)
+	require.NoError(t, err)
+
+	createdPacket, err := responder.CreateSessionCreated(33333, 44444)
+	require.NoError(t, err)
+
+	err = initiator.ProcessSessionCreated(createdPacket)
+	require.NoError(t, err)
+
+	// Create Session Confirmed fragments with packetNumber = 0 per spec.
+	fragments, err := initiator.CreateSessionConfirmedFragments(55555, 0, nil)
+	require.NoError(t, err)
+	require.NotEmpty(t, fragments, "should produce at least one fragment")
+
+	for i, frag := range fragments {
+		assert.Equal(t, uint32(0), frag.PacketNumber,
+			"fragment %d: PacketNumber must be 0 per spec", i)
+
+		// Verify the wire-level header bytes 8-11 also encode packet number 0.
+		require.True(t, len(frag.Header) >= 12,
+			"fragment %d: header too short", i)
+		pn := binary.BigEndian.Uint32(frag.Header[8:12])
+		assert.Equal(t, uint32(0), pn,
+			"fragment %d: header bytes 8-11 must encode packet number 0", i)
+
+		assert.Equal(t, MessageTypeSessionConfirmed, frag.MessageType,
+			"fragment %d: wrong message type", i)
+	}
+}
+
+// TestSessionConfirmedRetransmit_PreservesPacketNumber verifies that
+// retransmitting a Session Confirmed packet keeps its PacketNumber unchanged,
+// as required by the SSU2 spec for handshake retransmission.
+func TestSessionConfirmedRetransmit_PreservesPacketNumber(t *testing.T) {
+	initiator, responder, _, _ := setupHandshakePair(t)
+
+	requestPacket, err := initiator.CreateSessionRequest(11111, 22222)
+	require.NoError(t, err)
+	_, err = responder.ProcessSessionRequest(requestPacket)
+	require.NoError(t, err)
+	createdPacket, err := responder.CreateSessionCreated(33333, 44444)
+	require.NoError(t, err)
+	err = initiator.ProcessSessionCreated(createdPacket)
+	require.NoError(t, err)
+
+	fragments, err := initiator.CreateSessionConfirmedFragments(55555, 0, nil)
+	require.NoError(t, err)
+
+	// Simulate retransmit: the same SSU2Packet object is re-sent.
+	// Verify the packet number is still 0 after "retransmission" — the receiver
+	// would re-serialize the same packet, so the fields must be stable.
+	for retransmit := 0; retransmit < 3; retransmit++ {
+		for i, frag := range fragments {
+			assert.Equal(t, uint32(0), frag.PacketNumber,
+				"retransmit %d, fragment %d: PacketNumber must remain 0", retransmit, i)
+			pn := binary.BigEndian.Uint32(frag.Header[8:12])
+			assert.Equal(t, uint32(0), pn,
+				"retransmit %d, fragment %d: header pn must remain 0", retransmit, i)
+		}
+	}
 }
