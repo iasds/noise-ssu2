@@ -54,7 +54,7 @@ type KeepaliveManager struct {
 // SendReceiver defines the interface for sending keepalive messages.
 // This interface is implemented by SSU2Conn to allow testing with mocks.
 type SendReceiver interface {
-	// SendKeepalive sends a DateTime block as keepalive
+	// SendKeepalive sends an ACK-only packet as keepalive
 	SendKeepalive() error
 }
 

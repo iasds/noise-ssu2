@@ -153,7 +153,7 @@ func NewHandshakeHandler(initiator bool, staticKey, remoteStaticKey, prologue []
 	// Responders need a replay cache to protect against replayed SessionRequests
 	if !initiator {
 		handler.replayCache = replaycache.New(replaycache.Config{
-			TTL:             2 * time.Minute,
+			TTL:             4 * time.Minute,
 			MaxSize:         1024,
 			CleanupInterval: 30 * time.Second,
 		})
@@ -220,7 +220,7 @@ func NewHandshakeHandlerWithKeys(initiator bool, staticKeypair noise.DHKey, remo
 	// Responders need a replay cache to protect against replayed SessionRequests
 	if !initiator {
 		handler.replayCache = replaycache.New(replaycache.Config{
-			TTL:             2 * time.Minute,
+			TTL:             4 * time.Minute,
 			MaxSize:         1024,
 			CleanupInterval: 30 * time.Second,
 		})

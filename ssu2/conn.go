@@ -112,6 +112,9 @@ type SSU2Conn struct {
 	// SipHash length obfuscation (nil = disabled)
 	sipHashModifier *SipHashLengthModifier
 
+	// Path validation for connection migration (G-7)
+	pathValidator *PathValidator
+
 	// Connection state
 	state      ConnState
 	stateMutex sync.RWMutex
@@ -273,6 +276,9 @@ func NewSSU2Conn(
 		pendingPackets:   make(map[uint32]*PendingPacket),
 		lastActivity:     time.Now(),
 	}
+
+	// Initialize path validator for connection migration (G-7)
+	conn.pathValidator = NewPathValidator(conn)
 
 	// Initialize header protection if intro keys are provided
 	if len(config.IntroKey) == HeaderKeySize {
@@ -687,6 +693,11 @@ func (h *SSU2Conn) installCipherStates() error {
 	// Wire NextNonce callback so peer-initiated rekeys are applied.
 	cbs := h.dataHandler.getCallbacks()
 	cbs.OnNextNonce = h.handlePeerNextNonce
+	// Wire Congestion callback so RequestACK flag triggers immediate ACK (G-6).
+	cbs.OnCongestion = h.handleCongestionBlock
+	// Wire PathChallenge/PathResponse callbacks for path validation (G-7).
+	cbs.OnPathChallenge = h.handlePathChallengeData
+	cbs.OnPathResponse = h.handlePathResponseData
 	h.dataHandler.SetCallbacks(cbs)
 
 	// Update router hash from peer's static key if available
@@ -1070,6 +1081,45 @@ func (h *SSU2Conn) RemoteAddr() net.Addr {
 	return h.ssu2Addr
 }
 
+// SendToAddress sends a block to a specific UDP address (implements PathValidationConn).
+func (h *SSU2Conn) SendToAddress(block *SSU2Block, addr *net.UDPAddr) error {
+	pktNum := h.nextSendSequence()
+	hdr := make([]byte, ShortHeaderSize)
+	binary.BigEndian.PutUint64(hdr[0:8], h.config.ConnectionID)
+	binary.BigEndian.PutUint32(hdr[8:12], pktNum)
+	packet := &SSU2Packet{
+		MessageType:  MessageTypeData,
+		PacketNumber: pktNum,
+		Header:       hdr,
+		MAC:          make([]byte, MACSize),
+	}
+	payload, err := SerializeBlocks([]*SSU2Block{block})
+	if err != nil {
+		return oops.Wrapf(err, "failed to serialize block for path validation")
+	}
+	packet.Payload = payload
+	data, err := packet.Serialize()
+	if err != nil {
+		return oops.Wrapf(err, "failed to serialize packet for path validation")
+	}
+	_, err = h.underlying.WriteTo(data, addr)
+	return err
+}
+
+// GetRemoteAddr returns the current remote UDP address (implements PathValidationConn).
+func (h *SSU2Conn) GetRemoteAddr() *net.UDPAddr {
+	return h.remoteAddr
+}
+
+// SetRemoteAddr updates the remote address after successful path validation (implements PathValidationConn).
+func (h *SSU2Conn) SetRemoteAddr(addr *net.UDPAddr) error {
+	if addr == nil {
+		return oops.Errorf("address is nil")
+	}
+	h.remoteAddr = addr
+	return nil
+}
+
 // SetDeadline implements net.Conn.SetDeadline.
 func (h *SSU2Conn) SetDeadline(t time.Time) error {
 	h.deadlineMutex.Lock()
@@ -1284,9 +1334,11 @@ func (h *SSU2Conn) parseInboundPacket(data []byte, addr net.Addr) *SSU2Packet {
 	}
 	h.cipherMutex.Unlock()
 
-	// If the address changed but AEAD passed, migrate the connection
-	if addrChanged {
-		h.remoteAddr = udpAddr
+	// If the address changed but AEAD passed, initiate path validation (G-7).
+	// Per spec §Connection Migration: packets from a new address require
+	// path validation before accepting the address change.
+	if addrChanged && h.pathValidator != nil {
+		_, _ = h.pathValidator.InitiatePathValidation(udpAddr)
 	}
 
 	h.updateActivity()
@@ -1309,17 +1361,9 @@ func (h *SSU2Conn) keepaliveLoop() {
 
 			// Check if we need to send keepalive
 			if timeSinceActivity >= h.config.KeepaliveInterval {
-				// Send ACK + DateTime as keepalive per spec recommendation
-				blocks := make([]*SSU2Block, 0, 2)
-				if ack, err := h.ackHandler.GenerateACK(); err == nil && ack != nil {
-					blocks = append(blocks, ack)
-				}
-				// Include DateTime block per spec: Data messages "should" include DateTime
-				dtData := make([]byte, 4)
-				binary.BigEndian.PutUint32(dtData, uint32(time.Now().Unix()))
-				blocks = append(blocks, NewSSU2Block(BlockTypeDateTime, dtData))
-
-				if len(blocks) > 0 {
+				// Send ACK-only packet as keepalive per spec §Keepalive (M-3)
+				ack, err := h.ackHandler.GenerateACK()
+				if err == nil && ack != nil {
 					pktNum := h.nextSendSequence()
 					hdr := make([]byte, ShortHeaderSize)
 					binary.BigEndian.PutUint64(hdr[0:8], h.config.ConnectionID)
@@ -1330,7 +1374,7 @@ func (h *SSU2Conn) keepaliveLoop() {
 						Header:       hdr,
 						MAC:          make([]byte, MACSize),
 					}
-					payload, _ := SerializeBlocks(blocks)
+					payload, _ := SerializeBlocks([]*SSU2Block{ack})
 					packet.Payload = payload
 					_ = h.sendPacketDirect(packet)
 				}
@@ -1501,6 +1545,27 @@ func (h *SSU2Conn) sendImmediateACK() {
 	payload, _ := SerializeBlocks([]*SSU2Block{ack})
 	packet.Payload = payload
 	_ = h.sendPacketDirect(packet)
+}
+
+// handleCongestionBlock processes a received Congestion block (G-6).
+// If the RequestACK flag (bit 0) is set, triggers an immediate ACK per spec.
+func (h *SSU2Conn) handleCongestionBlock(flags uint8) error {
+	if flags&CongestionFlagRequestACK != 0 {
+		h.sendImmediateACK()
+	}
+	return nil
+}
+
+// handlePathChallengeData wraps PathValidator.HandlePathChallenge for the DataHandler callback (G-7).
+func (h *SSU2Conn) handlePathChallengeData(data []byte) error {
+	block := &SSU2Block{Type: BlockTypePathChallenge, Data: data}
+	return h.pathValidator.HandlePathChallenge(block, h.remoteAddr)
+}
+
+// handlePathResponseData wraps PathValidator.HandlePathResponse for the DataHandler callback (G-7).
+func (h *SSU2Conn) handlePathResponseData(data []byte) error {
+	block := &SSU2Block{Type: BlockTypePathResponse, Data: data}
+	return h.pathValidator.HandlePathResponse(block, h.remoteAddr)
 }
 
 // extractRetryToken parses a Retry message and returns the 8-byte token.

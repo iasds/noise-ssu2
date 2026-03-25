@@ -148,7 +148,7 @@ const (
 	minReserved14Size        = 0     // Reserved block type (no data expected)
 	minAddressSizeIPv4       = 6     // IPv4 address: port(2) + IP(4)
 	minAddressSizeIPv6       = 18    // IPv6 address: port(2) + IP(16)
-	minRelayTagRequestSize   = 0     // Relay tag request (empty data per spec)
+	minRelayTagRequestSize   = 4     // Relay tag request: nonce (4 bytes) per spec
 	minRelayTagSize          = 4     // Relay tag data: relay_tag(4) + expiration(3) = 7 total block, but data length is 4 minimum
 	minNewTokenSize          = 12    // New token data: 4 expiration + 8 token
 	minFirstPacketNumberSize = 4     // Initial packet number (4 bytes)

@@ -625,7 +625,7 @@ func TestSSU2Block_AllBlockTypes(t *testing.T) {
 		{"ACK", BlockTypeACK, 5},
 		{"Address", BlockTypeAddress, 6},
 		{"Reserved14", BlockTypeReserved14, 0},
-		{"RelayTagRequest", BlockTypeRelayTagRequest, 0},
+		{"RelayTagRequest", BlockTypeRelayTagRequest, 4},
 		{"RelayTag", BlockTypeRelayTag, 7},
 		{"NewToken", BlockTypeNewToken, 15},
 		{"PathChallenge", BlockTypePathChallenge, 0},

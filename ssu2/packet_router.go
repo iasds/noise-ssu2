@@ -143,6 +143,24 @@ func (pr *PacketRouter) RoutePacket(packet *SSU2Packet, remoteAddr *net.UDPAddr)
 		return oops.Wrapf(err, "failed to extract connection ID")
 	}
 
+	// Connection ID 0 is reserved for handshake (M-5: spec §Header)
+	if connID == 0 {
+		if pr.newSessionHandler == nil {
+			return oops.
+				Code("NO_SESSION_HANDLER").
+				In("packet_router").
+				Errorf("no handler registered for new sessions")
+		}
+		newConn, err := pr.newSessionHandler(remoteAddr, packet)
+		if err != nil {
+			return oops.Wrapf(err, "failed to create new session for handshake (connID=0)")
+		}
+		if err := pr.AddSession(newConn); err != nil {
+			return oops.Wrapf(err, "failed to register new session")
+		}
+		return nil
+	}
+
 	// Try to find existing session
 	conn := pr.GetSession(connID)
 

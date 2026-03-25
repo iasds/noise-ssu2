@@ -1056,7 +1056,7 @@ func TestDataHandler_AllBlockTypesExplicitlyHandled(t *testing.T) {
 		{BlockTypeACK, "ACK", make([]byte, 5)},                         // minACKSize = 5
 		{BlockTypeNextNonce, "NextNonce", make([]byte, 8)},             // minNextNonceSize = 8
 		{BlockTypeAddress, "Address", make([]byte, 9)},                 // minAddressSizeIPv4 = 9
-		{BlockTypeRelayTagRequest, "RelayTagRequest", make([]byte, 3)}, // minRelayTagRequestSize = 3
+		{BlockTypeRelayTagRequest, "RelayTagRequest", make([]byte, 4)}, // minRelayTagRequestSize = 4
 		{BlockTypeRelayTag, "RelayTag", make([]byte, 7)},               // minRelayTagSize = 7
 		{BlockTypeNewToken, "NewToken", make([]byte, 12)},              // minNewTokenSize = 12
 		{BlockTypePathChallenge, "PathChallenge", make([]byte, 8)},     // Variable

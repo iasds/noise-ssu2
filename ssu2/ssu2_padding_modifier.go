@@ -185,6 +185,10 @@ func (spm *SSU2PaddingModifier) calculateMTUAwarePadding(dataLen int) int {
 
 	// Calculate desired padding based on ratio
 	paddingSize := spm.calculateRatioPadding(dataLen)
+	// Early clamp: prevent ratio-to-bytes overflow before further processing (M-6)
+	if paddingSize > availableSpace {
+		paddingSize = availableSpace
+	}
 	paddingSize = spm.enforceMinimumPadding(paddingSize)
 	paddingSize = spm.applyRandomVariation(paddingSize, dataLen)
 	paddingSize = spm.enforceMaximumPadding(paddingSize)
