@@ -993,6 +993,39 @@ func TestNegotiatedPadding_NilPeer(t *testing.T) {
 	assert.Nil(t, h.NegotiatedPadding(), "should be nil when peer options missing")
 }
 
+func TestNegotiatedPadding_InvalidRangeNoConstraint(t *testing.T) {
+	h, _, _, _ := setupHandshakePair(t)
+
+	// Local transmit range [3.0, 4.0] does not overlap with peer's receive range [0.0, 2.0]
+	// →  negotiated TMin = max(3.0, 0.0) = 3.0, TMax = min(4.0, 2.0) = 2.0 → invalid
+	// Should be zeroed (no constraint) rather than clamped.
+	h.SetLocalOptions(&OptionsParams{
+		Version:   2,
+		TMinRatio: 3.0,
+		TMaxRatio: 4.0,
+		RMinRatio: 0.0,
+		RMaxRatio: 1.0,
+	})
+	h.peerOptions = &OptionsParams{
+		Version:   2,
+		TMinRatio: 5.0, // peer transmit min > local receive max → receive invalid
+		TMaxRatio: 6.0,
+		RMinRatio: 0.0,
+		RMaxRatio: 2.0, // peer receive max < local transmit min → transmit invalid
+	}
+
+	neg := h.NegotiatedPadding()
+	require.NotNil(t, neg)
+
+	// Transmit: empty intersection → no constraint
+	assert.Equal(t, 0.0, neg.TMinRatio, "invalid transmit range should zero min")
+	assert.Equal(t, 0.0, neg.TMaxRatio, "invalid transmit range should zero max")
+
+	// Receive: max(local.RMin=0.0, peer.TMin=5.0)=5.0, min(local.RMax=1.0, peer.TMax=6.0)=1.0 → invalid
+	assert.Equal(t, 0.0, neg.RMinRatio, "invalid receive range should zero min")
+	assert.Equal(t, 0.0, neg.RMaxRatio, "invalid receive range should zero max")
+}
+
 func TestExtractPeerOptions_Handshake(t *testing.T) {
 	initiator, responder, _, _ := setupHandshakePair(t)
 

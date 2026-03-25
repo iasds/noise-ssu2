@@ -1,6 +1,7 @@
 package ssu2
 
 import (
+	"bytes"
 	"time"
 
 	noise "github.com/go-i2p/go-noise"
@@ -15,6 +16,34 @@ const (
 	// Per ssu2.rst: "Handshake timeout: 15 seconds"
 	DefaultHandshakeTimeout = 15 * time.Second
 )
+
+// DefaultRouterInfoValidator is a basic RouterInfo validator that checks
+// whether the Noise-authenticated static key appears within the RouterInfo
+// payload. Per SSU2 spec §Session Confirmed, the responder must verify that
+// the static key from the Noise handshake corresponds to the identity key
+// in the RouterInfo. This default performs a byte-containment check;
+// production deployments should provide a full RouterInfo parser.
+func DefaultRouterInfoValidator(routerInfo []byte, authenticatedStaticKey []byte) error {
+	if len(routerInfo) == 0 {
+		return oops.
+			Code("EMPTY_ROUTER_INFO").
+			In("ssu2").
+			Errorf("RouterInfo is empty")
+	}
+	if len(authenticatedStaticKey) == 0 {
+		return oops.
+			Code("EMPTY_STATIC_KEY").
+			In("ssu2").
+			Errorf("authenticated static key is empty")
+	}
+	if !bytes.Contains(routerInfo, authenticatedStaticKey) {
+		return oops.
+			Code("ROUTER_INFO_KEY_MISMATCH").
+			In("ssu2").
+			Errorf("RouterInfo does not contain the Noise-authenticated static key")
+	}
+	return nil
+}
 
 // SSU2Config contains configuration for creating SSU2 connections and listeners.
 // SSU2 (Secure Semi-reliable UDP version 2) is I2P's UDP-based transport protocol.
@@ -139,12 +168,13 @@ type SSU2Config struct {
 	// Default: 5 seconds. Set to 0 to skip the wait (e.g. in tests).
 	DestroyTimeout time.Duration
 
-	// RouterInfoValidator is an optional callback invoked after the handshake
+	// RouterInfoValidator is a callback invoked after the handshake
 	// completes on the responder side. It receives the raw RouterInfo block
 	// from SessionConfirmed and the Noise-authenticated static public key.
 	// The validator MUST verify that the RouterInfo's identity key corresponds
 	// to the static key authenticated by the Noise handshake (C-2).
-	// If nil, no validation is performed (not recommended for production).
+	// Required for responder configs (Initiator=false); use
+	// DefaultRouterInfoValidator or provide a custom implementation.
 	RouterInfoValidator func(routerInfo []byte, authenticatedStaticKey []byte) error
 }
 
@@ -184,6 +214,7 @@ func NewSSU2Config(routerHash []byte, initiator bool) (*SSU2Config, error) {
 		ConnectionID:            0,   // Will be generated
 		KeepaliveInterval:       15 * time.Second,
 		DestroyTimeout:          0, // opt-in; set to destroyTimeout (5s) in production
+		RouterInfoValidator:     DefaultRouterInfoValidator,
 	}, nil
 }
 
@@ -317,6 +348,14 @@ func (sc *SSU2Config) WithModifiers(modifiers ...handshake.HandshakeModifier) *S
 	return sc
 }
 
+// WithRouterInfoValidator sets the RouterInfo validation callback.
+// The validator is invoked on the responder after handshake completion to verify
+// that the peer's RouterInfo contains the Noise-authenticated static key.
+func (sc *SSU2Config) WithRouterInfoValidator(validator func(routerInfo []byte, authenticatedStaticKey []byte) error) *SSU2Config {
+	sc.RouterInfoValidator = validator
+	return sc
+}
+
 // Validate checks if the configuration is valid for SSU2.
 func (sc *SSU2Config) Validate() error {
 	if err := sc.validateBasicConfiguration(); err != nil {
@@ -392,6 +431,15 @@ func (sc *SSU2Config) validateCryptographicParameters() error {
 			In("ssu2").
 			With("iv_length", len(sc.ObfuscationIV)).
 			Errorf("obfuscation IV must be 8 bytes")
+	}
+
+	// Per SSU2 spec §Session Confirmed (C-2): responders must validate
+	// that the Noise-authenticated static key matches the RouterInfo.
+	if !sc.Initiator && sc.RouterInfoValidator == nil {
+		return oops.
+			Code("MISSING_ROUTER_INFO_VALIDATOR").
+			In("ssu2").
+			Errorf("RouterInfoValidator is required for responder configs per SSU2 spec")
 	}
 
 	return nil

@@ -730,14 +730,18 @@ func (h *HandshakeHandler) NegotiatedPadding() *OptionsParams {
 	negotiated.TMinRatio = max44(local.TMinRatio, peer.RMinRatio)
 	negotiated.TMaxRatio = min44(local.TMaxRatio, peer.RMaxRatio)
 	if negotiated.TMaxRatio < negotiated.TMinRatio {
-		negotiated.TMaxRatio = negotiated.TMinRatio
+		// Empty intersection — treat as no constraint (zero both).
+		negotiated.TMinRatio = 0
+		negotiated.TMaxRatio = 0
 	}
 
 	// Our receive padding: bounded by our rmin/rmax AND peer's tmin/tmax
 	negotiated.RMinRatio = max44(local.RMinRatio, peer.TMinRatio)
 	negotiated.RMaxRatio = min44(local.RMaxRatio, peer.TMaxRatio)
 	if negotiated.RMaxRatio < negotiated.RMinRatio {
-		negotiated.RMaxRatio = negotiated.RMinRatio
+		// Empty intersection — treat as no constraint (zero both).
+		negotiated.RMinRatio = 0
+		negotiated.RMaxRatio = 0
 	}
 
 	// Dummy traffic and delay: use the smaller of the two peers' values

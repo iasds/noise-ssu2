@@ -263,7 +263,8 @@ func (hp *HeaderProtector) generateMask(key, nonce []byte) ([]byte, error) {
 }
 
 // encryptLongHeaderExtension encrypts the long header extension and optional
-// ephemeral key per the SSU2 spec. Uses ChaCha20 with kHeader2 and all-zero nonce.
+// ephemeral key per the SSU2 spec. Uses ChaCha20 with kHeader2 at counter
+// position n=1 per spec ("key: Bob's intro key, n: 1, data: 48 bytes").
 // For SessionRequest/SessionCreated (which include a 32-byte ephemeral key),
 // encrypts bytes 16-63 (48 bytes) as one ChaCha20 operation.
 // For other long header types, encrypts bytes 16-31 (16 bytes).
@@ -272,12 +273,14 @@ func (hp *HeaderProtector) encryptLongHeaderExtension(packet []byte) error {
 		return nil // Nothing to encrypt
 	}
 
-	// SSU2 spec §HeaderEncryptionKDF: ChaCha20.encrypt(k_header_2, iv={0,...}, packet[16:63])
-	nonce := make([]byte, 12) // all-zero nonce per spec
+	// SSU2 spec: ChaCha20.encrypt(k_header_2, n=1, packet[16:63])
+	nonce := make([]byte, 12) // all-zero nonce; counter set to 1 below
 	cipher, err := chacha20.NewUnauthenticatedCipher(hp.kHeader2, nonce)
 	if err != nil {
 		return oops.Wrapf(err, "failed to initialize ChaCha20 for header extension")
 	}
+	// SSU2 spec requires n=1 (counter position 1, skipping the first 64 bytes)
+	cipher.SetCounter(1)
 
 	// For packets with ephemeral keys, encrypt 48 bytes (header[16:64])
 	hasEphemeral := hp.headerType == HeaderTypeSessionRequest ||

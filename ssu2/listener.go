@@ -1,6 +1,7 @@
 package ssu2
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
@@ -471,54 +472,83 @@ func (l *SSU2Listener) processTokenRequest(packet *SSU2Packet, remoteAddr *net.U
 }
 
 // sendRetry sends a Retry message containing the specified token to the remote address.
-// The Retry message includes a NewToken block and echoes necessary header data.
+// Per SSU2 spec §Retry, the Retry message uses the same long header format as
+// SessionCreated and must include:
+//   - dest_conn_id (bytes 0-7): initiator's source connection ID from the request
+//   - src_conn_id (bytes 16-23): a new destination connection ID chosen by responder
+//   - token (bytes 24-31): the retry token value
+//   - payload: DateTime + NewToken blocks, AEAD-encrypted
 //
 // Parameters:
 //   - remoteAddr: Destination UDP address
 //   - token: 8-byte token value for the NewToken block
-//   - originalHeader: Header from TokenRequest (for connection ID extraction)
+//   - originalHeader: Header from the SessionRequest (for connection ID extraction)
 func (l *SSU2Listener) sendRetry(remoteAddr *net.UDPAddr, token []byte, originalHeader []byte) error {
 	if len(token) != TokenSize {
 		return oops.Errorf("token must be exactly %d bytes, got %d", TokenSize, len(token))
 	}
 
-	// Calculate token expiration (TTL from token cache)
-	expiration := time.Now().Add(l.tokenCache.GetTTL())
+	// Build payload blocks per spec: DateTime + NewToken
+	now := time.Now()
 
-	// Create NewToken block
+	// DateTime block: 4-byte Unix timestamp
+	dtData := make([]byte, 4)
+	binary.BigEndian.PutUint32(dtData, uint32(now.Unix()))
+	dateTimeBlock := NewSSU2Block(BlockTypeDateTime, dtData)
+
+	// NewToken block: expiration + token
+	expiration := now.Add(l.tokenCache.GetTTL())
 	tokenBlock, err := NewNewTokenBlock(expiration, token)
 	if err != nil {
 		return oops.Wrapf(err, "failed to create NewToken block")
 	}
 
-	// Serialize block into payload
-	payload, err := tokenBlock.Serialize()
+	// Serialize both blocks into payload
+	blocks := []*SSU2Block{dateTimeBlock, tokenBlock}
+	payload, err := SerializeBlocks(blocks)
 	if err != nil {
-		return oops.Wrapf(err, "failed to serialize NewToken block")
+		return oops.Wrapf(err, "failed to serialize Retry payload blocks")
 	}
 
 	// Create Retry packet (Type 9, uses long header)
 	retryPacket := NewSSU2Packet(MessageTypeRetry, 0)
 
-	// Build header (32 bytes for Retry message)
-	// Long header layout per spec §LongHeader:
-	// dest_conn_id(0-7), pkt_num(8-11), type(12), ver(13), id(14), flag(15),
-	// src_conn_id(16-23), token(24-31).
+	// Build 32-byte long header per spec §Retry:
+	// dest_conn_id(0-7): initiator's source connection ID
+	// pkt_num(8-11): 0
+	// type(12): MessageTypeRetry
+	// ver(13): protocol version
+	// id(14): network ID
+	// flag(15): 0
+	// src_conn_id(16-23): new connection ID for retried request
+	// token(24-31): retry token
 	header := make([]byte, LongHeaderSize)
 
-	// Copy destination connection ID from original request if available
-	if len(originalHeader) >= 8 {
-		copy(header[0:8], originalHeader[0:8]) // Destination connection ID
+	// dest_conn_id from the initiator's source connection ID (bytes 16-23 of the request)
+	if len(originalHeader) >= 24 {
+		copy(header[0:8], originalHeader[16:24])
+	} else if len(originalHeader) >= 8 {
+		copy(header[0:8], originalHeader[0:8])
 	}
 
-	// Set message type at byte 12 per spec
+	// Set packet fields
 	header[12] = MessageTypeRetry
 	header[13] = SSU2ProtocolVersion
 	header[14] = SSU2NetworkID
 
+	// Generate a new source connection ID for the retried request
+	var srcConnID [8]byte
+	if _, err := rand.Read(srcConnID[:]); err != nil {
+		return oops.Wrapf(err, "failed to generate source connection ID for Retry")
+	}
+	copy(header[16:24], srcConnID[:])
+
+	// Copy retry token into header bytes 24-31
+	copy(header[24:32], token)
+
 	retryPacket.Header = header
 	retryPacket.Payload = payload
-	retryPacket.MAC = make([]byte, MACSize) // Will be computed by crypto layer
+	retryPacket.MAC = make([]byte, MACSize)
 
 	// Serialize packet
 	packetData, err := retryPacket.Serialize()

@@ -183,7 +183,7 @@ func TestChaChaObfuscationModifier_NonEphemeralKey(t *testing.T) {
 	}
 }
 
-// TestChaChaObfuscationModifier_FixedNonce tests that the modifier uses all-zero nonce per SSU2 spec
+// TestChaChaObfuscationModifier_FixedNonce tests that the modifier uses n=1 counter per SSU2 spec
 func TestChaChaObfuscationModifier_FixedNonce(t *testing.T) {
 	introKey := make([]byte, 32)
 	_, err := rand.Read(introKey)

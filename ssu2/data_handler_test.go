@@ -1048,7 +1048,7 @@ func TestDataHandler_AllBlockTypesExplicitlyHandled(t *testing.T) {
 		{BlockTypeI2NPMessage, "I2NPMessage", []byte("test i2np message")},
 		{BlockTypeFirstFragment, "FirstFragment", append([]byte{11, 0, 0, 0, 1, 0, 0, 0, 0}, make([]byte, 50)...)},
 		{BlockTypeFollowOnFragment, "FollowOnFragment", append([]byte{0x02, 0, 0, 0, 1}, make([]byte, 50)...)},
-		{BlockTypeTermination, "Termination", make([]byte, 9)},         // minTerminationSize = 9
+		{BlockTypeTermination, "Termination", make([]byte, 5)},         // minTerminationSize = 5
 		{BlockTypeRelayRequest, "RelayRequest", make([]byte, 50)},      // Variable
 		{BlockTypeRelayResponse, "RelayResponse", make([]byte, 50)},    // Variable
 		{BlockTypeRelayIntro, "RelayIntro", make([]byte, 50)},          // Variable
@@ -1094,7 +1094,7 @@ func TestDataHandler_SetCallbacks(t *testing.T) {
 	var dateTimeValue uint32
 
 	handler.SetCallbacks(DataHandlerCallbacks{
-		OnTermination: func(validDataReceived uint64, reason uint8, additionalData []byte) {
+		OnTermination: func(validDataReceived uint32, reason uint8, additionalData []byte) {
 			terminationCalled = true
 			terminationReason = reason
 		},
@@ -1110,8 +1110,8 @@ func TestDataHandler_SetCallbacks(t *testing.T) {
 
 	// Test Termination callback
 	t.Run("Termination callback", func(t *testing.T) {
-		block := NewSSU2Block(BlockTypeTermination, make([]byte, 9)) // minTerminationSize = 9
-		block.Data[8] = 0x05                                         // Set reason code (byte 8 per spec)
+		block := NewSSU2Block(BlockTypeTermination, make([]byte, 5)) // minTerminationSize = 5
+		block.Data[0] = 0x05                                         // Set reason code (byte 0 per spec)
 		payload, _ := SerializeBlocks([]*SSU2Block{block})
 		packet := &SSU2Packet{
 			MessageType: MessageTypeData,
@@ -1354,7 +1354,7 @@ func TestDataHandler_TerminationBlockShort(t *testing.T) {
 
 	// Create raw bytes that bypass serialization validation
 	// Block header: Type (1 byte) + Length (2 bytes) + Data
-	// Type 6 (Termination) with 0-byte data (minimum is 9 bytes per SSU2 spec)
+	// Type 6 (Termination) with 0-byte data (minimum is 5 bytes per SSU2 spec)
 	rawPayload := []byte{0x06, 0x00, 0x00} // Type=6, Length=0
 
 	packet := &SSU2Packet{
@@ -1415,7 +1415,7 @@ func TestDataHandler_MultipleBlockTypes(t *testing.T) {
 
 	var terminationCalled, ackCalled bool
 	handler.SetCallbacks(DataHandlerCallbacks{
-		OnTermination: func(validDataReceived uint64, reason uint8, additionalData []byte) {
+		OnTermination: func(validDataReceived uint32, reason uint8, additionalData []byte) {
 			terminationCalled = true
 		},
 		OnACK: func(block *SSU2Block) error {
@@ -1427,10 +1427,10 @@ func TestDataHandler_MultipleBlockTypes(t *testing.T) {
 	blocks := []*SSU2Block{
 		NewSSU2Block(BlockTypeDateTime, make([]byte, 7)),    // minDateTimeSize = 7
 		NewSSU2Block(BlockTypeACK, make([]byte, 5)),         // minACKSize = 5
-		NewSSU2Block(BlockTypeTermination, make([]byte, 9)), // minTerminationSize = 9, byte 8 is reason
+		NewSSU2Block(BlockTypeTermination, make([]byte, 5)), // minTerminationSize = 5, byte 0 is reason
 		NewSSU2Block(BlockTypePadding, make([]byte, 16)),
 	}
-	blocks[2].Data[8] = 0x01 // Set termination reason (byte 8 per spec)
+	blocks[2].Data[0] = 0x01 // Set termination reason (byte 0 per spec)
 
 	payload, _ := SerializeBlocks(blocks)
 	packet := &SSU2Packet{

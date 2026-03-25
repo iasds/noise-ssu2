@@ -539,10 +539,21 @@ func (h *SSU2Conn) handshakeResponder(ctx context.Context) error {
 	}
 
 	// Collect additional fragments if the first packet indicates fragmentation.
+	// Per SSU2 spec §Session Confirmed, the frag byte encodes:
+	//   bits 3-0 = total fragments (1-15)
+	//   bits 7-4 = fragment index (0-based)
 	fragments := []*SSU2Packet{sessionConfirmed}
 	if len(sessionConfirmed.Header) >= 14 {
 		totalFrags := int(sessionConfirmed.Header[13] & 0x0F)
+		if totalFrags < 1 || totalFrags > 15 {
+			return oops.Errorf("invalid SessionConfirmed total fragment count: %d (must be 1-15)", totalFrags)
+		}
 		if totalFrags > 1 {
+			// Track seen fragment indices to detect duplicates
+			seen := make(map[int]bool)
+			firstIdx := int((sessionConfirmed.Header[13] >> 4) & 0x0F)
+			seen[firstIdx] = true
+
 			for i := 1; i < totalFrags; i++ {
 				frag, fErr := h.receivePacketWithTimeout(ctx, h.config.HandshakeTimeout)
 				if fErr != nil {
@@ -551,8 +562,25 @@ func (h *SSU2Conn) handshakeResponder(ctx context.Context) error {
 				if frag.MessageType != MessageTypeSessionConfirmed {
 					return oops.Errorf("expected SessionConfirmed fragment, got type %d", frag.MessageType)
 				}
+				// Validate fragment metadata
+				if len(frag.Header) < 14 {
+					return oops.Errorf("SessionConfirmed fragment %d has truncated header", i)
+				}
+				fragTotal := int(frag.Header[13] & 0x0F)
+				if fragTotal != totalFrags {
+					return oops.Errorf("SessionConfirmed fragment total mismatch: first=%d, fragment %d=%d", totalFrags, i, fragTotal)
+				}
+				fragIdx := int((frag.Header[13] >> 4) & 0x0F)
+				if seen[fragIdx] {
+					return oops.Errorf("duplicate SessionConfirmed fragment index %d", fragIdx)
+				}
+				seen[fragIdx] = true
 				fragments = append(fragments, frag)
 			}
+
+			// Sort fragments by index so ProcessSessionConfirmedFragments
+			// receives them in the correct order regardless of arrival order.
+			sortFragmentsByIndex(fragments)
 		}
 	}
 
@@ -682,31 +710,45 @@ func (h *SSU2Conn) installCipherStates() error {
 
 // deriveSipHashModifier derives per-direction SipHash-2-4 keys and IVs for
 // data-phase length obfuscation from the header protection keys using HKDF.
-// Each direction produces: k1(8) + k2(8) + IV(8) = 24 bytes.
+// Per SSU2 spec:
+//
+//	sipk_ab = HKDF(k_header_2_ab, ZEROLEN, "SipHashKey", 16) → two 8-byte keys
+//	sipiv_ab = HKDF(k_header_2_ab, ZEROLEN, "SipHashIV", 8)  → one 8-byte IV
+//	sipk_ba = HKDF(k_header_2_ba, ZEROLEN, "SipHashKey", 16)
+//	sipiv_ba = HKDF(k_header_2_ba, ZEROLEN, "SipHashIV", 8)
 func deriveSipHashModifier(sendKHeader2, recvKHeader2 []byte) (*SipHashLengthModifier, error) {
 	deriver := i2phkdf.NewHKDF()
-	info := []byte("SSU2SipHash")
+	infoKey := []byte("SipHashKey")
+	infoIV := []byte("SipHashIV")
 
-	sendData, err := deriver.Derive(nil, sendKHeader2, info, 24)
+	sendKeys, err := deriver.Derive(nil, sendKHeader2, infoKey, 16)
 	if err != nil {
 		return nil, oops.Wrapf(err, "failed to derive send SipHash keys")
 	}
-	recvData, err := deriver.Derive(nil, recvKHeader2, info, 24)
+	sendIVData, err := deriver.Derive(nil, sendKHeader2, infoIV, 8)
+	if err != nil {
+		return nil, oops.Wrapf(err, "failed to derive send SipHash IV")
+	}
+	recvKeys, err := deriver.Derive(nil, recvKHeader2, infoKey, 16)
 	if err != nil {
 		return nil, oops.Wrapf(err, "failed to derive recv SipHash keys")
 	}
+	recvIVData, err := deriver.Derive(nil, recvKHeader2, infoIV, 8)
+	if err != nil {
+		return nil, oops.Wrapf(err, "failed to derive recv SipHash IV")
+	}
 
 	outKeys := [2]uint64{
-		binary.LittleEndian.Uint64(sendData[0:8]),
-		binary.LittleEndian.Uint64(sendData[8:16]),
+		binary.LittleEndian.Uint64(sendKeys[0:8]),
+		binary.LittleEndian.Uint64(sendKeys[8:16]),
 	}
-	outIV := binary.LittleEndian.Uint64(sendData[16:24])
+	outIV := binary.LittleEndian.Uint64(sendIVData[0:8])
 
 	inKeys := [2]uint64{
-		binary.LittleEndian.Uint64(recvData[0:8]),
-		binary.LittleEndian.Uint64(recvData[8:16]),
+		binary.LittleEndian.Uint64(recvKeys[0:8]),
+		binary.LittleEndian.Uint64(recvKeys[8:16]),
 	}
-	inIV := binary.LittleEndian.Uint64(recvData[16:24])
+	inIV := binary.LittleEndian.Uint64(recvIVData[0:8])
 
 	return NewSipHashLengthModifierDirectional("ssu2-data-siphash", outKeys, inKeys, outIV, inIV), nil
 }
@@ -944,13 +986,13 @@ func (h *SSU2Conn) Close() error {
 		h.stateMutex.Unlock()
 
 		// Send Termination block (best effort)
-		// Spec §Termination: validDataPacketsReceived(8 bytes, big-endian) + reason(1 byte)
+		// Spec §Termination: reason(1 byte) + validDataPacketsReceived(4 bytes, big-endian)
 		termBlock := &SSU2Block{
 			Type: BlockTypeTermination,
-			Data: make([]byte, 9),
+			Data: make([]byte, 5),
 		}
-		binary.BigEndian.PutUint64(termBlock.Data[0:8], h.validDataPacketsReceived.Load())
-		termBlock.Data[8] = 0 // Reason: 0 (normal close)
+		termBlock.Data[0] = 0 // Reason: 0 (normal close)
+		binary.BigEndian.PutUint32(termBlock.Data[1:5], uint32(h.validDataPacketsReceived.Load()))
 
 		// Create Data packet with termination block
 		pktNum := h.nextSendSequence()
@@ -1660,4 +1702,21 @@ func (h *SSU2Conn) getWriteDeadline() <-chan time.Time {
 		return nil
 	}
 	return time.After(time.Until(h.writeDeadline))
+}
+
+// sortFragmentsByIndex sorts SessionConfirmed fragments by their fragment
+// index (bits 7-4 of header byte 13). This ensures ProcessSessionConfirmedFragments
+// receives fragments in the correct order regardless of arrival order.
+func sortFragmentsByIndex(fragments []*SSU2Packet) {
+	for i := 1; i < len(fragments); i++ {
+		for j := i; j > 0; j-- {
+			idxJ := int((fragments[j].Header[13] >> 4) & 0x0F)
+			idxPrev := int((fragments[j-1].Header[13] >> 4) & 0x0F)
+			if idxJ < idxPrev {
+				fragments[j], fragments[j-1] = fragments[j-1], fragments[j]
+			} else {
+				break
+			}
+		}
+	}
 }

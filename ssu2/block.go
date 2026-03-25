@@ -142,7 +142,7 @@ const (
 	minBlockHeaderSize       = 3     // Type (1) + Length (2)
 	minDateTimeSize          = 4     // Timestamp data (seconds since epoch)
 	minOptionsSize           = 12    // Options data (per spec minimum)
-	minTerminationSize       = 9     // Termination data: valid-data-packets-received(8) + reason(1)
+	minTerminationSize       = 5     // Termination data: reason(1) + valid-data-packets-received(4)
 	minNextNonceSize         = 8     // Next nonce (8 bytes)
 	minACKSize               = 5     // ACK data
 	minReserved14Size        = 0     // Reserved block type (no data expected)

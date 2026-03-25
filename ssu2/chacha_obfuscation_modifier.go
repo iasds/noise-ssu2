@@ -10,7 +10,8 @@ import (
 // ChaChaObfuscationModifier implements SSU2's ChaCha20-based obfuscation.
 // Per the SSU2 specification, SessionRequest and SessionCreated obfuscate
 // 48 bytes (header[16:32] || ephemeral_key) with a single ChaCha20 stream
-// at nonce n=0 (all-zero 12-byte nonce). This modifier supports both the 48-byte spec-compliant mode
+// at counter position n=1 ("key: Bob's intro key, n: 1, data: 48 bytes").
+// This modifier supports both the 48-byte spec-compliant mode
 // and 32-byte ephemeral-key-only mode for backward compatibility.
 //
 // Note: The primary obfuscation path in SSU2 is handled by
@@ -22,9 +23,10 @@ type ChaChaObfuscationModifier struct {
 	introKey []byte // 32-byte intro key (Bob's intro key per SSU2 spec)
 }
 
-// nonce0 is the 12-byte all-zero nonce used for SSU2 ChaCha20 header
-// obfuscation per the spec (§Header Encryption).
-var nonce0 = make([]byte, 12)
+// chachaNonce is the 12-byte all-zero nonce used with ChaCha20 for SSU2
+// header obfuscation. The spec requires counter position n=1, which is
+// set via SetCounter(1) after cipher creation.
+var chachaNonce = make([]byte, 12)
 
 // NewChaChaObfuscationModifier creates a new ChaCha20 obfuscation modifier for SSU2.
 // introKey must be 32 bytes (Bob's intro key per the SSU2 spec).
@@ -86,10 +88,11 @@ func (com *ChaChaObfuscationModifier) Name() string {
 	return com.name
 }
 
-// applyChacha creates a ChaCha20 cipher with an all-zero nonce and XORs the data.
-// Supports 48-byte (spec-compliant) and 32-byte (ephemeral-only) inputs.
+// applyChacha creates a ChaCha20 cipher at counter position n=1 per the SSU2
+// spec and XORs the data. Supports 48-byte (spec-compliant) and 32-byte
+// (ephemeral-only) inputs.
 func (com *ChaChaObfuscationModifier) applyChacha(data []byte) ([]byte, error) {
-	cipher, err := chacha20.NewUnauthenticatedCipher(com.introKey, nonce0)
+	cipher, err := chacha20.NewUnauthenticatedCipher(com.introKey, chachaNonce)
 	if err != nil {
 		return nil, oops.
 			Code("CHACHA20_CIPHER_CREATION_FAILED").
@@ -97,6 +100,8 @@ func (com *ChaChaObfuscationModifier) applyChacha(data []byte) ([]byte, error) {
 			With("modifier_name", com.name).
 			Wrap(err)
 	}
+	// SSU2 spec requires n=1 (counter position 1, skipping the first 64 bytes)
+	cipher.SetCounter(1)
 
 	result := make([]byte, len(data))
 	copy(result, data)
