@@ -111,6 +111,7 @@ Choose the appropriate pattern based on your security requirements:
 
 - **XX**: Mutual authentication with ephemeral keys
 - **IK**: Initiator knows responder's static key
+- **XK**: Initiator knows responder's static key, responder authenticates
 - **NK**: Responder has known static key, one-way authentication
 - **NN**: No authentication, only encryption (not recommended for production)
 
