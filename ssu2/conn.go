@@ -43,6 +43,12 @@ const (
 	// retransmitInterval is how often the retransmit loop checks for
 	// expired pending packets.
 	retransmitInterval = 250 * time.Millisecond
+
+	// destroyTimeout is the default time to wait after sending a Termination
+	// block before releasing session resources. Per spec §Termination,
+	// this gives the remote peer time to receive and acknowledge the
+	// close. Can be overridden via SSU2Config.DestroyTimeout.
+	destroyTimeout = 5 * time.Second
 )
 
 // String returns a human-readable state name.
@@ -134,6 +140,11 @@ type SSU2Conn struct {
 	lastActivity     time.Time
 	lastActivityLock sync.RWMutex
 	keepaliveTimer   *time.Timer
+
+	// remoteConnectionID is the peer's connection ID, learned during
+	// the handshake. Outbound data-phase packets must use this value
+	// as the Destination Connection ID per SSU2 spec.
+	remoteConnectionID uint64
 
 	// Nonce rekeying: tracks whether a NextNonce block has been sent
 	// for the current send cipher. Reset after rekey completes.
@@ -401,6 +412,14 @@ func (h *SSU2Conn) handshakeInitiator(ctx context.Context) error {
 		return oops.Wrapf(err, "failed to process SessionCreated")
 	}
 
+	// Extract the responder's Source Connection ID from the SessionCreated
+	// long header (bytes 16-23). Per SSU2 spec §Session Created, this is
+	// the responder's chosen connection ID that the initiator must use as
+	// dest_conn_id in all subsequent messages.
+	if len(response.Header) >= 24 {
+		h.remoteConnectionID = binary.BigEndian.Uint64(response.Header[16:24])
+	}
+
 	// After message 2 (← e, ee), install the SessionConfirmed header key so
 	// the HeaderProtectorManager can encrypt the outgoing SessionConfirmed header.
 	if h.headerProtector != nil {
@@ -415,7 +434,8 @@ func (h *SSU2Conn) handshakeInitiator(ctx context.Context) error {
 	// Use CreateSessionConfirmedFragments to support large RouterInfo that
 	// requires splitting across multiple packets per SSU2 spec §Session Confirmed.
 	// Per spec: "Packet Number :: 0 always, for all fragments, even if retransmitted."
-	fragments, err := h.handshakeHandler.CreateSessionConfirmedFragments(h.config.ConnectionID, 0, h.config.RouterHash)
+	// Per spec §Session Confirmed: dest_conn_id = responder's Source Connection ID.
+	fragments, err := h.handshakeHandler.CreateSessionConfirmedFragments(h.remoteConnectionID, 0, h.config.RouterHash)
 	if err != nil {
 		return oops.Wrapf(err, "failed to create SessionConfirmed")
 	}
@@ -448,6 +468,16 @@ func (h *SSU2Conn) handshakeResponder(ctx context.Context) error {
 		return oops.Wrapf(err, "failed to process SessionRequest")
 	}
 
+	// Extract the initiator's Source Connection ID from the SessionRequest
+	// long header (bytes 16-23). Per SSU2 spec §Session Request, this is
+	// the initiator's chosen connection ID. The responder must echo this
+	// as dest_conn_id in SessionCreated and use it for future routing.
+	var initiatorConnID uint64
+	if len(sessionRequest.Header) >= 24 {
+		initiatorConnID = binary.BigEndian.Uint64(sessionRequest.Header[16:24])
+	}
+	h.remoteConnectionID = initiatorConnID
+
 	// After message 1 (→ e, es), install the SessCreateHeader key so the
 	// HeaderProtectorManager can encrypt the outgoing SessionCreated header.
 	if h.headerProtector != nil {
@@ -458,8 +488,11 @@ func (h *SSU2Conn) handshakeResponder(ctx context.Context) error {
 		}
 	}
 
-	// Step 3: Create and send SessionCreated
-	sessionCreated, err := h.handshakeHandler.CreateSessionCreated(0, h.config.ConnectionID)
+	// Step 3: Create and send SessionCreated.
+	// Per SSU2 spec §Session Created:
+	//   src_conn_id  = responder's own connection ID
+	//   dest_conn_id = initiator's Source Connection ID from SessionRequest
+	sessionCreated, err := h.handshakeHandler.CreateSessionCreated(h.config.ConnectionID, initiatorConnID)
 	if err != nil {
 		return oops.Wrapf(err, "failed to create SessionCreated")
 	}
@@ -549,6 +582,21 @@ func (h *SSU2Conn) finalizeHandshake() error {
 			minBytes := int(negotiated.TMinRatio * float64(h.config.MTU))
 			if minBytes > h.config.MinPaddingSize {
 				h.config.MinPaddingSize = minBytes
+			}
+		}
+
+		// Push the negotiated values into the live SSU2PaddingModifier
+		// instance so that data-phase padding is actually applied. Without
+		// this, only the config fields are updated and the modifier
+		// continues using the original (default) parameters.
+		for _, mod := range h.config.Modifiers {
+			if pm, ok := mod.(*SSU2PaddingModifier); ok {
+				maxBytes := h.config.MaxPaddingSize
+				if negotiated.TMaxRatio > 0 {
+					maxBytes = int(negotiated.TMaxRatio * float64(h.config.MTU))
+				}
+				_ = pm.UpdatePaddingParams(h.config.MinPaddingSize, maxBytes, negotiated.TMaxRatio)
+				break
 			}
 		}
 	}
@@ -833,6 +881,13 @@ func (h *SSU2Conn) Close() error {
 		if err == nil {
 			packet.Payload = payload
 			_ = h.sendPacketDirect(packet) // Best effort, ignore errors
+		}
+
+		// Per spec §Termination: wait briefly for the peer's Termination
+		// response before tearing down the session. This avoids lingering
+		// half-open state on the remote side.
+		if h.config.DestroyTimeout > 0 {
+			time.Sleep(h.config.DestroyTimeout)
 		}
 
 		// Stop keepalive timer

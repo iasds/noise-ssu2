@@ -10,7 +10,7 @@ import (
 // ChaChaObfuscationModifier implements SSU2's ChaCha20-based obfuscation.
 // Per the SSU2 specification, SessionRequest and SessionCreated obfuscate
 // 48 bytes (header[16:32] || ephemeral_key) with a single ChaCha20 stream
-// at nonce n=1. This modifier supports both the 48-byte spec-compliant mode
+// at nonce n=0 (all-zero 12-byte nonce). This modifier supports both the 48-byte spec-compliant mode
 // and 32-byte ephemeral-key-only mode for backward compatibility.
 //
 // Note: The primary obfuscation path in SSU2 is handled by

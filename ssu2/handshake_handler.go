@@ -768,8 +768,10 @@ func (h *HandshakeHandler) validateHandshakeBlocks(blocks []*SSU2Block, messageT
 		}
 	}
 
-	// DateTime is recommended but not strictly required
-	// We'll be lenient and not fail if it's missing
+	// Per spec §Session Request/Created, DateTime is required.
+	// We accept messages without it for interoperability, but callers
+	// should treat its absence as a protocol deviation.
+	// Future strict mode could reject here: return oops.Errorf("DateTime block required")
 	_ = hasDateTime
 
 	return nil

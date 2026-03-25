@@ -3,12 +3,18 @@ package ssu2
 import (
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
 	"net"
 	"sync"
 	"time"
 
 	"github.com/samber/oops"
 )
+
+// errNoTokenPresent is a sentinel error returned by validateSessionRequestToken
+// when the SessionRequest does not contain a NewToken block. This is used by
+// handleNewSession to decide whether to send a Retry message.
+var errNoTokenPresent = errors.New("no token present in SessionRequest")
 
 // SSU2Listener implements net.Listener for accepting SSU2 connections over UDP.
 // It manages incoming packets, routes them to existing sessions, and creates
@@ -305,17 +311,32 @@ func (l *SSU2Listener) handleIncomingPacket(data []byte, remoteAddr *net.UDPAddr
 // handleNewSession is called by the router when a handshake packet arrives
 // for a new session. It creates a new SSU2Conn and adds it to the accept queue.
 //
-// For SessionRequest messages, if a token is present in the payload, it validates
-// the token before accepting the session. If no token is present or validation
-// fails, the session is still created but marked for token requirement checking.
+// When config.RequireRetry is true and the SessionRequest does not carry a
+// valid token, the listener sends a Retry message (with a generated token)
+// instead of accepting the session. The initiator is expected to resend
+// SessionRequest including the token from the Retry.
 func (l *SSU2Listener) handleNewSession(remoteAddr *net.UDPAddr, packet *SSU2Packet) (*SSU2Conn, error) {
-	// For SessionRequest, attempt to validate token if present
+	// For SessionRequest, validate token or trigger Retry
 	if packet.MessageType == MessageTypeSessionRequest {
 		if err := l.validateSessionRequestToken(packet, remoteAddr); err != nil {
-			return nil, oops.
-				Code("TOKEN_VALIDATION_FAILED").
-				In("ssu2_listener").
-				Wrap(err)
+			if errors.Is(err, errNoTokenPresent) && l.config.RequireRetry {
+				// Per spec §Retry: responder sends Retry to validate
+				// the initiator's source address before continuing.
+				if retryErr := l.processTokenRequest(packet, remoteAddr); retryErr != nil {
+					return nil, oops.Wrapf(retryErr, "failed to send Retry")
+				}
+				return nil, oops.
+					Code("RETRY_SENT").
+					In("ssu2_listener").
+					Errorf("sent Retry to %s, awaiting re-request with token", remoteAddr)
+			}
+			if !errors.Is(err, errNoTokenPresent) {
+				return nil, oops.
+					Code("TOKEN_VALIDATION_FAILED").
+					In("ssu2_listener").
+					Wrap(err)
+			}
+			// errNoTokenPresent but RequireRetry is false — accept without token
 		}
 	}
 
@@ -390,25 +411,23 @@ func (l *SSU2Listener) handleNewSession(remoteAddr *net.UDPAddr, packet *SSU2Pac
 }
 
 // validateSessionRequestToken extracts and validates the token from a SessionRequest.
-// If the payload contains a NewToken block, the token is validated against the cache.
-//
-// Returns nil if token is valid or not present, error if token is invalid.
+// Returns nil if the token is valid, errNoTokenPresent if no token block exists,
+// or an error describing the validation failure.
 func (l *SSU2Listener) validateSessionRequestToken(packet *SSU2Packet, remoteAddr *net.UDPAddr) error {
 	// Parse blocks from payload
 	if len(packet.Payload) == 0 {
-		return nil // No payload, no token to validate
+		return errNoTokenPresent
 	}
 
 	blocks, err := DeserializeBlocks(packet.Payload)
 	if err != nil {
-		// Can't parse blocks - continue without token validation
-		return nil
+		return errNoTokenPresent
 	}
 
 	// Find NewToken block
 	tokenBlock := FindBlockByType(blocks, BlockTypeNewToken)
 	if tokenBlock == nil {
-		return nil // No token block present
+		return errNoTokenPresent
 	}
 
 	// Parse token from block

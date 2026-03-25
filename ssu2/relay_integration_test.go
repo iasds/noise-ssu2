@@ -383,9 +383,9 @@ func TestRelayIntroEncoding(t *testing.T) {
 // TestRelayTagBlockEncoding tests RelayTagRequest and RelayTag block encoding.
 func TestRelayTagBlockEncoding(t *testing.T) {
 	t.Run("RelayTagRequest", func(t *testing.T) {
-		request := &RelayTagRequestBlock{
-			Nonce: 0xABCD1234,
-		}
+		// Per spec §Relay Tag Request Block: size=0 (empty data).
+		// Encode produces empty data; decode returns zero nonce.
+		request := &RelayTagRequestBlock{}
 
 		block, err := EncodeRelayTagRequest(request)
 		require.NoError(t, err)
@@ -393,7 +393,7 @@ func TestRelayTagBlockEncoding(t *testing.T) {
 
 		decoded, err := DecodeRelayTagRequest(block)
 		require.NoError(t, err)
-		assert.Equal(t, request.Nonce, decoded.Nonce)
+		assert.Equal(t, uint32(0), decoded.Nonce)
 	})
 
 	t.Run("RelayTag", func(t *testing.T) {

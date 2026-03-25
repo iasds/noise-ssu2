@@ -124,6 +124,20 @@ type SSU2Config struct {
 	// the responder to construct the Noise prologue for handshake binding.
 	// Set by the listener when creating a responder connection.
 	InitiatorConnectionID uint64
+
+	// RequireRetry, when true, causes the listener to send a Retry message
+	// in response to SessionRequest packets that do not carry a valid token.
+	// This implements SSU2 source-address validation: the responder sends
+	// Retry with a token, and the initiator must resend SessionRequest
+	// including that token before the handshake proceeds.
+	// Default: false (accept SessionRequest without token)
+	RequireRetry bool
+
+	// DestroyTimeout is the time to wait after sending a Termination block
+	// before releasing session resources. Per spec §Termination, this gives
+	// the remote peer time to receive and acknowledge the close.
+	// Default: 5 seconds. Set to 0 to skip the wait (e.g. in tests).
+	DestroyTimeout time.Duration
 }
 
 // NewSSU2Config creates a new SSU2Config with sensible defaults.
@@ -161,6 +175,7 @@ func NewSSU2Config(routerHash []byte, initiator bool) (*SSU2Config, error) {
 		PaddingRatio:            1.0, // 100%
 		ConnectionID:            0,   // Will be generated
 		KeepaliveInterval:       15 * time.Second,
+		DestroyTimeout:          0, // opt-in; set to destroyTimeout (5s) in production
 	}, nil
 }
 

@@ -411,7 +411,7 @@ func TestSSU2Listener_ProcessTokenRequest(t *testing.T) {
 
 // TestSSU2Listener_ValidateSessionRequestToken tests token validation
 func TestSSU2Listener_ValidateSessionRequestToken(t *testing.T) {
-	t.Run("EmptyPayloadReturnsNil", func(t *testing.T) {
+	t.Run("EmptyPayloadReturnsNoToken", func(t *testing.T) {
 		listener := createTestListener(t)
 		defer listener.Close()
 
@@ -420,10 +420,10 @@ func TestSSU2Listener_ValidateSessionRequestToken(t *testing.T) {
 		packet.Payload = nil
 
 		err := listener.validateSessionRequestToken(packet, remoteAddr)
-		assert.NoError(t, err)
+		assert.ErrorIs(t, err, errNoTokenPresent)
 	})
 
-	t.Run("NoTokenBlockReturnsNil", func(t *testing.T) {
+	t.Run("NoTokenBlockReturnsNoToken", func(t *testing.T) {
 		listener := createTestListener(t)
 		defer listener.Close()
 
@@ -438,7 +438,7 @@ func TestSSU2Listener_ValidateSessionRequestToken(t *testing.T) {
 		packet.Payload = payload
 
 		err = listener.validateSessionRequestToken(packet, remoteAddr)
-		assert.NoError(t, err)
+		assert.ErrorIs(t, err, errNoTokenPresent)
 	})
 
 	t.Run("ValidTokenPasses", func(t *testing.T) {

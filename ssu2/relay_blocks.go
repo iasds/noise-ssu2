@@ -574,34 +574,19 @@ func DecodeRelayIntro(block *SSU2Block) (*RelayIntroBlock, error) {
 }
 
 // EncodeRelayTagRequest encodes a RelayTagRequest block to wire format.
-//
-// Wire format: [Nonce:4]
-//
-// Parameters:
-//   - req: RelayTagRequest data to encode
-//
-// Returns:
-//   - *SSU2Block: Encoded block ready for transmission
-//   - error: If validation fails
+// Per spec §Relay Tag Request Block: size=0 (empty data portion).
 func EncodeRelayTagRequest(req *RelayTagRequestBlock) (*SSU2Block, error) {
 	if req == nil {
 		return nil, oops.Errorf("RelayTagRequestBlock is nil")
 	}
 
-	data := make([]byte, 4)
-	binary.BigEndian.PutUint32(data[0:4], req.Nonce)
-
-	return NewSSU2Block(BlockTypeRelayTagRequest, data), nil
+	return NewSSU2Block(BlockTypeRelayTagRequest, nil), nil
 }
 
 // DecodeRelayTagRequest decodes a RelayTagRequest block from wire format.
-//
-// Parameters:
-//   - block: SSU2Block with Type 15
-//
-// Returns:
-//   - *RelayTagRequestBlock: Decoded relay tag request
-//   - error: If decoding fails or validation fails
+// Per spec the data portion is empty (size=0). For backward compatibility
+// with older implementations that included a nonce, non-empty data is
+// accepted and the nonce is extracted if present.
 func DecodeRelayTagRequest(block *SSU2Block) (*RelayTagRequestBlock, error) {
 	if block == nil {
 		return nil, oops.Errorf("block is nil")
@@ -611,23 +596,14 @@ func DecodeRelayTagRequest(block *SSU2Block) (*RelayTagRequestBlock, error) {
 		return nil, oops.Errorf("invalid block type: expected %d, got %d", BlockTypeRelayTagRequest, block.Type)
 	}
 
+	req := &RelayTagRequestBlock{}
 	data := block.Data
-	if len(data) < 3 {
-		return nil, oops.Errorf("RelayTagRequest block too short: %d bytes (minimum 3)", len(data))
-	}
-
-	// Support both 3-byte and 4-byte nonces
-	var nonce uint32
 	if len(data) >= 4 {
-		nonce = binary.BigEndian.Uint32(data[0:4])
-	} else {
-		// 3-byte nonce: pad with zero byte
-		nonce = uint32(data[0])<<16 | uint32(data[1])<<8 | uint32(data[2])
+		req.Nonce = binary.BigEndian.Uint32(data[0:4])
+	} else if len(data) >= 3 {
+		req.Nonce = uint32(data[0])<<16 | uint32(data[1])<<8 | uint32(data[2])
 	}
-
-	return &RelayTagRequestBlock{
-		Nonce: nonce,
-	}, nil
+	return req, nil
 }
 
 // EncodeRelayTag encodes a RelayTag block to wire format.
