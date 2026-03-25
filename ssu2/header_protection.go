@@ -60,7 +60,7 @@ const (
 // It uses ChaCha20 to generate XOR masks from keys and IVs extracted from packet data.
 //
 // Header Encryption Algorithm (from spec):
-//  1. Extract IV from last 24 bytes of packet (iv1 = packet[len-24:len-13], iv2 = packet[len-12:len-1])
+//  1. Extract IV from last 24 bytes of packet (iv1 = packet[len-24:len-12], iv2 = packet[len-12:len])
 //  2. Generate mask using ChaCha20.encrypt(key, iv, zeros)
 //  3. XOR header bytes 0-7 with first mask
 //  4. XOR header bytes 8-15 with second mask

@@ -276,7 +276,10 @@ func TestSSU2Packet_Deserialize_Valid(t *testing.T) {
 			msgType: MessageTypeSessionRequest,
 			createData: func() []byte {
 				data := make([]byte, 0, 128)
-				data = append(data, make([]byte, LongHeaderSize)...)   // Header
+				hdr := make([]byte, LongHeaderSize)
+				hdr[13] = SSU2ProtocolVersion
+				hdr[14] = SSU2NetworkID
+				data = append(data, hdr...)                            // Header
 				data = append(data, make([]byte, EphemeralKeySize)...) // Ephemeral key
 				data = append(data, []byte("test payload content")...) // Payload
 				data = append(data, make([]byte, MACSize)...)          // MAC
@@ -361,9 +364,14 @@ func TestSSU2Packet_Deserialize_Invalid(t *testing.T) {
 			wantErrMsg: "packet too short",
 		},
 		{
-			name:       "SessionRequest missing ephemeral key",
-			msgType:    MessageTypeSessionRequest,
-			data:       make([]byte, LongHeaderSize+MACSize), // No ephemeral key
+			name:    "SessionRequest missing ephemeral key",
+			msgType: MessageTypeSessionRequest,
+			data: func() []byte {
+				d := make([]byte, LongHeaderSize+MACSize)
+				d[13] = SSU2ProtocolVersion
+				d[14] = SSU2NetworkID
+				return d
+			}(),
 			wantErrMsg: "packet too short",
 		},
 		{
@@ -406,6 +414,11 @@ func TestSSU2Packet_RoundTrip(t *testing.T) {
 			original.Header = make([]byte, original.getHeaderSize())
 			for i := range original.Header {
 				original.Header[i] = byte(i) // Fill with test pattern
+			}
+			// Long headers must contain valid protocol version/netID (G-4).
+			if original.getHeaderSize() == LongHeaderSize {
+				original.Header[13] = SSU2ProtocolVersion
+				original.Header[14] = SSU2NetworkID
 			}
 			if original.hasEphemeralKey() {
 				original.EphemeralKey = make([]byte, EphemeralKeySize)

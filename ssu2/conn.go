@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	i2phkdf "github.com/go-i2p/crypto/hkdf"
 	"github.com/go-i2p/noise"
 	"github.com/samber/oops"
 )
@@ -107,6 +108,9 @@ type SSU2Conn struct {
 
 	// Header protection (nil = disabled)
 	headerProtector *HeaderProtectorManager
+
+	// SipHash length obfuscation (nil = disabled)
+	sipHashModifier *SipHashLengthModifier
 
 	// Connection state
 	state      ConnState
@@ -388,12 +392,24 @@ func (h *SSU2Conn) handshakeInitiator(ctx context.Context) error {
 		}
 
 		// Resend SessionRequest with the token inserted at header bytes 24-31.
+		// CreateSessionRequestWithToken resets the handshake state internally (C-3).
 		sessionRequest, err = h.handshakeHandler.CreateSessionRequestWithToken(
 			h.config.ConnectionID, 0, token,
 		)
 		if err != nil {
 			return oops.Wrapf(err, "failed to create SessionRequest with Retry token")
 		}
+
+		// After the handshake state reset and new message 1, re-install
+		// the SessCreateHeader key for decrypting SessionCreated (C-3).
+		if h.headerProtector != nil {
+			if k := h.handshakeHandler.SessCreateHeaderKey(); len(k) > 0 {
+				if err := h.headerProtector.SetSessCreateHeaderKey(k); err != nil {
+					return oops.Wrapf(err, "failed to set SessCreateHeader key after Retry")
+				}
+			}
+		}
+
 		if err := h.sendPacketDirect(sessionRequest); err != nil {
 			return oops.Wrapf(err, "failed to send SessionRequest with token")
 		}
@@ -560,15 +576,30 @@ func (h *SSU2Conn) finalizeHandshake() error {
 	}
 
 	// Install KDF-derived header protection keys for data phase
+	var sendKHeader2, recvKHeader2 []byte
 	if h.headerProtector != nil {
-		k1, k2, err := h.handshakeHandler.DeriveHeaderKeys()
+		var err error
+		sendKHeader2, recvKHeader2, err = h.handshakeHandler.DeriveHeaderKeys()
 		if err != nil {
 			return oops.Wrapf(err, "failed to derive header protection keys")
 		}
-		if err := h.headerProtector.SetKDFKeys(k1, k2); err != nil {
+		if err := h.headerProtector.SetKDFKeys(sendKHeader2, recvKHeader2); err != nil {
 			return oops.Wrapf(err, "failed to set header protection KDF keys")
 		}
+	} else {
+		var err error
+		sendKHeader2, recvKHeader2, err = h.handshakeHandler.DeriveHeaderKeys()
+		if err != nil {
+			return oops.Wrapf(err, "failed to derive data-phase keys")
+		}
 	}
+
+	// Derive SipHash keys for data-phase length obfuscation (G-2).
+	sipMod, sipErr := deriveSipHashModifier(sendKHeader2, recvKHeader2)
+	if sipErr != nil {
+		return oops.Wrapf(sipErr, "failed to derive SipHash keys")
+	}
+	h.sipHashModifier = sipMod
 
 	h.stateMutex.Lock()
 	h.state = StateEstablished
@@ -634,9 +665,64 @@ func (h *SSU2Conn) installCipherStates() error {
 	if peerKey := h.handshakeHandler.GetRemoteStaticKey(); len(peerKey) == 32 {
 		hash := sha256.Sum256(peerKey)
 		h.ssu2Addr.UpdateRouterHash(hash[:])
+
+		// Validate the RouterInfo against the Noise-authenticated static key
+		// per SSU2 spec §Session Confirmed (C-2).
+		if h.config.RouterInfoValidator != nil {
+			if ri := h.handshakeHandler.GetPeerRouterInfo(); len(ri) > 0 {
+				if err := h.config.RouterInfoValidator(ri, peerKey); err != nil {
+					return oops.Wrapf(err, "RouterInfo validation failed against authenticated static key")
+				}
+			}
+		}
 	}
 
 	return nil
+}
+
+// deriveSipHashModifier derives per-direction SipHash-2-4 keys and IVs for
+// data-phase length obfuscation from the header protection keys using HKDF.
+// Each direction produces: k1(8) + k2(8) + IV(8) = 24 bytes.
+func deriveSipHashModifier(sendKHeader2, recvKHeader2 []byte) (*SipHashLengthModifier, error) {
+	deriver := i2phkdf.NewHKDF()
+	info := []byte("SSU2SipHash")
+
+	sendData, err := deriver.Derive(nil, sendKHeader2, info, 24)
+	if err != nil {
+		return nil, oops.Wrapf(err, "failed to derive send SipHash keys")
+	}
+	recvData, err := deriver.Derive(nil, recvKHeader2, info, 24)
+	if err != nil {
+		return nil, oops.Wrapf(err, "failed to derive recv SipHash keys")
+	}
+
+	outKeys := [2]uint64{
+		binary.LittleEndian.Uint64(sendData[0:8]),
+		binary.LittleEndian.Uint64(sendData[8:16]),
+	}
+	outIV := binary.LittleEndian.Uint64(sendData[16:24])
+
+	inKeys := [2]uint64{
+		binary.LittleEndian.Uint64(recvData[0:8]),
+		binary.LittleEndian.Uint64(recvData[8:16]),
+	}
+	inIV := binary.LittleEndian.Uint64(recvData[16:24])
+
+	return NewSipHashLengthModifierDirectional("ssu2-data-siphash", outKeys, inKeys, outIV, inIV), nil
+}
+
+// deriveRekeyKey derives a new cipher key from the current cipher state
+// using HKDF per SSU2 spec §NextNonce: newKey = HKDF(currentKey, ZEROLEN, "WrapCipherKey", 32).
+func deriveRekeyKey(cs *noise.CipherState) ([32]byte, error) {
+	key := cs.UnsafeKey()
+	deriver := i2phkdf.NewHKDF()
+	derived, err := deriver.Derive(nil, key[:], []byte("WrapCipherKey"), 32)
+	if err != nil {
+		return [32]byte{}, oops.Wrapf(err, "HKDF rekey derivation failed")
+	}
+	var newKey [32]byte
+	copy(newKey[:], derived)
+	return newKey, nil
 }
 
 // validateReadyForIO checks that the connection is in the Established state
@@ -900,6 +986,11 @@ func (h *SSU2Conn) Close() error {
 			h.dataHandler.Close()
 		}
 
+		// Zero SipHash key material
+		if h.sipHashModifier != nil {
+			h.sipHashModifier.ZeroKeys()
+		}
+
 		// Close channels to signal goroutines to exit
 		close(h.closeChan)
 
@@ -1122,6 +1213,14 @@ func (h *SSU2Conn) parseInboundPacket(data []byte, addr net.Addr) *SSU2Packet {
 		}
 	}
 
+	// SipHash length deobfuscation: recover the data length from header
+	// bytes 14-15 per spec §Data Phase Length Obfuscation (G-2).
+	if h.sipHashModifier != nil && len(data) >= ShortHeaderSize {
+		mask := h.sipHashModifier.NextInboundMask()
+		obfuscated := binary.BigEndian.Uint16(data[14:16])
+		binary.BigEndian.PutUint16(data[14:16], obfuscated^mask)
+	}
+
 	packet := &SSU2Packet{}
 	if err := packet.Deserialize(data); err != nil {
 		h.parseErrors.Add(1)
@@ -1237,6 +1336,14 @@ func (h *SSU2Conn) sendPacketDirect(packet *SSU2Packet) error {
 		packet.Payload = encrypted
 	}
 	h.cipherMutex.Unlock()
+
+	// SipHash length obfuscation: write obfuscated payload length to header
+	// bytes 14-15 per spec §Data Phase Length Obfuscation (G-2).
+	if h.sipHashModifier != nil && packet.MessageType == MessageTypeData {
+		dataLen := uint16(len(packet.Payload))
+		mask := h.sipHashModifier.NextOutboundMask()
+		binary.BigEndian.PutUint16(packet.Header[14:16], dataLen^mask)
+	}
 
 	// Serialize packet
 	data, err := packet.Serialize()
@@ -1435,7 +1542,9 @@ func (h *SSU2Conn) receiveHandshakeWithRetransmit(ctx context.Context, lastSent 
 // nextSendSequence returns the next packet sequence number.
 // When the sequence crosses rekeyThreshold, it fires a one-shot
 // NextNonce rekey so the cipher is refreshed before the 32-bit
-// counter wraps.
+// counter wraps. Per SSU2 spec, the packet number must not wrap
+// around to zero (G-1); if the counter reaches 0xFFFFFFFF the
+// connection is closed.
 //
 // NOTE: The SSU2 spec marks NextNonce (block type 11) as "TODO only if we
 // rotate keys" with size "TBD". This rekey mechanism is based on an
@@ -1443,6 +1552,14 @@ func (h *SSU2Conn) receiveHandshakeWithRetransmit(ctx context.Context, lastSent 
 func (h *SSU2Conn) nextSendSequence() uint32 {
 	h.sendSeqMutex.Lock()
 	defer h.sendSeqMutex.Unlock()
+
+	// Hard reject: do not wrap past 0xFFFFFFFF (G-1).
+	if h.sendSequence == 0xFFFFFFFF {
+		log.Error("packet number exhausted (0xFFFFFFFF): closing connection per SSU2 spec")
+		go h.Close()
+		return 0xFFFFFFFF
+	}
+
 	seq := h.sendSequence
 	h.sendSequence++
 
@@ -1465,8 +1582,14 @@ func (h *SSU2Conn) initiateRekey() {
 		return
 	}
 
-	// Rekey the send cipher (REKEY per Noise spec).
-	h.sendCipher.Rekey()
+	// Derive new send cipher key per SSU2 spec §NextNonce:
+	// newKey = HKDF(currentKey, ZEROLEN, "WrapCipherKey", 32) (G-5).
+	newKey, err := deriveRekeyKey(h.sendCipher)
+	if err != nil {
+		log.WithField("error", err).Error("failed to derive rekey for send cipher")
+		return
+	}
+	h.sendCipher.UnsafeSetKey(newKey)
 
 	// New starting nonce for the rekeyed cipher is 0.
 	h.sendCipher.SetNonce(0)
@@ -1499,7 +1622,13 @@ func (h *SSU2Conn) handlePeerNextNonce(newNonce uint64) error {
 		return oops.Errorf("receive cipher not initialized")
 	}
 
-	h.recvCipher.Rekey()
+	// Derive new recv cipher key per SSU2 spec §NextNonce:
+	// newKey = HKDF(currentKey, ZEROLEN, "WrapCipherKey", 32) (G-5).
+	newKey, err := deriveRekeyKey(h.recvCipher)
+	if err != nil {
+		return oops.Wrapf(err, "failed to derive rekey for recv cipher")
+	}
+	h.recvCipher.UnsafeSetKey(newKey)
 	h.recvCipher.SetNonce(newNonce)
 
 	log.WithField("newNonce", newNonce).Info("Applied peer NextNonce rekey on receive cipher")

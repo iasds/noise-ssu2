@@ -138,6 +138,14 @@ type SSU2Config struct {
 	// the remote peer time to receive and acknowledge the close.
 	// Default: 5 seconds. Set to 0 to skip the wait (e.g. in tests).
 	DestroyTimeout time.Duration
+
+	// RouterInfoValidator is an optional callback invoked after the handshake
+	// completes on the responder side. It receives the raw RouterInfo block
+	// from SessionConfirmed and the Noise-authenticated static public key.
+	// The validator MUST verify that the RouterInfo's identity key corresponds
+	// to the static key authenticated by the Noise handshake (C-2).
+	// If nil, no validation is performed (not recommended for production).
+	RouterInfoValidator func(routerInfo []byte, authenticatedStaticKey []byte) error
 }
 
 // NewSSU2Config creates a new SSU2Config with sensible defaults.

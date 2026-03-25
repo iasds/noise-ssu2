@@ -175,6 +175,18 @@ func (p *SSU2Packet) Deserialize(data []byte) error {
 	headerSize := p.getHeaderSize()
 	hasEphemeral := p.hasEphemeralKey()
 
+	// Validate protocol version and network ID for long-header messages
+	// (SessionRequest, SessionCreated, Retry, TokenRequest, PeerTest,
+	// HolePunch) per spec §Session Request bytes 13-14 (G-4).
+	if headerSize == LongHeaderSize {
+		if data[13] != SSU2ProtocolVersion {
+			return oops.Errorf("unsupported protocol version: %d (expected %d)", data[13], SSU2ProtocolVersion)
+		}
+		if data[14] != SSU2NetworkID {
+			return oops.Errorf("wrong network ID: %d (expected %d)", data[14], SSU2NetworkID)
+		}
+	}
+
 	// Calculate minimum expected size
 	minSize := headerSize + MACSize
 	if hasEphemeral {

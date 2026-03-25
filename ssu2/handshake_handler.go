@@ -75,6 +75,11 @@ type HandshakeHandler struct {
 	// peerOptions are the remote peer's padding parameters, parsed from
 	// received Options blocks during handshake.
 	peerOptions *OptionsParams
+
+	// peerRouterInfo stores the raw RouterInfo block received during
+	// SessionConfirmed processing. Used for post-handshake validation
+	// against the Noise-authenticated static key (C-2).
+	peerRouterInfo []byte
 }
 
 // buildSSU2Prologue returns the Noise prologue for SSU2 handshakes.
@@ -247,6 +252,11 @@ func (h *HandshakeHandler) CreateSessionRequest(sourceConnID, destConnID uint64)
 // CreateSessionRequestWithToken creates a SessionRequest with a Retry token
 // inserted into header bytes 24-31. This is used when resending SessionRequest
 // after receiving a Retry message from the responder.
+//
+// Per SSU2 spec §Retry, the handshake state must be reset before resending
+// because the first SessionRequest already advanced the Noise state machine.
+// This method calls ResetForRetry internally to create a fresh handshake state
+// with a new ephemeral key and clean chaining key (C-3).
 func (h *HandshakeHandler) CreateSessionRequestWithToken(sourceConnID, destConnID uint64, token []byte) (*SSU2Packet, error) {
 	if !h.initiator {
 		return nil, oops.Errorf("only initiator can create SessionRequest")
@@ -255,9 +265,50 @@ func (h *HandshakeHandler) CreateSessionRequestWithToken(sourceConnID, destConnI
 		return nil, oops.Errorf("retry token must be exactly 8 bytes, got %d", len(token))
 	}
 
+	// Reset the Noise handshake state so the new SessionRequest
+	// starts from a clean message index 0 with a fresh ephemeral key (C-3).
+	if err := h.ResetForRetry(); err != nil {
+		return nil, oops.Wrapf(err, "failed to reset handshake state for Retry")
+	}
+
 	blocks := h.createHandshakeBlocks(MessageTypeSessionRequest)
 
 	return h.buildHandshakePacket(blocks, MessageTypeSessionRequest, sourceConnID, destConnID, token)
+}
+
+// ResetForRetry recreates the internal Noise handshake state from scratch,
+// preserving the static key, remote static key, and local options. This is
+// required after receiving a Retry message because the original
+// CreateSessionRequest already advanced the handshake state machine past
+// message 1. Per SSU2 spec, the retried SessionRequest must use a fresh
+// ephemeral key and start from a clean chaining key (C-3).
+func (h *HandshakeHandler) ResetForRetry() error {
+	cs := noise.NewCipherSuite(noise.DH25519, noise.CipherChaChaPoly, noise.HashSHA256)
+	config := noise.Config{
+		CipherSuite:  cs,
+		Random:       rand.Reader,
+		Pattern:      noise.HandshakeXK,
+		Initiator:    h.initiator,
+		Prologue:     buildSSU2Prologue(),
+		ProtocolName: []byte(SSU2ProtocolName),
+		StaticKeypair: noise.DHKey{
+			Private: copyBytes(h.staticKey),
+			Public:  derivePublicKey(h.staticKey),
+		},
+	}
+	if h.initiator && len(h.remoteStaticKey) == 32 {
+		config.PeerStatic = copyBytes(h.remoteStaticKey)
+	}
+	hs, err := noise.NewHandshakeState(config)
+	if err != nil {
+		return oops.Wrapf(err, "failed to recreate handshake state for retry")
+	}
+	h.handshakeState = hs
+	h.sendCipher = nil
+	h.recvCipher = nil
+	h.sessCreateHeaderKey = nil
+	h.sessionConfirmedHeaderKey = nil
+	return nil
 }
 
 // ProcessSessionRequest processes a received SessionRequest message.
@@ -534,7 +585,7 @@ func (h *HandshakeHandler) ProcessSessionConfirmed(packet *SSU2Packet) error {
 
 	// Process 3rd XK handshake message (→ s, se).
 	// This completes the handshake and returns transport cipher states.
-	_, cs1, cs2, err := h.handshakeState.ReadMessage(nil, noiseMessage)
+	payload, cs1, cs2, err := h.handshakeState.ReadMessage(nil, noiseMessage)
 	if err != nil {
 		return oops.Wrapf(err, "failed to process SessionConfirmed handshake message")
 	}
@@ -547,6 +598,10 @@ func (h *HandshakeHandler) ProcessSessionConfirmed(packet *SSU2Packet) error {
 	if ps := h.handshakeState.PeerStatic(); len(ps) > 0 {
 		h.remoteStaticKey = copyBytes(ps)
 	}
+
+	// Extract the RouterInfo block from the decrypted payload so it can
+	// be validated against the Noise-authenticated static key (C-2).
+	h.extractPeerRouterInfo(payload)
 
 	return nil
 }
@@ -727,6 +782,31 @@ func (h *HandshakeHandler) extractPeerOptions(blocks []*SSU2Block) {
 			return
 		}
 	}
+}
+
+// extractPeerRouterInfo parses the decrypted SessionConfirmed payload and
+// stores the RouterInfo block data for later validation (C-2).
+func (h *HandshakeHandler) extractPeerRouterInfo(payload []byte) {
+	if len(payload) == 0 {
+		return
+	}
+	blocks, err := DeserializeBlocks(payload)
+	if err != nil {
+		return
+	}
+	for _, block := range blocks {
+		if block.Type == BlockTypeRouterInfo && len(block.Data) > 0 {
+			h.peerRouterInfo = copyBytes(block.Data)
+			return
+		}
+	}
+}
+
+// GetPeerRouterInfo returns the raw RouterInfo block received during
+// the SessionConfirmed handshake message. Returns nil if no RouterInfo
+// was received (e.g. initiator side, or tests without RouterInfo).
+func (h *HandshakeHandler) GetPeerRouterInfo() []byte {
+	return copyBytes(h.peerRouterInfo)
 }
 
 // createHandshakeBlocks creates the standard blocks for handshake messages.
@@ -1141,7 +1221,7 @@ func (h *HandshakeHandler) ProcessSessionConfirmedFragments(packets []*SSU2Packe
 		}
 	}
 
-	_, cs1, cs2, err := h.handshakeState.ReadMessage(nil, noiseMessage)
+	payload, cs1, cs2, err := h.handshakeState.ReadMessage(nil, noiseMessage)
 	if err != nil {
 		return oops.Wrapf(err, "failed to process SessionConfirmed handshake message")
 	}
@@ -1150,6 +1230,10 @@ func (h *HandshakeHandler) ProcessSessionConfirmedFragments(packets []*SSU2Packe
 	if ps := h.handshakeState.PeerStatic(); len(ps) > 0 {
 		h.remoteStaticKey = copyBytes(ps)
 	}
+
+	// Extract the RouterInfo block from the decrypted payload so it can
+	// be validated against the Noise-authenticated static key (C-2).
+	h.extractPeerRouterInfo(payload)
 
 	return nil
 }
