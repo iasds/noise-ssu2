@@ -604,6 +604,7 @@ func setupRelayTestPeer(t *testing.T, name string) *relayTestPeer {
 	// Create configuration
 	config, err := NewSSU2Config(routerHash, false)
 	require.NoError(t, err)
+	config.RouterInfoValidator = DefaultRouterInfoValidator
 
 	staticKey := make([]byte, 32)
 	config = config.WithStaticKey(staticKey)

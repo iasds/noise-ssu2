@@ -8,6 +8,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// newTestResponderConfig creates a responder SSU2Config with DefaultRouterInfoValidator
+// set, suitable for tests that need to call Validate() or ToConnConfig().
+func newTestResponderConfig(t *testing.T, routerHash []byte) *SSU2Config {
+	t.Helper()
+	config, err := NewSSU2Config(routerHash, false)
+	require.NoError(t, err)
+	config.RouterInfoValidator = DefaultRouterInfoValidator
+	return config
+}
+
 // TestNewSSU2Config verifies the constructor creates a valid config with defaults.
 func TestNewSSU2Config(t *testing.T) {
 	t.Run("valid router hash creates config with defaults", func(t *testing.T) {
@@ -49,6 +59,7 @@ func TestNewSSU2Config(t *testing.T) {
 
 		config, err := NewSSU2Config(routerHash, false)
 		require.NoError(t, err)
+		config.RouterInfoValidator = DefaultRouterInfoValidator
 
 		// Modify original, verify config unchanged
 		routerHash[0] = 255
@@ -263,10 +274,19 @@ func TestSSU2Config_WithPaddingSettings(t *testing.T) {
 func TestSSU2Config_Validate(t *testing.T) {
 	t.Run("valid config passes", func(t *testing.T) {
 		routerHash := make([]byte, 32)
-		config, _ := NewSSU2Config(routerHash, false)
+		config := newTestResponderConfig(t, routerHash)
 
 		err := config.Validate()
 		assert.NoError(t, err)
+	})
+
+	t.Run("responder without validator fails", func(t *testing.T) {
+		routerHash := make([]byte, 32)
+		config, _ := NewSSU2Config(routerHash, false)
+
+		err := config.Validate()
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "RouterInfoValidator is required")
 	})
 
 	t.Run("missing pattern fails", func(t *testing.T) {
@@ -313,6 +333,7 @@ func TestSSU2Config_Validate(t *testing.T) {
 	t.Run("invalid obfuscation IV fails", func(t *testing.T) {
 		routerHash := make([]byte, 32)
 		config, _ := NewSSU2Config(routerHash, false)
+		config.RouterInfoValidator = DefaultRouterInfoValidator
 		config.ObfuscationIV = make([]byte, 16) // Wrong length for SSU2
 
 		err := config.Validate()
@@ -323,6 +344,7 @@ func TestSSU2Config_Validate(t *testing.T) {
 	t.Run("invalid handshake timeout fails", func(t *testing.T) {
 		routerHash := make([]byte, 32)
 		config, _ := NewSSU2Config(routerHash, false)
+		config.RouterInfoValidator = DefaultRouterInfoValidator
 		config.HandshakeTimeout = -1 * time.Second
 
 		err := config.Validate()
@@ -333,6 +355,7 @@ func TestSSU2Config_Validate(t *testing.T) {
 	t.Run("invalid retry count fails", func(t *testing.T) {
 		routerHash := make([]byte, 32)
 		config, _ := NewSSU2Config(routerHash, false)
+		config.RouterInfoValidator = DefaultRouterInfoValidator
 		config.HandshakeRetries = -2
 
 		err := config.Validate()
@@ -343,6 +366,7 @@ func TestSSU2Config_Validate(t *testing.T) {
 	t.Run("invalid keepalive interval fails", func(t *testing.T) {
 		routerHash := make([]byte, 32)
 		config, _ := NewSSU2Config(routerHash, false)
+		config.RouterInfoValidator = DefaultRouterInfoValidator
 		config.KeepaliveInterval = 0
 
 		err := config.Validate()
@@ -353,6 +377,7 @@ func TestSSU2Config_Validate(t *testing.T) {
 	t.Run("invalid MTU fails", func(t *testing.T) {
 		routerHash := make([]byte, 32)
 		config, _ := NewSSU2Config(routerHash, false)
+		config.RouterInfoValidator = DefaultRouterInfoValidator
 		config.MTU = 1000 // Too small
 
 		err := config.Validate()
@@ -363,6 +388,7 @@ func TestSSU2Config_Validate(t *testing.T) {
 	t.Run("packet size less than MTU fails", func(t *testing.T) {
 		routerHash := make([]byte, 32)
 		config, _ := NewSSU2Config(routerHash, false)
+		config.RouterInfoValidator = DefaultRouterInfoValidator
 		config.MTU = 1400
 		config.MaxPacketSize = 1300
 
@@ -374,6 +400,7 @@ func TestSSU2Config_Validate(t *testing.T) {
 	t.Run("invalid padding range fails", func(t *testing.T) {
 		routerHash := make([]byte, 32)
 		config, _ := NewSSU2Config(routerHash, false)
+		config.RouterInfoValidator = DefaultRouterInfoValidator
 		config.MaxPaddingSize = 10
 		config.MinPaddingSize = 20
 
@@ -385,6 +412,7 @@ func TestSSU2Config_Validate(t *testing.T) {
 	t.Run("invalid padding ratio fails", func(t *testing.T) {
 		routerHash := make([]byte, 32)
 		config, _ := NewSSU2Config(routerHash, false)
+		config.RouterInfoValidator = DefaultRouterInfoValidator
 		config.PaddingRatio = 20.0
 
 		err := config.Validate()
@@ -407,6 +435,7 @@ func TestSSU2Config_ToConnConfig(t *testing.T) {
 
 		ssu2Config, err := NewSSU2Config(routerHash, false)
 		require.NoError(t, err)
+		ssu2Config.RouterInfoValidator = DefaultRouterInfoValidator
 
 		ssu2Config.WithStaticKey(staticKey).
 			WithHandshakeTimeout(20 * time.Second).
@@ -440,6 +469,7 @@ func TestSSU2Config_ToConnConfig(t *testing.T) {
 	t.Run("modifiers are created with correct settings", func(t *testing.T) {
 		routerHash := make([]byte, 32)
 		config, _ := NewSSU2Config(routerHash, false)
+		config.RouterInfoValidator = DefaultRouterInfoValidator
 
 		config.EnableChaChaObfuscation = true
 		config.PaddingEnabled = true
@@ -454,6 +484,7 @@ func TestSSU2Config_ToConnConfig(t *testing.T) {
 	t.Run("disabled modifiers are not created", func(t *testing.T) {
 		routerHash := make([]byte, 32)
 		config, _ := NewSSU2Config(routerHash, false)
+		config.RouterInfoValidator = DefaultRouterInfoValidator
 
 		config.EnableChaChaObfuscation = false
 		config.PaddingEnabled = false
@@ -473,6 +504,7 @@ func TestSSU2Config_ToConnConfig(t *testing.T) {
 		}
 
 		config, _ := NewSSU2Config(routerHash, false)
+		config.RouterInfoValidator = DefaultRouterInfoValidator
 		config.WithStaticKey(staticKey)
 
 		connConfig, err := config.ToConnConfig()
@@ -490,6 +522,7 @@ func TestSSU2Config_ToConnConfig(t *testing.T) {
 func TestSSU2Config_WithModifiers(t *testing.T) {
 	routerHash := make([]byte, 32)
 	config, _ := NewSSU2Config(routerHash, false)
+	config.RouterInfoValidator = DefaultRouterInfoValidator
 
 	// Create a mock modifier (using existing ChaCha modifier for testing)
 	modifier1, _ := NewChaChaObfuscationModifier("custom1", routerHash)
@@ -507,6 +540,7 @@ func TestSSU2Config_EdgeCases(t *testing.T) {
 	t.Run("zero connection ID is valid", func(t *testing.T) {
 		routerHash := make([]byte, 32)
 		config, _ := NewSSU2Config(routerHash, false)
+		config.RouterInfoValidator = DefaultRouterInfoValidator
 		config.WithConnectionID(0)
 
 		err := config.Validate()
@@ -516,6 +550,7 @@ func TestSSU2Config_EdgeCases(t *testing.T) {
 	t.Run("max padding ratio is valid", func(t *testing.T) {
 		routerHash := make([]byte, 32)
 		config, _ := NewSSU2Config(routerHash, false)
+		config.RouterInfoValidator = DefaultRouterInfoValidator
 		config.WithPaddingSettings(true, 0, 64, 15.9375)
 
 		err := config.Validate()
@@ -525,6 +560,7 @@ func TestSSU2Config_EdgeCases(t *testing.T) {
 	t.Run("infinite retries (-1) is valid", func(t *testing.T) {
 		routerHash := make([]byte, 32)
 		config, _ := NewSSU2Config(routerHash, false)
+		config.RouterInfoValidator = DefaultRouterInfoValidator
 		config.WithHandshakeRetries(-1)
 
 		err := config.Validate()
@@ -534,6 +570,7 @@ func TestSSU2Config_EdgeCases(t *testing.T) {
 	t.Run("zero timeouts for read/write are valid", func(t *testing.T) {
 		routerHash := make([]byte, 32)
 		config, _ := NewSSU2Config(routerHash, false)
+		config.RouterInfoValidator = DefaultRouterInfoValidator
 		config.WithReadTimeout(0).WithWriteTimeout(0)
 
 		err := config.Validate()
@@ -555,6 +592,7 @@ func BenchmarkSSU2Config_Creation(b *testing.B) {
 func BenchmarkSSU2Config_ToConnConfig(b *testing.B) {
 	routerHash := make([]byte, 32)
 	config, _ := NewSSU2Config(routerHash, false)
+	config.RouterInfoValidator = DefaultRouterInfoValidator
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

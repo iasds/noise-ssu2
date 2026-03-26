@@ -27,6 +27,7 @@ func TestListenerIntegration_ClientServerConnection(t *testing.T) {
 	}
 	serverConfig, err := NewSSU2Config(serverRouterHash, false) // responder
 	require.NoError(t, err)
+	serverConfig.RouterInfoValidator = DefaultRouterInfoValidator
 
 	serverStaticKey := make([]byte, 32)
 	for i := range serverStaticKey {
@@ -106,6 +107,7 @@ func TestListenerIntegration_MultipleConnections(t *testing.T) {
 	serverRouterHash := make([]byte, 32)
 	serverConfig, err := NewSSU2Config(serverRouterHash, false)
 	require.NoError(t, err)
+	serverConfig.RouterInfoValidator = DefaultRouterInfoValidator
 
 	serverStaticKey := make([]byte, 32)
 	serverConfig = serverConfig.WithStaticKey(serverStaticKey)
@@ -162,6 +164,7 @@ func TestListenerIntegration_TokenRequestRetryFlow(t *testing.T) {
 	serverRouterHash := make([]byte, 32)
 	serverConfig, err := NewSSU2Config(serverRouterHash, false)
 	require.NoError(t, err)
+	serverConfig.RouterInfoValidator = DefaultRouterInfoValidator
 
 	serverStaticKey := make([]byte, 32)
 	serverConfig = serverConfig.WithStaticKey(serverStaticKey)
@@ -230,6 +233,7 @@ func TestListenerIntegration_ConcurrentAccept(t *testing.T) {
 	serverRouterHash := make([]byte, 32)
 	serverConfig, err := NewSSU2Config(serverRouterHash, false)
 	require.NoError(t, err)
+	serverConfig.RouterInfoValidator = DefaultRouterInfoValidator
 
 	serverStaticKey := make([]byte, 32)
 	serverConfig = serverConfig.WithStaticKey(serverStaticKey)
@@ -286,6 +290,7 @@ func TestListenerIntegration_GracefulShutdown(t *testing.T) {
 	serverRouterHash := make([]byte, 32)
 	serverConfig, err := NewSSU2Config(serverRouterHash, false)
 	require.NoError(t, err)
+	serverConfig.RouterInfoValidator = DefaultRouterInfoValidator
 
 	serverStaticKey := make([]byte, 32)
 	serverConfig = serverConfig.WithStaticKey(serverStaticKey)
@@ -329,6 +334,7 @@ func TestListenerIntegration_PacketRouting(t *testing.T) {
 	serverRouterHash := make([]byte, 32)
 	serverConfig, err := NewSSU2Config(serverRouterHash, false)
 	require.NoError(t, err)
+	serverConfig.RouterInfoValidator = DefaultRouterInfoValidator
 
 	serverStaticKey := make([]byte, 32)
 	serverConfig = serverConfig.WithStaticKey(serverStaticKey)
@@ -378,6 +384,7 @@ func TestListenerIntegration_AddressInfo(t *testing.T) {
 	}
 	serverConfig, err := NewSSU2Config(serverRouterHash, false)
 	require.NoError(t, err)
+	serverConfig.RouterInfoValidator = DefaultRouterInfoValidator
 
 	serverStaticKey := make([]byte, 32)
 	serverConfig = serverConfig.WithStaticKey(serverStaticKey)
@@ -413,6 +420,7 @@ func TestListenerIntegration_ContextCancellation(t *testing.T) {
 	serverRouterHash := make([]byte, 32)
 	serverConfig, err := NewSSU2Config(serverRouterHash, false)
 	require.NoError(t, err)
+	serverConfig.RouterInfoValidator = DefaultRouterInfoValidator
 
 	serverStaticKey := make([]byte, 32)
 	serverConfig = serverConfig.WithStaticKey(serverStaticKey)
@@ -457,6 +465,7 @@ func TestListenerIntegration_InvalidPacketHandling(t *testing.T) {
 	serverRouterHash := make([]byte, 32)
 	serverConfig, err := NewSSU2Config(serverRouterHash, false)
 	require.NoError(t, err)
+	serverConfig.RouterInfoValidator = DefaultRouterInfoValidator
 
 	serverStaticKey := make([]byte, 32)
 	serverConfig = serverConfig.WithStaticKey(serverStaticKey)
@@ -513,6 +522,7 @@ func TestListenerIntegration_SessionRequestProcessing(t *testing.T) {
 	serverRouterHash := make([]byte, 32)
 	serverConfig, err := NewSSU2Config(serverRouterHash, false)
 	require.NoError(t, err)
+	serverConfig.RouterInfoValidator = DefaultRouterInfoValidator
 
 	serverStaticKey := make([]byte, 32)
 	serverConfig = serverConfig.WithStaticKey(serverStaticKey)
@@ -564,6 +574,7 @@ func TestListenerIntegration_ListenSSU2Helper(t *testing.T) {
 		serverRouterHash := make([]byte, 32)
 		serverConfig, err := NewSSU2Config(serverRouterHash, false)
 		require.NoError(t, err)
+		serverConfig.RouterInfoValidator = DefaultRouterInfoValidator
 
 		serverStaticKey := make([]byte, 32)
 		serverConfig = serverConfig.WithStaticKey(serverStaticKey)
@@ -584,6 +595,7 @@ func TestListenerIntegration_ListenSSU2Helper(t *testing.T) {
 		serverRouterHash := make([]byte, 32)
 		serverConfig, err := NewSSU2Config(serverRouterHash, false)
 		require.NoError(t, err)
+		serverConfig.RouterInfoValidator = DefaultRouterInfoValidator
 
 		serverStaticKey := make([]byte, 32)
 		serverConfig = serverConfig.WithStaticKey(serverStaticKey)

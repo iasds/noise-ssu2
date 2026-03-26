@@ -961,7 +961,7 @@ func (h *SSU2Conn) WriteBlocks(blocks []*SSU2Block) error {
 func (h *SSU2Conn) writeBlock(block *SSU2Block) error {
 	pktNum := h.nextSendSequence()
 	hdr := make([]byte, ShortHeaderSize)
-	binary.BigEndian.PutUint64(hdr[0:8], h.config.ConnectionID)
+	binary.BigEndian.PutUint64(hdr[0:8], h.remoteConnectionID)
 	binary.BigEndian.PutUint32(hdr[8:12], pktNum)
 	// byte 12 = MessageType will be written by Serialize()
 	packet := &SSU2Packet{
@@ -1023,7 +1023,7 @@ func (h *SSU2Conn) CloseWithReason(reason TerminationReason, additionalData []by
 		// Create Data packet with termination block
 		pktNum := h.nextSendSequence()
 		hdr := make([]byte, ShortHeaderSize)
-		binary.BigEndian.PutUint64(hdr[0:8], h.config.ConnectionID)
+		binary.BigEndian.PutUint64(hdr[0:8], h.remoteConnectionID)
 		binary.BigEndian.PutUint32(hdr[8:12], pktNum)
 		packet := &SSU2Packet{
 			MessageType:  MessageTypeData,
@@ -1100,7 +1100,7 @@ func (h *SSU2Conn) RemoteAddr() net.Addr {
 func (h *SSU2Conn) SendToAddress(block *SSU2Block, addr *net.UDPAddr) error {
 	pktNum := h.nextSendSequence()
 	hdr := make([]byte, ShortHeaderSize)
-	binary.BigEndian.PutUint64(hdr[0:8], h.config.ConnectionID)
+	binary.BigEndian.PutUint64(hdr[0:8], h.remoteConnectionID)
 	binary.BigEndian.PutUint32(hdr[8:12], pktNum)
 	packet := &SSU2Packet{
 		MessageType:  MessageTypeData,
@@ -1247,7 +1247,7 @@ func (h *SSU2Conn) retransmitExpired() {
 		// Per spec: retransmissions must use a fresh packet number.
 		newPktNum := h.nextSendSequence()
 		hdr := make([]byte, ShortHeaderSize)
-		binary.BigEndian.PutUint64(hdr[0:8], h.config.ConnectionID)
+		binary.BigEndian.PutUint64(hdr[0:8], h.remoteConnectionID)
 		binary.BigEndian.PutUint32(hdr[8:12], newPktNum)
 		newPacket := &SSU2Packet{
 			MessageType:  MessageTypeData,
@@ -1381,7 +1381,7 @@ func (h *SSU2Conn) keepaliveLoop() {
 				if err == nil && ack != nil {
 					pktNum := h.nextSendSequence()
 					hdr := make([]byte, ShortHeaderSize)
-					binary.BigEndian.PutUint64(hdr[0:8], h.config.ConnectionID)
+					binary.BigEndian.PutUint64(hdr[0:8], h.remoteConnectionID)
 					binary.BigEndian.PutUint32(hdr[8:12], pktNum)
 					packet := &SSU2Packet{
 						MessageType:  MessageTypeData,
@@ -1549,7 +1549,7 @@ func (h *SSU2Conn) sendImmediateACK() {
 	}
 	pktNum := h.nextSendSequence()
 	hdr := make([]byte, ShortHeaderSize)
-	binary.BigEndian.PutUint64(hdr[0:8], h.config.ConnectionID)
+	binary.BigEndian.PutUint64(hdr[0:8], h.remoteConnectionID)
 	binary.BigEndian.PutUint32(hdr[8:12], pktNum)
 	packet := &SSU2Packet{
 		MessageType:  MessageTypeData,
@@ -1707,6 +1707,14 @@ func (h *SSU2Conn) nextSendSequence() uint32 {
 
 // initiateRekey sends a NextNonce block to the peer, then rekeys the local
 // send cipher and resets the send sequence counter.
+//
+// The NextNonce block MUST be encrypted with the OLD key so the receiver can
+// decrypt it and learn about the rekey. Only after the NextNonce packet is
+// fully encrypted and transmitted do we switch to the new key.
+//
+// This function bypasses the normal sendQueue path and sends inline under
+// cipherMutex to guarantee atomic key transition: no packet can be encrypted
+// between NextNonce send and the key switch.
 func (h *SSU2Conn) initiateRekey() {
 	h.cipherMutex.Lock()
 	defer h.cipherMutex.Unlock()
@@ -1716,33 +1724,92 @@ func (h *SSU2Conn) initiateRekey() {
 	}
 
 	// Derive new send cipher key per SSU2 spec §NextNonce:
-	// newKey = HKDF(currentKey, ZEROLEN, "WrapCipherKey", 32) (G-5).
+	// newKey = HKDF(currentKey, ZEROLEN, "WrapCipherKey", 32).
 	newKey, err := deriveRekeyKey(h.sendCipher)
 	if err != nil {
 		log.WithField("error", err).Error("failed to derive rekey for send cipher")
 		return
 	}
-	h.sendCipher.UnsafeSetKey(newKey)
 
-	// New starting nonce for the rekeyed cipher is 0.
-	h.sendCipher.SetNonce(0)
-
-	// Build a NextNonce block with the new starting nonce (0).
-	var nonceBuf [8]byte
-	// nonceBuf is already zero-valued, which is what we want.
-	block := &SSU2Block{
-		Type: BlockTypeNextNonce,
-		Data: nonceBuf[:],
+	// Send NextNonce block encrypted with the OLD key before rekeying.
+	if err := h.sendNextNonceInline(); err != nil {
+		log.WithField("error", err).Error("failed to send NextNonce block")
+		return
 	}
+
+	// NOW rekey the cipher to the new key.
+	h.sendCipher.UnsafeSetKey(newKey)
+	h.sendCipher.SetNonce(0)
 
 	// Reset send sequence so new packets start at 0.
 	h.sendSeqMutex.Lock()
 	h.sendSequence = 0
 	h.sendSeqMutex.Unlock()
+}
 
-	// Best-effort send via the regular write path.
-	// writeBlock will allocate its own sequence number (0) from the reset counter.
-	_ = h.writeBlock(block)
+// sendNextNonceInline builds, encrypts, and sends a NextNonce block directly,
+// bypassing the sendQueue. Must be called while holding cipherMutex so the
+// packet is encrypted with the current (old) key atomically.
+func (h *SSU2Conn) sendNextNonceInline() error {
+	// Allocate packet number from the current sequence counter.
+	h.sendSeqMutex.Lock()
+	pktNum := h.sendSequence
+	h.sendSequence++
+	h.sendSeqMutex.Unlock()
+
+	// Build NextNonce block with new starting nonce (0).
+	var nonceBuf [8]byte
+	block := &SSU2Block{Type: BlockTypeNextNonce, Data: nonceBuf[:]}
+
+	payload, err := SerializeBlocks([]*SSU2Block{block})
+	if err != nil {
+		return oops.Wrapf(err, "serialize NextNonce block")
+	}
+
+	hdr := make([]byte, ShortHeaderSize)
+	binary.BigEndian.PutUint64(hdr[0:8], h.remoteConnectionID)
+	binary.BigEndian.PutUint32(hdr[8:12], pktNum)
+	hdr[12] = MessageTypeData
+
+	// Encrypt with the current (OLD) key.
+	h.sendCipher.SetNonce(uint64(pktNum))
+	encrypted, err := h.sendCipher.Encrypt(nil, hdr[:ShortHeaderSize], payload)
+	if err != nil {
+		return oops.Wrapf(err, "encrypt NextNonce block")
+	}
+
+	packet := &SSU2Packet{
+		MessageType:  MessageTypeData,
+		PacketNumber: pktNum,
+		Header:       hdr,
+		Payload:      encrypted,
+		MAC:          make([]byte, MACSize),
+	}
+
+	// SipHash length obfuscation.
+	if h.sipHashModifier != nil {
+		dataLen := uint16(len(encrypted))
+		mask := h.sipHashModifier.NextOutboundMask()
+		binary.BigEndian.PutUint16(packet.Header[14:16], dataLen^mask)
+	}
+
+	data, err := packet.Serialize()
+	if err != nil {
+		return oops.Wrapf(err, "serialize NextNonce packet")
+	}
+
+	if h.headerProtector != nil {
+		hType := messageTypeToHeaderType(packet.MessageType)
+		_ = h.headerProtector.EncryptOutboundHeader(data, hType)
+	}
+
+	_, err = h.underlying.WriteTo(data, h.remoteAddr)
+	if err != nil {
+		return oops.Wrapf(err, "send NextNonce packet")
+	}
+
+	h.updateActivity()
+	return nil
 }
 
 // handlePeerNextNonce is the OnNextNonce callback wired in installCipherStates.

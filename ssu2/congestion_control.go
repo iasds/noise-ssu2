@@ -139,6 +139,11 @@ type CongestionController struct {
 	// per-ACK bandwidth samples for the Westwood+ BWE filter.
 	lastAckTime time.Time
 
+	// congestionEpochStart is the time the current loss/recovery epoch began.
+	// Loss events within one RTT of this time are coalesced to prevent
+	// over-reducing cwnd from multiple losses in the same window (G-1).
+	congestionEpochStart time.Time
+
 	// mutex protects all fields for concurrent access
 	mutex sync.RWMutex
 }
@@ -304,6 +309,10 @@ func (cc *CongestionController) handleCongestionAvoidanceAck(ackedBytes int) {
 // Westwood+ sets ssthresh = max(BWE * minRTT, MinCWND) instead of Reno's
 // cwnd/2, providing a more accurate window estimate based on measured
 // throughput. Falls back to cwnd/2 when no BWE is available.
+//
+// Loss events within the same RTT window are coalesced: only the first
+// loss triggers a cwnd reduction. Subsequent losses within one RTT of the
+// epoch start are absorbed without further reduction (G-1).
 func (cc *CongestionController) OnPacketLoss() {
 	cc.mutex.Lock()
 	defer cc.mutex.Unlock()
@@ -312,6 +321,16 @@ func (cc *CongestionController) OnPacketLoss() {
 	if cc.state == Recovery {
 		return
 	}
+
+	// Coalesce loss events within the same RTT window (G-1).
+	now := time.Now()
+	if !cc.congestionEpochStart.IsZero() && cc.rttEstimator != nil {
+		rtt := cc.rttEstimator.GetSmoothedRTT()
+		if rtt > 0 && now.Sub(cc.congestionEpochStart) < rtt {
+			return // same epoch, absorb without further reduction
+		}
+	}
+	cc.congestionEpochStart = now
 
 	// Westwood+ ssthresh: BWE × minRTT
 	cc.ssthresh = cc.westwoodSSThresh()

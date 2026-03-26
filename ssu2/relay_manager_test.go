@@ -548,6 +548,7 @@ func createTestResponderConfig(t *testing.T) *SSU2Config {
 
 	config, err := NewSSU2Config(routerHash, false)
 	require.NoError(t, err)
+	config.RouterInfoValidator = DefaultRouterInfoValidator
 
 	return config.WithStaticKey(staticKey)
 }

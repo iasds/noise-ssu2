@@ -17,12 +17,20 @@ const (
 	DefaultHandshakeTimeout = 15 * time.Second
 )
 
-// DefaultRouterInfoValidator is a basic RouterInfo validator that checks
+// DefaultRouterInfoValidator is a MINIMAL RouterInfo validator that checks
 // whether the Noise-authenticated static key appears within the RouterInfo
-// payload. Per SSU2 spec §Session Confirmed, the responder must verify that
-// the static key from the Noise handshake corresponds to the identity key
-// in the RouterInfo. This default performs a byte-containment check;
-// production deployments should provide a full RouterInfo parser.
+// payload using bytes.Contains. This is INSUFFICIENT for production use
+// because crafted RouterInfo payloads can produce false-positive matches.
+//
+// WARNING: Do NOT use this validator in production. It is provided only as
+// a reference implementation and for testing. Production deployments MUST
+// supply a full RouterInfo parser that extracts the signing public key and
+// compares it to the Noise-authenticated static key.
+//
+// Per SSU2 spec §Session Confirmed, the responder must verify that the
+// static key from the Noise handshake corresponds to the identity key in
+// the RouterInfo. NewSSU2Config intentionally does NOT set a default
+// validator — callers must explicitly provide one via WithRouterInfoValidator.
 func DefaultRouterInfoValidator(routerInfo []byte, authenticatedStaticKey []byte) error {
 	if len(routerInfo) == 0 {
 		return oops.
@@ -213,8 +221,8 @@ func NewSSU2Config(routerHash []byte, initiator bool) (*SSU2Config, error) {
 		PaddingRatio:            1.0, // 100%
 		ConnectionID:            0,   // Will be generated
 		KeepaliveInterval:       15 * time.Second,
-		DestroyTimeout:          0, // opt-in; set to destroyTimeout (5s) in production
-		RouterInfoValidator:     DefaultRouterInfoValidator,
+		DestroyTimeout:          0,   // opt-in; set to destroyTimeout (5s) in production
+		RouterInfoValidator:     nil, // C-1: no default; callers must explicitly set via WithRouterInfoValidator
 	}, nil
 }
 
