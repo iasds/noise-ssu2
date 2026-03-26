@@ -296,8 +296,38 @@ func (b *SSU2Block) GetData() []byte {
 	return b.Data
 }
 
+// enforceBlockOrder reorders blocks so that Padding (254) is last and
+// Termination (6) is second-to-last, per spec §Blocks.
+// Returns a new slice; the original is not modified.
+func enforceBlockOrder(blocks []*SSU2Block) []*SSU2Block {
+	var termBlock, padBlock *SSU2Block
+	normal := make([]*SSU2Block, 0, len(blocks))
+
+	for _, b := range blocks {
+		switch b.Type {
+		case BlockTypeTermination:
+			termBlock = b
+		case BlockTypePadding:
+			padBlock = b
+		default:
+			normal = append(normal, b)
+		}
+	}
+
+	if termBlock != nil {
+		normal = append(normal, termBlock)
+	}
+	if padBlock != nil {
+		normal = append(normal, padBlock)
+	}
+
+	return normal
+}
+
 // SerializeBlocks serializes multiple blocks into a single byte slice.
 // This is useful for creating packet payloads that contain multiple blocks.
+// Blocks are automatically reordered per spec §Blocks: Padding (254) is
+// placed last, and Termination (6) second-to-last.
 //
 // Parameters:
 //   - blocks: Slice of blocks to serialize
@@ -310,9 +340,12 @@ func SerializeBlocks(blocks []*SSU2Block) ([]byte, error) {
 		return []byte{}, nil
 	}
 
+	// Enforce spec-required block ordering
+	ordered := enforceBlockOrder(blocks)
+
 	// Calculate total size
 	totalSize := 0
-	for _, block := range blocks {
+	for _, block := range ordered {
 		totalSize += block.Size()
 	}
 
@@ -320,7 +353,7 @@ func SerializeBlocks(blocks []*SSU2Block) ([]byte, error) {
 	buf := make([]byte, 0, totalSize)
 
 	// Serialize each block
-	for i, block := range blocks {
+	for i, block := range ordered {
 		data, err := block.Serialize()
 		if err != nil {
 			return nil, oops.Wrapf(err, "failed to serialize block %d (type %d)", i, block.Type)

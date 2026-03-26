@@ -554,30 +554,34 @@ func (h *SSU2Conn) handshakeResponder(ctx context.Context) error {
 			return oops.Errorf("invalid SessionConfirmed total fragment count: %d (must be 1-15)", totalFrags)
 		}
 		if totalFrags > 1 {
-			// Track seen fragment indices to detect duplicates
+			// Track seen fragment indices to detect duplicates.
+			// Per spec, all SessionConfirmed fragments use packet number 0
+			// even when retransmitted, so we must handle duplicate
+			// reception gracefully by skipping rather than failing.
 			seen := make(map[int]bool)
 			firstIdx := int((sessionConfirmed.Header[13] >> 4) & 0x0F)
 			seen[firstIdx] = true
 
-			for i := 1; i < totalFrags; i++ {
+			for len(seen) < totalFrags {
 				frag, fErr := h.receivePacketWithTimeout(ctx, h.config.HandshakeTimeout)
 				if fErr != nil {
-					return oops.Wrapf(fErr, "failed to receive SessionConfirmed fragment %d of %d", i, totalFrags)
+					return oops.Wrapf(fErr, "failed to receive SessionConfirmed fragment (%d of %d received)", len(seen), totalFrags)
 				}
 				if frag.MessageType != MessageTypeSessionConfirmed {
 					return oops.Errorf("expected SessionConfirmed fragment, got type %d", frag.MessageType)
 				}
 				// Validate fragment metadata
 				if len(frag.Header) < 14 {
-					return oops.Errorf("SessionConfirmed fragment %d has truncated header", i)
+					return oops.Errorf("SessionConfirmed fragment has truncated header")
 				}
 				fragTotal := int(frag.Header[13] & 0x0F)
 				if fragTotal != totalFrags {
-					return oops.Errorf("SessionConfirmed fragment total mismatch: first=%d, fragment %d=%d", totalFrags, i, fragTotal)
+					return oops.Errorf("SessionConfirmed fragment total mismatch: first=%d, got=%d", totalFrags, fragTotal)
 				}
 				fragIdx := int((frag.Header[13] >> 4) & 0x0F)
 				if seen[fragIdx] {
-					return oops.Errorf("duplicate SessionConfirmed fragment index %d", fragIdx)
+					// Duplicate fragment (retransmission) — skip
+					continue
 				}
 				seen[fragIdx] = true
 				fragments = append(fragments, frag)
@@ -987,8 +991,16 @@ func (h *SSU2Conn) writeBlock(block *SSU2Block) error {
 }
 
 // Close implements net.Conn.Close.
-// Sends a Termination block and closes the connection.
+// Sends a Termination block with reason NormalClose and closes the connection.
 func (h *SSU2Conn) Close() error {
+	return h.CloseWithReason(TerminationNormalClose, nil)
+}
+
+// CloseWithReason sends a Termination block with the given reason code
+// and optional additional data, then closes the connection.
+// Per spec §Termination, the data is: validDataPacketsReceived (8 bytes)
+// + reason (1 byte) + additional data (optional).
+func (h *SSU2Conn) CloseWithReason(reason TerminationReason, additionalData []byte) error {
 	h.closeOnce.Do(func() {
 		// Update state first
 		h.stateMutex.Lock()
@@ -996,13 +1008,17 @@ func (h *SSU2Conn) Close() error {
 		h.stateMutex.Unlock()
 
 		// Send Termination block (best effort)
-		// Spec §Termination: validDataPacketsReceived(8 bytes, big-endian) + reason(1 byte)
+		// Spec §Termination: validDataPacketsReceived(8 bytes, big-endian) + reason(1 byte) + additionalData
+		termData := make([]byte, 9+len(additionalData))
+		binary.BigEndian.PutUint64(termData[0:8], h.validDataPacketsReceived.Load())
+		termData[8] = byte(reason)
+		if len(additionalData) > 0 {
+			copy(termData[9:], additionalData)
+		}
 		termBlock := &SSU2Block{
 			Type: BlockTypeTermination,
-			Data: make([]byte, 9),
+			Data: termData,
 		}
-		binary.BigEndian.PutUint64(termBlock.Data[0:8], h.validDataPacketsReceived.Load())
-		termBlock.Data[8] = 0 // Reason: 0 (normal close)
 
 		// Create Data packet with termination block
 		pktNum := h.nextSendSequence()

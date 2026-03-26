@@ -508,6 +508,14 @@ func TestSerializeDeserializeBlocks_RoundTrip(t *testing.T) {
 		NewSSU2Block(BlockTypeRouterInfo, []byte("test router info")),
 	}
 
+	// Expected order after spec-enforced reorder: Padding must be last
+	expected := []*SSU2Block{
+		NewSSU2Block(BlockTypeDateTime, []byte{1, 2, 3, 4, 5, 6, 7}),
+		NewSSU2Block(BlockTypeOptions, make([]byte, 15)),
+		NewSSU2Block(BlockTypeRouterInfo, []byte("test router info")),
+		NewSSU2Block(BlockTypePadding, []byte{0xAA, 0xBB, 0xCC}),
+	}
+
 	// Serialize
 	serialized, err := SerializeBlocks(original)
 	require.NoError(t, err)
@@ -516,11 +524,11 @@ func TestSerializeDeserializeBlocks_RoundTrip(t *testing.T) {
 	restored, err := DeserializeBlocks(serialized)
 	require.NoError(t, err)
 
-	// Compare
-	require.Equal(t, len(original), len(restored))
-	for i := range original {
-		assert.Equal(t, original[i].Type, restored[i].Type)
-		assert.Equal(t, original[i].Data, restored[i].Data)
+	// Compare against expected (reordered) output
+	require.Equal(t, len(expected), len(restored))
+	for i := range expected {
+		assert.Equal(t, expected[i].Type, restored[i].Type)
+		assert.Equal(t, expected[i].Data, restored[i].Data)
 	}
 }
 
