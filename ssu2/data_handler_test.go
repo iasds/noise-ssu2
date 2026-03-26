@@ -2,6 +2,7 @@ package ssu2
 
 import (
 	"encoding/binary"
+	"net"
 	"testing"
 	"time"
 
@@ -391,8 +392,9 @@ func TestDataHandler_FollowOnFragment(t *testing.T) {
 	msg := handler.GetMessage()
 	require.NotNil(t, msg)
 
-	// Verify reassembled message
-	expected := append(firstData, secondData...)
+	// Verify reassembled message has 9-byte I2NP short header prepended (G-3)
+	expected := append(firstBlockData[:9], firstData...)
+	expected = append(expected, secondData...)
 	assert.Equal(t, expected, msg)
 
 	// Fragment set should be cleaned up
@@ -565,10 +567,11 @@ func TestDataHandler_FragmentReassembly_MultiFragment(t *testing.T) {
 	// Fragment set should be cleaned up
 	assert.Equal(t, 0, handler.GetFragmentCount())
 
-	// Verify the reassembled message
+	// Verify the reassembled message has 9-byte I2NP short header prepended (G-3)
 	assert.True(t, handler.HasMessages())
 	msg := handler.GetMessage()
-	expected := append(firstData, secondData...)
+	expected := append(firstBlockData[:9], firstData...)
+	expected = append(expected, secondData...)
 	assert.Equal(t, expected, msg)
 
 	// Verify stats
@@ -1167,6 +1170,8 @@ func TestDataHandler_RelayCallbacks(t *testing.T) {
 	var relayRequestCalled, relayResponseCalled, relayIntroCalled bool
 	var relayTagRequestCalled, relayTagCalled bool
 
+	dummySig := make([]byte, 64)
+
 	handler.SetCallbacks(DataHandlerCallbacks{
 		OnRelayRequest: func(block *SSU2Block) error {
 			relayRequestCalled = true
@@ -1188,35 +1193,70 @@ func TestDataHandler_RelayCallbacks(t *testing.T) {
 			relayTagCalled = true
 			return nil
 		},
+		// Pass-through verifiers for testing (G-2)
+		VerifyRelayRequestSignature:  func(block *RelayRequestBlock) error { return nil },
+		VerifyRelayResponseSignature: func(block *RelayResponseBlock) error { return nil },
+		VerifyRelayIntroSignature:    func(block *RelayIntroBlock) error { return nil },
 	})
 
-	relayTests := []struct {
-		name      string
-		blockType uint8
-		checkVar  *bool
-	}{
-		{"RelayRequest", BlockTypeRelayRequest, &relayRequestCalled},
-		{"RelayResponse", BlockTypeRelayResponse, &relayResponseCalled},
-		{"RelayIntro", BlockTypeRelayIntro, &relayIntroCalled},
-		{"RelayTagRequest", BlockTypeRelayTagRequest, &relayTagRequestCalled},
-		{"RelayTag", BlockTypeRelayTag, &relayTagCalled},
-	}
-
-	for _, tc := range relayTests {
-		t.Run(tc.name, func(t *testing.T) {
-			*tc.checkVar = false
-			block := NewSSU2Block(tc.blockType, make([]byte, 50))
-			payload, _ := SerializeBlocks([]*SSU2Block{block})
-			packet := &SSU2Packet{
-				MessageType: MessageTypeData,
-				Payload:     payload,
-			}
-
-			_, err := handler.ProcessDataPacket(packet)
-			assert.NoError(t, err)
-			assert.True(t, *tc.checkVar, "callback should have been called for %s", tc.name)
+	t.Run("RelayRequest", func(t *testing.T) {
+		relayRequestCalled = false
+		block, err := EncodeRelayRequest(&RelayRequestBlock{
+			Nonce: 1, RelayTag: 2, Timestamp: 100, Version: 2,
+			AlicePort: 8080, AliceIP: net.IPv4(127, 0, 0, 1),
+			Signature: dummySig,
 		})
-	}
+		require.NoError(t, err)
+		payload, _ := SerializeBlocks([]*SSU2Block{block})
+		_, err = handler.ProcessDataPacket(&SSU2Packet{MessageType: MessageTypeData, Payload: payload})
+		assert.NoError(t, err)
+		assert.True(t, relayRequestCalled, "callback should have been called for RelayRequest")
+	})
+
+	t.Run("RelayResponse", func(t *testing.T) {
+		relayResponseCalled = false
+		// Code 1-63 (Bob rejection): no signature needed
+		block, err := EncodeRelayResponse(&RelayResponseBlock{Code: 1, Nonce: 1})
+		require.NoError(t, err)
+		payload, _ := SerializeBlocks([]*SSU2Block{block})
+		_, err = handler.ProcessDataPacket(&SSU2Packet{MessageType: MessageTypeData, Payload: payload})
+		assert.NoError(t, err)
+		assert.True(t, relayResponseCalled, "callback should have been called for RelayResponse")
+	})
+
+	t.Run("RelayIntro", func(t *testing.T) {
+		relayIntroCalled = false
+		block, err := EncodeRelayIntro(&RelayIntroBlock{
+			AliceRouterHash: make([]byte, 32), Nonce: 1, AliceRelayTag: 2,
+			Timestamp: 100, Version: 2, AlicePort: 8080,
+			AliceIP: net.IPv4(127, 0, 0, 1), Signature: dummySig,
+		})
+		require.NoError(t, err)
+		payload, _ := SerializeBlocks([]*SSU2Block{block})
+		_, err = handler.ProcessDataPacket(&SSU2Packet{MessageType: MessageTypeData, Payload: payload})
+		assert.NoError(t, err)
+		assert.True(t, relayIntroCalled, "callback should have been called for RelayIntro")
+	})
+
+	t.Run("RelayTagRequest", func(t *testing.T) {
+		relayTagRequestCalled = false
+		block, err := EncodeRelayTagRequest(&RelayTagRequestBlock{})
+		require.NoError(t, err)
+		payload, _ := SerializeBlocks([]*SSU2Block{block})
+		_, err = handler.ProcessDataPacket(&SSU2Packet{MessageType: MessageTypeData, Payload: payload})
+		assert.NoError(t, err)
+		assert.True(t, relayTagRequestCalled, "callback should have been called for RelayTagRequest")
+	})
+
+	t.Run("RelayTag", func(t *testing.T) {
+		relayTagCalled = false
+		block, err := EncodeRelayTag(&RelayTagBlock{RelayTag: 42})
+		require.NoError(t, err)
+		payload, _ := SerializeBlocks([]*SSU2Block{block})
+		_, err = handler.ProcessDataPacket(&SSU2Packet{MessageType: MessageTypeData, Payload: payload})
+		assert.NoError(t, err)
+		assert.True(t, relayTagCalled, "callback should have been called for RelayTag")
+	})
 }
 
 // TestDataHandler_PathValidationCallbacks verifies path validation callbacks.
@@ -1452,31 +1492,41 @@ func TestDataHandler_PeerTestCallback(t *testing.T) {
 	var peerTestCalled bool
 	var receivedBlock *SSU2Block
 
+	dummySig := make([]byte, 64)
+
 	handler.SetCallbacks(DataHandlerCallbacks{
 		OnPeerTest: func(block *SSU2Block) error {
 			peerTestCalled = true
 			receivedBlock = block
 			return nil
 		},
+		// Pass-through verifier for testing (G-2)
+		VerifyPeerTestSignature: func(block *PeerTestBlock) error { return nil },
 	})
 
-	testData := make([]byte, 50)
-	for i := range testData {
-		testData[i] = byte(i)
+	ptBlock := &PeerTestBlock{
+		MessageCode: PeerTestRequest,
+		Code:        0,
+		Flag:        0,
+		Version:     2,
+		Nonce:       42,
+		Timestamp:   100,
+		AlicePort:   8080,
+		AliceIP:     net.IPv4(127, 0, 0, 1).To4(),
+		Signature:   dummySig,
 	}
-
-	block := NewSSU2Block(BlockTypePeerTest, testData)
+	block, err := EncodePeerTestBlock(ptBlock)
+	require.NoError(t, err)
 	payload, _ := SerializeBlocks([]*SSU2Block{block})
 	packet := &SSU2Packet{
 		MessageType: MessageTypeData,
 		Payload:     payload,
 	}
 
-	_, err := handler.ProcessDataPacket(packet)
+	_, err = handler.ProcessDataPacket(packet)
 	assert.NoError(t, err)
 	assert.True(t, peerTestCalled)
 	assert.Equal(t, BlockTypePeerTest, receivedBlock.Type)
-	assert.Equal(t, testData, receivedBlock.Data)
 }
 
 // TestDataHandler_MetadataBlockCallbacks verifies metadata block callbacks.

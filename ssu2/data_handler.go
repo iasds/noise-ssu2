@@ -109,6 +109,28 @@ type DataHandlerCallbacks struct {
 	// OnCongestion is called when a Congestion block is received.
 	// flags is the congestion flag byte per spec: bit 0 = request immediate ACK, bit 1 = ECN.
 	OnCongestion func(flags uint8) error
+
+	// VerifyPeerTestSignature is called to verify a PeerTest block's signature
+	// before dispatching to OnPeerTest. Per SSU2 spec §Peer Test, signatures
+	// MUST be verified before acting on the message (G-2). If nil, blocks with
+	// mandatory signatures (messages 1-4) are rejected.
+	VerifyPeerTestSignature func(block *PeerTestBlock) error
+
+	// VerifyRelayRequestSignature is called to verify a RelayRequest block's
+	// signature before dispatching to OnRelayRequest. Per SSU2 spec §Relay
+	// Request, signatures MUST be verified (G-2). If nil, blocks are rejected.
+	VerifyRelayRequestSignature func(block *RelayRequestBlock) error
+
+	// VerifyRelayResponseSignature is called to verify a RelayResponse block's
+	// signature before dispatching to OnRelayResponse. Per SSU2 spec §Relay
+	// Response, signatures MUST be verified for code 0 and code >= 64 (G-2).
+	// If nil, signed responses are rejected.
+	VerifyRelayResponseSignature func(block *RelayResponseBlock) error
+
+	// VerifyRelayIntroSignature is called to verify a RelayIntro block's
+	// signature before dispatching to OnRelayIntro. Per SSU2 spec §Relay
+	// Intro, signatures MUST be verified (G-2). If nil, blocks are rejected.
+	VerifyRelayIntroSignature func(block *RelayIntroBlock) error
 }
 
 // DataHandlerStats tracks statistics for monitoring and debugging.
@@ -455,8 +477,16 @@ func (h *DataHandler) reassembleMessage(messageID uint32) error {
 		}
 	}
 
-	// Reassemble fragments in order
-	var message []byte
+	// Reassemble fragments in order, prepending the I2NP short header
+	// (type + messageID + shortExpiration) so the delivered message matches
+	// the format produced by handleI2NPMessage (G-3).
+	header := make([]byte, 9)
+	header[0] = fragmentSet.I2NPType
+	binary.BigEndian.PutUint32(header[1:5], fragmentSet.MessageID)
+	binary.BigEndian.PutUint32(header[5:9], fragmentSet.ShortExpiration)
+
+	message := make([]byte, 0, int(fragmentSet.ReceivedSize)+9)
+	message = append(message, header...)
 	for i := uint8(0); i <= fragmentSet.LastFragNum; i++ {
 		message = append(message, fragmentSet.Fragments[i]...)
 	}
@@ -699,23 +729,61 @@ func (h *DataHandler) handleCongestion(data []byte) error {
 }
 
 // handleRelayRequest processes a RelayRequest block (Type 7).
+// Per SSU2 spec §Relay Request, signatures MUST be verified before acting (G-2).
 func (h *DataHandler) handleRelayRequest(block *SSU2Block) error {
 	log.WithField("dataLength", len(block.Data)).Debug("Received RelayRequest block")
 
 	cbs := h.getCallbacks()
+
+	// Decode to verify signature field is present
+	decoded, err := DecodeRelayRequest(block)
+	if err != nil {
+		return oops.Wrapf(err, "failed to decode RelayRequest block")
+	}
+
+	if len(decoded.Signature) == 0 {
+		return oops.Code("MISSING_SIGNATURE").Errorf("RelayRequest block has no signature")
+	}
+
+	// Verify signature if verifier is wired (G-2)
+	if cbs.VerifyRelayRequestSignature != nil {
+		if err := cbs.VerifyRelayRequestSignature(decoded); err != nil {
+			return oops.Code("SIGNATURE_INVALID").Wrapf(err, "RelayRequest signature verification failed")
+		}
+	}
+
 	if cbs.OnRelayRequest != nil {
 		return cbs.OnRelayRequest(block)
 	}
 
-	// No callback registered - block will be handled by relay manager if connected
 	return nil
 }
 
 // handleRelayResponse processes a RelayResponse block (Type 8).
+// Per SSU2 spec §Relay Response, signatures MUST be verified for
+// accepted (code 0) and Charlie-rejected (code >= 64) responses (G-2).
 func (h *DataHandler) handleRelayResponse(block *SSU2Block) error {
 	log.WithField("dataLength", len(block.Data)).Debug("Received RelayResponse block")
 
 	cbs := h.getCallbacks()
+
+	decoded, err := DecodeRelayResponse(block)
+	if err != nil {
+		return oops.Wrapf(err, "failed to decode RelayResponse block")
+	}
+
+	// Codes 0 (accepted) and >= 64 (Charlie rejection) carry signatures
+	if decoded.Code == 0 || decoded.Code >= 64 {
+		if len(decoded.Signature) == 0 {
+			return oops.Code("MISSING_SIGNATURE").Errorf("RelayResponse (code %d) has no signature", decoded.Code)
+		}
+		if cbs.VerifyRelayResponseSignature != nil {
+			if err := cbs.VerifyRelayResponseSignature(decoded); err != nil {
+				return oops.Code("SIGNATURE_INVALID").Wrapf(err, "RelayResponse signature verification failed")
+			}
+		}
+	}
+
 	if cbs.OnRelayResponse != nil {
 		return cbs.OnRelayResponse(block)
 	}
@@ -724,10 +792,27 @@ func (h *DataHandler) handleRelayResponse(block *SSU2Block) error {
 }
 
 // handleRelayIntro processes a RelayIntro block (Type 9).
+// Per SSU2 spec §Relay Intro, signatures MUST be verified before acting (G-2).
 func (h *DataHandler) handleRelayIntro(block *SSU2Block) error {
 	log.WithField("dataLength", len(block.Data)).Debug("Received RelayIntro block")
 
 	cbs := h.getCallbacks()
+
+	decoded, err := DecodeRelayIntro(block)
+	if err != nil {
+		return oops.Wrapf(err, "failed to decode RelayIntro block")
+	}
+
+	if len(decoded.Signature) == 0 {
+		return oops.Code("MISSING_SIGNATURE").Errorf("RelayIntro block has no signature")
+	}
+
+	if cbs.VerifyRelayIntroSignature != nil {
+		if err := cbs.VerifyRelayIntroSignature(decoded); err != nil {
+			return oops.Code("SIGNATURE_INVALID").Wrapf(err, "RelayIntro signature verification failed")
+		}
+	}
+
 	if cbs.OnRelayIntro != nil {
 		return cbs.OnRelayIntro(block)
 	}
@@ -760,10 +845,29 @@ func (h *DataHandler) handleRelayTag(block *SSU2Block) error {
 }
 
 // handlePeerTest processes a PeerTest block (Type 10).
+// Per SSU2 spec §Peer Test, signatures MUST be verified for messages 1-4 (G-2).
 func (h *DataHandler) handlePeerTest(block *SSU2Block) error {
 	log.WithField("dataLength", len(block.Data)).Debug("Received PeerTest block")
 
 	cbs := h.getCallbacks()
+
+	decoded, err := DecodePeerTestBlock(block)
+	if err != nil {
+		return oops.Wrapf(err, "failed to decode PeerTest block")
+	}
+
+	// Messages 1-4 MUST carry signatures per spec
+	if decoded.MessageCode >= PeerTestRequest && decoded.MessageCode <= PeerTestResult {
+		if len(decoded.Signature) == 0 {
+			return oops.Code("MISSING_SIGNATURE").Errorf("PeerTest message %d has no signature", decoded.MessageCode)
+		}
+		if cbs.VerifyPeerTestSignature != nil {
+			if err := cbs.VerifyPeerTestSignature(decoded); err != nil {
+				return oops.Code("SIGNATURE_INVALID").Wrapf(err, "PeerTest message %d signature verification failed", decoded.MessageCode)
+			}
+		}
+	}
+
 	if cbs.OnPeerTest != nil {
 		return cbs.OnPeerTest(block)
 	}

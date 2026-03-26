@@ -40,7 +40,11 @@ type PathValidator struct {
 	// tokenCache is the optional token cache for invalidation on migration
 	tokenCache *TokenCache
 
-	// mutex protects the challenges map
+	// discoveredMTU is the largest packet size that received a response
+	// during MTU probing. 0 means no probe has completed yet.
+	discoveredMTU int
+
+	// mutex protects the challenges map and discoveredMTU
 	mutex sync.RWMutex
 }
 
@@ -70,6 +74,10 @@ type PathChallenge struct {
 
 	// State tracks the validation progress
 	State PathChallengeState
+
+	// ProbeSize is the total packet size this challenge probes (G-5).
+	// 0 for non-MTU challenges.
+	ProbeSize int
 }
 
 // PathChallengeState represents the state of a path validation attempt.
@@ -112,6 +120,18 @@ const (
 
 	// PathValidationCleanupInterval is how often to clean up expired challenges
 	PathValidationCleanupInterval = 30 * time.Second
+)
+
+// MTU probing constants (G-5).
+const (
+	// MinMTU is the minimum MTU for SSU2 (spec-defined floor).
+	MinMTU = 1280
+
+	// MaxMTU is the upper bound for MTU probing.
+	MaxMTU = 1500
+
+	// MTUProbeStep is the size increment between probe steps.
+	MTUProbeStep = 20
 )
 
 // NewPathValidator creates a new path validator for a connection.
@@ -293,9 +313,18 @@ func (pv *PathValidator) HandlePathResponse(block *SSU2Block, fromAddr *net.UDPA
 
 	// Mark as validated
 	challenge.State = ChallengeValidated
+
+	// Update discovered MTU if this was a probe challenge (G-5)
+	if challenge.ProbeSize > 0 && challenge.ProbeSize > pv.discoveredMTU {
+		pv.discoveredMTU = challenge.ProbeSize
+	}
+
 	pv.mutex.Unlock()
 
-	// Complete path validation
+	// Complete path validation (skip for MTU-only probes)
+	if challenge.ProbeSize > 0 {
+		return nil
+	}
 	return pv.ValidatePath(challengeID)
 }
 
@@ -383,6 +412,7 @@ func (pv *PathValidator) GetChallenge(challengeID uint64) (*PathChallenge, bool)
 		NewAddr:     challenge.NewAddr,
 		Timestamp:   challenge.Timestamp,
 		State:       challenge.State,
+		ProbeSize:   challenge.ProbeSize,
 	}, true
 }
 
@@ -503,4 +533,84 @@ func DecodePathResponse(block *SSU2Block) (uint64, error) {
 	}
 
 	return binary.BigEndian.Uint64(block.Data[:8]), nil
+}
+
+// EncodePathChallengeWithPadding creates a Path Challenge block padded to
+// probeSize bytes (total block data length). The first 8 bytes are the
+// challenge ID; remaining bytes are random padding for MTU probing (G-5).
+func EncodePathChallengeWithPadding(challengeID uint64, probeSize int) *SSU2Block {
+	if probeSize < 8 {
+		probeSize = 8
+	}
+	data := make([]byte, probeSize)
+	binary.BigEndian.PutUint64(data[:8], challengeID)
+	// Fill remaining bytes with random padding; failure is non-fatal
+	if probeSize > 8 {
+		_, _ = rand.Read(data[8:])
+	}
+	return NewSSU2Block(BlockTypePathChallenge, data)
+}
+
+// InitiateMTUProbe starts an MTU probe by sending a Path Challenge padded
+// to the given size. If a Path Response is received for this challenge,
+// the discovered MTU is updated (G-5).
+func (pv *PathValidator) InitiateMTUProbe(addr *net.UDPAddr, size int) (uint64, error) {
+	if addr == nil {
+		return 0, oops.Errorf("address is nil")
+	}
+	if size < MinMTU || size > MaxMTU {
+		return 0, oops.Errorf("probe size %d out of range [%d, %d]", size, MinMTU, MaxMTU)
+	}
+
+	challengeID, err := generateChallengeID()
+	if err != nil {
+		return 0, oops.Wrapf(err, "failed to generate challenge ID for MTU probe")
+	}
+
+	challenge := &PathChallenge{
+		ChallengeID: challengeID,
+		NewAddr:     addr,
+		Timestamp:   time.Now(),
+		State:       ChallengeSent,
+		ProbeSize:   size,
+	}
+
+	pv.mutex.Lock()
+	pv.challenges[challengeID] = challenge
+	pv.mutex.Unlock()
+
+	block := EncodePathChallengeWithPadding(challengeID, size)
+	if err := pv.conn.SendToAddress(block, addr); err != nil {
+		pv.mutex.Lock()
+		delete(pv.challenges, challengeID)
+		pv.mutex.Unlock()
+		return 0, oops.Wrapf(err, "failed to send MTU probe of size %d", size)
+	}
+
+	return challengeID, nil
+}
+
+// CompleteMTUProbe is called when a Path Response is received for an MTU
+// probe challenge. Updates discoveredMTU if this probe was larger than
+// the previously discovered value (G-5).
+func (pv *PathValidator) CompleteMTUProbe(challengeID uint64) {
+	pv.mutex.Lock()
+	defer pv.mutex.Unlock()
+
+	challenge, exists := pv.challenges[challengeID]
+	if !exists || challenge.ProbeSize == 0 {
+		return
+	}
+	challenge.State = ChallengeValidated
+	if challenge.ProbeSize > pv.discoveredMTU {
+		pv.discoveredMTU = challenge.ProbeSize
+	}
+}
+
+// GetDiscoveredMTU returns the largest validated MTU from probing, or 0
+// if no MTU probe has completed (G-5).
+func (pv *PathValidator) GetDiscoveredMTU() int {
+	pv.mutex.RLock()
+	defer pv.mutex.RUnlock()
+	return pv.discoveredMTU
 }

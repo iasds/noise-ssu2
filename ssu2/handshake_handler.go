@@ -707,6 +707,12 @@ func (h *HandshakeHandler) PeerOptions() *OptionsParams {
 	return h.peerOptions
 }
 
+// LocalOptions returns the locally configured Options parameters, or nil
+// if none were set via SetLocalOptions (G-6).
+func (h *HandshakeHandler) LocalOptions() *OptionsParams {
+	return h.localOptions
+}
+
 // NegotiatedPadding returns the padding parameters that both peers agree on.
 // Per SSU2 spec, the initiator's transmit ratios are the responder's receive
 // constraints and vice versa. The negotiated range is the intersection of

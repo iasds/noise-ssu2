@@ -168,6 +168,11 @@ type SSU2Conn struct {
 	// validDataPacketsReceived counts successfully received data-phase packets.
 	// Included in the Termination block per spec §Termination.
 	validDataPacketsReceived atomic.Uint64
+
+	// validDataPacketsSent counts successfully sent data-phase packets.
+	// Compared against the peer's reported count in Termination blocks
+	// to detect packet loss during close (G-7).
+	validDataPacketsSent atomic.Uint64
 }
 
 // PendingPacket tracks an outbound packet awaiting acknowledgment.
@@ -644,6 +649,15 @@ func (h *SSU2Conn) finalizeHandshake() error {
 
 	// Apply negotiated padding parameters (G-3). If the peer sent an
 	// Options block, the negotiated values override the local defaults.
+	// G-6: Log when options negotiation is incomplete (one-sided).
+	localOpts := h.handshakeHandler.LocalOptions()
+	peerOpts := h.handshakeHandler.PeerOptions()
+	if localOpts != nil && peerOpts == nil {
+		log.Warn("Options negotiation one-sided: local options set but peer did not send Options block (G-6)")
+	} else if localOpts == nil && peerOpts != nil {
+		log.Warn("Options negotiation one-sided: peer sent Options but no local options configured (G-6)")
+	}
+
 	if negotiated := h.handshakeHandler.NegotiatedPadding(); negotiated != nil {
 		h.config.PaddingRatio = negotiated.TMaxRatio
 		if negotiated.TMinRatio > 0 {
@@ -701,6 +715,26 @@ func (h *SSU2Conn) installCipherStates() error {
 	// Wire PathChallenge/PathResponse callbacks for path validation (G-7).
 	cbs.OnPathChallenge = h.handlePathChallengeData
 	cbs.OnPathResponse = h.handlePathResponseData
+
+	// Wire Termination callback to compare peer-reported received count
+	// against our sent count for packet-loss diagnostics (G-7).
+	existingOnTermination := cbs.OnTermination
+	cbs.OnTermination = func(peerReceived uint64, reason uint8, additionalData []byte) {
+		sent := h.validDataPacketsSent.Load()
+		if sent > 0 {
+			lost := int64(sent) - int64(peerReceived)
+			log.WithFields(map[string]interface{}{
+				"sent":         sent,
+				"peerReceived": peerReceived,
+				"lost":         lost,
+				"reason":       reason,
+			}).Info("Termination packet loss summary (G-7)")
+		}
+		if existingOnTermination != nil {
+			existingOnTermination(peerReceived, reason, additionalData)
+		}
+	}
+
 	h.dataHandler.SetCallbacks(cbs)
 
 	// Update router hash from peer's static key if available
@@ -1464,6 +1498,11 @@ func (h *SSU2Conn) sendPacketDirect(packet *SSU2Packet) error {
 	_, err = h.underlying.WriteTo(data, h.remoteAddr)
 	if err != nil {
 		return oops.Wrapf(err, "failed to write to UDP")
+	}
+
+	// Count successfully sent data packets (G-7)
+	if packet.MessageType == MessageTypeData {
+		h.validDataPacketsSent.Add(1)
 	}
 
 	// Update activity
