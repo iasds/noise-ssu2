@@ -881,21 +881,18 @@ func TestFixedPointClamp(t *testing.T) {
 }
 
 func TestParseOptionsBlock(t *testing.T) {
-	data := make([]byte, 15)
-	binary.BigEndian.PutUint16(data[0:2], 2)
-	data[2] = floatToFixedPoint(1.0)            // tmin
-	data[3] = floatToFixedPoint(3.5)            // tmax
-	data[4] = floatToFixedPoint(0.5)            // rmin
-	data[5] = floatToFixedPoint(2.0)            // rmax
-	binary.BigEndian.PutUint16(data[6:8], 100)  // tdummy
-	binary.BigEndian.PutUint16(data[8:10], 200) // rdummy
-	binary.BigEndian.PutUint16(data[10:12], 50) // tdelay
-	binary.BigEndian.PutUint16(data[12:14], 75) // rdelay
-	data[14] = 0x01                             // flags
+	data := make([]byte, 12)
+	data[0] = floatToFixedPoint(1.0)            // tmin
+	data[1] = floatToFixedPoint(3.5)            // tmax
+	data[2] = floatToFixedPoint(0.5)            // rmin
+	data[3] = floatToFixedPoint(2.0)            // rmax
+	binary.BigEndian.PutUint16(data[4:6], 100)  // tdummy
+	binary.BigEndian.PutUint16(data[6:8], 200)  // rdummy
+	binary.BigEndian.PutUint16(data[8:10], 50)  // tdelay
+	binary.BigEndian.PutUint16(data[10:12], 75) // rdelay
 
 	opts, err := ParseOptionsBlock(data)
 	require.NoError(t, err)
-	assert.Equal(t, uint16(2), opts.Version)
 	assert.InDelta(t, 1.0, opts.TMinRatio, 0.0625)
 	assert.InDelta(t, 3.5, opts.TMaxRatio, 0.0625)
 	assert.InDelta(t, 0.5, opts.RMinRatio, 0.0625)
@@ -904,7 +901,6 @@ func TestParseOptionsBlock(t *testing.T) {
 	assert.Equal(t, uint16(200), opts.RDummy)
 	assert.Equal(t, uint16(50), opts.TDelay)
 	assert.Equal(t, uint16(75), opts.RDelay)
-	assert.Equal(t, uint8(0x01), opts.Flags)
 }
 
 func TestParseOptionsBlock_TooShort(t *testing.T) {
@@ -914,7 +910,6 @@ func TestParseOptionsBlock_TooShort(t *testing.T) {
 
 func TestOptionsSerializeRoundTrip(t *testing.T) {
 	original := &OptionsParams{
-		Version:   2,
 		TMinRatio: 1.0,
 		TMaxRatio: 4.0,
 		RMinRatio: 0.5,
@@ -923,14 +918,12 @@ func TestOptionsSerializeRoundTrip(t *testing.T) {
 		RDummy:    400,
 		TDelay:    100,
 		RDelay:    200,
-		Flags:     0x03,
 	}
 	data := original.Serialize()
-	assert.Len(t, data, 15)
+	assert.Len(t, data, 12)
 
 	parsed, err := ParseOptionsBlock(data)
 	require.NoError(t, err)
-	assert.Equal(t, original.Version, parsed.Version)
 	assert.InDelta(t, original.TMinRatio, parsed.TMinRatio, 0.0625)
 	assert.InDelta(t, original.TMaxRatio, parsed.TMaxRatio, 0.0625)
 	assert.InDelta(t, original.RMinRatio, parsed.RMinRatio, 0.0625)
@@ -939,14 +932,12 @@ func TestOptionsSerializeRoundTrip(t *testing.T) {
 	assert.Equal(t, original.RDummy, parsed.RDummy)
 	assert.Equal(t, original.TDelay, parsed.TDelay)
 	assert.Equal(t, original.RDelay, parsed.RDelay)
-	assert.Equal(t, original.Flags, parsed.Flags)
 }
 
 func TestNegotiatedPadding_BothPresent(t *testing.T) {
 	h, _, _, _ := setupHandshakePair(t)
 
 	h.SetLocalOptions(&OptionsParams{
-		Version:   2,
 		TMinRatio: 0.5,
 		TMaxRatio: 4.0,
 		RMinRatio: 1.0,
@@ -958,7 +949,6 @@ func TestNegotiatedPadding_BothPresent(t *testing.T) {
 	})
 	// Simulated peer options (peer's transmit = our receive, peer's receive = our transmit)
 	h.peerOptions = &OptionsParams{
-		Version:   2,
 		TMinRatio: 0.0,
 		TMaxRatio: 2.0,
 		RMinRatio: 1.0,
@@ -989,7 +979,7 @@ func TestNegotiatedPadding_BothPresent(t *testing.T) {
 
 func TestNegotiatedPadding_NilPeer(t *testing.T) {
 	h, _, _, _ := setupHandshakePair(t)
-	h.SetLocalOptions(&OptionsParams{Version: 2, TMaxRatio: 1.0})
+	h.SetLocalOptions(&OptionsParams{TMaxRatio: 1.0})
 	assert.Nil(t, h.NegotiatedPadding(), "should be nil when peer options missing")
 }
 
@@ -1000,14 +990,12 @@ func TestNegotiatedPadding_InvalidRangeNoConstraint(t *testing.T) {
 	// →  negotiated TMin = max(3.0, 0.0) = 3.0, TMax = min(4.0, 2.0) = 2.0 → invalid
 	// Should be zeroed (no constraint) rather than clamped.
 	h.SetLocalOptions(&OptionsParams{
-		Version:   2,
 		TMinRatio: 3.0,
 		TMaxRatio: 4.0,
 		RMinRatio: 0.0,
 		RMaxRatio: 1.0,
 	})
 	h.peerOptions = &OptionsParams{
-		Version:   2,
 		TMinRatio: 5.0, // peer transmit min > local receive max → receive invalid
 		TMaxRatio: 6.0,
 		RMinRatio: 0.0,
@@ -1030,8 +1018,8 @@ func TestExtractPeerOptions_Handshake(t *testing.T) {
 	initiator, responder, _, _ := setupHandshakePair(t)
 
 	// Set local options on both sides
-	initiator.SetLocalOptions(&OptionsParams{Version: 2, TMaxRatio: 2.0, RMaxRatio: 3.0})
-	responder.SetLocalOptions(&OptionsParams{Version: 2, TMaxRatio: 1.5, RMaxRatio: 4.0})
+	initiator.SetLocalOptions(&OptionsParams{TMaxRatio: 2.0, RMaxRatio: 3.0})
+	responder.SetLocalOptions(&OptionsParams{TMaxRatio: 1.5, RMaxRatio: 4.0})
 
 	// SessionRequest: initiator sends, responder receives + extracts options
 	sessionReq, err := initiator.CreateSessionRequest(1111, 2222)

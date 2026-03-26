@@ -29,7 +29,7 @@ type SSU2Block struct {
 // Block type constants from ssu2.rst
 const (
 	BlockTypeDateTime          uint8 = 0   // Timestamp block (4 bytes, seconds since epoch)
-	BlockTypeOptions           uint8 = 1   // Connection options (15+ bytes)
+	BlockTypeOptions           uint8 = 1   // Connection options (12+ bytes)
 	BlockTypeRouterInfo        uint8 = 2   // RouterInfo structure (variable)
 	BlockTypeI2NPMessage       uint8 = 3   // I2NP message (variable)
 	BlockTypeFirstFragment     uint8 = 4   // First fragment of message (variable)
@@ -43,8 +43,8 @@ const (
 	BlockTypeACK               uint8 = 12  // Acknowledgment (5+ bytes)
 	BlockTypeAddress           uint8 = 13  // Address block (9 or 21 bytes)
 	BlockTypeReserved14        uint8 = 14  // Reserved per spec (do not use)
-	BlockTypeRelayTagRequest   uint8 = 15  // Request relay tag (3 bytes)
-	BlockTypeRelayTag          uint8 = 16  // Relay tag assignment (7 bytes)
+	BlockTypeRelayTagRequest   uint8 = 15  // Request relay tag (0 bytes data)
+	BlockTypeRelayTag          uint8 = 16  // Relay tag assignment (4 bytes)
 	BlockTypeNewToken          uint8 = 17  // New session token (15 bytes)
 	BlockTypePathChallenge     uint8 = 18  // Path validation challenge (variable)
 	BlockTypePathResponse      uint8 = 19  // Path validation response (variable)
@@ -142,14 +142,14 @@ const (
 	minBlockHeaderSize       = 3     // Type (1) + Length (2)
 	minDateTimeSize          = 4     // Timestamp data (seconds since epoch)
 	minOptionsSize           = 12    // Options data (per spec minimum)
-	minTerminationSize       = 5     // Termination data: reason(1) + valid-data-packets-received(4)
+	minTerminationSize       = 9     // Termination data: valid-data-packets-received(8) + reason(1) per spec
 	minNextNonceSize         = 8     // Next nonce (8 bytes)
 	minACKSize               = 5     // ACK data
 	minReserved14Size        = 0     // Reserved block type (no data expected)
 	minAddressSizeIPv4       = 6     // IPv4 address: port(2) + IP(4)
 	minAddressSizeIPv6       = 18    // IPv6 address: port(2) + IP(16)
-	minRelayTagRequestSize   = 4     // Relay tag request: nonce (4 bytes) per spec
-	minRelayTagSize          = 4     // Relay tag data: relay_tag(4) + expiration(3) = 7 total block, but data length is 4 minimum
+	minRelayTagRequestSize   = 0     // Relay tag request: empty data per spec (size=0)
+	minRelayTagSize          = 4     // Relay tag data: relay_tag(4) per spec
 	minNewTokenSize          = 12    // New token data: 4 expiration + 8 token
 	minFirstPacketNumberSize = 4     // Initial packet number (4 bytes)
 	minCongestionSize        = 1     // Congestion experience (1 byte)

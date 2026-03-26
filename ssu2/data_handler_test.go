@@ -1043,25 +1043,25 @@ func TestDataHandler_AllBlockTypesExplicitlyHandled(t *testing.T) {
 		data      []byte
 	}{
 		{BlockTypeDateTime, "DateTime", make([]byte, 7)},       // minDateTimeSize = 7
-		{BlockTypeOptions, "Options", make([]byte, 15)},        // minOptionsSize = 12
+		{BlockTypeOptions, "Options", make([]byte, 12)},        // minOptionsSize = 12
 		{BlockTypeRouterInfo, "RouterInfo", make([]byte, 100)}, // Variable
 		{BlockTypeI2NPMessage, "I2NPMessage", []byte("test i2np message")},
 		{BlockTypeFirstFragment, "FirstFragment", append([]byte{11, 0, 0, 0, 1, 0, 0, 0, 0}, make([]byte, 50)...)},
 		{BlockTypeFollowOnFragment, "FollowOnFragment", append([]byte{0x02, 0, 0, 0, 1}, make([]byte, 50)...)},
-		{BlockTypeTermination, "Termination", make([]byte, 5)},         // minTerminationSize = 5
-		{BlockTypeRelayRequest, "RelayRequest", make([]byte, 50)},      // Variable
-		{BlockTypeRelayResponse, "RelayResponse", make([]byte, 50)},    // Variable
-		{BlockTypeRelayIntro, "RelayIntro", make([]byte, 50)},          // Variable
-		{BlockTypePeerTest, "PeerTest", make([]byte, 50)},              // Variable
-		{BlockTypeACK, "ACK", make([]byte, 5)},                         // minACKSize = 5
-		{BlockTypeNextNonce, "NextNonce", make([]byte, 8)},             // minNextNonceSize = 8
-		{BlockTypeAddress, "Address", make([]byte, 9)},                 // minAddressSizeIPv4 = 9
-		{BlockTypeRelayTagRequest, "RelayTagRequest", make([]byte, 4)}, // minRelayTagRequestSize = 4
-		{BlockTypeRelayTag, "RelayTag", make([]byte, 7)},               // minRelayTagSize = 7
-		{BlockTypeNewToken, "NewToken", make([]byte, 12)},              // minNewTokenSize = 12
-		{BlockTypePathChallenge, "PathChallenge", make([]byte, 8)},     // Variable
-		{BlockTypePathResponse, "PathResponse", make([]byte, 8)},       // Variable
-		{BlockTypePadding, "Padding", make([]byte, 16)},                // Variable
+		{BlockTypeTermination, "Termination", make([]byte, 9)},      // minTerminationSize = 9
+		{BlockTypeRelayRequest, "RelayRequest", make([]byte, 50)},   // Variable
+		{BlockTypeRelayResponse, "RelayResponse", make([]byte, 50)}, // Variable
+		{BlockTypeRelayIntro, "RelayIntro", make([]byte, 50)},       // Variable
+		{BlockTypePeerTest, "PeerTest", make([]byte, 50)},           // Variable
+		{BlockTypeACK, "ACK", make([]byte, 5)},                      // minACKSize = 5
+		{BlockTypeNextNonce, "NextNonce", make([]byte, 8)},          // minNextNonceSize = 8
+		{BlockTypeAddress, "Address", make([]byte, 9)},              // minAddressSizeIPv4 = 9
+		{BlockTypeRelayTagRequest, "RelayTagRequest", nil},          // minRelayTagRequestSize = 0
+		{BlockTypeRelayTag, "RelayTag", make([]byte, 4)},            // minRelayTagSize = 4
+		{BlockTypeNewToken, "NewToken", make([]byte, 12)},           // minNewTokenSize = 12
+		{BlockTypePathChallenge, "PathChallenge", make([]byte, 8)},  // Variable
+		{BlockTypePathResponse, "PathResponse", make([]byte, 8)},    // Variable
+		{BlockTypePadding, "Padding", make([]byte, 16)},             // Variable
 	}
 
 	for _, tc := range tests {
@@ -1094,7 +1094,7 @@ func TestDataHandler_SetCallbacks(t *testing.T) {
 	var dateTimeValue uint32
 
 	handler.SetCallbacks(DataHandlerCallbacks{
-		OnTermination: func(validDataReceived uint32, reason uint8, additionalData []byte) {
+		OnTermination: func(validDataReceived uint64, reason uint8, additionalData []byte) {
 			terminationCalled = true
 			terminationReason = reason
 		},
@@ -1110,8 +1110,8 @@ func TestDataHandler_SetCallbacks(t *testing.T) {
 
 	// Test Termination callback
 	t.Run("Termination callback", func(t *testing.T) {
-		block := NewSSU2Block(BlockTypeTermination, make([]byte, 5)) // minTerminationSize = 5
-		block.Data[0] = 0x05                                         // Set reason code (byte 0 per spec)
+		block := NewSSU2Block(BlockTypeTermination, make([]byte, 9)) // minTerminationSize = 9
+		block.Data[8] = 0x05                                         // Set reason code (byte 8 per spec)
 		payload, _ := SerializeBlocks([]*SSU2Block{block})
 		packet := &SSU2Packet{
 			MessageType: MessageTypeData,
@@ -1415,7 +1415,7 @@ func TestDataHandler_MultipleBlockTypes(t *testing.T) {
 
 	var terminationCalled, ackCalled bool
 	handler.SetCallbacks(DataHandlerCallbacks{
-		OnTermination: func(validDataReceived uint32, reason uint8, additionalData []byte) {
+		OnTermination: func(validDataReceived uint64, reason uint8, additionalData []byte) {
 			terminationCalled = true
 		},
 		OnACK: func(block *SSU2Block) error {
@@ -1427,10 +1427,10 @@ func TestDataHandler_MultipleBlockTypes(t *testing.T) {
 	blocks := []*SSU2Block{
 		NewSSU2Block(BlockTypeDateTime, make([]byte, 7)),    // minDateTimeSize = 7
 		NewSSU2Block(BlockTypeACK, make([]byte, 5)),         // minACKSize = 5
-		NewSSU2Block(BlockTypeTermination, make([]byte, 5)), // minTerminationSize = 5, byte 0 is reason
+		NewSSU2Block(BlockTypeTermination, make([]byte, 9)), // minTerminationSize = 9, byte 8 is reason
 		NewSSU2Block(BlockTypePadding, make([]byte, 16)),
 	}
-	blocks[2].Data[0] = 0x01 // Set termination reason (byte 0 per spec)
+	blocks[2].Data[8] = 0x01 // Set termination reason (byte 8 per spec)
 
 	payload, _ := SerializeBlocks(blocks)
 	packet := &SSU2Packet{

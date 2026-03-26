@@ -398,8 +398,7 @@ func TestRelayTagBlockEncoding(t *testing.T) {
 
 	t.Run("RelayTag", func(t *testing.T) {
 		tagBlock := &RelayTagBlock{
-			RelayTag:   0x12345678,
-			Expiration: 3600, // 1 hour in seconds
+			RelayTag: 0x12345678,
 		}
 
 		block, err := EncodeRelayTag(tagBlock)
@@ -409,7 +408,6 @@ func TestRelayTagBlockEncoding(t *testing.T) {
 		decoded, err := DecodeRelayTag(block)
 		require.NoError(t, err)
 		assert.Equal(t, tagBlock.RelayTag, decoded.RelayTag)
-		assert.Equal(t, tagBlock.Expiration, decoded.Expiration)
 	})
 }
 

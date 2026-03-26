@@ -153,14 +153,10 @@ type RelayTagRequestBlock struct {
 }
 
 // RelayTagBlock represents a relay tag assignment (Type 16).
-// Introducer assigns a relay tag to the requester.
+// Per spec: relay tag is 4 bytes, big-endian, nonzero.
 type RelayTagBlock struct {
 	// RelayTag is the assigned tag value (4 bytes)
 	RelayTag uint32
-
-	// Expiration is seconds until expiration (3 bytes)
-	// Stored as uint32, but only 3 bytes encoded on wire
-	Expiration uint32
 }
 
 // EncodeRelayRequest encodes a RelayRequest block to wire format.
@@ -607,8 +603,7 @@ func DecodeRelayTagRequest(block *SSU2Block) (*RelayTagRequestBlock, error) {
 }
 
 // EncodeRelayTag encodes a RelayTag block to wire format.
-//
-// Wire format: [RelayTag:4][Expiration:3]
+// Per spec: [RelayTag:4] (4 bytes, big-endian, nonzero)
 //
 // Parameters:
 //   - tag: RelayTag data to encode
@@ -621,23 +616,14 @@ func EncodeRelayTag(tag *RelayTagBlock) (*SSU2Block, error) {
 		return nil, oops.Errorf("RelayTagBlock is nil")
 	}
 
-	// Validate expiration fits in 3 bytes (max ~194 days)
-	if tag.Expiration > 0xFFFFFF {
-		return nil, oops.Errorf("expiration too large: %d (maximum 16777215)", tag.Expiration)
-	}
-
-	data := make([]byte, 7)
+	data := make([]byte, 4)
 	binary.BigEndian.PutUint32(data[0:4], tag.RelayTag)
-
-	// Encode 3-byte expiration
-	data[4] = byte(tag.Expiration >> 16)
-	data[5] = byte(tag.Expiration >> 8)
-	data[6] = byte(tag.Expiration)
 
 	return NewSSU2Block(BlockTypeRelayTag, data), nil
 }
 
 // DecodeRelayTag decodes a RelayTag block from wire format.
+// Per spec: 4 bytes minimum (relay tag only).
 //
 // Parameters:
 //   - block: SSU2Block with Type 16
@@ -655,17 +641,13 @@ func DecodeRelayTag(block *SSU2Block) (*RelayTagBlock, error) {
 	}
 
 	data := block.Data
-	if len(data) < 7 {
-		return nil, oops.Errorf("RelayTag block too short: %d bytes (minimum 7)", len(data))
+	if len(data) < 4 {
+		return nil, oops.Errorf("RelayTag block too short: %d bytes (minimum 4)", len(data))
 	}
 
 	relayTag := binary.BigEndian.Uint32(data[0:4])
 
-	// Decode 3-byte expiration
-	expiration := uint32(data[4])<<16 | uint32(data[5])<<8 | uint32(data[6])
-
 	return &RelayTagBlock{
-		RelayTag:   relayTag,
-		Expiration: expiration,
+		RelayTag: relayTag,
 	}, nil
 }

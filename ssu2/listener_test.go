@@ -500,7 +500,7 @@ func TestSSU2Listener_SendRetry(t *testing.T) {
 		remoteAddr := &net.UDPAddr{IP: net.ParseIP("192.168.1.100"), Port: 12345}
 		shortToken := make([]byte, 5) // Too short
 
-		err := listener.sendRetry(remoteAddr, shortToken, nil)
+		err := listener.sendRetry(remoteAddr, shortToken, nil, 0)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "token must be exactly")
 	})
@@ -518,7 +518,7 @@ func TestSSU2Listener_SendRetry(t *testing.T) {
 		originalHeader := make([]byte, 32)
 
 		// This may fail to send (no peer listening) but should construct packet
-		err := listener.sendRetry(remoteAddr, token, originalHeader)
+		err := listener.sendRetry(remoteAddr, token, originalHeader, 0)
 		// The send might fail, but packet construction should work
 		// We verify no panic occurs
 		_ = err

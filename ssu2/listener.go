@@ -467,8 +467,10 @@ func (l *SSU2Listener) processTokenRequest(packet *SSU2Packet, remoteAddr *net.U
 		return oops.Wrapf(err, "failed to generate token")
 	}
 
-	// Create and send Retry message with token
-	return l.sendRetry(remoteAddr, token, packet.Header)
+	// Create and send Retry message with token.
+	// Per spec: Retry must not be larger than 3x the incoming message.
+	incomingSize := len(packet.Header) + len(packet.Payload) + len(packet.MAC)
+	return l.sendRetry(remoteAddr, token, packet.Header, incomingSize)
 }
 
 // sendRetry sends a Retry message containing the specified token to the remote address.
@@ -479,11 +481,14 @@ func (l *SSU2Listener) processTokenRequest(packet *SSU2Packet, remoteAddr *net.U
 //   - token (bytes 24-31): the retry token value
 //   - payload: DateTime + NewToken blocks, AEAD-encrypted
 //
+// Per spec, the Retry message must not be larger than 3x the incoming message size.
+//
 // Parameters:
 //   - remoteAddr: Destination UDP address
 //   - token: 8-byte token value for the NewToken block
 //   - originalHeader: Header from the SessionRequest (for connection ID extraction)
-func (l *SSU2Listener) sendRetry(remoteAddr *net.UDPAddr, token []byte, originalHeader []byte) error {
+//   - incomingSize: Size of the incoming message (for amplification limit)
+func (l *SSU2Listener) sendRetry(remoteAddr *net.UDPAddr, token []byte, originalHeader []byte, incomingSize int) error {
 	if len(token) != TokenSize {
 		return oops.Errorf("token must be exactly %d bytes, got %d", TokenSize, len(token))
 	}
@@ -554,6 +559,11 @@ func (l *SSU2Listener) sendRetry(remoteAddr *net.UDPAddr, token []byte, original
 	packetData, err := retryPacket.Serialize()
 	if err != nil {
 		return oops.Wrapf(err, "failed to serialize Retry packet")
+	}
+
+	// Per spec: Retry message must not be larger than 3x the incoming message.
+	if incomingSize > 0 && len(packetData) > 3*incomingSize {
+		return oops.Errorf("Retry message (%d bytes) exceeds 3x amplification limit of incoming message (%d bytes)", len(packetData), incomingSize)
 	}
 
 	// Send packet

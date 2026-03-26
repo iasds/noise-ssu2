@@ -630,10 +630,10 @@ func (h *HandshakeHandler) GetRemoteStaticKey() []byte {
 }
 
 // OptionsParams holds the parsed or configured values from an SSU2 Options
-// block (Type 1, 15 bytes). Padding ratios use 4.4 fixed-point encoding
+// block (Type 1, 12 bytes minimum). Padding ratios use 4.4 fixed-point encoding
 // where the value = integerPart + fractionPart/16 (range 0.0–15.9375).
+// Per spec: tmin(1) | tmax(1) | rmin(1) | rmax(1) | tdmy(2) | rdmy(2) | tdelay(2) | rdelay(2)
 type OptionsParams struct {
-	Version   uint16  // protocol version (currently 2)
 	TMinRatio float64 // transmit padding minimum ratio
 	TMaxRatio float64 // transmit padding maximum ratio
 	RMinRatio float64 // receive padding minimum ratio
@@ -642,7 +642,6 @@ type OptionsParams struct {
 	RDummy    uint16  // receive dummy traffic rate
 	TDelay    uint16  // transmit delay (ms)
 	RDelay    uint16  // receive delay (ms)
-	Flags     uint8
 }
 
 // fixedPointToFloat decodes a 4.4 fixed-point byte: upper nibble is the
@@ -664,38 +663,35 @@ func floatToFixedPoint(f float64) byte {
 	return byte(intPart<<4 | fracPart)
 }
 
-// ParseOptionsBlock decodes a 15-byte Options block into OptionsParams.
+// ParseOptionsBlock decodes a 12+ byte Options block into OptionsParams.
+// Per spec: tmin(1) | tmax(1) | rmin(1) | rmax(1) | tdmy(2) | rdmy(2) | tdelay(2) | rdelay(2)
 func ParseOptionsBlock(data []byte) (*OptionsParams, error) {
-	if len(data) < 15 {
-		return nil, oops.Errorf("Options block too short: %d bytes, need 15", len(data))
+	if len(data) < 12 {
+		return nil, oops.Errorf("Options block too short: %d bytes, need 12", len(data))
 	}
 	return &OptionsParams{
-		Version:   binary.BigEndian.Uint16(data[0:2]),
-		TMinRatio: fixedPointToFloat(data[2]),
-		TMaxRatio: fixedPointToFloat(data[3]),
-		RMinRatio: fixedPointToFloat(data[4]),
-		RMaxRatio: fixedPointToFloat(data[5]),
-		TDummy:    binary.BigEndian.Uint16(data[6:8]),
-		RDummy:    binary.BigEndian.Uint16(data[8:10]),
-		TDelay:    binary.BigEndian.Uint16(data[10:12]),
-		RDelay:    binary.BigEndian.Uint16(data[12:14]),
-		Flags:     data[14],
+		TMinRatio: fixedPointToFloat(data[0]),
+		TMaxRatio: fixedPointToFloat(data[1]),
+		RMinRatio: fixedPointToFloat(data[2]),
+		RMaxRatio: fixedPointToFloat(data[3]),
+		TDummy:    binary.BigEndian.Uint16(data[4:6]),
+		RDummy:    binary.BigEndian.Uint16(data[6:8]),
+		TDelay:    binary.BigEndian.Uint16(data[8:10]),
+		RDelay:    binary.BigEndian.Uint16(data[10:12]),
 	}, nil
 }
 
-// Serialize encodes OptionsParams into a 15-byte Options block.
+// Serialize encodes OptionsParams into a 12-byte Options block per spec.
 func (o *OptionsParams) Serialize() []byte {
-	data := make([]byte, 15)
-	binary.BigEndian.PutUint16(data[0:2], o.Version)
-	data[2] = floatToFixedPoint(o.TMinRatio)
-	data[3] = floatToFixedPoint(o.TMaxRatio)
-	data[4] = floatToFixedPoint(o.RMinRatio)
-	data[5] = floatToFixedPoint(o.RMaxRatio)
-	binary.BigEndian.PutUint16(data[6:8], o.TDummy)
-	binary.BigEndian.PutUint16(data[8:10], o.RDummy)
-	binary.BigEndian.PutUint16(data[10:12], o.TDelay)
-	binary.BigEndian.PutUint16(data[12:14], o.RDelay)
-	data[14] = o.Flags
+	data := make([]byte, 12)
+	data[0] = floatToFixedPoint(o.TMinRatio)
+	data[1] = floatToFixedPoint(o.TMaxRatio)
+	data[2] = floatToFixedPoint(o.RMinRatio)
+	data[3] = floatToFixedPoint(o.RMaxRatio)
+	binary.BigEndian.PutUint16(data[4:6], o.TDummy)
+	binary.BigEndian.PutUint16(data[6:8], o.RDummy)
+	binary.BigEndian.PutUint16(data[8:10], o.TDelay)
+	binary.BigEndian.PutUint16(data[10:12], o.RDelay)
 	return data
 }
 
@@ -724,7 +720,7 @@ func (h *HandshakeHandler) NegotiatedPadding() *OptionsParams {
 	}
 	// The peer's transmit limits constrain what we receive, and our transmit
 	// limits constrain what the peer receives. Negotiate the overlap.
-	negotiated := &OptionsParams{Version: 2}
+	negotiated := &OptionsParams{}
 
 	// Our send padding: bounded by our tmin/tmax AND peer's rmin/rmax
 	negotiated.TMinRatio = max44(local.TMinRatio, peer.RMinRatio)
@@ -778,7 +774,7 @@ func minU16(a, b uint16) uint16 {
 // and stores the parsed result in h.peerOptions.
 func (h *HandshakeHandler) extractPeerOptions(blocks []*SSU2Block) {
 	for _, block := range blocks {
-		if block.Type == BlockTypeOptions && len(block.Data) >= 15 {
+		if block.Type == BlockTypeOptions && len(block.Data) >= 12 {
 			opts, err := ParseOptionsBlock(block.Data)
 			if err == nil {
 				h.peerOptions = opts

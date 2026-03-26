@@ -661,27 +661,25 @@ func TestDecodeRelayTagRequest_ShortData(t *testing.T) {
 // TestEncodeRelayTag_Valid tests encoding valid relay tag.
 func TestEncodeRelayTag_Valid(t *testing.T) {
 	tag := &RelayTagBlock{
-		RelayTag:   12345,
-		Expiration: 3600,
+		RelayTag: 12345,
 	}
 
 	block, err := EncodeRelayTag(tag)
 	require.NoError(t, err)
 	assert.NotNil(t, block)
 	assert.Equal(t, BlockTypeRelayTag, block.Type)
-	assert.Equal(t, 7, len(block.Data))
+	assert.Equal(t, 4, len(block.Data))
 }
 
-// TestEncodeRelayTag_MaxExpiration tests encoding maximum expiration.
-func TestEncodeRelayTag_MaxExpiration(t *testing.T) {
+// TestEncodeRelayTag_MaxRelayTag tests encoding maximum relay tag value.
+func TestEncodeRelayTag_MaxRelayTag(t *testing.T) {
 	tag := &RelayTagBlock{
-		RelayTag:   12345,
-		Expiration: 0xFFFFFF, // Maximum 3-byte value
+		RelayTag: 0xFFFFFFFF,
 	}
 
 	block, err := EncodeRelayTag(tag)
 	require.NoError(t, err)
-	assert.Equal(t, 7, len(block.Data))
+	assert.Equal(t, 4, len(block.Data))
 }
 
 // TestEncodeRelayTag_NilBlock tests encoding nil tag.
@@ -692,24 +690,10 @@ func TestEncodeRelayTag_NilBlock(t *testing.T) {
 	assert.Contains(t, err.Error(), "nil")
 }
 
-// TestEncodeRelayTag_ExpirationTooLarge tests expiration overflow.
-func TestEncodeRelayTag_ExpirationTooLarge(t *testing.T) {
-	tag := &RelayTagBlock{
-		RelayTag:   12345,
-		Expiration: 0x1000000, // Too large for 3 bytes
-	}
-
-	block, err := EncodeRelayTag(tag)
-	assert.Error(t, err)
-	assert.Nil(t, block)
-	assert.Contains(t, err.Error(), "too large")
-}
-
 // TestDecodeRelayTag_Valid tests decoding valid relay tag.
 func TestDecodeRelayTag_Valid(t *testing.T) {
 	original := &RelayTagBlock{
-		RelayTag:   12345,
-		Expiration: 3600,
+		RelayTag: 12345,
 	}
 
 	block, err := EncodeRelayTag(original)
@@ -718,7 +702,6 @@ func TestDecodeRelayTag_Valid(t *testing.T) {
 	decoded, err := DecodeRelayTag(block)
 	require.NoError(t, err)
 	assert.Equal(t, original.RelayTag, decoded.RelayTag)
-	assert.Equal(t, original.Expiration, decoded.Expiration)
 }
 
 // TestDecodeRelayTag_NilBlock tests decoding nil block.
@@ -733,7 +716,7 @@ func TestDecodeRelayTag_NilBlock(t *testing.T) {
 func TestDecodeRelayTag_WrongType(t *testing.T) {
 	block := &SSU2Block{
 		Type: BlockTypeRelayTagRequest,
-		Data: make([]byte, 7),
+		Data: make([]byte, 4),
 	}
 
 	decoded, err := DecodeRelayTag(block)
@@ -746,7 +729,7 @@ func TestDecodeRelayTag_WrongType(t *testing.T) {
 func TestDecodeRelayTag_TooShort(t *testing.T) {
 	block := &SSU2Block{
 		Type: BlockTypeRelayTag,
-		Data: make([]byte, 5), // Too short
+		Data: make([]byte, 3), // Too short
 	}
 
 	decoded, err := DecodeRelayTag(block)
@@ -853,8 +836,7 @@ func TestRelayBlocks_RoundTrip(t *testing.T) {
 	// Test RelayTag
 	t.Run("RelayTag", func(t *testing.T) {
 		tag := &RelayTagBlock{
-			RelayTag:   44444,
-			Expiration: 7200,
+			RelayTag: 44444,
 		}
 
 		block, err := EncodeRelayTag(tag)
@@ -864,6 +846,5 @@ func TestRelayBlocks_RoundTrip(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Equal(t, tag.RelayTag, decoded.RelayTag)
-		assert.Equal(t, tag.Expiration, decoded.Expiration)
 	})
 }

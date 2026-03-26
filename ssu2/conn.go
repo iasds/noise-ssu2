@@ -239,7 +239,6 @@ func NewSSU2Conn(
 	// Populate local Options from config so the handshake advertises our
 	// padding preferences to the peer (G-3).
 	handshakeHandler.SetLocalOptions(&OptionsParams{
-		Version:   2,
 		TMinRatio: 0, // we allow any transmit padding
 		TMaxRatio: config.PaddingRatio,
 		RMinRatio: 0,
@@ -997,13 +996,13 @@ func (h *SSU2Conn) Close() error {
 		h.stateMutex.Unlock()
 
 		// Send Termination block (best effort)
-		// Spec §Termination: reason(1 byte) + validDataPacketsReceived(4 bytes, big-endian)
+		// Spec §Termination: validDataPacketsReceived(8 bytes, big-endian) + reason(1 byte)
 		termBlock := &SSU2Block{
 			Type: BlockTypeTermination,
-			Data: make([]byte, 5),
+			Data: make([]byte, 9),
 		}
-		termBlock.Data[0] = 0 // Reason: 0 (normal close)
-		binary.BigEndian.PutUint32(termBlock.Data[1:5], uint32(h.validDataPacketsReceived.Load()))
+		binary.BigEndian.PutUint64(termBlock.Data[0:8], h.validDataPacketsReceived.Load())
+		termBlock.Data[8] = 0 // Reason: 0 (normal close)
 
 		// Create Data packet with termination block
 		pktNum := h.nextSendSequence()
@@ -1606,20 +1605,31 @@ func (h *SSU2Conn) receivePacketWithTimeout(ctx context.Context, timeout time.Du
 // lastSent if no response arrives within a per-attempt interval.
 // Per spec: handshake packets MUST be retransmitted with the same packet number
 // and identical encrypted contents.
+//
+// The spec recommends specific retransmission intervals:
+//   - Session Request: 1.25s, 2.5s, 5s
+//   - Session Created: 1s, 2s, 4s
 func (h *SSU2Conn) receiveHandshakeWithRetransmit(ctx context.Context, lastSent *SSU2Packet, totalTimeout time.Duration) (*SSU2Packet, error) {
-	const maxRetransmits = 3
-	attemptTimeout := totalTimeout / time.Duration(maxRetransmits+1)
-	if attemptTimeout < time.Second {
-		attemptTimeout = time.Second
+	// Use spec-recommended exponential backoff intervals based on message type.
+	var intervals []time.Duration
+	if lastSent != nil && lastSent.MessageType == MessageTypeSessionCreated {
+		intervals = []time.Duration{1 * time.Second, 2 * time.Second, 4 * time.Second}
+	} else {
+		intervals = []time.Duration{1250 * time.Millisecond, 2500 * time.Millisecond, 5 * time.Second}
 	}
 
 	deadline := time.Now().Add(totalTimeout)
-	for attempt := 0; attempt <= maxRetransmits; attempt++ {
+	for attempt := 0; attempt <= len(intervals); attempt++ {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
 			break
 		}
-		wait := attemptTimeout
+		var wait time.Duration
+		if attempt < len(intervals) {
+			wait = intervals[attempt]
+		} else {
+			wait = remaining
+		}
 		if wait > remaining {
 			wait = remaining
 		}
@@ -1639,11 +1649,11 @@ func (h *SSU2Conn) receiveHandshakeWithRetransmit(ctx context.Context, lastSent 
 		}
 
 		// Retransmit the last sent handshake packet with identical contents.
-		if attempt < maxRetransmits {
+		if attempt < len(intervals) {
 			_ = h.sendPacketDirect(lastSent)
 		}
 	}
-	return nil, oops.Errorf("handshake timeout after %d retransmits", maxRetransmits)
+	return nil, oops.Errorf("handshake timeout after %d retransmits", len(intervals))
 }
 
 // nextSendSequence returns the next packet sequence number.
