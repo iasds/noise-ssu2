@@ -151,6 +151,7 @@ type FragmentSet struct {
 	Fragments       map[uint8][]byte // Fragment number -> data
 	ReceivedSize    uint32           // Bytes received so far
 	HasLast         bool             // Whether we've received the last fragment
+	HasFirst        bool             // Whether we've received the first fragment
 	LastFragNum     uint8            // Fragment number of the last fragment
 	CreatedAt       time.Time        // When first fragment arrived
 	LastUpdate      time.Time        // Last fragment received time
@@ -389,8 +390,28 @@ func (h *DataHandler) handleFirstFragment(data []byte) error {
 	h.mutex.Lock()
 	defer h.mutex.Unlock()
 
-	// Check if we already have this message ID — silently accept retransmissions
-	if _, exists := h.fragments[messageID]; exists {
+	// Check if we already have this message ID from an early FollowOnFragment
+	if existing, exists := h.fragments[messageID]; exists {
+		if existing.HasFirst {
+			// Duplicate FirstFragment — ignore silently
+			return nil
+		}
+		// Populate missing metadata from this FirstFragment
+		existing.I2NPType = i2npType
+		existing.ShortExpiration = shortExpiration
+		existing.HasFirst = true
+		existing.Fragments[0] = make([]byte, len(fragmentData))
+		copy(existing.Fragments[0], fragmentData)
+		existing.ReceivedSize += uint32(len(fragmentData))
+		existing.LastUpdate = time.Now()
+		h.incrementStat(&h.stats.FragmentsReceived)
+
+		// Attempt reassembly now that we have the first fragment
+		if existing.HasLast {
+			if err := h.reassembleMessage(messageID); err != nil {
+				return err
+			}
+		}
 		return nil
 	}
 
@@ -403,6 +424,7 @@ func (h *DataHandler) handleFirstFragment(data []byte) error {
 		ReceivedSize:    uint32(len(fragmentData)),
 		CreatedAt:       time.Now(),
 		LastUpdate:      time.Now(),
+		HasFirst:        true,
 	}
 
 	// Store first fragment (fragment number 0)
@@ -433,11 +455,18 @@ func (h *DataHandler) handleFollowOnFragment(data []byte) error {
 	h.mutex.Lock()
 	defer h.mutex.Unlock()
 
-	// Find fragment set
+	// Find or create fragment set
 	fragmentSet, exists := h.fragments[messageID]
 	if !exists {
-		h.incrementStat(&h.stats.MessagesDropped)
-		return oops.Errorf("follow-on fragment for unknown message ID %d", messageID)
+		// Buffer early FollowOnFragment before its FirstFragment arrives
+		now := time.Now()
+		fragmentSet = &FragmentSet{
+			MessageID:  messageID,
+			Fragments:  make(map[uint8][]byte),
+			CreatedAt:  now,
+			LastUpdate: now,
+		}
+		h.fragments[messageID] = fragmentSet
 	}
 
 	// Check for duplicate fragment
@@ -458,8 +487,8 @@ func (h *DataHandler) handleFollowOnFragment(data []byte) error {
 		fragmentSet.LastFragNum = fragmentNum
 	}
 
-	// Attempt reassembly if we have the last fragment and all preceding ones
-	if fragmentSet.HasLast {
+	// Attempt reassembly if we have both first and last fragments and all preceding ones
+	if fragmentSet.HasFirst && fragmentSet.HasLast {
 		if err := h.reassembleMessage(messageID); err != nil {
 			return err
 		}
@@ -477,7 +506,7 @@ func (h *DataHandler) reassembleMessage(messageID uint32) error {
 	}
 
 	// Check we have all fragments from 0 through LastFragNum
-	if !fragmentSet.HasLast {
+	if !fragmentSet.HasFirst || !fragmentSet.HasLast {
 		return nil // Not ready yet
 	}
 	for i := uint8(0); i <= fragmentSet.LastFragNum; i++ {

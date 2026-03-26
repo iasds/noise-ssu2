@@ -152,7 +152,7 @@ func TestRelay6StepProcess(t *testing.T) {
 	require.NoError(t, err)
 
 	// Charlie's hole punch message (simulated through state updates)
-	err = alice.holePunchCoord.HandleHolePunch(sessionID, charlie.addr)
+	err = alice.holePunchCoord.HandleHolePunch(sessionID, charlie.addr, nil, nil)
 	require.NoError(t, err)
 
 	attempt := alice.holePunchCoord.GetAttempt(sessionID)
@@ -164,7 +164,7 @@ func TestRelay6StepProcess(t *testing.T) {
 	t.Log("Step 6: Alice sends SessionRequest to Charlie")
 
 	// Alice processes the hole punch response
-	err = alice.holePunchCoord.ProcessHolePunchResponse(sessionID, charlie.addr)
+	err = alice.holePunchCoord.ProcessHolePunchResponse(sessionID, charlie.addr, nil, nil)
 	require.NoError(t, err)
 
 	attempt = alice.holePunchCoord.GetAttempt(sessionID)

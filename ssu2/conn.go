@@ -35,6 +35,11 @@ const (
 	// rekeyThreshold is the send-sequence value at which we initiate a
 	// NextNonce rekey. Per the SSU2 spec the 32-bit packet number must
 	// not wrap, so we start the rekey handshake well before 0xFFFFFFFF.
+	//
+	// WARNING: NextNonce (block type 11) is based on an UNFINALIZED spec
+	// area (marked "TODO only if we rotate keys" with size "TBD").
+	// This threshold and the rekey mechanism may need revision for
+	// interoperability when the spec is finalised.
 	rekeyThreshold uint32 = 0xFFFF_FF00
 
 	// maxPacketRetries is the maximum number of retransmission attempts
@@ -1766,6 +1771,8 @@ func (h *SSU2Conn) initiateRekey() {
 	if h.sendCipher == nil {
 		return
 	}
+
+	log.Warn("initiating NextNonce rekey (unfinalized spec area — interoperability not guaranteed)")
 
 	// Derive new send cipher key per SSU2 spec §NextNonce:
 	// newKey = HKDF(currentKey, ZEROLEN, "WrapCipherKey", 32).

@@ -23,6 +23,11 @@ const (
 	// KeyRotationCheckInterval is how often to check if rotation is needed.
 	KeyRotationCheckInterval = 15 * time.Minute
 
+	// KeyGracePeriod is the duration after key rotation during which the old
+	// key is still accepted for decrypting in-flight packets. This prevents
+	// connection disruption during key transitions.
+	KeyGracePeriod = 30 * time.Second
+
 	// StaticKeySize is the size of X25519 static keys.
 	StaticKeySize = 32
 
@@ -129,6 +134,13 @@ type KeyRotationManager struct {
 	// introKey is the current introduction key for header encryption.
 	introKey *ManagedKey
 
+	// previousStaticKey is the retired static key kept during the grace
+	// period for decrypting in-flight packets.
+	previousStaticKey *ManagedKey
+
+	// previousIntroKey is the retired intro key kept during the grace period.
+	previousIntroKey *ManagedKey
+
 	// onRotation is called when a key rotation occurs.
 	onRotation KeyRotationCallback
 
@@ -232,6 +244,41 @@ func (krm *KeyRotationManager) GetIntroKey() []byte {
 
 	key := make([]byte, len(krm.introKey.Key))
 	copy(key, krm.introKey.Key)
+	return key
+}
+
+// GetPreviousStaticKey returns a copy of the previous static key if it is
+// still within the grace period after rotation. Returns nil if no previous
+// key exists or the grace period has elapsed.
+func (krm *KeyRotationManager) GetPreviousStaticKey() []byte {
+	krm.mu.RLock()
+	defer krm.mu.RUnlock()
+
+	if krm.previousStaticKey == nil || krm.previousStaticKey.RotatedAt.IsZero() {
+		return nil
+	}
+	if time.Since(krm.previousStaticKey.RotatedAt) > KeyGracePeriod {
+		return nil
+	}
+	key := make([]byte, len(krm.previousStaticKey.Key))
+	copy(key, krm.previousStaticKey.Key)
+	return key
+}
+
+// GetPreviousIntroKey returns a copy of the previous intro key if it is
+// still within the grace period after rotation. Returns nil otherwise.
+func (krm *KeyRotationManager) GetPreviousIntroKey() []byte {
+	krm.mu.RLock()
+	defer krm.mu.RUnlock()
+
+	if krm.previousIntroKey == nil || krm.previousIntroKey.RotatedAt.IsZero() {
+		return nil
+	}
+	if time.Since(krm.previousIntroKey.RotatedAt) > KeyGracePeriod {
+		return nil
+	}
+	key := make([]byte, len(krm.previousIntroKey.Key))
+	copy(key, krm.previousIntroKey.Key)
 	return key
 }
 
@@ -353,8 +400,18 @@ func (krm *KeyRotationManager) rotateStaticKeyLocked() ([]byte, error) {
 	}
 	oldKey.Successor = krm.staticKey
 
-	// Zero retired key material
-	internal.SecureZero(oldKey.Key)
+	// Keep old key for grace period so in-flight packets can be decrypted.
+	// Zero any previously retained key first.
+	if krm.previousStaticKey != nil {
+		internal.SecureZero(krm.previousStaticKey.Key)
+	}
+	krm.previousStaticKey = oldKey
+
+	// Schedule deferred zeroing of old key after grace period
+	go func(key *ManagedKey) {
+		time.Sleep(KeyGracePeriod)
+		internal.SecureZero(key.Key)
+	}(oldKey)
 
 	// Notify callback
 	if krm.onRotation != nil {
@@ -420,8 +477,17 @@ func (krm *KeyRotationManager) rotateIntroKeyLocked() ([]byte, error) {
 	}
 	oldKey.Successor = krm.introKey
 
-	// Zero retired key material
-	internal.SecureZero(oldKey.Key)
+	// Keep old key for grace period so in-flight packets can be decrypted.
+	if krm.previousIntroKey != nil {
+		internal.SecureZero(krm.previousIntroKey.Key)
+	}
+	krm.previousIntroKey = oldKey
+
+	// Schedule deferred zeroing after grace period
+	go func(key *ManagedKey) {
+		time.Sleep(KeyGracePeriod)
+		internal.SecureZero(key.Key)
+	}(oldKey)
 
 	// Notify callback
 	if krm.onRotation != nil {

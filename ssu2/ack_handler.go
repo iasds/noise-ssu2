@@ -35,6 +35,16 @@ type ACKHandler struct {
 
 	// ackDelay is the calculated delay before sending ACK
 	ackDelay time.Duration
+
+	// ackThreshold is the number of received packets that triggers an
+	// immediate ACK regardless of delay timer.
+	ackThreshold int
+
+	// maxACKDataSize is the maximum size in bytes of the ACK block data
+	// (excluding the 3-byte block header). This prevents ACK blocks from
+	// consuming excessive MTU space. Default: 504 bytes (~half of 1280 MTU
+	// minus headers).
+	maxACKDataSize int
 }
 
 // PendingACK tracks an unacknowledged packet awaiting confirmation.
@@ -50,6 +60,8 @@ func NewACKHandler() *ACKHandler {
 		receivedPackets: make([]uint32, 0, 64),
 		pendingACKs:     make(map[uint32]*PendingACK),
 		ackDelay:        10 * time.Millisecond, // Default from ssu2.rst
+		ackThreshold:    10,
+		maxACKDataSize:  504, // ~half of 1280 MTU minus headers
 	}
 }
 
@@ -59,6 +71,29 @@ func (h *ACKHandler) RecordReceived(packetNum uint32) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.receivedPackets = append(h.receivedPackets, packetNum)
+}
+
+// SetACKThreshold sets the number of received packets that triggers an
+// immediate ACK. Must be >= 1.
+func (h *ACKHandler) SetACKThreshold(threshold int) {
+	if threshold < 1 {
+		threshold = 1
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.ackThreshold = threshold
+}
+
+// SetMaxACKDataSize sets the maximum ACK block data size in bytes.
+// This limits ACK blocks to fit within the available MTU. Must be >= 5
+// (minimum ACK block: 4-byte throughPN + 1-byte acnt).
+func (h *ACKHandler) SetMaxACKDataSize(size int) {
+	if size < 5 {
+		size = 5
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.maxACKDataSize = size
 }
 
 // ShouldSendACK determines if an ACK should be sent based on timing and packet count.
@@ -82,7 +117,7 @@ func (h *ACKHandler) ShouldSendACK(rtt time.Duration) bool {
 
 	// Send ACK if delay elapsed or we have many packets
 	timeSinceLastACK := time.Since(h.lastACKTime)
-	return timeSinceLastACK >= h.ackDelay || len(h.receivedPackets) >= 10
+	return timeSinceLastACK >= h.ackDelay || len(h.receivedPackets) >= h.ackThreshold
 }
 
 // GenerateACK creates an ACK block (Type 12) for all received packets.
@@ -112,8 +147,14 @@ func (h *ACKHandler) GenerateACK() (*SSU2Block, error) {
 
 	// Build optional nack/ack range pairs for remaining packets
 	var rangeBytes []byte
+	// Reserve 5 bytes for the header (throughPN + acnt)
+	maxRangeBytes := h.maxACKDataSize - 5
 	i := consecutiveCount
 	for i < len(sorted) {
+		// Enforce MTU-based size limit on ACK range data
+		if len(rangeBytes)+2 > maxRangeBytes {
+			break
+		}
 		// Gap: number of missing packets between previous run and next acked
 		prevPN := sorted[i-1]
 		nextPN := sorted[i]

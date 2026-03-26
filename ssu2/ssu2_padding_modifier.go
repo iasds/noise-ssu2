@@ -32,7 +32,6 @@ const (
 	minMTU           = 1280 // IPv6 minimum MTU
 	maxMTU           = 1500 // Typical Ethernet MTU
 	defaultMTU       = 1280
-	ssu2HeaderSize   = 80 // Approximate SSU2 header overhead
 	aeadTagSize      = 16 // ChaCha20-Poly1305 AEAD tag
 	maxPaddingBlocks = 65516
 )
@@ -165,6 +164,15 @@ func (spm *SSU2PaddingModifier) SetMTU(mtu int) error {
 	return nil
 }
 
+// headerOverhead returns the spec-correct SSU2 header size based on mode.
+// Per SSU2 spec: short (Data) headers are 16 bytes, long (Handshake) headers are 32 bytes.
+func (spm *SSU2PaddingModifier) headerOverhead() int {
+	if spm.aeadMode {
+		return ShortHeaderSize // 16 bytes for data-phase packets
+	}
+	return LongHeaderSize // 32 bytes for handshake packets
+}
+
 // calculateMTUAwarePadding computes padding size respecting MTU limits.
 // Key difference from NTCP2: enforces UDP packet size constraints.
 func (spm *SSU2PaddingModifier) calculateMTUAwarePadding(dataLen int) int {
@@ -172,8 +180,8 @@ func (spm *SSU2PaddingModifier) calculateMTUAwarePadding(dataLen int) int {
 		return 0
 	}
 
-	// Calculate available space in MTU
-	overhead := ssu2HeaderSize + aeadTagSize
+	// Calculate available space in MTU using spec-correct header sizes
+	overhead := spm.headerOverhead() + aeadTagSize
 	if spm.aeadMode {
 		overhead += 3 // Block header for AEAD padding
 	}
@@ -409,7 +417,7 @@ func (spm *SSU2PaddingModifier) EstimatePaddingSize(dataLen int) int {
 		}
 
 		// Respect MTU constraint
-		overhead := ssu2HeaderSize + aeadTagSize
+		overhead := spm.headerOverhead() + aeadTagSize
 		availableSpace := spm.mtu - dataLen - overhead
 		if ratioPadding > availableSpace {
 			return availableSpace

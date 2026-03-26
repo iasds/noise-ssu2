@@ -1,6 +1,7 @@
 package ssu2
 
 import (
+	"crypto/ed25519"
 	"net"
 	"sync"
 	"time"
@@ -30,6 +31,11 @@ type HolePunchCoordinator struct {
 
 	// attempts maps session ID to hole punch attempt
 	attempts map[uint64]*HolePunchAttempt
+
+	// VerifyHolePunchSignature is called to verify incoming HolePunch messages.
+	// Per SSU2 spec §Hole Punch, messages transiting through a relay MUST be
+	// authenticated cryptographically. If nil, incoming messages are rejected.
+	VerifyHolePunchSignature func(block *RelayIntroBlock, signerKey ed25519.PublicKey) error
 
 	// mutex protects all fields
 	mutex sync.RWMutex
@@ -229,13 +235,19 @@ func (hpc *HolePunchCoordinator) SendHolePunch(sessionID uint64, targetAddr *net
 }
 
 // HandleHolePunch processes an incoming hole punch packet from a remote peer.
+// Per SSU2 spec §Hole Punch, the message's signature MUST be verified before
+// processing. If block is non-nil and VerifyHolePunchSignature is set, the
+// signature is verified. If VerifyHolePunchSignature is nil, the message is
+// rejected to prevent unauthenticated state transitions.
 //
 // Parameters:
 //   - sessionID: Session identifier from the packet
 //   - fromAddr: Address the packet came from
+//   - block: The decoded RelayIntro-format block (may be nil for legacy callers)
+//   - signerKey: Ed25519 public key of the message signer
 //
-// Returns error if session not found.
-func (hpc *HolePunchCoordinator) HandleHolePunch(sessionID uint64, fromAddr *net.UDPAddr) error {
+// Returns error if session not found or signature verification fails.
+func (hpc *HolePunchCoordinator) HandleHolePunch(sessionID uint64, fromAddr *net.UDPAddr, block *RelayIntroBlock, signerKey ed25519.PublicKey) error {
 	hpc.mutex.Lock()
 	defer hpc.mutex.Unlock()
 
@@ -244,24 +256,63 @@ func (hpc *HolePunchCoordinator) HandleHolePunch(sessionID uint64, fromAddr *net
 		return err
 	}
 
+	// Verify signature per SSU2 spec §Hole Punch (G-2)
+	if block != nil {
+		if hpc.VerifyHolePunchSignature == nil {
+			return oops.
+				Code("VERIFICATION_NOT_CONFIGURED").
+				In("holepunch_coordinator").
+				With("session_id", sessionID).
+				Errorf("hole punch signature verifier not configured")
+		}
+		if err := hpc.VerifyHolePunchSignature(block, signerKey); err != nil {
+			return oops.
+				Code("SIGNATURE_VERIFICATION_FAILED").
+				In("holepunch_coordinator").
+				With("session_id", sessionID).
+				Wrapf(err, "hole punch signature verification failed")
+		}
+	}
+
 	attempt.State = HolePunchWaiting
 	return nil
 }
 
 // ProcessHolePunchResponse processes a response to a hole punch attempt.
+// Per SSU2 spec §Hole Punch, the response's signature MUST be verified.
 //
 // Parameters:
 //   - sessionID: Session identifier
 //   - addr: Address that responded
+//   - block: The decoded RelayIntro-format block (may be nil for legacy callers)
+//   - signerKey: Ed25519 public key of the message signer
 //
-// Returns error if session not found.
-func (hpc *HolePunchCoordinator) ProcessHolePunchResponse(sessionID uint64, addr *net.UDPAddr) error {
+// Returns error if session not found or signature verification fails.
+func (hpc *HolePunchCoordinator) ProcessHolePunchResponse(sessionID uint64, addr *net.UDPAddr, block *RelayIntroBlock, signerKey ed25519.PublicKey) error {
 	hpc.mutex.Lock()
 	defer hpc.mutex.Unlock()
 
 	attempt, err := hpc.lookupAttempt(sessionID, addr, "response")
 	if err != nil {
 		return err
+	}
+
+	// Verify signature per SSU2 spec §Hole Punch (G-2)
+	if block != nil {
+		if hpc.VerifyHolePunchSignature == nil {
+			return oops.
+				Code("VERIFICATION_NOT_CONFIGURED").
+				In("holepunch_coordinator").
+				With("session_id", sessionID).
+				Errorf("hole punch signature verifier not configured")
+		}
+		if err := hpc.VerifyHolePunchSignature(block, signerKey); err != nil {
+			return oops.
+				Code("SIGNATURE_VERIFICATION_FAILED").
+				In("holepunch_coordinator").
+				With("session_id", sessionID).
+				Wrapf(err, "hole punch response signature verification failed")
+		}
 	}
 
 	// Verify address matches expected remote

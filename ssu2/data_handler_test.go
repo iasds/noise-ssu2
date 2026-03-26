@@ -456,14 +456,14 @@ func TestDataHandler_FollowOnFragment_UnknownMessageID(t *testing.T) {
 		Payload:     payload,
 	}
 
-	// Process packet should fail
+	// Process packet should succeed — early FollowOnFragments are buffered
 	_, err = handler.ProcessDataPacket(packet)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unknown message ID")
+	require.NoError(t, err)
 
-	// Verify stats
+	// Verify fragment was buffered
+	assert.Equal(t, 1, handler.GetFragmentCount())
 	stats := handler.GetStats()
-	assert.Equal(t, uint64(1), stats.MessagesDropped)
+	assert.Equal(t, uint64(1), stats.FragmentsReceived)
 }
 
 func TestDataHandler_FollowOnFragment_Duplicate(t *testing.T) {
