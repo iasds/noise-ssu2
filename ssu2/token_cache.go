@@ -52,6 +52,15 @@ func NewTokenCache(ttl time.Duration) *TokenCache {
 	}
 }
 
+// newTokenCacheFromConfig creates a TokenCache using SSU2Config values.
+func newTokenCacheFromConfig(config *SSU2Config) *TokenCache {
+	tc := NewTokenCache(60 * time.Second)
+	if config != nil && config.TokenCacheMaxSize > 0 {
+		tc.maxSize = config.TokenCacheMaxSize
+	}
+	return tc
+}
+
 // GenerateToken creates a new token for the specified address.
 // The token is cryptographically random and stored in the cache.
 // Returns the token value.

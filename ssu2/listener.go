@@ -120,7 +120,7 @@ func NewSSU2Listener(underlying net.PacketConn, config *SSU2Config) (*SSU2Listen
 		config:       config,
 		addr:         addr,
 		sessions:     make(map[uint64]*SSU2Conn),
-		tokenCache:   NewTokenCache(60 * time.Second),
+		tokenCache:   newTokenCacheFromConfig(config),
 		acceptQueue:  make(chan *SSU2Conn, 100), // Buffer 100 pending connections
 		packetQueue:  make(chan incomingPacket, packetQueueSize),
 		shutdownChan: make(chan struct{}),

@@ -170,6 +170,22 @@ type SSU2Config struct {
 	// Default: false (accept SessionRequest without token)
 	RequireRetry bool
 
+	// IdleTimeout is the maximum duration without activity before the
+	// connection is closed. The spec does not mandate a specific value.
+	// Default: 5 minutes.
+	IdleTimeout time.Duration
+
+	// FragmentTimeout is the duration after which incomplete fragment sets
+	// are discarded by the DataHandler. The spec recommends timely cleanup.
+	// Default: 10 seconds.
+	FragmentTimeout time.Duration
+
+	// TokenCacheMaxSize is the maximum number of retry tokens the listener
+	// will cache. Under high connection rates, a small cache can evict
+	// legitimate tokens before use.
+	// Default: 10000.
+	TokenCacheMaxSize int
+
 	// DestroyTimeout is the time to wait after sending a Termination block
 	// before releasing session resources. Per spec §Termination, this gives
 	// the remote peer time to receive and acknowledge the close.
@@ -221,6 +237,9 @@ func NewSSU2Config(routerHash []byte, initiator bool) (*SSU2Config, error) {
 		PaddingRatio:            1.0, // 100%
 		ConnectionID:            0,   // Will be generated
 		KeepaliveInterval:       15 * time.Second,
+		IdleTimeout:             5 * time.Minute,
+		FragmentTimeout:         10 * time.Second,
+		TokenCacheMaxSize:       10000,
 		DestroyTimeout:          0,   // opt-in; set to destroyTimeout (5s) in production
 		RouterInfoValidator:     nil, // C-1: no default; callers must explicitly set via WithRouterInfoValidator
 	}, nil
@@ -344,6 +363,26 @@ func (sc *SSU2Config) WithConnectionID(connID uint64) *SSU2Config {
 // UDP connections require active keepalive to maintain state.
 func (sc *SSU2Config) WithKeepalive(interval time.Duration) *SSU2Config {
 	sc.KeepaliveInterval = interval
+	return sc
+}
+
+// WithIdleTimeout sets the idle timeout after which the connection is closed.
+func (sc *SSU2Config) WithIdleTimeout(timeout time.Duration) *SSU2Config {
+	sc.IdleTimeout = timeout
+	return sc
+}
+
+// WithFragmentTimeout sets the duration after which incomplete fragment sets are discarded.
+func (sc *SSU2Config) WithFragmentTimeout(timeout time.Duration) *SSU2Config {
+	sc.FragmentTimeout = timeout
+	return sc
+}
+
+// WithTokenCacheMaxSize sets the maximum number of retry tokens cached by the listener.
+func (sc *SSU2Config) WithTokenCacheMaxSize(maxSize int) *SSU2Config {
+	if maxSize > 0 {
+		sc.TokenCacheMaxSize = maxSize
+	}
 	return sc
 }
 

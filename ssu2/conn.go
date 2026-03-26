@@ -269,7 +269,7 @@ func NewSSU2Conn(
 		config:           config,
 		initiator:        initiator,
 		handshakeHandler: handshakeHandler,
-		dataHandler:      NewDataHandler(100), // 100 message queue size
+		dataHandler:      newDataHandlerFromConfig(config), // M-3: fragment timeout from config
 		ackHandler:       NewACKHandler(),
 		rttEstimator:     NewRTTEstimator(),
 		recvWindow:       NewReceiveWindow(0, 256), // start at 0, max 256 packets
@@ -1429,8 +1429,11 @@ func (h *SSU2Conn) keepaliveLoop() {
 				}
 			}
 
-			// Check for timeout (5 minutes default idle timeout)
-			idleTimeout := 5 * time.Minute
+			// Check for timeout (M-2: configurable idle timeout)
+			idleTimeout := h.config.IdleTimeout
+			if idleTimeout <= 0 {
+				idleTimeout = 5 * time.Minute
+			}
 			if timeSinceActivity >= idleTimeout {
 				h.closeMutex.Lock()
 				h.closeErr = oops.Errorf("idle timeout")
@@ -1541,7 +1544,9 @@ func (h *SSU2Conn) processInboundPacket(packet *SSU2Packet) {
 		}
 
 		h.validDataPacketsReceived.Add(1)
-		// Check immediate-ack flag: header byte 13, bit 0
+		// Check immediate-ack flag: header byte 13, bit 0 (M-5: this is also
+		// checked via CongestionFlagRequestACK in the Congestion block handler,
+		// providing redundant but harmless ACK triggering)
 		if len(packet.Header) > 13 && packet.Header[13]&0x01 != 0 {
 			h.sendImmediateACK()
 		}

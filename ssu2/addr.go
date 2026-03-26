@@ -49,6 +49,10 @@ func NewSSU2Addr(underlying net.Addr, routerHash []byte, connID uint64, role str
 			Errorf("router hash must be exactly 32 bytes")
 	}
 
+	// M-6: connID==0 is rejected because SSU2Addr represents established session
+	// addresses. The spec uses dest_conn_id=0 only in SessionRequest headers
+	// (initiator doesn't know responder's ID yet), which is handled at the
+	// packet layer, not the addressing layer.
 	if connID == 0 {
 		return nil, oops.
 			Code("INVALID_CONNECTION_ID").

@@ -172,6 +172,15 @@ func NewDataHandler(queueSize int) *DataHandler {
 	}
 }
 
+// newDataHandlerFromConfig creates a DataHandler using SSU2Config values.
+func newDataHandlerFromConfig(config *SSU2Config) *DataHandler {
+	dh := NewDataHandler(100)
+	if config != nil && config.FragmentTimeout > 0 {
+		dh.fragmentTimeout = config.FragmentTimeout
+	}
+	return dh
+}
+
 // StartReaper launches a background goroutine that periodically removes
 // incomplete fragment sets older than fragmentTimeout.
 func (h *DataHandler) StartReaper() {
