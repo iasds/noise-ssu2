@@ -110,7 +110,7 @@ type SSU2Conn struct {
 	headerProtector *HeaderProtectorManager
 
 	// SipHash length obfuscation (nil = disabled)
-	sipHashModifier *SipHashLengthModifier
+	sipHashModifier atomic.Pointer[SipHashLengthModifier]
 
 	// Path validation for connection migration (G-7)
 	pathValidator *PathValidator
@@ -641,7 +641,7 @@ func (h *SSU2Conn) finalizeHandshake() error {
 	if sipErr != nil {
 		return oops.Wrapf(sipErr, "failed to derive SipHash keys")
 	}
-	h.sipHashModifier = sipMod
+	h.sipHashModifier.Store(sipMod)
 
 	h.stateMutex.Lock()
 	h.state = StateEstablished
@@ -1089,8 +1089,8 @@ func (h *SSU2Conn) CloseWithReason(reason TerminationReason, additionalData []by
 		}
 
 		// Zero SipHash key material
-		if h.sipHashModifier != nil {
-			h.sipHashModifier.ZeroKeys()
+		if mod := h.sipHashModifier.Load(); mod != nil {
+			mod.ZeroKeys()
 		}
 
 		// Close channels to signal goroutines to exit
@@ -1356,8 +1356,8 @@ func (h *SSU2Conn) parseInboundPacket(data []byte, addr net.Addr) *SSU2Packet {
 
 	// SipHash length deobfuscation: recover the data length from header
 	// bytes 14-15 per spec §Data Phase Length Obfuscation (G-2).
-	if h.sipHashModifier != nil && len(data) >= ShortHeaderSize {
-		mask := h.sipHashModifier.NextInboundMask()
+	if mod := h.sipHashModifier.Load(); mod != nil && len(data) >= ShortHeaderSize {
+		mask := mod.NextInboundMask()
 		obfuscated := binary.BigEndian.Uint16(data[14:16])
 		binary.BigEndian.PutUint16(data[14:16], obfuscated^mask)
 	}
@@ -1477,9 +1477,9 @@ func (h *SSU2Conn) sendPacketDirect(packet *SSU2Packet) error {
 
 	// SipHash length obfuscation: write obfuscated payload length to header
 	// bytes 14-15 per spec §Data Phase Length Obfuscation (G-2).
-	if h.sipHashModifier != nil && packet.MessageType == MessageTypeData {
+	if mod := h.sipHashModifier.Load(); mod != nil && packet.MessageType == MessageTypeData {
 		dataLen := uint16(len(packet.Payload))
-		mask := h.sipHashModifier.NextOutboundMask()
+		mask := mod.NextOutboundMask()
 		binary.BigEndian.PutUint16(packet.Header[14:16], dataLen^mask)
 	}
 
@@ -1831,9 +1831,9 @@ func (h *SSU2Conn) sendNextNonceInline() error {
 	}
 
 	// SipHash length obfuscation.
-	if h.sipHashModifier != nil {
+	if mod := h.sipHashModifier.Load(); mod != nil {
 		dataLen := uint16(len(encrypted))
-		mask := h.sipHashModifier.NextOutboundMask()
+		mask := mod.NextOutboundMask()
 		binary.BigEndian.PutUint16(packet.Header[14:16], dataLen^mask)
 	}
 
