@@ -90,8 +90,14 @@ type SSU2Config struct {
 	StaticKey []byte
 
 	// RemoteRouterHash is the remote peer's router identity hash
-	// Required for outbound connections, optional for listeners
+	// Used for identity verification, optional for listeners
 	RemoteRouterHash *data.Hash
+
+	// RemoteStaticKey is the remote peer's X25519 static public key (32 bytes).
+	// Required for initiator connections (XK pattern requires pre-knowledge of
+	// the responder's static key). This is NOT the router hash — it is the "s"
+	// parameter from the peer's RouterAddress options.
+	RemoteStaticKey []byte
 
 	// HandshakeTimeout is the maximum time to wait for handshake completion
 	// Default: 15 seconds (per SSU2 specification)
@@ -297,11 +303,23 @@ func (sc *SSU2Config) WithStaticKey(key []byte) *SSU2Config {
 	return sc
 }
 
-// WithRemoteRouterHash sets the remote peer's router identity.
-// Required for outbound connections.
+// WithRemoteRouterHash sets the remote peer's router identity hash.
+// Used for identity verification.
 func (sc *SSU2Config) WithRemoteRouterHash(hash data.Hash) *SSU2Config {
 	h := hash
 	sc.RemoteRouterHash = &h
+	return sc
+}
+
+// WithRemoteStaticKey sets the remote peer's X25519 static public key.
+// Required for initiator connections. The key must be 32 bytes (Curve25519).
+// This is the "s" parameter from the peer's RouterAddress options, NOT the
+// router hash.
+func (sc *SSU2Config) WithRemoteStaticKey(key []byte) *SSU2Config {
+	if len(key) == 32 {
+		sc.RemoteStaticKey = make([]byte, 32)
+		copy(sc.RemoteStaticKey, key)
+	}
 	return sc
 }
 
@@ -501,12 +519,22 @@ func (sc *SSU2Config) validateCryptographicParameters() error {
 		return err
 	}
 
-	// For initiator connections, remote router hash is required
-	if sc.Initiator && sc.RemoteRouterHash == nil {
+	// For initiator connections, the remote static key is required for the
+	// Noise XK handshake (C-1). The router hash is used separately for
+	// identity verification.
+	if sc.Initiator && len(sc.RemoteStaticKey) == 0 {
 		return oops.
-			Code("MISSING_REMOTE_ROUTER_HASH").
+			Code("MISSING_REMOTE_STATIC_KEY").
 			In("ssu2").
-			Errorf("remote router hash is required for initiator connections")
+			Errorf("remote static key is required for initiator connections (use WithRemoteStaticKey)")
+	}
+
+	if sc.Initiator && len(sc.RemoteStaticKey) != 0 && len(sc.RemoteStaticKey) != 32 {
+		return oops.
+			Code("INVALID_REMOTE_STATIC_KEY").
+			In("ssu2").
+			With("key_length", len(sc.RemoteStaticKey)).
+			Errorf("remote static key must be 32 bytes")
 	}
 
 	// Validate ChaCha20 obfuscation IV if provided (8 bytes for SSU2)

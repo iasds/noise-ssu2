@@ -22,8 +22,9 @@ func createTestConfig(t *testing.T) *SSU2Config {
 	config, err := NewSSU2Config(routerHash, true)
 	require.NoError(t, err)
 	config.RemoteRouterHash = hashPtr(remoteHash)
-	config.ConnectionID = 123456 // Non-zero connection ID
-	config.DestroyTimeout = 0    // Skip destroy wait in tests
+	config.RemoteStaticKey = make([]byte, 32) // placeholder static key for tests
+	config.ConnectionID = 123456              // Non-zero connection ID
+	config.DestroyTimeout = 0                 // Skip destroy wait in tests
 	return config
 }
 
@@ -156,6 +157,7 @@ func TestNewSSU2Conn_ValidInitiator(t *testing.T) {
 	config, err := NewSSU2Config(routerHash, true)
 	require.NoError(t, err)
 	config.RemoteRouterHash = hashPtr(remoteHash) // Required for initiator
+	config.RemoteStaticKey = respPub              // X25519 static key for XK handshake
 	config.ConnectionID = 12345
 	config.MTU = 1500
 	config.DestroyTimeout = 0 // Skip destroy wait in tests
@@ -645,6 +647,7 @@ func TestBuildI2NPFragmentBlocks_SmallPayload(t *testing.T) {
 	var rh1 data.Hash
 	copy(rh1[:], dh2.Public)
 	config.RemoteRouterHash = &rh1
+	config.RemoteStaticKey = dh2.Public
 
 	mockConn := newMockPacketConn(&net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1234})
 	remoteAddr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 5678}
@@ -685,6 +688,7 @@ func TestBuildI2NPFragmentBlocks_LargePayload(t *testing.T) {
 	var rh2 data.Hash
 	copy(rh2[:], dh2.Public)
 	config.RemoteRouterHash = &rh2
+	config.RemoteStaticKey = dh2.Public
 
 	mockConn := newMockPacketConn(&net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1234})
 	remoteAddr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 5678}
@@ -745,6 +749,7 @@ func TestBuildI2NPFragmentBlocks_MessageIDConsistent(t *testing.T) {
 	var rh3 data.Hash
 	copy(rh3[:], dh2.Public)
 	config.RemoteRouterHash = &rh3
+	config.RemoteStaticKey = dh2.Public
 
 	mockConn := newMockPacketConn(&net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1234})
 	remoteAddr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 5678}

@@ -339,14 +339,10 @@ func createSSU2Connection(packetConn net.PacketConn, remoteAddr *net.UDPAddr, co
 	}
 
 	// For initiator connections, we need static keys
-	// These should be provided in the config
 	staticKey := config.StaticKey
-	// Remote static key should be in RemoteRouterHash for responder's key
-	var remoteStaticKey []byte
-	if config.RemoteRouterHash != nil {
-		h := *config.RemoteRouterHash
-		remoteStaticKey = h[:]
-	}
+	// Use the remote X25519 static key for the Noise XK handshake (C-1).
+	// This is NOT the router hash — it is the peer's actual static public key.
+	remoteStaticKey := config.RemoteStaticKey
 
 	conn, err := NewSSU2Conn(
 		packetConn,

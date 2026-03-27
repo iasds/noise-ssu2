@@ -281,14 +281,14 @@ func TestSSU2Config_Validate(t *testing.T) {
 		assert.Contains(t, err.Error(), "static key must be 32 bytes")
 	})
 
-	t.Run("initiator without remote hash fails", func(t *testing.T) {
+	t.Run("initiator without remote static key fails", func(t *testing.T) {
 		routerHash := generateRandomHash()
 		config, _ := NewSSU2Config(routerHash, true)
-		config.RemoteRouterHash = nil
+		config.RemoteStaticKey = nil
 
 		err := config.Validate()
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "remote router hash is required for initiator")
+		assert.Contains(t, err.Error(), "remote static key is required for initiator")
 	})
 
 	t.Run("invalid obfuscation IV fails", func(t *testing.T) {
