@@ -256,6 +256,9 @@ func NewSSU2Conn(
 		handshakeHandler.ReconfigureReplayCache(config.ReplayCacheTTL)
 	}
 
+	// Set timestamp skew tolerance from config (G-1).
+	handshakeHandler.maxClockSkew = config.MaxClockSkew
+
 	// Populate local Options from config so the handshake advertises our
 	// padding preferences to the peer (G-3).
 	handshakeHandler.SetLocalOptions(&OptionsParams{

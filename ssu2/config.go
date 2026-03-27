@@ -206,7 +206,7 @@ type SSU2Config struct {
 	// DestroyTimeout is the time to wait after sending a Termination block
 	// before releasing session resources. Per spec §Termination, this gives
 	// the remote peer time to receive and acknowledge the close.
-	// Default: 5 seconds. Set to 0 to skip the wait (e.g. in tests).
+	// Default: 11 seconds (max RTO per spec). Set to 0 to skip the wait (e.g. in tests).
 	DestroyTimeout time.Duration
 
 	// EnableNextNonce enables the NextNonce rekey mechanism (block type 11).
@@ -222,6 +222,13 @@ type SSU2Config struct {
 	// reasonable default for the handshake window.
 	// Default: 4 minutes (M-2).
 	ReplayCacheTTL time.Duration
+
+	// MaxClockSkew is the maximum allowed difference between local and
+	// remote clocks for handshake timestamp validation (G-1). Per the SSU2
+	// spec, the receiver should verify that the DateTime block timestamp is
+	// within a certain window of local time.
+	// Default: 120 seconds. Set to 0 to disable skew validation.
+	MaxClockSkew time.Duration
 
 	// RouterInfoValidator is a callback invoked after the handshake
 	// completes on the responder side. It receives the raw RouterInfo block
@@ -259,7 +266,8 @@ func NewSSU2Config(routerHash data.Hash, initiator bool) (*SSU2Config, error) {
 		IdleTimeout:             5 * time.Minute,
 		FragmentTimeout:         10 * time.Second,
 		TokenCacheMaxSize:       10000,
-		DestroyTimeout:          0, // opt-in; set to destroyTimeout (5s) in production
+		DestroyTimeout:          11 * time.Second,  // Per spec §Termination: 11s (max RTO)
+		MaxClockSkew:            120 * time.Second, // Per spec: ±120s skew tolerance (G-1)
 		ReplayCacheTTL:          4 * time.Minute,
 		RouterInfoValidator:     nil, // C-1: no default; callers must explicitly set via WithRouterInfoValidator
 	}, nil
@@ -393,6 +401,20 @@ func (sc *SSU2Config) WithIdleTimeout(timeout time.Duration) *SSU2Config {
 // WithFragmentTimeout sets the duration after which incomplete fragment sets are discarded.
 func (sc *SSU2Config) WithFragmentTimeout(timeout time.Duration) *SSU2Config {
 	sc.FragmentTimeout = timeout
+	return sc
+}
+
+// WithDestroyTimeout sets the time to wait after sending a Termination block
+// before releasing session resources. Set to 0 to skip the wait (e.g. in tests).
+func (sc *SSU2Config) WithDestroyTimeout(timeout time.Duration) *SSU2Config {
+	sc.DestroyTimeout = timeout
+	return sc
+}
+
+// WithMaxClockSkew sets the maximum allowed clock skew for handshake timestamp
+// validation. Set to 0 to disable skew checking.
+func (sc *SSU2Config) WithMaxClockSkew(skew time.Duration) *SSU2Config {
+	sc.MaxClockSkew = skew
 	return sc
 }
 

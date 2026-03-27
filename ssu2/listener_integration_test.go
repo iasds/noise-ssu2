@@ -444,6 +444,7 @@ func TestListenerIntegration_ContextCancellation(t *testing.T) {
 	clientRouterHash := generateRandomHash()
 	clientConfig, err := NewSSU2Config(clientRouterHash, true)
 	require.NoError(t, err)
+	clientConfig.DestroyTimeout = 0 // Skip destroy wait in tests
 
 	clientStaticKey := make([]byte, 32)
 	clientConfig = clientConfig.WithStaticKey(clientStaticKey)

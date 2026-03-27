@@ -23,6 +23,7 @@ func createTestConfig(t *testing.T) *SSU2Config {
 	require.NoError(t, err)
 	config.RemoteRouterHash = hashPtr(remoteHash)
 	config.ConnectionID = 123456 // Non-zero connection ID
+	config.DestroyTimeout = 0    // Skip destroy wait in tests
 	return config
 }
 
@@ -157,6 +158,7 @@ func TestNewSSU2Conn_ValidInitiator(t *testing.T) {
 	config.RemoteRouterHash = hashPtr(remoteHash) // Required for initiator
 	config.ConnectionID = 12345
 	config.MTU = 1500
+	config.DestroyTimeout = 0 // Skip destroy wait in tests
 
 	conn, err := NewSSU2Conn(initConn, remoteAddr, config, true, initPriv, respPub)
 	require.NoError(t, err)

@@ -614,3 +614,63 @@ func (pv *PathValidator) GetDiscoveredMTU() int {
 	defer pv.mutex.RUnlock()
 	return pv.discoveredMTU
 }
+
+// RunPMTUD performs Path MTU Discovery using binary search between low and
+// high. Each step sends a padded Path Challenge and waits for a response.
+// On success the discovered MTU is updated; on timeout (no response within
+// PathValidationTimeout) the probe size is reduced. The final discovered
+// MTU is returned, or MinMTU if no probe succeeded (G-4).
+//
+// Parameters:
+//   - addr: the remote address to probe
+//   - low:  minimum probe size (typically MinMTU, 1280)
+//   - high: maximum probe size (e.g. MaxPacketSizeIPv4 or MaxPacketSizeIPv6)
+//
+// RunPMTUD blocks until the search completes or the context expires.
+func (pv *PathValidator) RunPMTUD(addr *net.UDPAddr, low, high int) int {
+	if low < MinMTU {
+		low = MinMTU
+	}
+	if high > MaxMTU {
+		high = MaxMTU
+	}
+	if low >= high {
+		return low
+	}
+
+	best := low
+
+	for low+MTUProbeStep <= high {
+		mid := (low + high) / 2
+
+		id, err := pv.InitiateMTUProbe(addr, mid)
+		if err != nil {
+			high = mid - 1
+			continue
+		}
+
+		// Wait for probe response or timeout
+		deadline := time.Now().Add(PathValidationTimeout)
+		probed := false
+		for time.Now().Before(deadline) {
+			time.Sleep(100 * time.Millisecond)
+			ch, exists := pv.GetChallenge(id)
+			if exists && ch.State == ChallengeValidated {
+				probed = true
+				break
+			}
+			if exists && ch.State == ChallengeFailed {
+				break
+			}
+		}
+
+		if probed {
+			best = mid
+			low = mid + 1
+		} else {
+			high = mid - 1
+		}
+	}
+
+	return best
+}

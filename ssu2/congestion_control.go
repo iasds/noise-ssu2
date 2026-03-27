@@ -439,6 +439,39 @@ func (cc *CongestionController) OnPersistentCongestion() {
 	cc.state = SlowStart
 }
 
+// DetectPersistentCongestion checks whether a set of lost packets indicates
+// persistent congestion per RFC 9002 §7.6.2. It returns true (and triggers
+// OnPersistentCongestion) when the time span between the earliest and latest
+// lost packet send times exceeds PersistentCongestionThreshold and no
+// acknowledged packet was sent between them (ackInRange=false).
+//
+// Parameters:
+//   - earliestLossSendTime: send time of the earliest declared-lost packet
+//   - latestLossSendTime: send time of the latest declared-lost packet
+//   - ackInRange: true if any acknowledged packet was sent between
+//     earliestLossSendTime and latestLossSendTime
+func (cc *CongestionController) DetectPersistentCongestion(
+	earliestLossSendTime, latestLossSendTime time.Time,
+	ackInRange bool,
+) bool {
+	if ackInRange {
+		return false
+	}
+	if earliestLossSendTime.IsZero() || latestLossSendTime.IsZero() {
+		return false
+	}
+	span := latestLossSendTime.Sub(earliestLossSendTime)
+	if span < 0 {
+		span = -span
+	}
+	threshold := cc.PersistentCongestionThreshold()
+	if span > threshold {
+		cc.OnPersistentCongestion()
+		return true
+	}
+	return false
+}
+
 // Reset returns the controller to initial state.
 // This is useful after connection migration or significant path changes.
 func (cc *CongestionController) Reset() {

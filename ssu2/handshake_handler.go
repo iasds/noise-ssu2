@@ -80,6 +80,12 @@ type HandshakeHandler struct {
 	// SessionConfirmed processing. Used for post-handshake validation
 	// against the Noise-authenticated static key (C-2).
 	peerRouterInfo []byte
+
+	// maxClockSkew is the maximum allowed difference between local and
+	// remote timestamps (G-1). If > 0, validateHandshakeBlocks rejects
+	// DateTime blocks whose timestamp differs from local time by more
+	// than this value. Set from SSU2Config.MaxClockSkew.
+	maxClockSkew time.Duration
 }
 
 // buildSSU2Prologue returns the Noise prologue for SSU2 handshakes.
@@ -862,15 +868,35 @@ func (h *HandshakeHandler) validateHandshakeBlocks(blocks []*SSU2Block, messageT
 			if len(block.Data) < 4 {
 				return oops.Errorf("DateTime block too short: %d bytes", len(block.Data))
 			}
+			if err := h.validateTimestampSkew(block.Data); err != nil {
+				return err
+			}
 		}
 	}
 
 	// Per spec §Session Request/Created, DateTime is required.
 	// We accept messages without it for interoperability, but callers
 	// should treat its absence as a protocol deviation.
-	// Future strict mode could reject here: return oops.Errorf("DateTime block required")
 	_ = hasDateTime
 
+	return nil
+}
+
+// validateTimestampSkew checks that the remote timestamp is within
+// maxClockSkew of local time. If maxClockSkew is 0, skew validation
+// is disabled (G-1).
+func (h *HandshakeHandler) validateTimestampSkew(dateTimeData []byte) error {
+	if h.maxClockSkew <= 0 {
+		return nil
+	}
+	remoteTime := time.Unix(int64(binary.BigEndian.Uint32(dateTimeData[:4])), 0)
+	skew := time.Since(remoteTime)
+	if skew < 0 {
+		skew = -skew
+	}
+	if skew > h.maxClockSkew {
+		return oops.Errorf("clock skew %s exceeds maximum %s", skew, h.maxClockSkew)
+	}
 	return nil
 }
 

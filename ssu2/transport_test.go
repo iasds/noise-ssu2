@@ -461,6 +461,7 @@ func createValidInitiatorConfig(t *testing.T) *SSU2Config {
 
 	config, err := NewSSU2Config(routerHash, true)
 	require.NoError(t, err)
+	config.DestroyTimeout = 0 // Skip destroy wait in tests
 	config.WithStaticKey(staticKey).WithRemoteRouterHash(remoteRouterHash)
 	return config
 } // Helper function to create a valid responder configuration.
@@ -470,6 +471,7 @@ func createValidResponderConfig(t *testing.T) *SSU2Config {
 
 	config, err := NewSSU2Config(routerHash, false)
 	require.NoError(t, err)
+	config.DestroyTimeout = 0 // Skip destroy wait in tests
 	config.RouterInfoValidator = DefaultRouterInfoValidator
 	config.WithStaticKey(staticKey)
 	return config
