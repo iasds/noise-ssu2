@@ -5,8 +5,8 @@ go 1.24.5
 toolchain go1.24.12
 
 require (
-	github.com/go-i2p/common v0.0.0-00010101000000-000000000000
-	github.com/go-i2p/crypto v0.1.4-0.20260219234435-41c70b0435dd
+	github.com/go-i2p/common c40aee7ed134d1bb0cb43e24ada938826f628224
+	github.com/go-i2p/crypto 96101c044a62e74b4f77690e39fa30b0fe6ed2cf
 	github.com/go-i2p/logger v0.1.2
 	github.com/go-i2p/noise v1.1.1-0.20260327201800-8e41bb3d9f1e
 	github.com/samber/oops v1.21.0
@@ -36,4 +36,4 @@ require (
 
 //replace github.com/go-i2p/noise => ../noise
 
-//#replace github.com/go-i2p/common => ../common
+//replace github.com/go-i2p/common => ../common
