@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/go-i2p/common/data"
 	"github.com/go-i2p/crypto/rand"
 
 	noise "github.com/go-i2p/go-noise"
@@ -805,7 +806,7 @@ func (nc *NTCP2Conn) SetWriteDeadline(t time.Time) error {
 
 // RouterHash returns the router hash from the remote address.
 // This is I2P-specific functionality for NTCP2 connections.
-func (nc *NTCP2Conn) RouterHash() []byte {
+func (nc *NTCP2Conn) RouterHash() data.Hash {
 	return nc.remoteAddr.RouterHash()
 }
 
@@ -847,14 +848,7 @@ func (nc *NTCP2Conn) PropagatePeerStaticKey() {
 
 	// Only update if the current hash is all zeros (placeholder).
 	currentHash := nc.remoteAddr.RouterHash()
-	allZero := true
-	for _, b := range currentHash {
-		if b != 0 {
-			allZero = false
-			break
-		}
-	}
-	if !allZero {
+	if !currentHash.IsZero() {
 		return
 	}
 
@@ -864,10 +858,13 @@ func (nc *NTCP2Conn) PropagatePeerStaticKey() {
 	// transport layer can later compute the proper hash via PeerStaticKey() and
 	// HandshakeHash(). Using the static key directly is a better placeholder
 	// than all-zeros for session deduplication.
-	if err := nc.remoteAddr.SetRouterHash(peerKey); err != nil {
-		nc.logger.Warn("failed to propagate peer static key to remote address",
+	hash, err := data.NewHashFromSlice(peerKey)
+	if err != nil {
+		nc.logger.Warn("failed to create hash from peer static key",
 			"error", err.Error())
+		return
 	}
+	nc.remoteAddr.SetRouterHash(hash)
 }
 
 // PeerStaticKey returns the remote peer's Noise static public key (32 bytes).

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-i2p/crypto/rand"
+	"github.com/go-i2p/common/data"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -27,9 +27,7 @@ func TestNewNTCP2Listener(t *testing.T) {
 }
 
 func TestNewNTCP2ListenerErrors(t *testing.T) {
-	routerHash := make([]byte, 32)
-	_, err := rand.Read(routerHash)
-	require.NoError(t, err)
+	routerHash := generateRandomHash()
 
 	config, err := NewNTCP2Config(routerHash, false)
 	require.NoError(t, err)
@@ -63,7 +61,9 @@ func TestNewNTCP2ListenerErrors(t *testing.T) {
 			}(),
 			config: func() *NTCP2Config {
 				c, _ := NewNTCP2Config(routerHash, false)
-				c.BobRouterHash = make([]byte, 16) // Invalid router hash size
+				// With data.Hash, BobRouterHash is always 32 bytes,
+				// so we invalidate by clearing the pattern instead
+				c.Pattern = ""
 				return c
 			}(),
 			expectedError: "invalid ntcp2 listener configuration",
@@ -151,23 +151,18 @@ func TestNTCP2ListenerConcurrentClose(t *testing.T) {
 func TestFormatRouterHash(t *testing.T) {
 	tests := []struct {
 		name     string
-		hash     []byte
+		hash     data.Hash
 		expected string
 	}{
 		{
 			name:     "valid hash",
-			hash:     []byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20},
+			hash:     data.Hash{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20},
 			expected: "0102030405060708...",
 		},
 		{
-			name:     "short hash",
-			hash:     []byte{0x01, 0x02, 0x03},
-			expected: "invalid",
-		},
-		{
-			name:     "empty hash",
-			hash:     []byte{},
-			expected: "invalid",
+			name:     "zero hash",
+			hash:     data.Hash{},
+			expected: "0000000000000000...",
 		},
 	}
 

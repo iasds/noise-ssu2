@@ -342,7 +342,11 @@ func createSSU2Connection(packetConn net.PacketConn, remoteAddr *net.UDPAddr, co
 	// These should be provided in the config
 	staticKey := config.StaticKey
 	// Remote static key should be in RemoteRouterHash for responder's key
-	remoteStaticKey := config.RemoteRouterHash
+	var remoteStaticKey []byte
+	if config.RemoteRouterHash != nil {
+		h := *config.RemoteRouterHash
+		remoteStaticKey = h[:]
+	}
 
 	conn, err := NewSSU2Conn(
 		packetConn,

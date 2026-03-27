@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-i2p/common/data"
 	"github.com/go-i2p/crypto/siphash"
 	noise "github.com/go-i2p/go-noise"
 	"github.com/go-i2p/go-noise/handshake"
@@ -374,8 +375,8 @@ func TestNTCP2Conn_Deadlines(t *testing.T) {
 
 // TestNTCP2Conn_I2PSpecificMethods tests NTCP2-specific methods
 func TestNTCP2Conn_I2PSpecificMethods(t *testing.T) {
-	routerHash := make([]byte, 32)
-	copy(routerHash, "test-router-hash-32-bytes-long!")
+	var routerHash data.Hash
+	copy(routerHash[:], "test-router-hash-32-bytes-long!")
 
 	tcpAddr := &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 8080}
 
@@ -426,8 +427,8 @@ func TestNTCP2Conn_NetConnInterface(t *testing.T) {
 // Helper functions for creating test objects
 
 func createTestNTCP2Addr(prefix, role string) *NTCP2Addr {
-	routerHash := make([]byte, 32)
-	copy(routerHash, prefix+"-router-hash")
+	var routerHash data.Hash
+	copy(routerHash[:], prefix+"-router-hash")
 
 	// Create a mock TCP address
 	tcpAddr := &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 8080}

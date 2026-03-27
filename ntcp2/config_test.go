@@ -4,12 +4,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-i2p/common/data"
 	"github.com/go-i2p/crypto/rand"
 
 	"github.com/go-i2p/go-noise/handshake"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// hashPtr returns a pointer to the given data.Hash, useful for struct literals.
+func hashPtr(h data.Hash) *data.Hash {
+	return &h
+}
 
 // testModifier is a minimal HandshakeModifier implementation for Clone() tests.
 type testModifier struct {
@@ -28,9 +34,7 @@ func (m *testModifier) Name() string { return m.name }
 func (m *testModifier) Close() error { return nil }
 
 func TestNewNTCP2ConfigWithInitiator(t *testing.T) {
-	routerHash := make([]byte, 32)
-	_, err := rand.Read(routerHash)
-	require.NoError(t, err)
+	routerHash := generateRandomHash()
 
 	// Test initiator configuration
 	config, err := NewNTCP2Config(routerHash, true)
@@ -97,9 +101,7 @@ func TestNTCP2ConfigBuilderMethods(t *testing.T) {
 }
 
 func TestNTCP2ConfigWithModifiers(t *testing.T) {
-	routerHash := make([]byte, 32)
-	_, err := rand.Read(routerHash)
-	require.NoError(t, err)
+	routerHash := generateRandomHash()
 
 	// Create some test modifiers
 	xorMod := handshake.NewXORModifier("test-xor", []byte{0xAA, 0xBB})
@@ -117,9 +119,7 @@ func TestNTCP2ConfigWithModifiers(t *testing.T) {
 }
 
 func TestNTCP2ConfigComprehensiveValidation(t *testing.T) {
-	routerHash := make([]byte, 32)
-	_, err := rand.Read(routerHash)
-	require.NoError(t, err)
+	routerHash := generateRandomHash()
 
 	tests := []struct {
 		name        string
@@ -136,16 +136,6 @@ func TestNTCP2ConfigComprehensiveValidation(t *testing.T) {
 			expectError: false,
 		},
 		{
-			name: "invalid router hash",
-			setupConfig: func() *NTCP2Config {
-				config, _ := NewNTCP2Config(routerHash, false)
-				config.BobRouterHash = make([]byte, 16) // Invalid length
-				return config
-			},
-			expectError: true,
-			errorCode:   "INVALID_ROUTER_HASH",
-		},
-		{
 			name: "invalid static key",
 			setupConfig: func() *NTCP2Config {
 				config, _ := NewNTCP2Config(routerHash, false)
@@ -154,16 +144,6 @@ func TestNTCP2ConfigComprehensiveValidation(t *testing.T) {
 			},
 			expectError: true,
 			errorCode:   "INVALID_STATIC_KEY",
-		},
-		{
-			name: "invalid remote router hash",
-			setupConfig: func() *NTCP2Config {
-				config, _ := NewNTCP2Config(routerHash, false)
-				config.RemoteRouterHash = make([]byte, 16) // Invalid length
-				return config
-			},
-			expectError: true,
-			errorCode:   "INVALID_REMOTE_ROUTER_HASH",
 		},
 		{
 			name: "missing remote hash for initiator",
@@ -290,9 +270,7 @@ func TestNTCP2ConfigToConnConfig(t *testing.T) {
 }
 
 func TestNTCP2ConfigToConnConfigWithDisabledModifiers(t *testing.T) {
-	routerHash := make([]byte, 32)
-	_, err := rand.Read(routerHash)
-	require.NoError(t, err)
+	routerHash := generateRandomHash()
 
 	ntcp2Config, err := NewNTCP2Config(routerHash, false)
 	require.NoError(t, err)
@@ -336,18 +314,16 @@ func TestNTCP2ConfigToConnConfigWithCustomModifiers(t *testing.T) {
 }
 
 func TestNTCP2ConfigBuilderDefensiveCopying(t *testing.T) {
-	routerHash := mustRandomBytes(t, 32)
 	staticKey := mustRandomBytes(t, 32)
 
+	routerHash := generateRandomHash()
 	config, err := NewNTCP2Config(routerHash, false)
 	require.NoError(t, err)
 
 	config = config.WithStaticKey(staticKey)
-	routerHash[0] = 0xFF
 	staticKey[0] = 0xFF
 
-	// Config should be unaffected
-	assert.NotEqual(t, byte(0xFF), config.BobRouterHash[0])
+	// Config should be unaffected (BobRouterHash is data.Hash value type, always independent)
 	assert.NotEqual(t, byte(0xFF), config.StaticKey[0])
 }
 
@@ -375,17 +351,13 @@ func TestNTCP2ConfigValidationEdgeCases(t *testing.T) {
 
 // TestNTCP2ConfigEdgeCases tests edge cases for NTCP2Config validation.
 func TestNTCP2ConfigEdgeCases(t *testing.T) {
-	routerHash := make([]byte, 32)
-	_, err := rand.Read(routerHash)
-	require.NoError(t, err)
+	routerHash := generateRandomHash()
 
 	t.Run("valid config with all options", func(t *testing.T) {
 		config, err := NewNTCP2Config(routerHash, false)
 		require.NoError(t, err)
 
 		staticKey := make([]byte, 32)
-		_, err = rand.Read(staticKey)
-		require.NoError(t, err)
 
 		config = config.WithStaticKey(staticKey).
 			WithHandshakeTimeout(10 * time.Second).
@@ -394,13 +366,6 @@ func TestNTCP2ConfigEdgeCases(t *testing.T) {
 
 		err = config.Validate()
 		assert.NoError(t, err)
-
-		// Verify defensive copying in config
-		originalHash := make([]byte, 32)
-		copy(originalHash, routerHash)
-		routerHash[0] = 0xFF // Modify original
-
-		assert.Equal(t, originalHash, config.BobRouterHash) // Should be unchanged
 	})
 
 	t.Run("invalid static key in WithStaticKey", func(t *testing.T) {
@@ -416,7 +381,8 @@ func TestNTCP2ConfigEdgeCases(t *testing.T) {
 
 		// Validate should catch the missing key for initiator
 		config.Initiator = true
-		config.RemoteRouterHash = make([]byte, 32)
+		rh := generateRandomHash()
+		config.RemoteRouterHash = &rh
 		config.RemoteStaticKey = make([]byte, 32)
 	})
 }
@@ -426,7 +392,7 @@ func TestNTCP2ConfigEdgeCases(t *testing.T) {
 // ============================================================================
 
 func TestAudit_Quality_SilentRejection(t *testing.T) {
-	routerHash := make([]byte, 32)
+	routerHash := generateRandomHash()
 	config, err := NewNTCP2Config(routerHash, true)
 	require.NoError(t, err)
 	require.NotNil(t, config)
@@ -442,15 +408,11 @@ func TestAudit_Quality_SilentRejection(t *testing.T) {
 	config = config.WithStaticKey(validKey)
 	assert.Equal(t, validKey, config.StaticKey, "Valid static key must be set")
 
-	config = config.WithRemoteRouterHash(make([]byte, 31))
-	assert.Nil(t, config.RemoteRouterHash, "Invalid router hash must not be set")
-
-	validHash := make([]byte, 32)
-	for i := range validHash {
-		validHash[i] = byte(i + 100)
-	}
+	// WithRemoteRouterHash now takes data.Hash (always 32 bytes), no invalid length possible
+	validHash := generateRandomHash()
 	config = config.WithRemoteRouterHash(validHash)
-	assert.Equal(t, validHash, config.RemoteRouterHash, "Valid router hash must be set")
+	assert.NotNil(t, config.RemoteRouterHash, "Valid router hash must be set")
+	assert.Equal(t, validHash, *config.RemoteRouterHash, "Valid router hash must be set")
 }
 
 func TestAudit_Quality_Constants(t *testing.T) {
@@ -474,9 +436,10 @@ func TestAudit_ConfigUsesXKPattern(t *testing.T) {
 	assert.Equal(t, "XK", NTCP2Pattern)
 
 	validKey := make([]byte, 32)
+	rh := generateRandomHash()
 	config = config.
 		WithStaticKey(validKey).
-		WithRemoteRouterHash(make([]byte, 32)).
+		WithRemoteRouterHash(rh).
 		WithRemoteStaticKey(make([]byte, 32)).
 		WithAESObfuscation(true, make([]byte, 16))
 	connConfig, err2 := config.ToConnConfig()
@@ -547,19 +510,23 @@ func TestKDF_ASKLabelConfigured(t *testing.T) {
 // ============================================================================
 
 func TestAuditFix_Clone_IndependentConfig(t *testing.T) {
+	var originalHash data.Hash
+	copy(originalHash[:], "original-hash-32-bytes-long!!!!!")
+
 	original := &NTCP2Config{
 		Pattern:       "XK",
 		MaxFrameSize:  16384,
-		BobRouterHash: []byte("original-hash-32-bytes-long!!!!!"),
+		BobRouterHash: originalHash,
 	}
 
 	clone := original.Clone()
 
 	clone.MaxFrameSize = 8192
+	// BobRouterHash is data.Hash ([32]byte value type), so clone has its own copy
 	clone.BobRouterHash[0] = 0xFF
 
 	assert.Equal(t, 16384, original.MaxFrameSize, "clone modification should not affect original")
-	assert.NotEqual(t, byte(0xFF), original.BobRouterHash[0], "clone byte slice modification should not affect original")
+	assert.NotEqual(t, byte(0xFF), original.BobRouterHash[0], "clone value type modification should not affect original")
 }
 
 // ============================================================================
@@ -567,7 +534,7 @@ func TestAuditFix_Clone_IndependentConfig(t *testing.T) {
 // ============================================================================
 
 func TestAuditFix_BobRouterHash_FieldRenamed(t *testing.T) {
-	rhb := make([]byte, 32)
+	var rhb data.Hash
 	for i := range rhb {
 		rhb[i] = byte(i + 1)
 	}
@@ -578,31 +545,28 @@ func TestAuditFix_BobRouterHash_FieldRenamed(t *testing.T) {
 }
 
 func TestAuditFix_BobRouterHash_ValidationWorks(t *testing.T) {
-	_, err := NewNTCP2Config(make([]byte, 16), true)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "bob router hash must be exactly 32 bytes")
-
-	config, err := NewNTCP2Config(make([]byte, 32), false)
+	// data.Hash is [32]byte, so invalid-length router hash is no longer possible
+	// Verify that a zero hash still creates a valid config
+	config, err := NewNTCP2Config(data.Hash{}, false)
 	require.NoError(t, err)
 
-	config.BobRouterHash = make([]byte, 10)
 	err = config.Validate()
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "bob router hash must be exactly 32 bytes")
+	assert.NoError(t, err)
 }
 
 func TestAuditFix_BobRouterHash_DefensiveCopy(t *testing.T) {
-	rhb := make([]byte, 32)
+	// data.Hash is [32]byte value type, so it's always independently copied
+	rhb := generateRandomHash()
 	config, err := NewNTCP2Config(rhb, true)
 	require.NoError(t, err)
 
 	rhb[0] = 0xFF
 	assert.NotEqual(t, byte(0xFF), config.BobRouterHash[0],
-		"BobRouterHash must be a defensive copy")
+		"BobRouterHash must be independent (value type)")
 }
 
 func TestAuditFix_BobRouterHash_AESModifierUsesIt(t *testing.T) {
-	rhb := make([]byte, 32)
+	var rhb data.Hash
 	for i := range rhb {
 		rhb[i] = byte(i + 10)
 	}
@@ -621,7 +585,7 @@ func TestAuditFix_BobRouterHash_AESModifierUsesIt(t *testing.T) {
 }
 
 func TestAuditFix_BobRouterHash_ClonePreserves(t *testing.T) {
-	rhb := make([]byte, 32)
+	var rhb data.Hash
 	for i := range rhb {
 		rhb[i] = byte(i)
 	}
@@ -631,12 +595,13 @@ func TestAuditFix_BobRouterHash_ClonePreserves(t *testing.T) {
 	clone := config.Clone()
 	assert.Equal(t, config.BobRouterHash, clone.BobRouterHash)
 
+	// data.Hash is [32]byte value type, so clone has its own copy
 	clone.BobRouterHash[0] = 0xFF
 	assert.NotEqual(t, config.BobRouterHash[0], clone.BobRouterHash[0])
 }
 
 func TestAuditFix_Clone_DocCommentsPresent(t *testing.T) {
-	rhb := make([]byte, 32)
+	rhb := generateRandomHash()
 	config, err := NewNTCP2Config(rhb, true)
 	require.NoError(t, err)
 
@@ -645,6 +610,7 @@ func TestAuditFix_Clone_DocCommentsPresent(t *testing.T) {
 	clone.Pattern = "NN"
 	assert.Equal(t, "XK", config.Pattern, "Clone must not share value fields")
 
+	// data.Hash is [32]byte value type, so clone has its own copy
 	clone.BobRouterHash[0] = 0xFF
 	assert.NotEqual(t, byte(0xFF), config.BobRouterHash[0],
 		"Clone must deep-copy BobRouterHash")
@@ -659,7 +625,7 @@ func TestClone_AllNilOptionalFields(t *testing.T) {
 	original := &NTCP2Config{
 		Pattern:              "XK",
 		Initiator:            true,
-		BobRouterHash:        make([]byte, 32),
+		BobRouterHash:        data.Hash{},
 		HandshakeTimeout:     30 * time.Second,
 		MaxFrameSize:         16384,
 		EnableAESObfuscation: true,
@@ -685,8 +651,7 @@ func TestClone_AllNilOptionalFields(t *testing.T) {
 	assert.Equal(t, original.EnableAESObfuscation, clone.EnableAESObfuscation)
 	assert.Equal(t, original.EnableSipHashLength, clone.EnableSipHashLength)
 
-	// BobRouterHash (non-nil) is still deep copied
-	assert.NotNil(t, clone.BobRouterHash)
+	// BobRouterHash is data.Hash value type, always independently copied
 	clone.BobRouterHash[0] = 0xFF
 	assert.NotEqual(t, byte(0xFF), original.BobRouterHash[0],
 		"BobRouterHash must be deep-copied even when other fields are nil")
@@ -697,7 +662,8 @@ func TestClone_AllNilOptionalFields(t *testing.T) {
 // all 6 non-nil branches in Clone() and confirms mutation independence.
 func TestClone_AllOptionalFieldsPopulated(t *testing.T) {
 	staticKey := deterministicBytes(32, 1)
-	remoteRouterHash := deterministicBytes(32, 0x20)
+	var remoteRouterHash data.Hash
+	copy(remoteRouterHash[:], deterministicBytes(32, 0x20))
 	remoteStaticKey := deterministicBytes(32, 0x40)
 	obfuscationIV := deterministicBytes(16, 0x60)
 
@@ -707,9 +673,9 @@ func TestClone_AllOptionalFieldsPopulated(t *testing.T) {
 	original := &NTCP2Config{
 		Pattern:          "XK",
 		Initiator:        true,
-		BobRouterHash:    make([]byte, 32),
+		BobRouterHash:    data.Hash{},
 		StaticKey:        staticKey,
-		RemoteRouterHash: remoteRouterHash,
+		RemoteRouterHash: &remoteRouterHash,
 		RemoteStaticKey:  remoteStaticKey,
 		ObfuscationIV:    obfuscationIV,
 		Modifiers:        []handshake.HandshakeModifier{mod1, mod2},
@@ -762,9 +728,9 @@ func TestClone_AllOptionalFieldsPopulated(t *testing.T) {
 func TestClone_PartialNilFields(t *testing.T) {
 	t.Run("StaticKey_nil_others_set", func(t *testing.T) {
 		original := &NTCP2Config{
-			BobRouterHash:    make([]byte, 32),
+			BobRouterHash:    data.Hash{},
 			StaticKey:        nil,
-			RemoteRouterHash: make([]byte, 32),
+			RemoteRouterHash: hashPtr(data.Hash{}),
 			RemoteStaticKey:  make([]byte, 32),
 			ObfuscationIV:    make([]byte, 16),
 		}
@@ -777,7 +743,7 @@ func TestClone_PartialNilFields(t *testing.T) {
 
 	t.Run("RemoteRouterHash_nil_others_set", func(t *testing.T) {
 		original := &NTCP2Config{
-			BobRouterHash:    make([]byte, 32),
+			BobRouterHash:    data.Hash{},
 			StaticKey:        make([]byte, 32),
 			RemoteRouterHash: nil,
 			RemoteStaticKey:  make([]byte, 32),
@@ -792,9 +758,9 @@ func TestClone_PartialNilFields(t *testing.T) {
 
 	t.Run("RemoteStaticKey_nil_others_set", func(t *testing.T) {
 		original := &NTCP2Config{
-			BobRouterHash:    make([]byte, 32),
+			BobRouterHash:    data.Hash{},
 			StaticKey:        make([]byte, 32),
-			RemoteRouterHash: make([]byte, 32),
+			RemoteRouterHash: hashPtr(data.Hash{}),
 			RemoteStaticKey:  nil,
 			ObfuscationIV:    make([]byte, 16),
 		}
@@ -807,9 +773,9 @@ func TestClone_PartialNilFields(t *testing.T) {
 
 	t.Run("ObfuscationIV_nil_others_set", func(t *testing.T) {
 		original := &NTCP2Config{
-			BobRouterHash:    make([]byte, 32),
+			BobRouterHash:    data.Hash{},
 			StaticKey:        make([]byte, 32),
-			RemoteRouterHash: make([]byte, 32),
+			RemoteRouterHash: hashPtr(data.Hash{}),
 			RemoteStaticKey:  make([]byte, 32),
 			ObfuscationIV:    nil,
 		}
@@ -822,7 +788,7 @@ func TestClone_PartialNilFields(t *testing.T) {
 
 	t.Run("Modifiers_nil_others_set", func(t *testing.T) {
 		original := &NTCP2Config{
-			BobRouterHash: make([]byte, 32),
+			BobRouterHash: data.Hash{},
 			StaticKey:     make([]byte, 32),
 			Modifiers:     nil,
 		}
@@ -833,7 +799,7 @@ func TestClone_PartialNilFields(t *testing.T) {
 
 	t.Run("Modifiers_empty_slice", func(t *testing.T) {
 		original := &NTCP2Config{
-			BobRouterHash: make([]byte, 32),
+			BobRouterHash: data.Hash{},
 			Modifiers:     []handshake.HandshakeModifier{},
 		}
 		clone := original.Clone()
@@ -842,13 +808,13 @@ func TestClone_PartialNilFields(t *testing.T) {
 		assert.Empty(t, clone.Modifiers)
 	})
 
-	t.Run("BobRouterHash_nil", func(t *testing.T) {
+	t.Run("BobRouterHash_zero", func(t *testing.T) {
 		original := &NTCP2Config{
-			BobRouterHash: nil,
+			BobRouterHash: data.Hash{},
 			StaticKey:     make([]byte, 32),
 		}
 		clone := original.Clone()
-		assert.Nil(t, clone.BobRouterHash)
+		assert.Equal(t, data.Hash{}, clone.BobRouterHash)
 		assert.NotNil(t, clone.StaticKey)
 	})
 }
@@ -859,7 +825,7 @@ func TestClone_ValueFieldIndependence(t *testing.T) {
 	original := &NTCP2Config{
 		Pattern:              "XK",
 		Initiator:            true,
-		BobRouterHash:        make([]byte, 32),
+		BobRouterHash:        data.Hash{},
 		HandshakeTimeout:     30 * time.Second,
 		ReadTimeout:          5 * time.Second,
 		WriteTimeout:         10 * time.Second,
@@ -914,14 +880,15 @@ func TestClone_ValueFieldIndependence(t *testing.T) {
 // remote static key, and AES obfuscation).
 func newSipHashTestConfig(t *testing.T) *NTCP2Config {
 	t.Helper()
-	routerHash := make([]byte, 32)
-	copy(routerHash, "test-router-hash-32-bytes-long!")
+	var routerHash data.Hash
+	copy(routerHash[:], "test-router-hash-32-bytes-long!")
 
 	config, err := NewNTCP2Config(routerHash, true)
 	require.NoError(t, err)
 
-	config.RemoteRouterHash = make([]byte, 32)
-	copy(config.RemoteRouterHash, "remote-hash-32-bytes-long!!!!!")
+	var remoteHash data.Hash
+	copy(remoteHash[:], "remote-hash-32-bytes-long!!!!!")
+	config.RemoteRouterHash = &remoteHash
 	config.StaticKey = make([]byte, 32)
 	copy(config.StaticKey, "static-key-32-bytes-long!!!!!!!")
 	config.RemoteStaticKey = make([]byte, 32)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 
+	"github.com/go-i2p/common/data"
 	noise "github.com/go-i2p/go-noise"
 	"github.com/samber/oops"
 )
@@ -327,31 +328,21 @@ func createDialAddresses(conn net.Conn, config *NTCP2Config) (*NTCP2Addr, *NTCP2
 
 	// Validate RemoteRouterHash length early so the error clearly
 	// indicates the config source rather than a generic NewNTCP2Addr failure.
-	if config.RemoteRouterHash != nil && len(config.RemoteRouterHash) != RouterHashSize {
-		return nil, nil, oops.
-			Code("INVALID_REMOTE_ROUTER_HASH").
-			In("ntcp2").
-			With("expected", RouterHashSize).
-			With("got", len(config.RemoteRouterHash)).
-			Errorf("config.RemoteRouterHash must be exactly %d bytes", RouterHashSize)
-	}
+	// (data.Hash type guarantees correct size; this check is a no-op placeholder)
 
 	// Create remote address from connection's remote address and config.
 	// For responder connections (e.g., WrapNTCP2Conn on accepted conns),
 	// the remote router hash may not be known until after the handshake
 	// completes and PeerStaticKey() is available. Use a placeholder zero
-	// hash in that case so NewNTCP2Addr does not reject the nil input.
-	var remoteRouterHash []byte
+	// hash in that case.
+	var remoteHash data.Hash
 	if config.RemoteRouterHash != nil {
-		remoteRouterHash = make([]byte, len(config.RemoteRouterHash))
-		copy(remoteRouterHash, config.RemoteRouterHash)
-	} else {
-		remoteRouterHash = make([]byte, RouterHashSize) // placeholder zero hash
+		remoteHash = *config.RemoteRouterHash
 	}
 
 	remoteAddr, err := NewNTCP2Addr(
 		conn.RemoteAddr(),
-		remoteRouterHash,
+		remoteHash,
 		remoteRole,
 	)
 	if err != nil {

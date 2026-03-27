@@ -4,6 +4,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/go-i2p/common/data"
 	noise "github.com/go-i2p/go-noise"
 	"github.com/go-i2p/go-noise/handshake"
 	"github.com/go-i2p/go-noise/internal"
@@ -23,20 +24,20 @@ type NTCP2Config struct {
 	// For listeners, this is always false
 	Initiator bool
 
-	// BobRouterHash is Bob's (the responder's) router hash (32 bytes).
+	// BobRouterHash is Bob's (the responder's) router hash.
 	// Per the I2P NTCP2 spec, both Alice (initiator) and Bob (responder)
 	// use RH_B as the AES-256-CBC key for ephemeral key obfuscation.
 	// For the responder, this is their own router hash.
 	// For the initiator, this is the remote peer's router hash.
 	// Required for NTCP2 addressing and AES obfuscation.
-	BobRouterHash []byte
+	BobRouterHash data.Hash
 
 	// StaticKey is the long-term static key for this peer (32 bytes for Curve25519)
 	StaticKey []byte
 
-	// RemoteRouterHash is the remote peer's router identity (32 bytes)
-	// Required for outbound connections, optional for listeners
-	RemoteRouterHash []byte
+	// RemoteRouterHash is the remote peer's router identity hash.
+	// Required for outbound connections, optional for listeners.
+	RemoteRouterHash *data.Hash
 
 	// RemoteStaticKey is the remote peer's Curve25519 static public key (32 bytes)
 	// Required for initiator connections using XK pattern (pre-message: ← s)
@@ -109,28 +110,16 @@ type NTCP2Config struct {
 }
 
 // NewNTCP2Config creates a new NTCP2Config with sensible defaults.
-// bobRouterHash must be exactly 32 bytes representing Bob's (the responder's)
-// router hash (RH_B). Per the NTCP2 spec, both initiator and responder use
-// RH_B for AES ephemeral key obfuscation. For a responder, pass your own
-// router hash; for an initiator, pass the remote peer's router hash.
+// bobRouterHash is Bob's (the responder's) router hash (RH_B). Per the NTCP2
+// spec, both initiator and responder use RH_B for AES ephemeral key obfuscation.
+// For a responder, pass your own router hash; for an initiator, pass the remote
+// peer's router hash.
 // initiator indicates whether this connection will initiate the handshake.
-func NewNTCP2Config(bobRouterHash []byte, initiator bool) (*NTCP2Config, error) {
-	if len(bobRouterHash) != RouterHashSize {
-		return nil, oops.
-			Code("INVALID_ROUTER_HASH").
-			In("ntcp2").
-			With("hash_length", len(bobRouterHash)).
-			Errorf("bob router hash must be exactly %d bytes", RouterHashSize)
-	}
-
-	// Make defensive copy of router hash
-	hash := make([]byte, RouterHashSize)
-	copy(hash, bobRouterHash)
-
+func NewNTCP2Config(bobRouterHash data.Hash, initiator bool) (*NTCP2Config, error) {
 	return &NTCP2Config{
 		Pattern:              NTCP2Pattern,
 		Initiator:            initiator,
-		BobRouterHash:        hash,
+		BobRouterHash:        bobRouterHash,
 		HandshakeTimeout:     DefaultHandshakeTimeoutSeconds * time.Second,
 		ReadTimeout:          0,
 		WriteTimeout:         0,
@@ -166,11 +155,8 @@ func (nc *NTCP2Config) WithStaticKey(key []byte) *NTCP2Config {
 // WithRemoteRouterHash sets the remote peer's router identity.
 // hash must be 32 bytes. Required for outbound connections.
 // Invalid lengths are ignored; call Validate() to check all fields before use.
-func (nc *NTCP2Config) WithRemoteRouterHash(hash []byte) *NTCP2Config {
-	if len(hash) == RouterHashSize {
-		nc.RemoteRouterHash = make([]byte, RouterHashSize)
-		copy(nc.RemoteRouterHash, hash)
-	}
+func (nc *NTCP2Config) WithRemoteRouterHash(hash data.Hash) *NTCP2Config {
+	nc.RemoteRouterHash = &hash
 	return nc
 }
 
@@ -298,14 +284,7 @@ func (nc *NTCP2Config) validateBasicConfiguration() error {
 		return err
 	}
 
-	// Validate Bob's router hash
-	if len(nc.BobRouterHash) != RouterHashSize {
-		return oops.
-			Code("INVALID_ROUTER_HASH").
-			In("ntcp2").
-			With("hash_length", len(nc.BobRouterHash)).
-			Errorf("bob router hash must be exactly %d bytes", RouterHashSize)
-	}
+	// BobRouterHash validation is implicit via data.Hash type (always 32 bytes).
 
 	return nil
 }
@@ -316,17 +295,8 @@ func (nc *NTCP2Config) validateCryptographicParameters() error {
 		return err
 	}
 
-	// Validate remote router hash if provided
-	if len(nc.RemoteRouterHash) > 0 && len(nc.RemoteRouterHash) != RouterHashSize {
-		return oops.
-			Code("INVALID_REMOTE_ROUTER_HASH").
-			In("ntcp2").
-			With("hash_length", len(nc.RemoteRouterHash)).
-			Errorf("remote router hash must be %d bytes", RouterHashSize)
-	}
-
 	// For initiator connections, remote router hash is required
-	if nc.Initiator && len(nc.RemoteRouterHash) == 0 {
+	if nc.Initiator && nc.RemoteRouterHash == nil {
 		return oops.
 			Code("MISSING_REMOTE_ROUTER_HASH").
 			In("ntcp2").
@@ -564,7 +534,7 @@ func (nc *NTCP2Config) createAESModifierIfEnabled() (handshake.HandshakeModifier
 			Errorf("AES obfuscation IV is required (published in peer's network database entry)")
 	}
 
-	aesModifier, err := NewAESObfuscationModifier("ntcp2-aes", nc.BobRouterHash, iv)
+	aesModifier, err := NewAESObfuscationModifier("ntcp2-aes", nc.BobRouterHash[:], iv)
 	if err != nil {
 		return nil, oops.
 			Code("AES_MODIFIER_FAILED").
@@ -634,17 +604,14 @@ func (nc *NTCP2Config) Clone() *NTCP2Config {
 		MinPaddingSize:       nc.MinPaddingSize,
 		MaxPaddingSize:       nc.MaxPaddingSize,
 	}
-	if nc.BobRouterHash != nil {
-		clone.BobRouterHash = make([]byte, len(nc.BobRouterHash))
-		copy(clone.BobRouterHash, nc.BobRouterHash)
-	}
+	clone.BobRouterHash = nc.BobRouterHash
 	if nc.StaticKey != nil {
 		clone.StaticKey = make([]byte, len(nc.StaticKey))
 		copy(clone.StaticKey, nc.StaticKey)
 	}
 	if nc.RemoteRouterHash != nil {
-		clone.RemoteRouterHash = make([]byte, len(nc.RemoteRouterHash))
-		copy(clone.RemoteRouterHash, nc.RemoteRouterHash)
+		h := *nc.RemoteRouterHash
+		clone.RemoteRouterHash = &h
 	}
 	if nc.RemoteStaticKey != nil {
 		clone.RemoteStaticKey = make([]byte, len(nc.RemoteStaticKey))

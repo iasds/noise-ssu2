@@ -393,7 +393,7 @@ func TestRelayTagBlockEncoding(t *testing.T) {
 
 		decoded, err := DecodeRelayTagRequest(block)
 		require.NoError(t, err)
-		assert.Equal(t, uint32(0), decoded.Nonce)
+		assert.NotNil(t, decoded)
 	})
 
 	t.Run("RelayTag", func(t *testing.T) {

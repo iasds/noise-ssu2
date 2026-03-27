@@ -4,10 +4,11 @@ package ssu2
 
 import (
 	"crypto/rand"
-	"encoding/base64"
 	"fmt"
 	"net"
 
+	i2pbase64 "github.com/go-i2p/common/base64"
+	"github.com/go-i2p/common/data"
 	"github.com/samber/oops"
 )
 
@@ -17,36 +18,28 @@ import (
 type SSU2Addr struct {
 	// underlying is the UDP network address
 	underlying net.Addr
-	// routerHash is the 32-byte I2P router identity hash
-	routerHash []byte
+	// routerHash is the I2P router identity hash
+	routerHash data.Hash
 	// connectionID is the 8-byte SSU2 connection identifier
 	connectionID uint64
 	// role indicates if this is an initiator or responder address
 	role string
-	// destHash is the 32-byte destination hash (optional, nil for router-to-router)
-	destHash []byte
+	// destHash is the destination hash (optional, nil for router-to-router)
+	destHash *data.Hash
 	// introducerAddr is the UDP address of an introducer for NAT traversal (optional)
 	introducerAddr net.Addr
 }
 
 // NewSSU2Addr creates a new SSU2Addr with the specified UDP address, router hash, connection ID, and role.
-// routerHash must be exactly 32 bytes representing the I2P router identity.
+// routerHash is the I2P router identity hash.
 // connID should be a cryptographically secure random 8-byte value (use GenerateConnectionID).
 // role should be either "initiator" or "responder".
-func NewSSU2Addr(underlying net.Addr, routerHash []byte, connID uint64, role string) (*SSU2Addr, error) {
+func NewSSU2Addr(underlying net.Addr, routerHash data.Hash, connID uint64, role string) (*SSU2Addr, error) {
 	if underlying == nil {
 		return nil, oops.
 			Code("INVALID_UNDERLYING_ADDR").
 			In("ssu2").
 			Errorf("underlying address cannot be nil")
-	}
-
-	if len(routerHash) != 32 {
-		return nil, oops.
-			Code("INVALID_ROUTER_HASH").
-			In("ssu2").
-			With("hash_length", len(routerHash)).
-			Errorf("router hash must be exactly 32 bytes")
 	}
 
 	// M-6: connID==0 is rejected because SSU2Addr represents established session
@@ -68,36 +61,21 @@ func NewSSU2Addr(underlying net.Addr, routerHash []byte, connID uint64, role str
 			Errorf("role must be 'initiator' or 'responder'")
 	}
 
-	// Make defensive copy of router hash
-	hash := make([]byte, 32)
-	copy(hash, routerHash)
-
 	return &SSU2Addr{
 		underlying:   underlying,
-		routerHash:   hash,
+		routerHash:   routerHash,
 		connectionID: connID,
 		role:         role,
 	}, nil
 }
 
 // WithDestinationHash sets the destination hash for tunnel connections.
-// destHash must be exactly 32 bytes or nil for router-to-router connections.
 // Returns a new SSU2Addr instance (immutable pattern).
-func (sa *SSU2Addr) WithDestinationHash(destHash []byte) (*SSU2Addr, error) {
-	if destHash != nil && len(destHash) != 32 {
-		return nil, oops.
-			Code("INVALID_DEST_HASH").
-			In("ssu2").
-			With("hash_length", len(destHash)).
-			Errorf("destination hash must be exactly 32 bytes or nil")
-	}
-
+func (sa *SSU2Addr) WithDestinationHash(destHash data.Hash) *SSU2Addr {
 	return sa.copyWithModifications(func(newAddr *SSU2Addr) {
-		if destHash != nil {
-			newAddr.destHash = make([]byte, 32)
-			copy(newAddr.destHash, destHash)
-		}
-	}), nil
+		h := destHash
+		newAddr.destHash = &h
+	})
 }
 
 // WithIntroducer sets the introducer address for NAT traversal.
@@ -123,13 +101,12 @@ func (sa *SSU2Addr) copyWithModifications(modify func(*SSU2Addr)) *SSU2Addr {
 		underlying:   sa.underlying,
 		connectionID: sa.connectionID,
 		role:         sa.role,
-		routerHash:   make([]byte, 32),
+		routerHash:   sa.routerHash,
 	}
-	copy(newAddr.routerHash, sa.routerHash)
 
 	if sa.destHash != nil {
-		newAddr.destHash = make([]byte, 32)
-		copy(newAddr.destHash, sa.destHash)
+		h := *sa.destHash
+		newAddr.destHash = &h
 	}
 
 	if sa.introducerAddr != nil {
@@ -140,13 +117,11 @@ func (sa *SSU2Addr) copyWithModifications(modify func(*SSU2Addr)) *SSU2Addr {
 	return newAddr
 }
 
-// UpdateRouterHash replaces the router hash with the given 32-byte value.
+// UpdateRouterHash replaces the router hash with the given value.
 // This is used after the handshake completes to replace the placeholder hash
 // with one derived from the peer's authenticated static key.
-func (sa *SSU2Addr) UpdateRouterHash(hash []byte) {
-	if len(hash) == 32 {
-		copy(sa.routerHash, hash)
-	}
+func (sa *SSU2Addr) UpdateRouterHash(hash data.Hash) {
+	sa.routerHash = hash
 }
 
 // Network returns "ssu2" to identify this as an SSU2 transport address.
@@ -163,8 +138,8 @@ func (sa *SSU2Addr) String() string {
 		return "ssu2://invalid"
 	}
 
-	// Base64 encode router hash for readability
-	routerB64 := base64.URLEncoding.EncodeToString(sa.routerHash)
+	// I2P base64 encode router hash for readability
+	routerB64 := i2pbase64.EncodeToString(sa.routerHash[:])
 
 	// Build base address with connection ID
 	addr := fmt.Sprintf("ssu2://%s:%d/%s/%s",
@@ -172,7 +147,7 @@ func (sa *SSU2Addr) String() string {
 
 	// Add optional destination hash
 	if sa.destHash != nil {
-		destB64 := base64.URLEncoding.EncodeToString(sa.destHash)
+		destB64 := i2pbase64.EncodeToString(sa.destHash[:])
 		addr += "?dest=" + destB64
 	}
 
@@ -188,15 +163,9 @@ func (sa *SSU2Addr) String() string {
 	return addr
 }
 
-// RouterHash returns a copy of the router identity hash.
-// The returned slice is a defensive copy to prevent external modification.
-func (sa *SSU2Addr) RouterHash() []byte {
-	if sa.routerHash == nil {
-		return nil
-	}
-	hash := make([]byte, 32)
-	copy(hash, sa.routerHash)
-	return hash
+// RouterHash returns the router identity hash.
+func (sa *SSU2Addr) RouterHash() data.Hash {
+	return sa.routerHash
 }
 
 // ConnectionID returns the SSU2 connection identifier.
@@ -214,15 +183,13 @@ func (sa *SSU2Addr) UnderlyingAddr() net.Addr {
 	return sa.underlying
 }
 
-// DestinationHash returns a copy of the destination hash, or nil for router-to-router connections.
-// The returned slice is a defensive copy to prevent external modification.
-func (sa *SSU2Addr) DestinationHash() []byte {
+// DestinationHash returns the destination hash, or nil for router-to-router connections.
+func (sa *SSU2Addr) DestinationHash() *data.Hash {
 	if sa.destHash == nil {
 		return nil
 	}
-	hash := make([]byte, 32)
-	copy(hash, sa.destHash)
-	return hash
+	h := *sa.destHash
+	return &h
 }
 
 // IntroducerAddr returns the introducer address, or nil if no introducer is used.

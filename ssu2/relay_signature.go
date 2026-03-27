@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"net"
 
+	"github.com/go-i2p/common/data"
 	"github.com/samber/oops"
 )
 
@@ -33,19 +34,12 @@ const (
 //   - AlicePort: 2 bytes
 //   - AliceIP: (asz-2) bytes
 func BuildRelayRequestSignedData(
-	bobHash, charlieHash []byte,
+	bobHash, charlieHash data.Hash,
 	nonce, relayTag, timestamp uint32,
 	version uint8,
 	alicePort uint16,
 	aliceIP net.IP,
 ) ([]byte, error) {
-	if len(bobHash) != 32 {
-		return nil, oops.Errorf("bobHash must be 32 bytes, got %d", len(bobHash))
-	}
-	if len(charlieHash) != 32 {
-		return nil, oops.Errorf("charlieHash must be 32 bytes, got %d", len(charlieHash))
-	}
-
 	ip4 := aliceIP.To4()
 	var ipBytes []byte
 	var asz uint8
@@ -67,9 +61,9 @@ func BuildRelayRequestSignedData(
 
 	copy(buf[off:], RelayRequestPrologue)
 	off += 16
-	copy(buf[off:], bobHash)
+	copy(buf[off:], bobHash[:])
 	off += 32
-	copy(buf[off:], charlieHash)
+	copy(buf[off:], charlieHash[:])
 	off += 32
 	binary.BigEndian.PutUint32(buf[off:], nonce)
 	off += 4
@@ -91,7 +85,7 @@ func BuildRelayRequestSignedData(
 // SignRelayRequest signs a relay request using Alice's Ed25519 private key.
 func SignRelayRequest(
 	privateKey ed25519.PrivateKey,
-	bobHash, charlieHash []byte,
+	bobHash, charlieHash data.Hash,
 	nonce, relayTag, timestamp uint32,
 	version uint8,
 	alicePort uint16,
@@ -108,7 +102,7 @@ func SignRelayRequest(
 func VerifyRelayRequestSignature(
 	publicKey ed25519.PublicKey,
 	signature []byte,
-	bobHash, charlieHash []byte,
+	bobHash, charlieHash data.Hash,
 	nonce, relayTag, timestamp uint32,
 	version uint8,
 	alicePort uint16,
@@ -133,16 +127,12 @@ func VerifyRelayRequestSignature(
 //   - CharliePort: 2 bytes (not present if csz is 0)
 //   - CharlieIP: (csz-2) bytes (not present if csz is 0)
 func BuildRelayResponseSignedData(
-	bobHash []byte,
+	bobHash data.Hash,
 	nonce, timestamp uint32,
 	version uint8,
 	charliePort uint16,
 	charlieIP net.IP,
 ) ([]byte, error) {
-	if len(bobHash) != 32 {
-		return nil, oops.Errorf("bobHash must be 32 bytes, got %d", len(bobHash))
-	}
-
 	var ipBytes []byte
 	var csz uint8
 	if charlieIP == nil {
@@ -168,7 +158,7 @@ func BuildRelayResponseSignedData(
 
 	copy(buf[off:], RelayAgreementPrologue)
 	off += 16
-	copy(buf[off:], bobHash)
+	copy(buf[off:], bobHash[:])
 	off += 32
 	binary.BigEndian.PutUint32(buf[off:], nonce)
 	off += 4
@@ -191,7 +181,7 @@ func BuildRelayResponseSignedData(
 // For accepted responses (code 0), Charlie signs. For Bob rejections (code 1-63), Bob signs.
 func SignRelayResponse(
 	privateKey ed25519.PrivateKey,
-	bobHash []byte,
+	bobHash data.Hash,
 	nonce, timestamp uint32,
 	version uint8,
 	charliePort uint16,
@@ -210,7 +200,7 @@ func SignRelayResponse(
 func VerifyRelayResponseSignature(
 	publicKey ed25519.PublicKey,
 	signature []byte,
-	bobHash []byte,
+	bobHash data.Hash,
 	nonce, timestamp uint32,
 	version uint8,
 	charliePort uint16,

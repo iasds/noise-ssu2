@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/go-i2p/common/data"
 	i2phkdf "github.com/go-i2p/crypto/hkdf"
 	"github.com/go-i2p/noise"
 	"github.com/samber/oops"
@@ -276,23 +277,25 @@ func NewSSU2Conn(
 	}
 
 	// Create connection instance
+	rttEst := NewRTTEstimator()
 	conn := &SSU2Conn{
-		underlying:       underlying,
-		remoteAddr:       remoteAddr,
-		ssu2Addr:         ssu2Addr,
-		config:           config,
-		initiator:        initiator,
-		handshakeHandler: handshakeHandler,
-		dataHandler:      newDataHandlerFromConfig(config), // M-3: fragment timeout from config
-		ackHandler:       NewACKHandler(),
-		rttEstimator:     NewRTTEstimator(),
-		recvWindow:       NewReceiveWindow(0, 256), // start at 0, max 256 packets
-		state:            StateInit,
-		closeChan:        make(chan struct{}),
-		sendQueue:        make(chan *SSU2Packet, 64),
-		recvQueue:        make(chan *SSU2Packet, 64),
-		pendingPackets:   make(map[uint32]*PendingPacket),
-		lastActivity:     time.Now(),
+		underlying:           underlying,
+		remoteAddr:           remoteAddr,
+		ssu2Addr:             ssu2Addr,
+		config:               config,
+		initiator:            initiator,
+		handshakeHandler:     handshakeHandler,
+		dataHandler:          newDataHandlerFromConfig(config), // M-3: fragment timeout from config
+		ackHandler:           NewACKHandler(),
+		rttEstimator:         rttEst,
+		congestionController: NewCongestionControllerWithMTU(rttEst, config.MTU),
+		recvWindow:           NewReceiveWindow(0, 256), // start at 0, max 256 packets
+		state:                StateInit,
+		closeChan:            make(chan struct{}),
+		sendQueue:            make(chan *SSU2Packet, 64),
+		recvQueue:            make(chan *SSU2Packet, 64),
+		pendingPackets:       make(map[uint32]*PendingPacket),
+		lastActivity:         time.Now(),
 	}
 
 	// Initialize path validator for connection migration (G-7)
@@ -485,7 +488,7 @@ func (h *SSU2Conn) handshakeInitiator(ctx context.Context) error {
 	// requires splitting across multiple packets per SSU2 spec §Session Confirmed.
 	// Per spec: "Packet Number :: 0 always, for all fragments, even if retransmitted."
 	// Per spec §Session Confirmed: dest_conn_id = responder's Source Connection ID.
-	fragments, err := h.handshakeHandler.CreateSessionConfirmedFragments(h.remoteConnectionID, 0, h.config.RouterHash)
+	fragments, err := h.handshakeHandler.CreateSessionConfirmedFragments(h.remoteConnectionID, 0, h.config.RouterHash[:])
 	if err != nil {
 		return oops.Wrapf(err, "failed to create SessionConfirmed")
 	}
@@ -767,7 +770,7 @@ func (h *SSU2Conn) installCipherStates() error {
 	// Update router hash from peer's static key if available
 	if peerKey := h.handshakeHandler.GetRemoteStaticKey(); len(peerKey) == 32 {
 		hash := sha256.Sum256(peerKey)
-		h.ssu2Addr.UpdateRouterHash(hash[:])
+		h.ssu2Addr.UpdateRouterHash(data.NewHash(hash))
 
 		// Validate the RouterInfo against the Noise-authenticated static key
 		// per SSU2 spec §Session Confirmed (C-2).

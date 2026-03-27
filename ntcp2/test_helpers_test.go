@@ -7,6 +7,7 @@ import (
 	"net"
 	"testing"
 
+	"github.com/go-i2p/common/data"
 	"github.com/go-i2p/crypto/rand"
 
 	noise "github.com/go-i2p/go-noise"
@@ -40,7 +41,7 @@ func deterministicBytes(size int, offset byte) []byte {
 type testNTCP2Listener struct {
 	listener   *NTCP2Listener
 	tcpAddr    net.Addr
-	routerHash []byte
+	routerHash data.Hash
 }
 
 // newTestNTCP2Listener creates a real TCP listener on localhost, generates a
@@ -52,9 +53,7 @@ func newTestNTCP2Listener(t *testing.T) testNTCP2Listener {
 	require.NoError(t, err)
 	t.Cleanup(func() { tcpLn.Close() })
 
-	routerHash := make([]byte, 32)
-	_, err = rand.Read(routerHash)
-	require.NoError(t, err)
+	routerHash := generateRandomHash()
 
 	config, err := NewNTCP2Config(routerHash, false)
 	require.NoError(t, err)
@@ -142,9 +141,9 @@ func createTestNTCP2ConnWithSLM(t *testing.T) *NTCP2Conn {
 
 // testCryptoMaterial holds random byte slices commonly needed by NTCP2 tests.
 type testCryptoMaterial struct {
-	routerHash    []byte
+	routerHash    data.Hash
 	staticKey     []byte
-	remoteHash    []byte
+	remoteHash    data.Hash
 	obfuscationIV []byte
 }
 
@@ -152,9 +151,9 @@ type testCryptoMaterial struct {
 func newTestCryptoMaterial(t *testing.T) testCryptoMaterial {
 	t.Helper()
 	return testCryptoMaterial{
-		routerHash:    generateRandomBytes(32),
+		routerHash:    generateRandomHash(),
 		staticKey:     generateRandomBytes(32),
-		remoteHash:    generateRandomBytes(32),
+		remoteHash:    generateRandomHash(),
 		obfuscationIV: generateRandomBytes(16),
 	}
 }
@@ -163,7 +162,7 @@ func newTestCryptoMaterial(t *testing.T) testCryptoMaterial {
 // Use this for tests that only need a valid config without specific key material.
 func newTestNTCP2ConfigSimple(t *testing.T, initiator bool) *NTCP2Config {
 	t.Helper()
-	routerHash := generateRandomBytes(32)
+	routerHash := generateRandomHash()
 	config, err := NewNTCP2Config(routerHash, initiator)
 	require.NoError(t, err)
 	return config
@@ -197,7 +196,7 @@ func newTestInitiatorConfigFrom(t *testing.T, m testCryptoMaterial) *NTCP2Config
 // router hash and static key, suitable for clone/listener tests.
 func newTestResponderConfigWithKey(t *testing.T) *NTCP2Config {
 	t.Helper()
-	routerHash := generateRandomBytes(32)
+	routerHash := generateRandomHash()
 	staticKey := generateRandomBytes(32)
 	config, err := NewNTCP2Config(routerHash, false)
 	require.NoError(t, err)
@@ -208,8 +207,8 @@ func newTestResponderConfigWithKey(t *testing.T) *NTCP2Config {
 // router hash and AES obfuscation disabled, suitable for listener tests.
 func newTestResponderConfigNoAES(t *testing.T) *NTCP2Config {
 	t.Helper()
-	routerHash := make([]byte, RouterHashSize)
-	copy(routerHash, "responder-hash-32-bytes-long!!!!")
+	var routerHash data.Hash
+	copy(routerHash[:], "responder-hash-32-bytes-long!!!!")
 
 	config, err := NewNTCP2Config(routerHash, false)
 	require.NoError(t, err)
@@ -220,8 +219,8 @@ func newTestResponderConfigNoAES(t *testing.T) *NTCP2Config {
 type testXKConfigPair struct {
 	initiatorConfig *NTCP2Config
 	responderConfig *NTCP2Config
-	initiatorHash   []byte
-	responderHash   []byte
+	initiatorHash   data.Hash
+	responderHash   data.Hash
 }
 
 // newTestXKConfigPair creates a matched initiator+responder NTCP2Config pair
@@ -241,10 +240,10 @@ func newTestXKConfigPair(t *testing.T) testXKConfigPair {
 	responderKP, err := cs.GenerateKeypair(rand.Reader)
 	require.NoError(t, err)
 
-	initiatorHash := make([]byte, RouterHashSize)
-	copy(initiatorHash, "initiator-hash-32-bytes-long!!!!")
-	responderHash := make([]byte, RouterHashSize)
-	copy(responderHash, "responder-hash-32-bytes-long!!!!")
+	var initiatorHash data.Hash
+	copy(initiatorHash[:], "initiator-hash-32-bytes-long!!!!")
+	var responderHash data.Hash
+	copy(responderHash[:], "responder-hash-32-bytes-long!!!!")
 
 	responderConfig, err := NewNTCP2Config(responderHash, false)
 	require.NoError(t, err)

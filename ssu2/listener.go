@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-i2p/common/data"
 	"github.com/samber/oops"
 )
 
@@ -352,12 +353,9 @@ func (l *SSU2Listener) handleNewSession(remoteAddr *net.UDPAddr, packet *SSU2Pac
 	// and uniquely identifies this handshake session. The real router hash
 	// (SHA-256 of the peer's RouterInfo) is installed post-handshake by
 	// installCipherStates once the peer's static key is known.
-	var routerHash []byte
+	var routerHash data.Hash
 	if len(packet.EphemeralKey) == 32 {
-		h := sha256.Sum256(packet.EphemeralKey)
-		routerHash = h[:]
-	} else {
-		routerHash = make([]byte, 32)
+		routerHash = data.NewHash(sha256.Sum256(packet.EphemeralKey))
 	}
 
 	// Create a connection-specific config with the generated connection ID

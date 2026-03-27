@@ -5,6 +5,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/go-i2p/common/data"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -13,7 +14,7 @@ func TestNewNTCP2Addr(t *testing.T) {
 	tests := []struct {
 		name         string
 		underlying   net.Addr
-		routerHash   []byte
+		routerHash   data.Hash
 		role         string
 		expectError  bool
 		errorMessage string
@@ -21,45 +22,29 @@ func TestNewNTCP2Addr(t *testing.T) {
 		{
 			name:        "valid_initiator_addr",
 			underlying:  &net.TCPAddr{IP: net.ParseIP("192.168.1.1"), Port: 8080},
-			routerHash:  make([]byte, 32), // Valid 32-byte hash
+			routerHash:  data.Hash{}, // Valid zero hash
 			role:        "initiator",
 			expectError: false,
 		},
 		{
 			name:        "valid_responder_addr",
 			underlying:  &net.TCPAddr{IP: net.ParseIP("10.0.0.1"), Port: 9091},
-			routerHash:  make([]byte, 32),
+			routerHash:  data.Hash{},
 			role:        "responder",
 			expectError: false,
 		},
 		{
 			name:         "nil_underlying_addr",
 			underlying:   nil,
-			routerHash:   make([]byte, 32),
+			routerHash:   data.Hash{},
 			role:         "initiator",
 			expectError:  true,
 			errorMessage: "underlying address cannot be nil",
 		},
 		{
-			name:         "invalid_router_hash_too_short",
-			underlying:   &net.TCPAddr{IP: net.ParseIP("192.168.1.1"), Port: 8080},
-			routerHash:   make([]byte, 16), // Too short
-			role:         "initiator",
-			expectError:  true,
-			errorMessage: "router hash must be exactly 32 bytes",
-		},
-		{
-			name:         "invalid_router_hash_too_long",
-			underlying:   &net.TCPAddr{IP: net.ParseIP("192.168.1.1"), Port: 8080},
-			routerHash:   make([]byte, 64), // Too long
-			role:         "initiator",
-			expectError:  true,
-			errorMessage: "router hash must be exactly 32 bytes",
-		},
-		{
 			name:         "invalid_role",
 			underlying:   &net.TCPAddr{IP: net.ParseIP("192.168.1.1"), Port: 8080},
-			routerHash:   make([]byte, 32),
+			routerHash:   data.Hash{},
 			role:         "invalid",
 			expectError:  true,
 			errorMessage: "role must be 'initiator' or 'responder'",
@@ -67,7 +52,7 @@ func TestNewNTCP2Addr(t *testing.T) {
 		{
 			name:         "empty_role",
 			underlying:   &net.TCPAddr{IP: net.ParseIP("192.168.1.1"), Port: 8080},
-			routerHash:   make([]byte, 32),
+			routerHash:   data.Hash{},
 			role:         "",
 			expectError:  true,
 			errorMessage: "role must be 'initiator' or 'responder'",
@@ -87,7 +72,6 @@ func TestNewNTCP2Addr(t *testing.T) {
 				require.NotNil(t, addr)
 				assert.Equal(t, tt.underlying, addr.underlying)
 				assert.Equal(t, tt.role, addr.role)
-				assert.Equal(t, 32, len(addr.routerHash))
 			}
 		})
 	}
@@ -95,7 +79,7 @@ func TestNewNTCP2Addr(t *testing.T) {
 
 func TestNTCP2Addr_NetAddrInterface(t *testing.T) {
 	underlying := &net.TCPAddr{IP: net.ParseIP("192.168.1.1"), Port: 8080}
-	routerHash := make([]byte, 32)
+	var routerHash data.Hash
 	addr, err := NewNTCP2Addr(underlying, routerHash, "initiator")
 	require.NoError(t, err)
 
@@ -107,7 +91,7 @@ func TestNTCP2Addr_NetAddrInterface(t *testing.T) {
 
 func TestNTCP2Addr_Network(t *testing.T) {
 	underlying := &net.TCPAddr{IP: net.ParseIP("192.168.1.1"), Port: 8080}
-	routerHash := make([]byte, 32)
+	var routerHash data.Hash
 	addr, err := NewNTCP2Addr(underlying, routerHash, "initiator")
 	require.NoError(t, err)
 
@@ -116,7 +100,7 @@ func TestNTCP2Addr_Network(t *testing.T) {
 
 func TestNTCP2Addr_String(t *testing.T) {
 	underlying := &net.TCPAddr{IP: net.ParseIP("192.168.1.1"), Port: 8080}
-	routerHash := make([]byte, 32)
+	var routerHash data.Hash
 	// Set some recognizable bytes in router hash
 	routerHash[0] = 0xAA
 	routerHash[31] = 0xBB
@@ -162,17 +146,16 @@ func TestNTCP2Addr_String(t *testing.T) {
 
 func TestNTCP2Addr_AccessorMethods(t *testing.T) {
 	underlying := &net.TCPAddr{IP: net.ParseIP("192.168.1.1"), Port: 8080}
-	routerHash := make([]byte, 32)
+	var routerHash data.Hash
 	routerHash[0] = 0xAA // Set recognizable byte
 
 	addr, err := NewNTCP2Addr(underlying, routerHash, "initiator")
 	require.NoError(t, err)
 
-	// Test RouterHash - should return defensive copy
+	// Test RouterHash - returns value copy
 	returnedHash := addr.RouterHash()
-	assert.Equal(t, 32, len(returnedHash))
 	assert.Equal(t, byte(0xAA), returnedHash[0])
-	// Test defensive copy by modifying returned slice
+	// Test value copy by modifying returned value
 	returnedHash[0] = 0xFF
 	assert.Equal(t, byte(0xAA), addr.RouterHash()[0]) // Original should be unchanged
 
@@ -189,17 +172,17 @@ func TestNTCP2Addr_AccessorMethods(t *testing.T) {
 
 func TestNTCP2Addr_DefensiveCopying(t *testing.T) {
 	underlying := &net.TCPAddr{IP: net.ParseIP("192.168.1.1"), Port: 8080}
-	routerHash := make([]byte, 32)
+	var routerHash data.Hash
 	routerHash[0] = 0xAA
 
 	addr, err := NewNTCP2Addr(underlying, routerHash, "initiator")
 	require.NoError(t, err)
 
-	// Modify original router hash - should not affect created address
+	// Modify original router hash - should not affect created address (value type)
 	routerHash[0] = 0xFF
 	assert.Equal(t, byte(0xAA), addr.routerHash[0])
 
-	// Modify returned router hash - should not affect internal state
+	// Modify returned router hash - should not affect internal state (value copy)
 	returned := addr.RouterHash()
 	returned[0] = 0xFF
 	assert.Equal(t, byte(0xAA), addr.routerHash[0])
@@ -209,7 +192,7 @@ func TestNTCP2Addr_StringHandlesNilUnderlying(t *testing.T) {
 	// Test edge case - this shouldn't happen in normal usage but we handle it gracefully
 	addr := &NTCP2Addr{
 		underlying: nil,
-		routerHash: make([]byte, 32),
+		routerHash: data.Hash{},
 		role:       "initiator",
 	}
 
@@ -220,7 +203,7 @@ func TestNTCP2Addr_StringHandlesNilUnderlying(t *testing.T) {
 func TestNTCP2Addr_IdentHash(t *testing.T) {
 	// Test that IdentHash returns the correct [32]byte
 	underlying := &net.TCPAddr{IP: net.ParseIP("192.168.1.1"), Port: 8080}
-	routerHash := make([]byte, 32)
+	var routerHash data.Hash
 	for i := range routerHash {
 		routerHash[i] = byte(i)
 	}
@@ -238,7 +221,7 @@ func TestNTCP2Addr_IdentHash(t *testing.T) {
 // Benchmark tests to ensure performance is adequate
 func BenchmarkNTCP2Addr_Creation(b *testing.B) {
 	underlying := &net.TCPAddr{IP: net.ParseIP("192.168.1.1"), Port: 8080}
-	routerHash := make([]byte, 32)
+	var routerHash data.Hash
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -248,7 +231,7 @@ func BenchmarkNTCP2Addr_Creation(b *testing.B) {
 
 func BenchmarkNTCP2Addr_String(b *testing.B) {
 	underlying := &net.TCPAddr{IP: net.ParseIP("192.168.1.1"), Port: 8080}
-	routerHash := make([]byte, 32)
+	var routerHash data.Hash
 	addr, _ := NewNTCP2Addr(underlying, routerHash, "initiator")
 
 	b.ResetTimer()
@@ -259,7 +242,7 @@ func BenchmarkNTCP2Addr_String(b *testing.B) {
 
 func TestNTCP2AddrConcurrency(t *testing.T) {
 	underlying := &net.TCPAddr{IP: net.ParseIP("192.168.1.1"), Port: 8080}
-	routerHash := make([]byte, 32)
+	var routerHash data.Hash
 	routerHash[0] = 0xAA
 
 	addr, err := NewNTCP2Addr(underlying, routerHash, "initiator")
@@ -282,14 +265,13 @@ func TestNTCP2AddrConcurrency(t *testing.T) {
 		}()
 		go func(i int) {
 			defer wg.Done()
-			newHash := make([]byte, 32)
+			var newHash data.Hash
 			newHash[0] = byte(i)
-			_ = addr.SetRouterHash(newHash)
+			addr.SetRouterHash(newHash)
 		}(i)
 	}
 	wg.Wait()
 
 	// Verify the address is still valid
-	hash := addr.RouterHash()
-	assert.Equal(t, 32, len(hash))
+	_ = addr.RouterHash()
 }

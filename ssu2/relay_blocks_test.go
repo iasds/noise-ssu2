@@ -607,19 +607,20 @@ func TestDecodeRelayTagRequest_Valid(t *testing.T) {
 
 	decoded, err := DecodeRelayTagRequest(block)
 	require.NoError(t, err)
-	assert.Equal(t, uint32(0), decoded.Nonce)
+	assert.NotNil(t, decoded)
 }
 
-// TestDecodeRelayTagRequest_ThreeByte tests decoding 3-byte nonce.
-func TestDecodeRelayTagRequest_ThreeByte(t *testing.T) {
+// TestDecodeRelayTagRequest_NonEmptyData tests backward-compat decoding of
+// non-empty data (ignored per spec, accepted for older implementations).
+func TestDecodeRelayTagRequest_NonEmptyData(t *testing.T) {
 	block := &SSU2Block{
 		Type: BlockTypeRelayTagRequest,
-		Data: []byte{0x12, 0x34, 0x56}, // 3-byte nonce
+		Data: []byte{0x12, 0x34, 0x56},
 	}
 
 	decoded, err := DecodeRelayTagRequest(block)
 	require.NoError(t, err)
-	assert.Equal(t, uint32(0x123456), decoded.Nonce)
+	assert.NotNil(t, decoded)
 }
 
 // TestDecodeRelayTagRequest_NilBlock tests decoding nil block.
@@ -649,13 +650,12 @@ func TestDecodeRelayTagRequest_WrongType(t *testing.T) {
 func TestDecodeRelayTagRequest_ShortData(t *testing.T) {
 	block := &SSU2Block{
 		Type: BlockTypeRelayTagRequest,
-		Data: []byte{0x12}, // 1 byte — too short for a nonce, still valid per spec
+		Data: []byte{0x12}, // 1 byte — still valid per backward compat
 	}
 
 	decoded, err := DecodeRelayTagRequest(block)
 	assert.NoError(t, err)
 	assert.NotNil(t, decoded)
-	assert.Equal(t, uint32(0), decoded.Nonce) // No nonce extracted
 }
 
 // TestEncodeRelayTag_Valid tests encoding valid relay tag.
@@ -829,8 +829,7 @@ func TestRelayBlocks_RoundTrip(t *testing.T) {
 
 		decoded, err := DecodeRelayTagRequest(block)
 		require.NoError(t, err)
-
-		assert.Equal(t, uint32(0), decoded.Nonce)
+		assert.NotNil(t, decoded)
 	})
 
 	// Test RelayTag

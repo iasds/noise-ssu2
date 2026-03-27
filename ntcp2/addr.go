@@ -3,11 +3,12 @@
 package ntcp2
 
 import (
-	"encoding/base64"
 	"fmt"
 	"net"
 	"sync"
 
+	i2pbase64 "github.com/go-i2p/common/base64"
+	"github.com/go-i2p/common/data"
 	"github.com/samber/oops"
 )
 
@@ -19,29 +20,21 @@ type NTCP2Addr struct {
 	mu sync.RWMutex
 	// underlying is the TCP network address
 	underlying net.Addr
-	// routerHash is the 32-byte I2P router identity hash
-	routerHash []byte
+	// routerHash is the I2P router identity hash
+	routerHash data.Hash
 	// role indicates if this is an initiator or responder address
 	role string
 }
 
 // NewNTCP2Addr creates a new NTCP2Addr with the specified TCP address and router hash.
-// routerHash must be exactly 32 bytes representing the I2P router identity.
+// routerHash is the I2P router identity hash.
 // role should be either "initiator" or "responder".
-func NewNTCP2Addr(underlying net.Addr, routerHash []byte, role string) (*NTCP2Addr, error) {
+func NewNTCP2Addr(underlying net.Addr, routerHash data.Hash, role string) (*NTCP2Addr, error) {
 	if underlying == nil {
 		return nil, oops.
 			Code("INVALID_UNDERLYING_ADDR").
 			In("ntcp2").
 			Errorf("underlying address cannot be nil")
-	}
-
-	if len(routerHash) != RouterHashSize {
-		return nil, oops.
-			Code("INVALID_ROUTER_HASH").
-			In("ntcp2").
-			With("hash_length", len(routerHash)).
-			Errorf("router hash must be exactly %d bytes", RouterHashSize)
 	}
 
 	if role != "initiator" && role != "responder" {
@@ -52,13 +45,9 @@ func NewNTCP2Addr(underlying net.Addr, routerHash []byte, role string) (*NTCP2Ad
 			Errorf("role must be 'initiator' or 'responder'")
 	}
 
-	// Make defensive copy of router hash
-	hash := make([]byte, RouterHashSize)
-	copy(hash, routerHash)
-
 	return &NTCP2Addr{
 		underlying: underlying,
-		routerHash: hash,
+		routerHash: routerHash,
 		role:       role,
 	}, nil
 }
@@ -78,52 +67,33 @@ func (na *NTCP2Addr) String() string {
 	}
 
 	na.mu.RLock()
-	routerB64 := base64.URLEncoding.EncodeToString(na.routerHash)
+	routerB64 := i2pbase64.EncodeToString(na.routerHash[:])
 	na.mu.RUnlock()
 
 	return fmt.Sprintf("ntcp2://%s/%s/%s", routerB64, na.role, na.underlying.String())
 }
 
-// RouterHash returns a copy of the router identity hash.
-// The returned slice is a defensive copy to prevent external modification.
-func (na *NTCP2Addr) RouterHash() []byte {
+// RouterHash returns the router identity hash.
+func (na *NTCP2Addr) RouterHash() data.Hash {
 	na.mu.RLock()
 	defer na.mu.RUnlock()
-	if na.routerHash == nil {
-		return nil
-	}
-	hash := make([]byte, RouterHashSize)
-	copy(hash, na.routerHash)
-	return hash
+	return na.routerHash
 }
 
 // IdentHash returns the router identity hash as a fixed-size [32]byte array.
-// This provides the router hash in a standard type that callers (such as
-// go-i2p's transport layer) can convert to their own hash types as needed.
 func (na *NTCP2Addr) IdentHash() [32]byte {
 	na.mu.RLock()
 	defer na.mu.RUnlock()
-	var h [32]byte
-	copy(h[:], na.routerHash)
-	return h
+	return na.routerHash.Bytes()
 }
 
 // SetRouterHash updates the router identity hash.
-// routerHash must be exactly 32 bytes.
 // This is used to update a placeholder zero hash after the Noise handshake
 // reveals the remote peer's static key.
-func (na *NTCP2Addr) SetRouterHash(routerHash []byte) error {
-	if len(routerHash) != RouterHashSize {
-		return oops.
-			Code("INVALID_ROUTER_HASH").
-			In("ntcp2").
-			With("hash_length", len(routerHash)).
-			Errorf("router hash must be exactly %d bytes", RouterHashSize)
-	}
+func (na *NTCP2Addr) SetRouterHash(routerHash data.Hash) {
 	na.mu.Lock()
-	copy(na.routerHash, routerHash)
+	na.routerHash = routerHash
 	na.mu.Unlock()
-	return nil
 }
 
 // Role returns the connection role ("initiator" or "responder").

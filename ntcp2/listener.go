@@ -6,6 +6,7 @@ import (
 	"net"
 	"sync/atomic"
 
+	"github.com/go-i2p/common/data"
 	noise "github.com/go-i2p/go-noise"
 	"github.com/go-i2p/logger"
 	"github.com/samber/oops"
@@ -137,15 +138,20 @@ func (nl *NTCP2Listener) createResponderConnConfig() (*noise.ConnConfig, *NTCP2C
 // part 2 via github.com/go-i2p/common/router_identity, and compute the proper
 // hash via github.com/go-i2p/common/data.HashData().
 func (nl *NTCP2Listener) createRemoteNTCP2Addr(noiseConn *noise.NoiseConn) (*NTCP2Addr, error) {
+	var remoteHash data.Hash
 	remoteRouterHash := noiseConn.PeerStatic()
-	if len(remoteRouterHash) == 0 {
-		// Fall back to config if handshake didn't provide the peer's static key
-		remoteRouterHash = make([]byte, RouterHashSize)
-		if nl.config.RemoteRouterHash != nil {
-			copy(remoteRouterHash, nl.config.RemoteRouterHash)
+	if len(remoteRouterHash) >= 32 {
+		var err error
+		remoteHash, err = data.NewHashFromSlice(remoteRouterHash)
+		if err != nil {
+			remoteHash = data.Hash{} // fall back to zero hash
 		}
+	} else if nl.config.RemoteRouterHash != nil {
+		remoteHash = *nl.config.RemoteRouterHash
 	}
-	remoteAddr, err := NewNTCP2Addr(noiseConn.RemoteAddr(), remoteRouterHash, "initiator")
+	// else remoteHash stays zero value
+
+	remoteAddr, err := NewNTCP2Addr(noiseConn.RemoteAddr(), remoteHash, "initiator")
 	if err != nil {
 		return nil, oops.
 			Code("REMOTE_ADDR_FAILED").
@@ -291,10 +297,7 @@ func (nl *NTCP2Listener) isClosed() bool {
 }
 
 // formatRouterHash formats a router hash for logging (first 8 bytes as hex).
-func formatRouterHash(hash []byte) string {
-	if len(hash) < 8 {
-		return "invalid"
-	}
+func formatRouterHash(hash data.Hash) string {
 	return fmt.Sprintf("%x...", hash[:8])
 }
 

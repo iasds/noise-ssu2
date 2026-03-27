@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"net"
 
+	"github.com/go-i2p/common/data"
 	"github.com/samber/oops"
 )
 
@@ -27,20 +28,13 @@ const PeerTestPrologue = "PeerTestValidate"
 //
 // Set aliceHash to nil for messages 1 and 2.
 func BuildPeerTestSignedData(
-	bobHash []byte,
-	aliceHash []byte,
+	bobHash data.Hash,
+	aliceHash *data.Hash,
 	version uint8,
 	nonce, timestamp uint32,
 	alicePort uint16,
 	aliceIP net.IP,
 ) ([]byte, error) {
-	if len(bobHash) != 32 {
-		return nil, oops.Errorf("bobHash must be 32 bytes, got %d", len(bobHash))
-	}
-	if aliceHash != nil && len(aliceHash) != 32 {
-		return nil, oops.Errorf("aliceHash must be 32 bytes, got %d", len(aliceHash))
-	}
-
 	ip4 := aliceIP.To4()
 	var ipBytes []byte
 	var asz uint8
@@ -66,10 +60,10 @@ func BuildPeerTestSignedData(
 
 	copy(buf[off:], PeerTestPrologue)
 	off += 16
-	copy(buf[off:], bobHash)
+	copy(buf[off:], bobHash[:])
 	off += 32
 	if aliceHash != nil {
-		copy(buf[off:], aliceHash)
+		copy(buf[off:], aliceHash[:])
 		off += 32
 	}
 	buf[off] = version
@@ -91,7 +85,7 @@ func BuildPeerTestSignedData(
 // For messages 1/2, aliceHash should be nil. For messages 3/4, aliceHash must be provided.
 func SignPeerTest(
 	privateKey ed25519.PrivateKey,
-	bobHash, aliceHash []byte,
+	bobHash data.Hash, aliceHash *data.Hash,
 	version uint8,
 	nonce, timestamp uint32,
 	alicePort uint16,
@@ -109,7 +103,7 @@ func SignPeerTest(
 func VerifyPeerTestSignature(
 	publicKey ed25519.PublicKey,
 	signature []byte,
-	bobHash, aliceHash []byte,
+	bobHash data.Hash, aliceHash *data.Hash,
 	version uint8,
 	nonce, timestamp uint32,
 	alicePort uint16,

@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-i2p/common/data"
 	"github.com/samber/oops"
 )
 
@@ -45,8 +46,8 @@ type IntroducerInfo struct {
 	// Addr is the UDP address of the introducer
 	Addr *net.UDPAddr
 
-	// RouterHash is the 32-byte I2P router identity
-	RouterHash []byte
+	// RouterHash is the I2P router identity hash
+	RouterHash data.Hash
 
 	// RelayTag is the tag assigned by the introducer
 	RelayTag uint32
@@ -137,24 +138,16 @@ func (rm *RelayManager) Stop() {
 //
 // Parameters:
 //   - addr: UDP address of the introducer
-//   - routerHash: 32-byte router identity of the introducer
+//   - routerHash: router identity hash of the introducer
 //   - relayTag: Tag assigned by the introducer for relay requests
 //
 // Returns error if parameters are invalid.
-func (rm *RelayManager) RegisterIntroducer(addr *net.UDPAddr, routerHash []byte, relayTag uint32) error {
+func (rm *RelayManager) RegisterIntroducer(addr *net.UDPAddr, routerHash data.Hash, relayTag uint32) error {
 	if addr == nil {
 		return oops.
 			Code("INVALID_ADDRESS").
 			In("relay_manager").
 			Errorf("introducer address cannot be nil")
-	}
-
-	if len(routerHash) != 32 {
-		return oops.
-			Code("INVALID_ROUTER_HASH").
-			In("relay_manager").
-			With("hash_length", len(routerHash)).
-			Errorf("router hash must be exactly 32 bytes")
 	}
 
 	if relayTag == 0 {
@@ -180,11 +173,10 @@ func (rm *RelayManager) RegisterIntroducer(addr *net.UDPAddr, routerHash []byte,
 	// Create new introducer info
 	info := &IntroducerInfo{
 		Addr:       addr,
-		RouterHash: make([]byte, 32),
+		RouterHash: routerHash,
 		RelayTag:   relayTag,
 		ExpiresAt:  time.Now().Add(1 * time.Hour),
 	}
-	copy(info.RouterHash, routerHash)
 
 	// Add or replace oldest
 	if len(rm.introducers) < 3 {
@@ -218,11 +210,10 @@ func (rm *RelayManager) GetIntroducers() []*IntroducerInfo {
 		if intro.ExpiresAt.After(now) {
 			infoCopy := &IntroducerInfo{
 				Addr:       intro.Addr,
-				RouterHash: make([]byte, 32),
+				RouterHash: intro.RouterHash,
 				RelayTag:   intro.RelayTag,
 				ExpiresAt:  intro.ExpiresAt,
 			}
-			copy(infoCopy.RouterHash, intro.RouterHash)
 			result = append(result, infoCopy)
 		}
 	}

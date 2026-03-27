@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-i2p/common/data"
 	"github.com/go-i2p/crypto/rand"
 
 	upstreamnoise "github.com/go-i2p/noise"
@@ -21,6 +22,13 @@ func generateRandomBytes(size int) []byte {
 	return bytes
 }
 
+// generateRandomHash generates a random data.Hash for testing
+func generateRandomHash() data.Hash {
+	var h [32]byte
+	rand.Read(h[:])
+	return data.NewHash(h)
+}
+
 func TestDialNTCP2(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -33,8 +41,8 @@ func TestDialNTCP2(t *testing.T) {
 		{
 			name: "successful dial with valid config",
 			setupConfig: func() *NTCP2Config {
-				routerHash := generateRandomBytes(32)
-				remoteHash := generateRandomBytes(32)
+				routerHash := generateRandomHash()
+				remoteHash := generateRandomHash()
 				staticKey := generateRandomBytes(32)
 
 				config, err := NewNTCP2Config(routerHash, true)
@@ -54,7 +62,7 @@ func TestDialNTCP2(t *testing.T) {
 		{
 			name: "invalid network parameter",
 			setupConfig: func() *NTCP2Config {
-				routerHash := generateRandomBytes(32)
+				routerHash := generateRandomHash()
 				config, _ := NewNTCP2Config(routerHash, true)
 				return config
 			},
@@ -66,7 +74,7 @@ func TestDialNTCP2(t *testing.T) {
 		{
 			name: "invalid address parameter",
 			setupConfig: func() *NTCP2Config {
-				routerHash := generateRandomBytes(32)
+				routerHash := generateRandomHash()
 				config, _ := NewNTCP2Config(routerHash, true)
 				return config
 			},
@@ -86,7 +94,7 @@ func TestDialNTCP2(t *testing.T) {
 		{
 			name: "responder config for dial operation",
 			setupConfig: func() *NTCP2Config {
-				routerHash := generateRandomBytes(32)
+				routerHash := generateRandomHash()
 				config, _ := NewNTCP2Config(routerHash, false) // responder
 				return config
 			},
@@ -132,7 +140,7 @@ func TestListenNTCP2(t *testing.T) {
 		{
 			name: "successful listen with valid config",
 			setupConfig: func() *NTCP2Config {
-				routerHash := generateRandomBytes(32)
+				routerHash := generateRandomHash()
 				staticKey := generateRandomBytes(32)
 
 				config, err := NewNTCP2Config(routerHash, false) // responder
@@ -149,7 +157,7 @@ func TestListenNTCP2(t *testing.T) {
 		{
 			name: "invalid network parameter",
 			setupConfig: func() *NTCP2Config {
-				routerHash := generateRandomBytes(32)
+				routerHash := generateRandomHash()
 				config, _ := NewNTCP2Config(routerHash, false)
 				return config
 			},
@@ -161,7 +169,7 @@ func TestListenNTCP2(t *testing.T) {
 		{
 			name: "invalid address parameter",
 			setupConfig: func() *NTCP2Config {
-				routerHash := generateRandomBytes(32)
+				routerHash := generateRandomHash()
 				config, _ := NewNTCP2Config(routerHash, false)
 				return config
 			},
@@ -181,7 +189,7 @@ func TestListenNTCP2(t *testing.T) {
 		{
 			name: "initiator config for listen operation",
 			setupConfig: func() *NTCP2Config {
-				routerHash := generateRandomBytes(32)
+				routerHash := generateRandomHash()
 				config, _ := NewNTCP2Config(routerHash, true) // initiator
 				return config
 			},
@@ -243,8 +251,8 @@ func TestWrapNTCP2Conn(t *testing.T) {
 				return client
 			},
 			setupConfig: func() *NTCP2Config {
-				routerHash := generateRandomBytes(32)
-				remoteHash := generateRandomBytes(32)
+				routerHash := generateRandomHash()
+				remoteHash := generateRandomHash()
 				staticKey := generateRandomBytes(32)
 				obfuscationIV := generateRandomBytes(16)
 
@@ -263,7 +271,7 @@ func TestWrapNTCP2Conn(t *testing.T) {
 			name:      "nil connection",
 			setupConn: func() net.Conn { return nil },
 			setupConfig: func() *NTCP2Config {
-				routerHash := generateRandomBytes(32)
+				routerHash := generateRandomHash()
 				config, _ := NewNTCP2Config(routerHash, true)
 				return config
 			},
@@ -319,7 +327,7 @@ func TestWrapNTCP2Listener(t *testing.T) {
 		defer tcpListener.Close()
 
 		// Create NTCP2 config
-		routerHash := generateRandomBytes(32)
+		routerHash := generateRandomHash()
 		staticKey := generateRandomBytes(32)
 
 		config, err := NewNTCP2Config(routerHash, false) // responder
@@ -353,7 +361,7 @@ func TestDialNTCP2WithHandshake(t *testing.T) {
 		require.NoError(t, err)
 
 		// Create responder (listener) config
-		routerHash := generateRandomBytes(32)
+		routerHash := generateRandomHash()
 		listenerConfig, err := NewNTCP2Config(routerHash, false)
 		require.NoError(t, err)
 		listenerConfig = listenerConfig.WithStaticKey(responderKP.Private).
@@ -385,7 +393,7 @@ func TestDialNTCP2WithHandshake(t *testing.T) {
 		}()
 
 		// Create initiator (dial) config
-		clientRouterHash := generateRandomBytes(32)
+		clientRouterHash := generateRandomHash()
 		dialConfig, err := NewNTCP2Config(clientRouterHash, true)
 		require.NoError(t, err)
 		dialConfig = dialConfig.WithStaticKey(initiatorKP.Private).
@@ -427,8 +435,8 @@ func TestValidateDialParams(t *testing.T) {
 			network: "tcp",
 			addr:    "127.0.0.1:8080",
 			setupConfig: func() *NTCP2Config {
-				routerHash := generateRandomBytes(32)
-				remoteHash := generateRandomBytes(32)
+				routerHash := generateRandomHash()
+				remoteHash := generateRandomHash()
 				staticKey := generateRandomBytes(32)
 				config, _ := NewNTCP2Config(routerHash, true)
 				config = config.WithStaticKey(staticKey).
@@ -443,7 +451,7 @@ func TestValidateDialParams(t *testing.T) {
 			network: "",
 			addr:    "127.0.0.1:8080",
 			setupConfig: func() *NTCP2Config {
-				routerHash := generateRandomBytes(32)
+				routerHash := generateRandomHash()
 				config, _ := NewNTCP2Config(routerHash, true)
 				return config
 			},
@@ -455,7 +463,7 @@ func TestValidateDialParams(t *testing.T) {
 			network: "tcp",
 			addr:    "",
 			setupConfig: func() *NTCP2Config {
-				routerHash := generateRandomBytes(32)
+				routerHash := generateRandomHash()
 				config, _ := NewNTCP2Config(routerHash, true)
 				return config
 			},
@@ -475,7 +483,7 @@ func TestValidateDialParams(t *testing.T) {
 			network: "tcp",
 			addr:    "127.0.0.1:8080",
 			setupConfig: func() *NTCP2Config {
-				routerHash := generateRandomBytes(32)
+				routerHash := generateRandomHash()
 				config, _ := NewNTCP2Config(routerHash, false) // responder
 				return config
 			},
@@ -515,7 +523,7 @@ func TestValidateListenParams(t *testing.T) {
 			network: "tcp",
 			addr:    "127.0.0.1:0",
 			setupConfig: func() *NTCP2Config {
-				routerHash := generateRandomBytes(32)
+				routerHash := generateRandomHash()
 				staticKey := generateRandomBytes(32)
 				config, _ := NewNTCP2Config(routerHash, false) // responder
 				config = config.WithStaticKey(staticKey)
@@ -528,7 +536,7 @@ func TestValidateListenParams(t *testing.T) {
 			network: "",
 			addr:    "127.0.0.1:0",
 			setupConfig: func() *NTCP2Config {
-				routerHash := generateRandomBytes(32)
+				routerHash := generateRandomHash()
 				config, _ := NewNTCP2Config(routerHash, false)
 				return config
 			},
@@ -540,7 +548,7 @@ func TestValidateListenParams(t *testing.T) {
 			network: "tcp",
 			addr:    "",
 			setupConfig: func() *NTCP2Config {
-				routerHash := generateRandomBytes(32)
+				routerHash := generateRandomHash()
 				config, _ := NewNTCP2Config(routerHash, false)
 				return config
 			},
@@ -560,7 +568,7 @@ func TestValidateListenParams(t *testing.T) {
 			network: "tcp",
 			addr:    "127.0.0.1:0",
 			setupConfig: func() *NTCP2Config {
-				routerHash := generateRandomBytes(32)
+				routerHash := generateRandomHash()
 				config, _ := NewNTCP2Config(routerHash, true) // initiator
 				return config
 			},
@@ -594,8 +602,8 @@ func TestCreateDialAddresses(t *testing.T) {
 		defer server.Close()
 
 		// Create config
-		routerHash := generateRandomBytes(32)
-		remoteHash := generateRandomBytes(32)
+		routerHash := generateRandomHash()
+		remoteHash := generateRandomHash()
 
 		config, err := NewNTCP2Config(routerHash, true)
 		require.NoError(t, err)
@@ -634,7 +642,7 @@ func TestDialNTCP2WithHandshake_Wrapper(t *testing.T) {
 		require.NoError(t, err)
 
 		// Create responder (listener) config
-		routerHash := generateRandomBytes(32)
+		routerHash := generateRandomHash()
 		listenerConfig, err := NewNTCP2Config(routerHash, false)
 		require.NoError(t, err)
 		listenerConfig = listenerConfig.WithStaticKey(responderKP.Private).
@@ -665,7 +673,7 @@ func TestDialNTCP2WithHandshake_Wrapper(t *testing.T) {
 		}()
 
 		// Create initiator config
-		clientRouterHash := generateRandomBytes(32)
+		clientRouterHash := generateRandomHash()
 		dialConfig, err := NewNTCP2Config(clientRouterHash, true)
 		require.NoError(t, err)
 		dialConfig = dialConfig.WithStaticKey(initiatorKP.Private).
@@ -688,7 +696,7 @@ func TestDialNTCP2WithHandshake_Wrapper(t *testing.T) {
 	})
 
 	t.Run("error propagated from invalid config", func(t *testing.T) {
-		routerHash := generateRandomBytes(32)
+		routerHash := generateRandomHash()
 		config, err := NewNTCP2Config(routerHash, true)
 		require.NoError(t, err)
 
@@ -700,7 +708,7 @@ func TestDialNTCP2WithHandshake_Wrapper(t *testing.T) {
 	})
 
 	t.Run("error propagated from unreachable address", func(t *testing.T) {
-		routerHash := generateRandomBytes(32)
+		routerHash := generateRandomHash()
 		config, err := NewNTCP2Config(routerHash, true)
 		require.NoError(t, err)
 
@@ -725,7 +733,7 @@ func TestDialNTCP2WithHandshake_Wrapper(t *testing.T) {
 func TestAuditFix_SetNTCP2Config_NotRedundantInDialNTCP2WithHandshakeContext(t *testing.T) {
 	conn := createTestNTCP2Conn(&mockNoiseConn{})
 
-	routerHash := generateRandomBytes(32)
+	routerHash := generateRandomHash()
 	config, err := NewNTCP2Config(routerHash, true)
 	require.NoError(t, err)
 

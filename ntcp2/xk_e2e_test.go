@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-i2p/common/data"
 	"github.com/go-i2p/crypto/rand"
 
 	noise "github.com/go-i2p/go-noise"
@@ -44,11 +45,11 @@ func TestXKHandshake_NTCP2_FullE2E(t *testing.T) {
 	require.NoError(t, err, "generate responder keypair")
 
 	// ── Step 2: Create test router hashes (SHA-256 of RouterIdentity) ─
-	initiatorHash := make([]byte, RouterHashSize)
-	copy(initiatorHash, "initiator-hash-32-bytes-long!!!!")
+	var initiatorHash data.Hash
+	copy(initiatorHash[:], "initiator-hash-32-bytes-long!!!!")
 
-	responderHash := make([]byte, RouterHashSize)
-	copy(responderHash, "responder-hash-32-bytes-long!!!!")
+	var responderHash data.Hash
+	copy(responderHash[:], "responder-hash-32-bytes-long!!!!")
 
 	// ── Step 3: Build NTCP2Config for responder ───────────────────────
 	responderConfig, err := NewNTCP2Config(responderHash, false)
@@ -311,7 +312,7 @@ func dialAndHandshakeInitiator(
 	t *testing.T,
 	addr string,
 	initiatorConfig *NTCP2Config,
-	initiatorHash, responderHash []byte,
+	initiatorHash, responderHash data.Hash,
 	wg *sync.WaitGroup,
 	responderErr *error,
 ) *NTCP2Conn {
@@ -445,10 +446,10 @@ func TestInboundRouterHash(t *testing.T) {
 	responderKP, err := cs.GenerateKeypair(rand.Reader)
 	require.NoError(t, err)
 
-	initiatorHash := make([]byte, RouterHashSize)
-	copy(initiatorHash, "initiator-hash-32-bytes-long!!!!")
-	responderHash := make([]byte, RouterHashSize)
-	copy(responderHash, "responder-hash-32-bytes-long!!!!")
+	var initiatorHash data.Hash
+	copy(initiatorHash[:], "initiator-hash-32-bytes-long!!!!")
+	var responderHash data.Hash
+	copy(responderHash[:], "responder-hash-32-bytes-long!!!!")
 
 	// --- Responder config (listener) ---
 	responderConfig, err := NewNTCP2Config(responderHash, false)

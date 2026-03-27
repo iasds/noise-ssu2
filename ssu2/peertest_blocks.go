@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"net"
 
+	"github.com/go-i2p/common/data"
 	"github.com/samber/oops"
 )
 
@@ -100,7 +101,7 @@ type PeerTestBlock struct {
 	Flag uint8
 
 	// RouterHash is the 32-byte hash (only for messages 2 and 4)
-	RouterHash []byte
+	RouterHash *data.Hash
 
 	// Version is the peer test protocol version (should be 2)
 	Version uint8
@@ -161,10 +162,10 @@ func EncodePeerTestBlock(block *PeerTestBlock) (*SSU2Block, error) {
 	off++
 
 	if block.hasRouterHash() {
-		if len(block.RouterHash) != 32 {
-			return nil, oops.Errorf("RouterHash must be 32 bytes for message %d", block.MessageCode)
+		if block.RouterHash == nil {
+			return nil, oops.Errorf("RouterHash must be set for message %d", block.MessageCode)
 		}
-		copy(data[off:off+32], block.RouterHash)
+		copy(data[off:off+32], block.RouterHash[:])
 		off += 32
 	}
 
@@ -198,20 +199,20 @@ func DecodePeerTestBlock(ssu2Block *SSU2Block) (*PeerTestBlock, error) {
 		return nil, oops.Errorf("invalid block type: expected %d, got %d", BlockTypePeerTest, ssu2Block.Type)
 	}
 
-	data := ssu2Block.Data
+	rawData := ssu2Block.Data
 	// Minimum: msg(1)+code(1)+flag(1)+ver(1)+nonce(4)+timestamp(4)+asz(1)+port(2)+ip(4) = 19
-	if len(data) < 19 {
-		return nil, oops.Errorf("PeerTest block too short: %d bytes (minimum 19)", len(data))
+	if len(rawData) < 19 {
+		return nil, oops.Errorf("PeerTest block too short: %d bytes (minimum 19)", len(rawData))
 	}
 
 	block := &PeerTestBlock{}
 	off := 0
 
-	block.MessageCode = PeerTestMessageCode(data[off])
+	block.MessageCode = PeerTestMessageCode(rawData[off])
 	off++
-	block.Code = data[off]
+	block.Code = rawData[off]
 	off++
-	block.Flag = data[off]
+	block.Flag = rawData[off]
 	off++
 
 	if block.MessageCode < 1 || block.MessageCode > 7 {
@@ -220,47 +221,49 @@ func DecodePeerTestBlock(ssu2Block *SSU2Block) (*PeerTestBlock, error) {
 
 	// Messages 2 and 4 include a 32-byte router hash
 	if block.hasRouterHash() {
-		if len(data) < off+32 {
-			return nil, oops.Errorf("PeerTest block too short for router hash: %d bytes", len(data))
+		if len(rawData) < off+32 {
+			return nil, oops.Errorf("PeerTest block too short for router hash: %d bytes", len(rawData))
 		}
-		block.RouterHash = make([]byte, 32)
-		copy(block.RouterHash, data[off:off+32])
+		var rh [32]byte
+		copy(rh[:], rawData[off:off+32])
+		h := data.NewHash(rh)
+		block.RouterHash = &h
 		off += 32
 	}
 
 	// Remaining minimum: ver(1)+nonce(4)+timestamp(4)+asz(1)+port(2)+ip(4) = 16
-	if len(data) < off+16 {
-		return nil, oops.Errorf("PeerTest block too short for signed data: %d bytes at offset %d", len(data), off)
+	if len(rawData) < off+16 {
+		return nil, oops.Errorf("PeerTest block too short for signed data: %d bytes at offset %d", len(rawData), off)
 	}
 
-	block.Version = data[off]
+	block.Version = rawData[off]
 	off++
-	block.Nonce = binary.BigEndian.Uint32(data[off : off+4])
+	block.Nonce = binary.BigEndian.Uint32(rawData[off : off+4])
 	off += 4
-	block.Timestamp = binary.BigEndian.Uint32(data[off : off+4])
+	block.Timestamp = binary.BigEndian.Uint32(rawData[off : off+4])
 	off += 4
 
-	asz := data[off]
+	asz := rawData[off]
 	off++
 	if asz != 6 && asz != 18 {
 		return nil, oops.Errorf("invalid asz: %d (must be 6 or 18)", asz)
 	}
 
 	ipLen := int(asz) - 2
-	if len(data) < off+2+ipLen {
-		return nil, oops.Errorf("PeerTest block too short for address: %d bytes", len(data))
+	if len(rawData) < off+2+ipLen {
+		return nil, oops.Errorf("PeerTest block too short for address: %d bytes", len(rawData))
 	}
 
-	block.AlicePort = binary.BigEndian.Uint16(data[off : off+2])
+	block.AlicePort = binary.BigEndian.Uint16(rawData[off : off+2])
 	off += 2
 	block.AliceIP = make([]byte, ipLen)
-	copy(block.AliceIP, data[off:off+ipLen])
+	copy(block.AliceIP, rawData[off:off+ipLen])
 	off += ipLen
 
 	// Remaining bytes are signature (optional for messages 5-7)
-	if off < len(data) {
-		block.Signature = make([]byte, len(data)-off)
-		copy(block.Signature, data[off:])
+	if off < len(rawData) {
+		block.Signature = make([]byte, len(rawData)-off)
+		copy(block.Signature, rawData[off:])
 	}
 
 	return block, nil

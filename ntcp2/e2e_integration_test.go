@@ -6,8 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-i2p/crypto/rand"
-
 	noise "github.com/go-i2p/go-noise"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -186,9 +184,7 @@ func TestE2E_PostHandshakeHook_DerivesCorrectKeys(t *testing.T) {
 // SetNTCP2Config → PostHandshakeHook → PropagateSipHash pipeline.
 func TestE2E_PropagateSipHash_CopiesModifierToConn(t *testing.T) {
 	// Create an NTCP2Config with SipHash enabled
-	routerHash := make([]byte, 32)
-	_, err := rand.Read(routerHash)
-	require.NoError(t, err)
+	routerHash := generateRandomHash()
 
 	config, err := NewNTCP2Config(routerHash, true)
 	require.NoError(t, err)
@@ -241,9 +237,7 @@ func TestE2E_AESObfuscationModifier_Creation(t *testing.T) {
 // TestE2E_WithAESObfuscation_RejectsInvalidIV verifies that
 // WithAESObfuscation returns an error for invalid IV lengths.
 func TestE2E_WithAESObfuscation_RejectsInvalidIV(t *testing.T) {
-	routerHash := make([]byte, 32)
-	_, err := rand.Read(routerHash)
-	require.NoError(t, err)
+	routerHash := generateRandomHash()
 
 	config, err := NewNTCP2Config(routerHash, true)
 	require.NoError(t, err)

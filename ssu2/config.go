@@ -4,6 +4,7 @@ import (
 	"crypto/subtle"
 	"time"
 
+	"github.com/go-i2p/common/data"
 	"github.com/go-i2p/common/router_info"
 	noise "github.com/go-i2p/go-noise"
 	"github.com/go-i2p/go-noise/handshake"
@@ -81,16 +82,16 @@ type SSU2Config struct {
 	// For listeners, this is always false
 	Initiator bool
 
-	// RouterHash is the local router identity (32 bytes)
+	// RouterHash is the local router identity hash
 	// Required for SSU2 addressing and session establishment
-	RouterHash []byte
+	RouterHash data.Hash
 
 	// StaticKey is the long-term static key for this peer (32 bytes for Curve25519)
 	StaticKey []byte
 
-	// RemoteRouterHash is the remote peer's router identity (32 bytes)
+	// RemoteRouterHash is the remote peer's router identity hash
 	// Required for outbound connections, optional for listeners
-	RemoteRouterHash []byte
+	RemoteRouterHash *data.Hash
 
 	// HandshakeTimeout is the maximum time to wait for handshake completion
 	// Default: 15 seconds (per SSU2 specification)
@@ -233,25 +234,13 @@ type SSU2Config struct {
 }
 
 // NewSSU2Config creates a new SSU2Config with sensible defaults.
-// routerHash must be exactly 32 bytes representing the local router identity.
+// routerHash is the local router identity hash.
 // initiator indicates whether this connection will initiate the handshake.
-func NewSSU2Config(routerHash []byte, initiator bool) (*SSU2Config, error) {
-	if len(routerHash) != 32 {
-		return nil, oops.
-			Code("INVALID_ROUTER_HASH").
-			In("ssu2").
-			With("hash_length", len(routerHash)).
-			Errorf("router hash must be exactly 32 bytes")
-	}
-
-	// Make defensive copy of router hash
-	hash := make([]byte, 32)
-	copy(hash, routerHash)
-
+func NewSSU2Config(routerHash data.Hash, initiator bool) (*SSU2Config, error) {
 	return &SSU2Config{
 		Pattern:                 "XK",
 		Initiator:               initiator,
-		RouterHash:              hash,
+		RouterHash:              routerHash,
 		HandshakeTimeout:        DefaultHandshakeTimeout,
 		ReadTimeout:             0, // No timeout by default
 		WriteTimeout:            0, // No timeout by default
@@ -294,12 +283,10 @@ func (sc *SSU2Config) WithStaticKey(key []byte) *SSU2Config {
 }
 
 // WithRemoteRouterHash sets the remote peer's router identity.
-// hash must be 32 bytes. Required for outbound connections.
-func (sc *SSU2Config) WithRemoteRouterHash(hash []byte) *SSU2Config {
-	if len(hash) == 32 {
-		sc.RemoteRouterHash = make([]byte, 32)
-		copy(sc.RemoteRouterHash, hash)
-	}
+// Required for outbound connections.
+func (sc *SSU2Config) WithRemoteRouterHash(hash data.Hash) *SSU2Config {
+	h := hash
+	sc.RemoteRouterHash = &h
 	return sc
 }
 
@@ -466,15 +453,6 @@ func (sc *SSU2Config) validateBasicConfiguration() error {
 		return err
 	}
 
-	// Validate router hash
-	if len(sc.RouterHash) != 32 {
-		return oops.
-			Code("INVALID_ROUTER_HASH").
-			In("ssu2").
-			With("hash_length", len(sc.RouterHash)).
-			Errorf("router hash must be exactly 32 bytes")
-	}
-
 	return nil
 }
 
@@ -485,17 +463,8 @@ func (sc *SSU2Config) validateCryptographicParameters() error {
 		return err
 	}
 
-	// Validate remote router hash if provided
-	if len(sc.RemoteRouterHash) > 0 && len(sc.RemoteRouterHash) != 32 {
-		return oops.
-			Code("INVALID_REMOTE_ROUTER_HASH").
-			In("ssu2").
-			With("hash_length", len(sc.RemoteRouterHash)).
-			Errorf("remote router hash must be 32 bytes")
-	}
-
 	// For initiator connections, remote router hash is required
-	if sc.Initiator && len(sc.RemoteRouterHash) == 0 {
+	if sc.Initiator && sc.RemoteRouterHash == nil {
 		return oops.
 			Code("MISSING_REMOTE_ROUTER_HASH").
 			In("ssu2").
@@ -683,7 +652,7 @@ func (sc *SSU2Config) createChaChaModifierIfEnabled() (handshake.HandshakeModifi
 		introKey = sc.IntroKey
 	} else {
 		// Fallback to router hash for backward compatibility
-		introKey = sc.RouterHash
+		introKey = sc.RouterHash[:]
 	}
 
 	chachaModifier, err := NewChaChaObfuscationModifier("ssu2-chacha", introKey)

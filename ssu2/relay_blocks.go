@@ -143,14 +143,8 @@ type RelayIntroBlock struct {
 }
 
 // RelayTagRequestBlock represents a relay tag request (Type 15).
-// Request allocation of a relay tag from an introducer.
-type RelayTagRequestBlock struct {
-	// Nonce uniquely identifies this request (4 bytes).
-	// The spec says the data portion is "3 bytes minimum". This implementation
-	// always encodes 4 bytes but accepts 3- or 4-byte nonces when decoding,
-	// for interoperability with peers using only 3 bytes.
-	Nonce uint32
-}
+// Per spec §Relay Tag Request Block, the data portion is empty (size=0).
+type RelayTagRequestBlock struct{}
 
 // RelayTagBlock represents a relay tag assignment (Type 16).
 // Per spec: relay tag is 4 bytes, big-endian, nonzero.
@@ -580,9 +574,8 @@ func EncodeRelayTagRequest(req *RelayTagRequestBlock) (*SSU2Block, error) {
 }
 
 // DecodeRelayTagRequest decodes a RelayTagRequest block from wire format.
-// Per spec the data portion is empty (size=0). For backward compatibility
-// with older implementations that included a nonce, non-empty data is
-// accepted and the nonce is extracted if present.
+// Per spec the data portion is empty (size=0). Non-empty data is accepted
+// for backward compatibility with older implementations but is ignored.
 func DecodeRelayTagRequest(block *SSU2Block) (*RelayTagRequestBlock, error) {
 	if block == nil {
 		return nil, oops.Errorf("block is nil")
@@ -592,14 +585,7 @@ func DecodeRelayTagRequest(block *SSU2Block) (*RelayTagRequestBlock, error) {
 		return nil, oops.Errorf("invalid block type: expected %d, got %d", BlockTypeRelayTagRequest, block.Type)
 	}
 
-	req := &RelayTagRequestBlock{}
-	data := block.Data
-	if len(data) >= 4 {
-		req.Nonce = binary.BigEndian.Uint32(data[0:4])
-	} else if len(data) >= 3 {
-		req.Nonce = uint32(data[0])<<16 | uint32(data[1])<<8 | uint32(data[2])
-	}
-	return req, nil
+	return &RelayTagRequestBlock{}, nil
 }
 
 // EncodeRelayTag encodes a RelayTag block to wire format.
