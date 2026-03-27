@@ -108,11 +108,6 @@ func (s CongestionState) String() string {
 // On loss, ssthresh = max(BWE * minRTT, MinCWND) instead of Reno's cwnd/2,
 // yielding better throughput on lossy I2P overlay links.
 //
-// NOTE: ECN (Explicit Congestion Notification) is not implemented (M-1).
-// The SSU2 spec lists ECN as optional (Congestion block flag bit 1).
-// If ECN support is added, CongestionFlagECN should be checked in inbound
-// Congestion blocks and fed into OnPacketLoss as a congestion signal.
-//
 // The controller is thread-safe and can be used concurrently.
 type CongestionController struct {
 	// cwnd is the congestion window in bytes
@@ -498,6 +493,34 @@ func (cc *CongestionController) ShouldProbe() bool {
 
 	// Probe if CWND is less than half of max and we have capacity
 	return cc.cwnd < MaxCongestionWindow/2 && cc.bytesInFlight < cc.cwnd/2
+}
+
+// OnECN handles an Explicit Congestion Notification signal from a peer's
+// Congestion block (flag bit 1). ECN is treated as a congestion signal
+// equivalent to a single packet loss: ssthresh is set via Westwood+ BWE
+// and CWND is reduced, but with the same epoch-coalescing as OnPacketLoss
+// to avoid over-reducing within a single RTT window.
+func (cc *CongestionController) OnECN() {
+	cc.mutex.Lock()
+	defer cc.mutex.Unlock()
+
+	if cc.state == Recovery {
+		return
+	}
+
+	now := time.Now()
+	if !cc.congestionEpochStart.IsZero() && cc.rttEstimator != nil {
+		rtt := cc.rttEstimator.GetSmoothedRTT()
+		if rtt > 0 && now.Sub(cc.congestionEpochStart) < rtt {
+			return
+		}
+	}
+	cc.congestionEpochStart = now
+
+	cc.ssthresh = cc.westwoodSSThresh()
+	cc.cwnd = cc.ssthresh
+	cc.state = CongestionAvoidance
+	cc.bytesAcked = 0
 }
 
 // SetCWND manually sets the congestion window (for testing or special cases).

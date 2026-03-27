@@ -108,11 +108,12 @@ type SSU2Conn struct {
 	initiator bool
 
 	// Protocol handlers
-	handshakeHandler *HandshakeHandler
-	dataHandler      *DataHandler
-	ackHandler       *ACKHandler
-	rttEstimator     *RTTEstimator
-	recvWindow       *ReceiveWindow
+	handshakeHandler     *HandshakeHandler
+	dataHandler          *DataHandler
+	ackHandler           *ACKHandler
+	rttEstimator         *RTTEstimator
+	recvWindow           *ReceiveWindow
+	congestionController *CongestionController
 
 	// Header protection (nil = disabled)
 	headerProtector *HeaderProtectorManager
@@ -1634,9 +1635,13 @@ func (h *SSU2Conn) sendImmediateACK() {
 
 // handleCongestionBlock processes a received Congestion block (G-6).
 // If the RequestACK flag (bit 0) is set, triggers an immediate ACK per spec.
+// If the ECN flag (bit 1) is set, signals the congestion controller.
 func (h *SSU2Conn) handleCongestionBlock(flags uint8) error {
 	if flags&CongestionFlagRequestACK != 0 {
 		h.sendImmediateACK()
+	}
+	if flags&CongestionFlagECN != 0 && h.congestionController != nil {
+		h.congestionController.OnECN()
 	}
 	return nil
 }

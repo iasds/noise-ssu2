@@ -1,9 +1,10 @@
 package ssu2
 
 import (
-	"bytes"
+	"crypto/subtle"
 	"time"
 
+	"github.com/go-i2p/common/router_info"
 	noise "github.com/go-i2p/go-noise"
 	"github.com/go-i2p/go-noise/handshake"
 	"github.com/go-i2p/go-noise/internal"
@@ -17,20 +18,16 @@ const (
 	DefaultHandshakeTimeout = 15 * time.Second
 )
 
-// DefaultRouterInfoValidator is a MINIMAL RouterInfo validator that checks
-// whether the Noise-authenticated static key appears within the RouterInfo
-// payload using bytes.Contains. This is INSUFFICIENT for production use
-// because crafted RouterInfo payloads can produce false-positive matches.
+// DefaultRouterInfoValidator validates that the Noise-authenticated static
+// key matches the "s" option in an SSU2 address within the RouterInfo.
 //
-// WARNING: Do NOT use this validator in production. It is provided only as
-// a reference implementation and for testing. Production deployments MUST
-// supply a full RouterInfo parser that extracts the signing public key and
-// compares it to the Noise-authenticated static key.
+// It parses the RouterInfo binary payload, locates SSU2 router addresses,
+// and compares the static key from the "s" option against the
+// Noise-authenticated static key using constant-time comparison.
 //
-// Per SSU2 spec §Session Confirmed, the responder must verify that the
-// static key from the Noise handshake corresponds to the identity key in
-// the RouterInfo. NewSSU2Config intentionally does NOT set a default
-// validator — callers must explicitly provide one via WithRouterInfoValidator.
+// Per SSU2 spec §SessionConfirmed Notes, the responder must verify that
+// the static key authenticated by the Noise handshake corresponds to the
+// key published in the peer's RouterInfo.
 func DefaultRouterInfoValidator(routerInfo []byte, authenticatedStaticKey []byte) error {
 	if len(routerInfo) == 0 {
 		return oops.
@@ -44,13 +41,32 @@ func DefaultRouterInfoValidator(routerInfo []byte, authenticatedStaticKey []byte
 			In("ssu2").
 			Errorf("authenticated static key is empty")
 	}
-	if !bytes.Contains(routerInfo, authenticatedStaticKey) {
+
+	ri, _, err := router_info.ReadRouterInfo(routerInfo)
+	if err != nil {
 		return oops.
-			Code("ROUTER_INFO_KEY_MISMATCH").
+			Code("ROUTER_INFO_PARSE_FAILED").
 			In("ssu2").
-			Errorf("RouterInfo does not contain the Noise-authenticated static key")
+			Wrapf(err, "failed to parse RouterInfo")
 	}
-	return nil
+
+	for _, addr := range ri.RouterAddresses() {
+		if addr == nil || !addr.IsSSU2() {
+			continue
+		}
+		staticKey, err := addr.StaticKey()
+		if err != nil {
+			continue
+		}
+		if subtle.ConstantTimeCompare(staticKey[:], authenticatedStaticKey) == 1 {
+			return nil
+		}
+	}
+
+	return oops.
+		Code("ROUTER_INFO_KEY_MISMATCH").
+		In("ssu2").
+		Errorf("no SSU2 address in RouterInfo contains the Noise-authenticated static key")
 }
 
 // SSU2Config contains configuration for creating SSU2 connections and listeners.
