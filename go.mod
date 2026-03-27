@@ -8,7 +8,7 @@ require (
 	github.com/go-i2p/common v0.0.0-00010101000000-000000000000
 	github.com/go-i2p/crypto v0.1.4-0.20260219234435-41c70b0435dd
 	github.com/go-i2p/logger v0.1.2
-	github.com/go-i2p/noise v1.1.1-0.20260218013035-4a9b0d93ea92
+	github.com/go-i2p/noise v1.1.1-0.20260327201800-8e41bb3d9f1e
 	github.com/samber/oops v1.21.0
 	github.com/stretchr/testify v1.11.1
 	golang.org/x/crypto v0.48.0
