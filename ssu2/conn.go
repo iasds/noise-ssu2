@@ -292,7 +292,7 @@ func NewSSU2Conn(
 		ackHandler:           NewACKHandler(),
 		rttEstimator:         rttEst,
 		congestionController: NewCongestionControllerWithMTU(rttEst, config.MTU),
-		recvWindow:           NewReceiveWindow(0, 256), // start at 0, max 256 packets
+		recvWindow:           NewReceiveWindow(0, config.ReceiveWindowSize), // configurable via SSU2Config (M-3)
 		state:                StateInit,
 		closeChan:            make(chan struct{}),
 		sendQueue:            make(chan *SSU2Packet, 64),
@@ -748,6 +748,11 @@ func (h *SSU2Conn) installCipherStates() error {
 	// Wire PathChallenge/PathResponse callbacks for path validation (G-7).
 	cbs.OnPathChallenge = h.handlePathChallengeData
 	cbs.OnPathResponse = h.handlePathResponseData
+
+	// Wire default Address block handler for passive NAT detection (G-6).
+	if cbs.OnAddress == nil {
+		cbs.OnAddress = h.handleAddressBlock
+	}
 
 	// Wire Termination callback to compare peer-reported received count
 	// against our sent count for packet-loss diagnostics (G-7).
@@ -1662,6 +1667,31 @@ func (h *SSU2Conn) handlePathChallengeData(data []byte) error {
 func (h *SSU2Conn) handlePathResponseData(data []byte) error {
 	block := &SSU2Block{Type: BlockTypePathResponse, Data: data}
 	return h.pathValidator.HandlePathResponse(block, h.remoteAddr)
+}
+
+// handleAddressBlock processes an Address block (Type 13) for passive NAT
+// detection (G-6). The block contains the sender's view of our IP and port.
+// Format: IP (4 or 16 bytes) + Port (2 bytes big-endian).
+func (h *SSU2Conn) handleAddressBlock(data []byte) error {
+	if len(data) != 6 && len(data) != 18 {
+		return oops.Errorf("Address block invalid length: %d (expected 6 or 18)", len(data))
+	}
+	portOffset := len(data) - 2
+	ip := net.IP(data[:portOffset])
+	port := binary.BigEndian.Uint16(data[portOffset:])
+
+	localAddr := h.LocalAddr()
+	if udp, ok := localAddr.(*net.UDPAddr); ok {
+		if !udp.IP.Equal(ip) || udp.Port != int(port) {
+			log.WithFields(map[string]interface{}{
+				"reportedIP":   ip.String(),
+				"reportedPort": port,
+				"localIP":      udp.IP.String(),
+				"localPort":    udp.Port,
+			}).Info("Address block reports different address (possible NAT)")
+		}
+	}
+	return nil
 }
 
 // extractRetryToken parses a Retry message and returns the 8-byte token.

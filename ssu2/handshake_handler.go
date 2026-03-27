@@ -850,8 +850,8 @@ func (h *HandshakeHandler) createHandshakeBlocks(messageType uint8) []*SSU2Block
 	if h.localOptions != nil {
 		blocks = append(blocks, NewSSU2Block(BlockTypeOptions, h.localOptions.Serialize()))
 	} else {
-		optData := make([]byte, 15)
-		binary.BigEndian.PutUint16(optData[0:2], 2) // SSU2 version 2
+		// Default 12-byte Options block per spec §Options Block (M-2).
+		optData := make([]byte, 12)
 		blocks = append(blocks, NewSSU2Block(BlockTypeOptions, optData))
 	}
 
@@ -874,10 +874,10 @@ func (h *HandshakeHandler) validateHandshakeBlocks(blocks []*SSU2Block, messageT
 		}
 	}
 
-	// Per spec §Session Request/Created, DateTime is required.
-	// We accept messages without it for interoperability, but callers
-	// should treat its absence as a protocol deviation.
-	_ = hasDateTime
+	// Per spec §Session Request/Created, DateTime is required (M-1).
+	if !hasDateTime {
+		return oops.Errorf("DateTime block required in message type %d per SSU2 spec", messageType)
+	}
 
 	return nil
 }

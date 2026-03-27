@@ -230,6 +230,12 @@ type SSU2Config struct {
 	// Default: 120 seconds. Set to 0 to disable skew validation.
 	MaxClockSkew time.Duration
 
+	// ReceiveWindowSize is the maximum number of out-of-order packets
+	// buffered by the receive window. Larger values improve throughput
+	// on lossy links at the cost of memory (M-3).
+	// Default: 256. Use 0 for DefaultMaxWindowSize (512).
+	ReceiveWindowSize int
+
 	// RouterInfoValidator is a callback invoked after the handshake
 	// completes on the responder side. It receives the raw RouterInfo block
 	// from SessionConfirmed and the Noise-authenticated static public key.
@@ -269,6 +275,7 @@ func NewSSU2Config(routerHash data.Hash, initiator bool) (*SSU2Config, error) {
 		DestroyTimeout:          11 * time.Second,  // Per spec §Termination: 11s (max RTO)
 		MaxClockSkew:            120 * time.Second, // Per spec: ±120s skew tolerance (G-1)
 		ReplayCacheTTL:          4 * time.Minute,
+		ReceiveWindowSize:       256, // Configurable via WithReceiveWindowSize (M-3)
 		RouterInfoValidator:     nil, // C-1: no default; callers must explicitly set via WithRouterInfoValidator
 	}, nil
 }
@@ -415,6 +422,15 @@ func (sc *SSU2Config) WithDestroyTimeout(timeout time.Duration) *SSU2Config {
 // validation. Set to 0 to disable skew checking.
 func (sc *SSU2Config) WithMaxClockSkew(skew time.Duration) *SSU2Config {
 	sc.MaxClockSkew = skew
+	return sc
+}
+
+// WithReceiveWindowSize sets the maximum number of out-of-order packets
+// the receive window will buffer. Use 0 for DefaultMaxWindowSize.
+func (sc *SSU2Config) WithReceiveWindowSize(size int) *SSU2Config {
+	if size >= 0 {
+		sc.ReceiveWindowSize = size
+	}
 	return sc
 }
 
