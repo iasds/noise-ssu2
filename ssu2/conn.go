@@ -35,6 +35,9 @@ const (
 	// rekeyThreshold is the send-sequence value at which we initiate a
 	// NextNonce rekey. Per the SSU2 spec the 32-bit packet number must
 	// not wrap, so we start the rekey handshake well before 0xFFFFFFFF.
+	// The 256-packet gap (0xFFFFFFFF - 0xFFFFFF00) provides enough lead
+	// time for the NextNonce block to be sent, acknowledged, and for both
+	// sides to switch to the new key before the counter is exhausted (M-3).
 	//
 	// WARNING: NextNonce (block type 11) is based on an UNFINALIZED spec
 	// area (marked "TODO only if we rotate keys" with size "TBD").
@@ -51,10 +54,10 @@ const (
 	retransmitInterval = 250 * time.Millisecond
 
 	// destroyTimeout is the default time to wait after sending a Termination
-	// block before releasing session resources. Per spec §Termination,
-	// this gives the remote peer time to receive and acknowledge the
-	// close. Can be overridden via SSU2Config.DestroyTimeout.
-	destroyTimeout = 5 * time.Second
+	// block before releasing session resources. Per spec §Termination:
+	// "Wait for 11 seconds (the maximum RTO)" after sending a Termination
+	// block. Can be overridden via SSU2Config.DestroyTimeout (M-4).
+	destroyTimeout = 11 * time.Second
 )
 
 // String returns a human-readable state name.
@@ -246,6 +249,11 @@ func NewSSU2Conn(
 		return nil, oops.Wrapf(err, "failed to create handshake handler")
 	}
 
+	// Override replay cache TTL if configured (M-2).
+	if config.ReplayCacheTTL > 0 && !initiator {
+		handshakeHandler.ReconfigureReplayCache(config.ReplayCacheTTL)
+	}
+
 	// Populate local Options from config so the handshake advertises our
 	// padding preferences to the peer (G-3).
 	handshakeHandler.SetLocalOptions(&OptionsParams{
@@ -401,6 +409,16 @@ func (h *SSU2Conn) handshakeInitiator(ctx context.Context) error {
 
 	// Handle Retry: responder may require a token before proceeding.
 	if response.MessageType == MessageTypeRetry {
+		// Validate the Retry's destination connection ID matches our source
+		// connection ID, confirming the Retry is a response to OUR SessionRequest
+		// and was header-encrypted with the expected intro key (G-3).
+		if len(response.Header) >= 8 {
+			retryDestID := binary.BigEndian.Uint64(response.Header[0:8])
+			if retryDestID != h.config.ConnectionID {
+				return oops.Errorf("Retry dest connection ID %d does not match our source ID %d (possible injection)", retryDestID, h.config.ConnectionID)
+			}
+		}
+
 		token, err := h.extractRetryToken(response)
 		if err != nil {
 			return oops.Wrapf(err, "failed to extract Retry token")
@@ -712,9 +730,12 @@ func (h *SSU2Conn) installCipherStates() error {
 	h.recvCipher = recv
 	h.cipherMutex.Unlock()
 
-	// Wire NextNonce callback so peer-initiated rekeys are applied.
 	cbs := h.dataHandler.getCallbacks()
-	cbs.OnNextNonce = h.handlePeerNextNonce
+	// Wire NextNonce callback only if enabled (G-1). When disabled,
+	// inbound NextNonce blocks are silently ignored.
+	if h.config.EnableNextNonce {
+		cbs.OnNextNonce = h.handlePeerNextNonce
+	}
 	// Wire Congestion callback so RequestACK flag triggers immediate ACK (G-6).
 	cbs.OnCongestion = h.handleCongestionBlock
 	// Wire PathChallenge/PathResponse callbacks for path validation (G-7).
@@ -1745,8 +1766,9 @@ func (h *SSU2Conn) nextSendSequence() uint32 {
 	seq := h.sendSequence
 	h.sendSequence++
 
-	// Trigger rekey exactly once when we cross the threshold.
-	if seq >= rekeyThreshold && !h.rekeyInFlight.Load() {
+	// Trigger rekey exactly once when we cross the threshold,
+	// but only if NextNonce is enabled via config (G-1).
+	if h.config.EnableNextNonce && seq >= rekeyThreshold && !h.rekeyInFlight.Load() {
 		if h.rekeyInFlight.CompareAndSwap(false, true) {
 			go h.initiateRekey()
 		}

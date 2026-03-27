@@ -152,9 +152,22 @@ type CongestionController struct {
 
 // NewCongestionController creates a new congestion controller.
 // If rttEstimator is nil, congestion control will work without RTT-based decisions.
+// Uses the default IPv4 MTU for initial CWND; prefer NewCongestionControllerWithMTU
+// to derive CWND from the session's actual MTU (M-5).
 func NewCongestionController(rttEstimator *RTTEstimator) *CongestionController {
+	return NewCongestionControllerWithMTU(rttEstimator, MaxPacketSizeIPv4)
+}
+
+// NewCongestionControllerWithMTU creates a congestion controller with the
+// initial CWND derived from the given MTU (3 × mtu per SSU2 spec §Congestion).
+// This correctly handles IPv6 sessions where the MTU (1452) differs from
+// the IPv4 default (1472) (M-5).
+func NewCongestionControllerWithMTU(rttEstimator *RTTEstimator, mtu int) *CongestionController {
+	if mtu <= 0 {
+		mtu = MaxPacketSizeIPv4
+	}
 	return &CongestionController{
-		cwnd:          InitialCongestionWindow,
+		cwnd:          mtu * 3,
 		ssthresh:      InitialSlowStartThreshold,
 		state:         SlowStart,
 		bytesAcked:    0,

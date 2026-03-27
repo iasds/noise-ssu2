@@ -264,6 +264,17 @@ func (h *HandshakeHandler) CreateSessionRequestWithToken(sourceConnID, destConnI
 	if len(token) != 8 {
 		return nil, oops.Errorf("retry token must be exactly 8 bytes, got %d", len(token))
 	}
+	// Per SSU2 spec §Session Request: token must be nonzero when retrying (G-5).
+	allZero := true
+	for _, b := range token {
+		if b != 0 {
+			allZero = false
+			break
+		}
+	}
+	if allZero {
+		return nil, oops.Errorf("retry token must be nonzero per SSU2 spec")
+	}
 
 	// Reset the Noise handshake state so the new SessionRequest
 	// starts from a clean message index 0 with a fresh ephemeral key (C-3).
@@ -868,6 +879,12 @@ func (h *HandshakeHandler) validateHandshakeBlocks(blocks []*SSU2Block, messageT
 // extracts the ephemeral key, and assembles an SSU2Packet.
 // token may be nil for initial requests, or an 8-byte slice for Retry sessions.
 func (h *HandshakeHandler) buildHandshakePacket(blocks []*SSU2Block, msgType uint8, sourceConnID, destConnID uint64, token []byte) (*SSU2Packet, error) {
+	// Per SSU2 spec §Session Request: destConnID=0 is only valid for
+	// the initial SessionRequest. Reject zero for all other message types (C-1).
+	if destConnID == 0 && msgType != MessageTypeSessionRequest {
+		return nil, oops.Errorf("destConnID=0 is only allowed for SessionRequest (type %d), got type %d", MessageTypeSessionRequest, msgType)
+	}
+
 	payload, err := SerializeBlocks(blocks)
 	if err != nil {
 		return nil, oops.Wrapf(err, "failed to serialize handshake blocks")
@@ -1250,6 +1267,20 @@ func (h *HandshakeHandler) Close() {
 	if h.replayCache != nil {
 		h.replayCache.Close()
 	}
+}
+
+// ReconfigureReplayCache replaces the replay cache with one using the
+// given TTL. This allows callers to override the default 4-minute TTL
+// from SSU2Config (M-2).
+func (h *HandshakeHandler) ReconfigureReplayCache(ttl time.Duration) {
+	if h.replayCache != nil {
+		h.replayCache.Close()
+	}
+	h.replayCache = replaycache.New(replaycache.Config{
+		TTL:             ttl,
+		MaxSize:         1024,
+		CleanupInterval: 30 * time.Second,
+	})
 }
 
 // copyBytes creates a defensive copy of a byte slice.

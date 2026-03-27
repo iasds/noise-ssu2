@@ -192,6 +192,20 @@ type SSU2Config struct {
 	// Default: 5 seconds. Set to 0 to skip the wait (e.g. in tests).
 	DestroyTimeout time.Duration
 
+	// EnableNextNonce enables the NextNonce rekey mechanism (block type 11).
+	// WARNING: The SSU2 spec has NOT finalized this block's format or
+	// semantics (marked "TODO" with size "TBD"). Enabling this risks
+	// breaking interoperability with peers that implement a different
+	// (or no) rekey protocol.
+	// Default: false (disabled until spec is finalized) (G-1).
+	EnableNextNonce bool
+
+	// ReplayCacheTTL is the time-to-live for entries in the handshake replay
+	// cache. The spec does not mandate a specific value; 4 minutes is a
+	// reasonable default for the handshake window.
+	// Default: 4 minutes (M-2).
+	ReplayCacheTTL time.Duration
+
 	// RouterInfoValidator is a callback invoked after the handshake
 	// completes on the responder side. It receives the raw RouterInfo block
 	// from SessionConfirmed and the Noise-authenticated static public key.
@@ -240,7 +254,8 @@ func NewSSU2Config(routerHash []byte, initiator bool) (*SSU2Config, error) {
 		IdleTimeout:             5 * time.Minute,
 		FragmentTimeout:         10 * time.Second,
 		TokenCacheMaxSize:       10000,
-		DestroyTimeout:          0,   // opt-in; set to destroyTimeout (5s) in production
+		DestroyTimeout:          0, // opt-in; set to destroyTimeout (5s) in production
+		ReplayCacheTTL:          4 * time.Minute,
 		RouterInfoValidator:     nil, // C-1: no default; callers must explicitly set via WithRouterInfoValidator
 	}, nil
 }

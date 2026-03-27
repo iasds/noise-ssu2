@@ -45,7 +45,7 @@ const (
 	BlockTypeReserved14        uint8 = 14  // Reserved per spec (do not use)
 	BlockTypeRelayTagRequest   uint8 = 15  // Request relay tag (0 bytes data)
 	BlockTypeRelayTag          uint8 = 16  // Relay tag assignment (4 bytes)
-	BlockTypeNewToken          uint8 = 17  // New session token (15 bytes)
+	BlockTypeNewToken          uint8 = 17  // New session token (12 bytes data, 15 bytes on wire)
 	BlockTypePathChallenge     uint8 = 18  // Path validation challenge (variable)
 	BlockTypePathResponse      uint8 = 19  // Path validation response (variable)
 	BlockTypeFirstPacketNumber uint8 = 20  // Initial packet number for data phase (4 bytes)
