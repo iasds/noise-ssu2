@@ -114,6 +114,9 @@ func TestDialSSU2WithHandshake_ContextCancellation(t *testing.T) {
 // TestDialSSU2WithHandshake_WithoutContext tests handshake without explicit context.
 func TestDialSSU2WithHandshake_WithoutContext(t *testing.T) {
 	config := createValidInitiatorConfig(t)
+	// Use a short handshake timeout so the test completes quickly.
+	// The default (15s) exceeds the test's wait window.
+	config.WithHandshakeTimeout(2 * time.Second)
 	localAddr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0}
 	remoteAddr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 12345}
 
@@ -131,7 +134,7 @@ func TestDialSSU2WithHandshake_WithoutContext(t *testing.T) {
 	select {
 	case <-done:
 		// Expected to complete (with error)
-	case <-time.After(5 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("DialSSU2WithHandshake did not complete within timeout")
 	}
 }
