@@ -58,8 +58,9 @@ func TestListenerIntegration_ClientServerConnection(t *testing.T) {
 		clientStaticKey[i] = byte(i + 200)
 	}
 	clientConfig = clientConfig.WithStaticKey(clientStaticKey)
-	// Set server's router hash for XK handshake
+	// Set server's router hash and static key for XK handshake
 	clientConfig = clientConfig.WithRemoteRouterHash(serverRouterHash)
+	clientConfig = clientConfig.WithRemoteStaticKey(serverStaticKey)
 
 	// Channel to receive accepted connections
 	acceptDone := make(chan *SSU2Conn, 1)
