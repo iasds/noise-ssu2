@@ -4,6 +4,7 @@ import (
 	"net"
 	"testing"
 
+	"github.com/go-i2p/common/data"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -12,7 +13,7 @@ func TestNewSSU2Addr(t *testing.T) {
 	tests := []struct {
 		name         string
 		underlying   net.Addr
-		routerHash   []byte
+		routerHash   data.Hash
 		connID       uint64
 		role         string
 		expectError  bool
@@ -21,7 +22,7 @@ func TestNewSSU2Addr(t *testing.T) {
 		{
 			name:        "valid_initiator_addr",
 			underlying:  &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 8080},
-			routerHash:  make([]byte, 32),
+			routerHash:  generateRandomHash(),
 			connID:      12345,
 			role:        "initiator",
 			expectError: false,
@@ -29,7 +30,7 @@ func TestNewSSU2Addr(t *testing.T) {
 		{
 			name:        "valid_responder_addr",
 			underlying:  &net.UDPAddr{IP: net.ParseIP("10.0.0.1"), Port: 9091},
-			routerHash:  make([]byte, 32),
+			routerHash:  generateRandomHash(),
 			connID:      67890,
 			role:        "responder",
 			expectError: false,
@@ -37,34 +38,16 @@ func TestNewSSU2Addr(t *testing.T) {
 		{
 			name:         "nil_underlying_addr",
 			underlying:   nil,
-			routerHash:   make([]byte, 32),
+			routerHash:   generateRandomHash(),
 			connID:       12345,
 			role:         "initiator",
 			expectError:  true,
 			errorMessage: "underlying address cannot be nil",
 		},
 		{
-			name:         "invalid_router_hash_too_short",
-			underlying:   &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 8080},
-			routerHash:   make([]byte, 16),
-			connID:       12345,
-			role:         "initiator",
-			expectError:  true,
-			errorMessage: "router hash must be exactly 32 bytes",
-		},
-		{
-			name:         "invalid_router_hash_too_long",
-			underlying:   &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 8080},
-			routerHash:   make([]byte, 64),
-			connID:       12345,
-			role:         "initiator",
-			expectError:  true,
-			errorMessage: "router hash must be exactly 32 bytes",
-		},
-		{
 			name:         "zero_connection_id",
 			underlying:   &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 8080},
-			routerHash:   make([]byte, 32),
+			routerHash:   generateRandomHash(),
 			connID:       0,
 			role:         "initiator",
 			expectError:  true,
@@ -73,7 +56,7 @@ func TestNewSSU2Addr(t *testing.T) {
 		{
 			name:         "invalid_role",
 			underlying:   &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 8080},
-			routerHash:   make([]byte, 32),
+			routerHash:   generateRandomHash(),
 			connID:       12345,
 			role:         "invalid",
 			expectError:  true,
@@ -82,7 +65,7 @@ func TestNewSSU2Addr(t *testing.T) {
 		{
 			name:         "empty_role",
 			underlying:   &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 8080},
-			routerHash:   make([]byte, 32),
+			routerHash:   generateRandomHash(),
 			connID:       12345,
 			role:         "",
 			expectError:  true,
@@ -115,76 +98,41 @@ func TestNewSSU2Addr(t *testing.T) {
 func TestSSU2Addr_WithDestinationHash(t *testing.T) {
 	// Create base address
 	underlying := &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 8080}
-	routerHash := make([]byte, 32)
+	routerHash := generateRandomHash()
 	baseAddr, err := NewSSU2Addr(underlying, routerHash, 12345, "initiator")
 	require.NoError(t, err)
 
-	tests := []struct {
-		name         string
-		destHash     []byte
-		expectError  bool
-		errorMessage string
-	}{
-		{
-			name:        "valid_dest_hash",
-			destHash:    make([]byte, 32),
-			expectError: false,
-		},
-		{
-			name:        "nil_dest_hash",
-			destHash:    nil,
-			expectError: false,
-		},
-		{
-			name:         "invalid_dest_hash_too_short",
-			destHash:     make([]byte, 16),
-			expectError:  true,
-			errorMessage: "destination hash must be exactly 32 bytes or nil",
-		},
-		{
-			name:         "invalid_dest_hash_too_long",
-			destHash:     make([]byte, 64),
-			expectError:  true,
-			errorMessage: "destination hash must be exactly 32 bytes or nil",
-		},
-	}
+	t.Run("valid_dest_hash", func(t *testing.T) {
+		destHash := generateRandomHash()
+		newAddr := baseAddr.WithDestinationHash(destHash)
+		require.NotNil(t, newAddr)
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			newAddr, err := baseAddr.WithDestinationHash(tt.destHash)
+		// Verify immutability - original should be unchanged
+		assert.Nil(t, baseAddr.destHash)
 
-			if tt.expectError {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), tt.errorMessage)
-				assert.Nil(t, newAddr)
-			} else {
-				require.NoError(t, err)
-				require.NotNil(t, newAddr)
+		returnedDest := newAddr.DestinationHash()
+		require.NotNil(t, returnedDest)
+		assert.Equal(t, destHash, *returnedDest)
+	})
 
-				// Verify immutability - original should be unchanged
-				assert.Nil(t, baseAddr.destHash)
+	t.Run("zero_dest_hash", func(t *testing.T) {
+		destHash := data.Hash{}
+		newAddr := baseAddr.WithDestinationHash(destHash)
+		require.NotNil(t, newAddr)
 
-				if tt.destHash != nil {
-					assert.Equal(t, 32, len(newAddr.destHash))
-					// Test defensive copy by modifying original and verifying it doesn't affect the copy
-					if len(tt.destHash) > 0 {
-						originalByte := tt.destHash[0]
-						tt.destHash[0] = 0xFF
-						assert.NotEqual(t, byte(0xFF), newAddr.destHash[0])
-						tt.destHash[0] = originalByte // Restore
-					}
-				} else {
-					assert.Nil(t, newAddr.destHash)
-				}
-			}
-		})
-	}
+		// Verify immutability - original should be unchanged
+		assert.Nil(t, baseAddr.destHash)
+
+		returnedDest := newAddr.DestinationHash()
+		require.NotNil(t, returnedDest)
+		assert.Equal(t, destHash, *returnedDest)
+	})
 }
 
 func TestSSU2Addr_WithIntroducer(t *testing.T) {
 	// Create base address
 	underlying := &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 8080}
-	routerHash := make([]byte, 32)
+	routerHash := generateRandomHash()
 	baseAddr, err := NewSSU2Addr(underlying, routerHash, 12345, "initiator")
 	require.NoError(t, err)
 
@@ -229,7 +177,7 @@ func TestSSU2Addr_WithIntroducer(t *testing.T) {
 
 func TestSSU2Addr_NetAddrInterface(t *testing.T) {
 	underlying := &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 8080}
-	routerHash := make([]byte, 32)
+	routerHash := generateRandomHash()
 	addr, err := NewSSU2Addr(underlying, routerHash, 12345, "initiator")
 	require.NoError(t, err)
 
@@ -241,7 +189,7 @@ func TestSSU2Addr_NetAddrInterface(t *testing.T) {
 
 func TestSSU2Addr_Network(t *testing.T) {
 	underlying := &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 8080}
-	routerHash := make([]byte, 32)
+	routerHash := generateRandomHash()
 	addr, err := NewSSU2Addr(underlying, routerHash, 12345, "initiator")
 	require.NoError(t, err)
 
@@ -250,7 +198,7 @@ func TestSSU2Addr_Network(t *testing.T) {
 
 func TestSSU2Addr_String(t *testing.T) {
 	underlying := &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 8080}
-	routerHash := make([]byte, 32)
+	var routerHash data.Hash
 	// Set some recognizable bytes in router hash
 	routerHash[0] = 0xAA
 	routerHash[31] = 0xBB
@@ -276,9 +224,9 @@ func TestSSU2Addr_String(t *testing.T) {
 		{
 			name: "with_destination_hash",
 			setupAddr: func(addr *SSU2Addr) *SSU2Addr {
-				destHash := make([]byte, 32)
+				var destHash data.Hash
 				destHash[0] = 0xCC
-				newAddr, _ := addr.WithDestinationHash(destHash)
+				newAddr := addr.WithDestinationHash(destHash)
 				return newAddr
 			},
 			contains: []string{
@@ -308,9 +256,9 @@ func TestSSU2Addr_String(t *testing.T) {
 		{
 			name: "with_both_dest_and_introducer",
 			setupAddr: func(addr *SSU2Addr) *SSU2Addr {
-				destHash := make([]byte, 32)
+				var destHash data.Hash
 				introducerAddr := &net.UDPAddr{IP: net.ParseIP("10.0.0.2"), Port: 9999}
-				newAddr, _ := addr.WithDestinationHash(destHash)
+				newAddr := addr.WithDestinationHash(destHash)
 				newAddr, _ = newAddr.WithIntroducer(introducerAddr)
 				return newAddr
 			},
@@ -346,18 +294,18 @@ func TestSSU2Addr_String(t *testing.T) {
 
 func TestSSU2Addr_AccessorMethods(t *testing.T) {
 	underlying := &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 8080}
-	routerHash := make([]byte, 32)
+	var routerHash data.Hash
 	routerHash[0] = 0xAA // Set recognizable byte
 	connID := uint64(12345)
 
 	addr, err := NewSSU2Addr(underlying, routerHash, connID, "initiator")
 	require.NoError(t, err)
 
-	// Test RouterHash - should return defensive copy
+	// Test RouterHash - returns data.Hash value type
 	returnedHash := addr.RouterHash()
 	assert.Equal(t, 32, len(returnedHash))
 	assert.Equal(t, byte(0xAA), returnedHash[0])
-	// Test defensive copy by modifying returned slice
+	// Modifying the returned value should not affect internal state (value type copy)
 	returnedHash[0] = 0xFF
 	assert.Equal(t, byte(0xAA), addr.RouterHash()[0]) // Original should be unchanged
 
@@ -379,15 +327,15 @@ func TestSSU2Addr_AccessorMethods(t *testing.T) {
 	assert.False(t, addr.IsTunnelConnection())
 
 	// Add destination hash and test again
-	destHash := make([]byte, 32)
+	var destHash data.Hash
 	destHash[0] = 0xBB
-	addrWithDest, err := addr.WithDestinationHash(destHash)
-	require.NoError(t, err)
+	addrWithDest := addr.WithDestinationHash(destHash)
 
 	returnedDest := addrWithDest.DestinationHash()
-	assert.Equal(t, 32, len(returnedDest))
+	require.NotNil(t, returnedDest)
+	assert.Equal(t, 32, len(*returnedDest))
 	assert.Equal(t, byte(0xBB), returnedDest[0])
-	// Test defensive copy by modifying returned slice
+	// Modifying the returned value should not affect internal state
 	returnedDest[0] = 0xFF
 	assert.Equal(t, byte(0xBB), addrWithDest.DestinationHash()[0]) // Original should be unchanged
 
@@ -406,17 +354,17 @@ func TestSSU2Addr_AccessorMethods(t *testing.T) {
 
 func TestSSU2Addr_DefensiveCopying(t *testing.T) {
 	underlying := &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 8080}
-	routerHash := make([]byte, 32)
+	var routerHash data.Hash
 	routerHash[0] = 0xAA
 
 	addr, err := NewSSU2Addr(underlying, routerHash, 12345, "initiator")
 	require.NoError(t, err)
 
-	// Modify original router hash - should not affect created address
+	// data.Hash is a value type [32]byte, so the original variable is independent
 	routerHash[0] = 0xFF
 	assert.Equal(t, byte(0xAA), addr.routerHash[0])
 
-	// Modify returned router hash - should not affect internal state
+	// Modify returned router hash - should not affect internal state (value copy)
 	returned := addr.RouterHash()
 	returned[0] = 0xFF
 	assert.Equal(t, byte(0xAA), addr.routerHash[0])
@@ -426,7 +374,7 @@ func TestSSU2Addr_StringHandlesNilUnderlying(t *testing.T) {
 	// Test edge case - this shouldn't happen in normal usage but we handle it gracefully
 	addr := &SSU2Addr{
 		underlying:   nil,
-		routerHash:   make([]byte, 32),
+		routerHash:   data.Hash{},
 		connectionID: 12345,
 		role:         "initiator",
 	}
@@ -438,8 +386,8 @@ func TestSSU2Addr_StringHandlesNilUnderlying(t *testing.T) {
 func TestSSU2Addr_BuilderPattern(t *testing.T) {
 	// Test builder pattern with method chaining
 	underlying := &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 8080}
-	routerHash := make([]byte, 32)
-	destHash := make([]byte, 32)
+	var routerHash data.Hash
+	var destHash data.Hash
 	introducerAddr := &net.UDPAddr{IP: net.ParseIP("10.0.0.2"), Port: 9999}
 
 	// Set recognizable bytes
@@ -451,8 +399,7 @@ func TestSSU2Addr_BuilderPattern(t *testing.T) {
 	require.NoError(t, err)
 
 	// Chain builder methods
-	addrWithDest, err := baseAddr.WithDestinationHash(destHash)
-	require.NoError(t, err)
+	addrWithDest := baseAddr.WithDestinationHash(destHash)
 
 	finalAddr, err := addrWithDest.WithIntroducer(introducerAddr)
 	require.NoError(t, err)
@@ -494,7 +441,7 @@ func TestGenerateConnectionID(t *testing.T) {
 
 func TestSSU2Addr_ConnectionIDInString(t *testing.T) {
 	underlying := &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 8080}
-	routerHash := make([]byte, 32)
+	routerHash := generateRandomHash()
 	connID := uint64(12345)
 
 	addr, err := NewSSU2Addr(underlying, routerHash, connID, "initiator")
@@ -509,7 +456,7 @@ func TestSSU2Addr_ConnectionIDInString(t *testing.T) {
 // Benchmark tests to ensure performance is adequate
 func BenchmarkSSU2Addr_Creation(b *testing.B) {
 	underlying := &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 8080}
-	routerHash := make([]byte, 32)
+	routerHash := generateRandomHash()
 	connID := uint64(12345)
 
 	b.ResetTimer()
@@ -520,7 +467,7 @@ func BenchmarkSSU2Addr_Creation(b *testing.B) {
 
 func BenchmarkSSU2Addr_String(b *testing.B) {
 	underlying := &net.UDPAddr{IP: net.ParseIP("192.168.1.1"), Port: 8080}
-	routerHash := make([]byte, 32)
+	routerHash := generateRandomHash()
 	addr, _ := NewSSU2Addr(underlying, routerHash, 12345, "initiator")
 
 	b.ResetTimer()

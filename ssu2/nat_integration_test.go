@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-i2p/common/data"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -353,7 +354,7 @@ func TestNATTraversal_IntroducerRegistry(t *testing.T) {
 	for i, intro := range introducers {
 		regIntro := &RegisteredIntroducer{
 			Addr:       intro.addr,
-			RouterHash: intro.routerHash,
+			RouterHash: intro.routerHash[:],
 			StaticKey:  make([]byte, 44), // 44 bytes base64
 			IntroKey:   make([]byte, 44), // 44 bytes base64
 			RelayTag:   uint32(10000 + i),
@@ -428,7 +429,7 @@ func TestNATTraversal_PendingSessionTracking(t *testing.T) {
 // testPeer represents a peer in the test network.
 type testPeer struct {
 	addr           *net.UDPAddr
-	routerHash     []byte
+	routerHash     data.Hash
 	listener       *SSU2Listener
 	relayMgr       *RelayManager
 	holePunchCoord *HolePunchCoordinator
@@ -437,7 +438,7 @@ type testPeer struct {
 // setupPeer creates and initializes a test peer with all NAT traversal components.
 func setupPeer(t *testing.T, name string) *testPeer {
 	// Create unique router hash
-	routerHash := make([]byte, 32)
+	var routerHash data.Hash
 	for i := range routerHash {
 		routerHash[i] = byte(i) ^ byte(name[0]) // Mix in name for uniqueness
 	}

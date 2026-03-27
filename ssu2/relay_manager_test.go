@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-i2p/common/data"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -34,7 +35,7 @@ func TestRelayManager_Stop(t *testing.T) {
 
 	// Add some state
 	addr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 12345}
-	routerHash := make([]byte, 32)
+	routerHash := generateRandomHash()
 	err := rm.RegisterIntroducer(addr, routerHash, 123)
 	require.NoError(t, err)
 
@@ -56,7 +57,7 @@ func TestRelayManager_RegisterIntroducer(t *testing.T) {
 	defer rm.Stop()
 
 	addr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 12345}
-	routerHash := make([]byte, 32)
+	routerHash := generateRandomHash()
 	for i := range routerHash {
 		routerHash[i] = byte(i)
 	}
@@ -81,7 +82,7 @@ func TestRelayManager_RegisterIntroducer_NilAddress(t *testing.T) {
 	rm := NewRelayManager(listener)
 	defer rm.Stop()
 
-	routerHash := make([]byte, 32)
+	routerHash := generateRandomHash()
 	err := rm.RegisterIntroducer(nil, routerHash, 123)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "address cannot be nil")
@@ -97,10 +98,10 @@ func TestRelayManager_RegisterIntroducer_InvalidRouterHash(t *testing.T) {
 
 	addr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 12345}
 
-	// Wrong length
-	err := rm.RegisterIntroducer(addr, make([]byte, 16), 123)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "must be exactly 32 bytes")
+	// With data.Hash as [32]byte, the hash is always exactly 32 bytes.
+	// Just verify registration works with a zero hash.
+	err := rm.RegisterIntroducer(addr, data.Hash{}, 123)
+	assert.NoError(t, err)
 }
 
 // TestRelayManager_RegisterIntroducer_ZeroTag tests tag validation.
@@ -112,7 +113,7 @@ func TestRelayManager_RegisterIntroducer_ZeroTag(t *testing.T) {
 	defer rm.Stop()
 
 	addr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 12345}
-	routerHash := make([]byte, 32)
+	routerHash := generateRandomHash()
 
 	err := rm.RegisterIntroducer(addr, routerHash, 0)
 	assert.Error(t, err)
@@ -128,7 +129,7 @@ func TestRelayManager_RegisterIntroducer_Update(t *testing.T) {
 	defer rm.Stop()
 
 	addr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 12345}
-	routerHash := make([]byte, 32)
+	routerHash := generateRandomHash()
 
 	// Register with tag 123
 	err := rm.RegisterIntroducer(addr, routerHash, 123)
@@ -152,7 +153,7 @@ func TestRelayManager_RegisterIntroducer_MaxLimit(t *testing.T) {
 	rm := NewRelayManager(listener)
 	defer rm.Stop()
 
-	routerHash := make([]byte, 32)
+	routerHash := generateRandomHash()
 
 	// Register 3 introducers (max)
 	for i := 0; i < 3; i++ {
@@ -187,7 +188,7 @@ func TestRelayManager_GetIntroducers(t *testing.T) {
 	assert.Empty(t, introducers)
 
 	// Add introducers
-	routerHash := make([]byte, 32)
+	routerHash := generateRandomHash()
 	for i := 0; i < 2; i++ {
 		addr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 12345 + i}
 		err := rm.RegisterIntroducer(addr, routerHash, uint32(100+i))
@@ -208,7 +209,7 @@ func TestRelayManager_RemoveIntroducer(t *testing.T) {
 
 	addr1 := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 12345}
 	addr2 := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 12346}
-	routerHash := make([]byte, 32)
+	routerHash := generateRandomHash()
 
 	// Register two introducers
 	err := rm.RegisterIntroducer(addr1, routerHash, 123)
@@ -485,7 +486,7 @@ func TestRelayManager_GetStats(t *testing.T) {
 
 	// Add some state
 	addr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 12345}
-	routerHash := make([]byte, 32)
+	routerHash := generateRandomHash()
 	err := rm.RegisterIntroducer(addr, routerHash, 123)
 	require.NoError(t, err)
 
@@ -513,7 +514,7 @@ func TestRelayManager_CleanupExpired(t *testing.T) {
 
 	// Add introducer with short expiry
 	addr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 12345}
-	routerHash := make([]byte, 32)
+	routerHash := generateRandomHash()
 	err := rm.RegisterIntroducer(addr, routerHash, 123)
 	require.NoError(t, err)
 
@@ -543,7 +544,7 @@ func createMockListener(t *testing.T) *SSU2Listener {
 
 // Helper function to create a test responder configuration.
 func createTestResponderConfig(t *testing.T) *SSU2Config {
-	routerHash := make([]byte, 32)
+	routerHash := generateRandomHash()
 	staticKey := make([]byte, 32)
 
 	config, err := NewSSU2Config(routerHash, false)

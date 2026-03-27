@@ -453,17 +453,17 @@ func TestConcurrentDial(t *testing.T) {
 // Helper function to create a valid initiator configuration.
 func createValidInitiatorConfig(t *testing.T) *SSU2Config {
 	staticKey := make([]byte, 32)
-	remoteStaticKey := make([]byte, 32)
-	routerHash := make([]byte, 32)
+	remoteRouterHash := generateRandomHash()
+	routerHash := generateRandomHash()
 
 	config, err := NewSSU2Config(routerHash, true)
 	require.NoError(t, err)
-	config.WithStaticKey(staticKey).WithRemoteRouterHash(remoteStaticKey)
+	config.WithStaticKey(staticKey).WithRemoteRouterHash(remoteRouterHash)
 	return config
 } // Helper function to create a valid responder configuration.
 func createValidResponderConfig(t *testing.T) *SSU2Config {
 	staticKey := make([]byte, 32)
-	routerHash := make([]byte, 32)
+	routerHash := generateRandomHash()
 
 	config, err := NewSSU2Config(routerHash, false)
 	require.NoError(t, err)

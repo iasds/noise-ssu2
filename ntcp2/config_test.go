@@ -83,7 +83,7 @@ func TestNTCP2ConfigBuilderMethods(t *testing.T) {
 
 	assert.Equal(t, "XK", config.Pattern)
 	assert.Equal(t, m.staticKey, config.StaticKey)
-	assert.Equal(t, m.remoteHash, config.RemoteRouterHash)
+	assert.Equal(t, m.remoteHash, *config.RemoteRouterHash)
 	assert.Equal(t, 45*time.Second, config.HandshakeTimeout)
 	assert.Equal(t, 10*time.Second, config.ReadTimeout)
 	assert.Equal(t, 15*time.Second, config.WriteTimeout)

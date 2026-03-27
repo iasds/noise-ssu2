@@ -505,8 +505,6 @@ func TestInboundRouterHash(t *testing.T) {
 	// The responder's RouterHash() should be non-zero: the initiator's Noise
 	// static public key, propagated by PropagatePeerStaticKey().
 	responderRemoteHash := responderNTCP2.RouterHash()
-	require.Len(t, responderRemoteHash, RouterHashSize,
-		"responder remote router hash should be 32 bytes")
 
 	allZero := true
 	for _, b := range responderRemoteHash {
@@ -519,10 +517,11 @@ func TestInboundRouterHash(t *testing.T) {
 		"responder remote router hash must not be all zeros after handshake")
 
 	// It should equal the initiator's Noise static public key.
-	assert.Equal(t, responderNTCP2.PeerStaticKey(), responderRemoteHash,
+	rhBytes := responderRemoteHash.Bytes()
+	assert.Equal(t, responderNTCP2.PeerStaticKey(), rhBytes[:],
 		"responder RouterHash should equal PeerStaticKey after PropagatePeerStaticKey")
 
 	// The initiator's static public key (as raw bytes).
-	assert.Equal(t, initiatorKP.Public[:], responderRemoteHash,
+	assert.Equal(t, initiatorKP.Public[:], rhBytes[:],
 		"responder RouterHash should match the initiator's actual static public key")
 }

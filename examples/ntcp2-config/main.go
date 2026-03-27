@@ -8,6 +8,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/go-i2p/common/data"
 	ntcp2shared "github.com/go-i2p/go-noise/examples/ntcp2-shared"
 	"github.com/go-i2p/go-noise/handshake"
 	"github.com/go-i2p/go-noise/ntcp2"
@@ -76,7 +77,9 @@ func runNTCP2ConfigurationDemo(routerHash, remoteRouterHash, destHash, staticKey
 // prints its common properties (pattern and role name), consolidating the
 // repeated create-and-display pattern used for responder and initiator configs.
 func createAndDisplayBasicConfig(routerHash []byte, isInitiator bool, roleName string) *ntcp2.NTCP2Config {
-	config, err := ntcp2.NewNTCP2Config(routerHash, isInitiator)
+	var rh data.Hash
+	copy(rh[:], routerHash)
+	config, err := ntcp2.NewNTCP2Config(rh, isInitiator)
 	if err != nil {
 		fmt.Printf("❌ Failed to create %s config: %v\n", roleName, err)
 		return nil
@@ -121,7 +124,9 @@ func demonstrateAdvancedConfigurations(routerHash []byte) {
 	}
 
 	// Advanced configuration with chained builder methods
-	config, err := ntcp2.NewNTCP2Config(routerHash, true) // true = initiator
+	var rh data.Hash
+	copy(rh[:], routerHash)
+	config, err := ntcp2.NewNTCP2Config(rh, true) // true = initiator
 	if err != nil {
 		fmt.Printf("❌ Failed to create config: %v\n", err)
 		return
@@ -175,7 +180,9 @@ func demonstrateResponderConfiguration(routerHash, staticKey []byte, args *ntcp2
 	fmt.Println("\n🔧 Responder (Server) Configuration:")
 	fmt.Println("====================================")
 
-	config, err := ntcp2.NewNTCP2Config(routerHash, false) // false = responder
+	var rh data.Hash
+	copy(rh[:], routerHash)
+	config, err := ntcp2.NewNTCP2Config(rh, false) // false = responder
 	if err != nil {
 		log.Fatalf("Failed to create responder config: %v", err)
 	}
@@ -214,7 +221,9 @@ func demonstrateInitiatorConfiguration(routerHash, remoteRouterHash, staticKey [
 
 // createBaseInitiatorConfig creates the basic NTCP2 configuration with core settings
 func createBaseInitiatorConfig(routerHash, staticKey []byte, args *ntcp2shared.NTCP2Args) *ntcp2.NTCP2Config {
-	config, err := ntcp2.NewNTCP2Config(routerHash, true) // true = initiator
+	var rh data.Hash
+	copy(rh[:], routerHash)
+	config, err := ntcp2.NewNTCP2Config(rh, true) // true = initiator
 	if err != nil {
 		log.Fatalf("Failed to create initiator config: %v", err)
 	}
@@ -230,7 +239,9 @@ func createBaseInitiatorConfig(routerHash, staticKey []byte, args *ntcp2shared.N
 func applyNTCP2Features(configBuilder *ntcp2.NTCP2Config, remoteRouterHash []byte, args *ntcp2shared.NTCP2Args) *ntcp2.NTCP2Config {
 	// Add remote router hash if available
 	if remoteRouterHash != nil {
-		configBuilder = configBuilder.WithRemoteRouterHash(remoteRouterHash)
+		var rrh data.Hash
+		copy(rrh[:], remoteRouterHash)
+		configBuilder = configBuilder.WithRemoteRouterHash(rrh)
 	}
 
 	// Apply NTCP2-specific features

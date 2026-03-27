@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-i2p/common/data"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -351,7 +352,7 @@ func createValidConfig(t *testing.T) *SSU2Config {
 	t.Helper()
 
 	// Generate router hash
-	routerHash := make([]byte, 32)
+	routerHash := generateRandomHash()
 
 	config, err := NewSSU2Config(routerHash, false)
 	require.NoError(t, err)
@@ -558,8 +559,8 @@ func TestListenerRouterHash(t *testing.T) {
 		// The router hash should be SHA-256 of the ephemeral key, not all zeros
 		expectedHash := sha256.Sum256(ephemeralKey)
 		actualHash := conn.ssu2Addr.RouterHash()
-		assert.Equal(t, expectedHash[:], actualHash)
-		assert.NotEqual(t, make([]byte, 32), actualHash, "router hash must not be zero-filled")
+		assert.Equal(t, data.Hash(expectedHash), actualHash)
+		assert.False(t, actualHash.IsZero(), "router hash must not be zero-filled")
 	})
 
 	t.Run("falls back to zero hash without ephemeral key", func(t *testing.T) {
@@ -583,6 +584,6 @@ func TestListenerRouterHash(t *testing.T) {
 		require.NotNil(t, conn)
 
 		// Without an ephemeral key, falls back to zero hash
-		assert.Equal(t, make([]byte, 32), conn.ssu2Addr.RouterHash())
+		assert.True(t, conn.ssu2Addr.RouterHash().IsZero())
 	})
 }

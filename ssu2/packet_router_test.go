@@ -438,10 +438,7 @@ func TestPacketRouter_Concurrent(t *testing.T) {
 func createMockSSU2Conn(t *testing.T, connID uint64) *SSU2Conn {
 	t.Helper()
 
-	routerHash := make([]byte, 32)
-	for i := range routerHash {
-		routerHash[i] = byte(i)
-	}
+	routerHash := generateRandomHash()
 
 	addr, err := NewSSU2Addr(
 		&net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 5555},

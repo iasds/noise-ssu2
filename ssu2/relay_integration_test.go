@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-i2p/common/data"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -73,7 +74,7 @@ func TestRelay6StepProcess(t *testing.T) {
 
 	relayIntro := &RelayIntroBlock{
 		Flag:            0,
-		AliceRouterHash: alice.routerHash,
+		AliceRouterHash: alice.routerHash[:],
 		Nonce:           relayRequest.Nonce,
 		AliceRelayTag:   aliceRelayTag,
 		Timestamp:       uint32(time.Now().Unix()),
@@ -584,7 +585,7 @@ func TestRelayMessageRoundTrip(t *testing.T) {
 // relayTestPeer represents a peer for relay integration testing.
 type relayTestPeer struct {
 	addr           *net.UDPAddr
-	routerHash     []byte
+	routerHash     data.Hash
 	packetConn     net.PacketConn
 	listener       *SSU2Listener
 	relayMgr       *RelayManager
@@ -596,7 +597,7 @@ func setupRelayTestPeer(t *testing.T, name string) *relayTestPeer {
 	t.Helper()
 
 	// Create unique router hash
-	routerHash := make([]byte, 32)
+	var routerHash data.Hash
 	for i := range routerHash {
 		routerHash[i] = byte(i) ^ byte(name[0])
 	}

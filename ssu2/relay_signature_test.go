@@ -6,19 +6,20 @@ import (
 	"net"
 	"testing"
 
+	"github.com/go-i2p/common/data"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestBuildRelayRequestSignedData(t *testing.T) {
-	bobHash := make([]byte, 32)
-	charlieHash := make([]byte, 32)
+	var bobHash data.Hash
+	var charlieHash data.Hash
 	for i := range bobHash {
 		bobHash[i] = byte(i)
 		charlieHash[i] = byte(i + 32)
 	}
 
-	data, err := BuildRelayRequestSignedData(
+	result, err := BuildRelayRequestSignedData(
 		bobHash, charlieHash,
 		0x12345678, 0xAABBCCDD, 0x60000000,
 		2, 8080, net.IPv4(192, 168, 1, 1),
@@ -26,17 +27,17 @@ func TestBuildRelayRequestSignedData(t *testing.T) {
 	require.NoError(t, err)
 
 	// prologue(16) + bhash(32) + chash(32) + nonce(4) + tag(4) + ts(4) + ver(1) + asz(1) + port(2) + ip(4) = 100
-	assert.Equal(t, 100, len(data))
-	assert.Equal(t, RelayRequestPrologue, string(data[:16]))
-	assert.Equal(t, bobHash, data[16:48])
-	assert.Equal(t, charlieHash, data[48:80])
+	assert.Equal(t, 100, len(result))
+	assert.Equal(t, RelayRequestPrologue, string(result[:16]))
+	assert.Equal(t, bobHash[:], result[16:48])
+	assert.Equal(t, charlieHash[:], result[48:80])
 }
 
 func TestBuildRelayRequestSignedDataIPv6(t *testing.T) {
-	bobHash := make([]byte, 32)
-	charlieHash := make([]byte, 32)
+	var bobHash data.Hash
+	var charlieHash data.Hash
 
-	data, err := BuildRelayRequestSignedData(
+	result, err := BuildRelayRequestSignedData(
 		bobHash, charlieHash,
 		1, 2, 3, 2, 8080,
 		net.ParseIP("2001:db8::1"),
@@ -44,25 +45,25 @@ func TestBuildRelayRequestSignedDataIPv6(t *testing.T) {
 	require.NoError(t, err)
 
 	// prologue(16) + bhash(32) + chash(32) + nonce(4) + tag(4) + ts(4) + ver(1) + asz(1) + port(2) + ip(16) = 112
-	assert.Equal(t, 112, len(data))
+	assert.Equal(t, 112, len(result))
 }
 
 func TestBuildRelayRequestSignedDataInvalidHash(t *testing.T) {
+	// With data.Hash as [32]byte, both hashes are always valid 32 bytes.
+	// This test now just verifies the function works with zero hashes.
 	_, err := BuildRelayRequestSignedData(
-		make([]byte, 16), make([]byte, 32),
+		data.Hash{}, data.Hash{},
 		1, 2, 3, 2, 8080, net.IPv4(1, 2, 3, 4),
 	)
-	assert.Error(t, err)
+	assert.NoError(t, err)
 }
 
 func TestSignAndVerifyRelayRequest(t *testing.T) {
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	require.NoError(t, err)
 
-	bobHash := make([]byte, 32)
-	charlieHash := make([]byte, 32)
-	rand.Read(bobHash)
-	rand.Read(charlieHash)
+	bobHash := generateRandomHash()
+	charlieHash := generateRandomHash()
 
 	sig, err := SignRelayRequest(
 		priv, bobHash, charlieHash,
@@ -85,8 +86,8 @@ func TestVerifyRelayRequestWrongKey(t *testing.T) {
 	_, priv, _ := ed25519.GenerateKey(rand.Reader)
 	otherPub, _, _ := ed25519.GenerateKey(rand.Reader)
 
-	bobHash := make([]byte, 32)
-	charlieHash := make([]byte, 32)
+	bobHash := generateRandomHash()
+	charlieHash := generateRandomHash()
 
 	sig, err := SignRelayRequest(
 		priv, bobHash, charlieHash,
@@ -103,36 +104,35 @@ func TestVerifyRelayRequestWrongKey(t *testing.T) {
 }
 
 func TestBuildRelayResponseSignedData(t *testing.T) {
-	bobHash := make([]byte, 32)
+	bobHash := generateRandomHash()
 
-	data, err := BuildRelayResponseSignedData(
+	result, err := BuildRelayResponseSignedData(
 		bobHash, 1, 2, 2, 8080, net.IPv4(10, 0, 0, 1),
 	)
 	require.NoError(t, err)
 
 	// prologue(16) + bhash(32) + nonce(4) + ts(4) + ver(1) + csz(1) + port(2) + ip(4) = 64
-	assert.Equal(t, 64, len(data))
-	assert.Equal(t, RelayAgreementPrologue, string(data[:16]))
+	assert.Equal(t, 64, len(result))
+	assert.Equal(t, RelayAgreementPrologue, string(result[:16]))
 }
 
 func TestBuildRelayResponseSignedDataNoAddress(t *testing.T) {
-	bobHash := make([]byte, 32)
+	bobHash := generateRandomHash()
 
-	data, err := BuildRelayResponseSignedData(
+	result, err := BuildRelayResponseSignedData(
 		bobHash, 1, 2, 2, 0, nil,
 	)
 	require.NoError(t, err)
 
 	// prologue(16) + bhash(32) + nonce(4) + ts(4) + ver(1) + csz(1) = 58
-	assert.Equal(t, 58, len(data))
+	assert.Equal(t, 58, len(result))
 }
 
 func TestSignAndVerifyRelayResponse(t *testing.T) {
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	require.NoError(t, err)
 
-	bobHash := make([]byte, 32)
-	rand.Read(bobHash)
+	bobHash := generateRandomHash()
 
 	sig, err := SignRelayResponse(
 		priv, bobHash,

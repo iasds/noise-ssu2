@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-i2p/common/data"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -21,7 +22,7 @@ import (
 // 5. Verify connection properties
 func TestListenerIntegration_ClientServerConnection(t *testing.T) {
 	// Create server configuration (responder)
-	serverRouterHash := make([]byte, 32)
+	var serverRouterHash data.Hash
 	for i := range serverRouterHash {
 		serverRouterHash[i] = byte(i)
 	}
@@ -45,7 +46,7 @@ func TestListenerIntegration_ClientServerConnection(t *testing.T) {
 	t.Logf("Listener bound to %s", actualAddr.Network())
 
 	// Create client configuration (initiator)
-	clientRouterHash := make([]byte, 32)
+	var clientRouterHash data.Hash
 	for i := range clientRouterHash {
 		clientRouterHash[i] = byte(i + 50)
 	}
@@ -57,8 +58,8 @@ func TestListenerIntegration_ClientServerConnection(t *testing.T) {
 		clientStaticKey[i] = byte(i + 200)
 	}
 	clientConfig = clientConfig.WithStaticKey(clientStaticKey)
-	// Set server's static key for XK handshake
-	clientConfig = clientConfig.WithRemoteRouterHash(serverStaticKey)
+	// Set server's router hash for XK handshake
+	clientConfig = clientConfig.WithRemoteRouterHash(serverRouterHash)
 
 	// Channel to receive accepted connections
 	acceptDone := make(chan *SSU2Conn, 1)
@@ -104,7 +105,7 @@ func TestListenerIntegration_ClientServerConnection(t *testing.T) {
 // TestListenerIntegration_MultipleConnections tests accepting multiple concurrent connections.
 func TestListenerIntegration_MultipleConnections(t *testing.T) {
 	// Create server
-	serverRouterHash := make([]byte, 32)
+	serverRouterHash := generateRandomHash()
 	serverConfig, err := NewSSU2Config(serverRouterHash, false)
 	require.NoError(t, err)
 	serverConfig.RouterInfoValidator = DefaultRouterInfoValidator
@@ -161,7 +162,7 @@ func TestListenerIntegration_MultipleConnections(t *testing.T) {
 // TestListenerIntegration_TokenRequestRetryFlow tests the token request/retry mechanism.
 func TestListenerIntegration_TokenRequestRetryFlow(t *testing.T) {
 	// Create server
-	serverRouterHash := make([]byte, 32)
+	serverRouterHash := generateRandomHash()
 	serverConfig, err := NewSSU2Config(serverRouterHash, false)
 	require.NoError(t, err)
 	serverConfig.RouterInfoValidator = DefaultRouterInfoValidator
@@ -230,7 +231,7 @@ func TestListenerIntegration_TokenRequestRetryFlow(t *testing.T) {
 // TestListenerIntegration_ConcurrentAccept tests concurrent Accept calls.
 func TestListenerIntegration_ConcurrentAccept(t *testing.T) {
 	// Create server
-	serverRouterHash := make([]byte, 32)
+	serverRouterHash := generateRandomHash()
 	serverConfig, err := NewSSU2Config(serverRouterHash, false)
 	require.NoError(t, err)
 	serverConfig.RouterInfoValidator = DefaultRouterInfoValidator
@@ -287,7 +288,7 @@ func TestListenerIntegration_ConcurrentAccept(t *testing.T) {
 // TestListenerIntegration_GracefulShutdown tests graceful shutdown with active sessions.
 func TestListenerIntegration_GracefulShutdown(t *testing.T) {
 	// Create server
-	serverRouterHash := make([]byte, 32)
+	serverRouterHash := generateRandomHash()
 	serverConfig, err := NewSSU2Config(serverRouterHash, false)
 	require.NoError(t, err)
 	serverConfig.RouterInfoValidator = DefaultRouterInfoValidator
@@ -331,7 +332,7 @@ func TestListenerIntegration_GracefulShutdown(t *testing.T) {
 // TestListenerIntegration_PacketRouting tests packet routing to existing sessions.
 func TestListenerIntegration_PacketRouting(t *testing.T) {
 	// Create server
-	serverRouterHash := make([]byte, 32)
+	serverRouterHash := generateRandomHash()
 	serverConfig, err := NewSSU2Config(serverRouterHash, false)
 	require.NoError(t, err)
 	serverConfig.RouterInfoValidator = DefaultRouterInfoValidator
@@ -378,7 +379,7 @@ func TestListenerIntegration_PacketRouting(t *testing.T) {
 // TestListenerIntegration_AddressInfo tests SSU2 address information.
 func TestListenerIntegration_AddressInfo(t *testing.T) {
 	// Create server
-	serverRouterHash := make([]byte, 32)
+	var serverRouterHash data.Hash
 	for i := range serverRouterHash {
 		serverRouterHash[i] = byte(0xAB)
 	}
@@ -417,7 +418,7 @@ func TestListenerIntegration_AddressInfo(t *testing.T) {
 // TestListenerIntegration_ContextCancellation tests context cancellation during operations.
 func TestListenerIntegration_ContextCancellation(t *testing.T) {
 	// Create server
-	serverRouterHash := make([]byte, 32)
+	serverRouterHash := generateRandomHash()
 	serverConfig, err := NewSSU2Config(serverRouterHash, false)
 	require.NoError(t, err)
 	serverConfig.RouterInfoValidator = DefaultRouterInfoValidator
@@ -440,13 +441,13 @@ func TestListenerIntegration_ContextCancellation(t *testing.T) {
 	defer cancel()
 
 	// Try to connect with context - this tests transport-level context handling
-	clientRouterHash := make([]byte, 32)
+	clientRouterHash := generateRandomHash()
 	clientConfig, err := NewSSU2Config(clientRouterHash, true)
 	require.NoError(t, err)
 
 	clientStaticKey := make([]byte, 32)
 	clientConfig = clientConfig.WithStaticKey(clientStaticKey)
-	clientConfig = clientConfig.WithRemoteRouterHash(serverStaticKey)
+	clientConfig = clientConfig.WithRemoteRouterHash(serverRouterHash)
 
 	// The dial itself doesn't use context, but handshake does
 	conn, err := DialSSU2(nil, pc.LocalAddr().(*net.UDPAddr), clientConfig)
@@ -462,7 +463,7 @@ func TestListenerIntegration_ContextCancellation(t *testing.T) {
 // TestListenerIntegration_InvalidPacketHandling tests handling of malformed packets.
 func TestListenerIntegration_InvalidPacketHandling(t *testing.T) {
 	// Create server
-	serverRouterHash := make([]byte, 32)
+	serverRouterHash := generateRandomHash()
 	serverConfig, err := NewSSU2Config(serverRouterHash, false)
 	require.NoError(t, err)
 	serverConfig.RouterInfoValidator = DefaultRouterInfoValidator
@@ -519,7 +520,7 @@ func TestListenerIntegration_InvalidPacketHandling(t *testing.T) {
 // TestListenerIntegration_SessionRequestProcessing tests SessionRequest message processing.
 func TestListenerIntegration_SessionRequestProcessing(t *testing.T) {
 	// Create server
-	serverRouterHash := make([]byte, 32)
+	serverRouterHash := generateRandomHash()
 	serverConfig, err := NewSSU2Config(serverRouterHash, false)
 	require.NoError(t, err)
 	serverConfig.RouterInfoValidator = DefaultRouterInfoValidator
@@ -571,7 +572,7 @@ func TestListenerIntegration_SessionRequestProcessing(t *testing.T) {
 // TestListenerIntegration_ListenSSU2Helper tests the ListenSSU2 helper function.
 func TestListenerIntegration_ListenSSU2Helper(t *testing.T) {
 	t.Run("ValidParams", func(t *testing.T) {
-		serverRouterHash := make([]byte, 32)
+		serverRouterHash := generateRandomHash()
 		serverConfig, err := NewSSU2Config(serverRouterHash, false)
 		require.NoError(t, err)
 		serverConfig.RouterInfoValidator = DefaultRouterInfoValidator
@@ -592,7 +593,7 @@ func TestListenerIntegration_ListenSSU2Helper(t *testing.T) {
 	})
 
 	t.Run("NilAddress", func(t *testing.T) {
-		serverRouterHash := make([]byte, 32)
+		serverRouterHash := generateRandomHash()
 		serverConfig, err := NewSSU2Config(serverRouterHash, false)
 		require.NoError(t, err)
 		serverConfig.RouterInfoValidator = DefaultRouterInfoValidator
@@ -615,7 +616,7 @@ func TestListenerIntegration_ListenSSU2Helper(t *testing.T) {
 
 	t.Run("InitiatorConfig", func(t *testing.T) {
 		// ListenSSU2 requires responder config
-		serverRouterHash := make([]byte, 32)
+		serverRouterHash := generateRandomHash()
 		serverConfig, err := NewSSU2Config(serverRouterHash, true) // initiator
 		require.NoError(t, err)
 

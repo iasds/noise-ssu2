@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-i2p/common/data"
 	"github.com/go-i2p/noise"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -16,14 +17,11 @@ import (
 // createTestConfig creates a test SSU2Config with sensible defaults.
 func createTestConfig(t *testing.T) *SSU2Config {
 	t.Helper()
-	routerHash := make([]byte, 32)
-	remoteHash := make([]byte, 32)
-	for i := range remoteHash {
-		remoteHash[i] = byte(i + 1) // Different from routerHash
-	}
+	routerHash := generateRandomHash()
+	remoteHash := generateRandomHash()
 	config, err := NewSSU2Config(routerHash, true)
 	require.NoError(t, err)
-	config.RemoteRouterHash = remoteHash
+	config.RemoteRouterHash = hashPtr(remoteHash)
 	config.ConnectionID = 123456 // Non-zero connection ID
 	return config
 }
@@ -152,14 +150,11 @@ func TestNewSSU2Conn_ValidInitiator(t *testing.T) {
 	defer initConn.Close()
 
 	remoteAddr := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 9001}
-	routerHash := make([]byte, 32)
-	remoteHash := make([]byte, 32)
-	for i := range remoteHash {
-		remoteHash[i] = byte(i + 1)
-	}
+	routerHash := generateRandomHash()
+	remoteHash := generateRandomHash()
 	config, err := NewSSU2Config(routerHash, true)
 	require.NoError(t, err)
-	config.RemoteRouterHash = remoteHash // Required for initiator
+	config.RemoteRouterHash = hashPtr(remoteHash) // Required for initiator
 	config.ConnectionID = 12345
 	config.MTU = 1500
 
@@ -645,7 +640,9 @@ func TestBuildI2NPFragmentBlocks_SmallPayload(t *testing.T) {
 	dh2, err := noise.DH25519.GenerateKeypair(nil)
 	require.NoError(t, err)
 	config.StaticKey = dh.Private
-	config.RemoteRouterHash = dh2.Public
+	var rh1 data.Hash
+	copy(rh1[:], dh2.Public)
+	config.RemoteRouterHash = &rh1
 
 	mockConn := newMockPacketConn(&net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1234})
 	remoteAddr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 5678}
@@ -683,7 +680,9 @@ func TestBuildI2NPFragmentBlocks_LargePayload(t *testing.T) {
 	dh2, err := noise.DH25519.GenerateKeypair(nil)
 	require.NoError(t, err)
 	config.StaticKey = dh.Private
-	config.RemoteRouterHash = dh2.Public
+	var rh2 data.Hash
+	copy(rh2[:], dh2.Public)
+	config.RemoteRouterHash = &rh2
 
 	mockConn := newMockPacketConn(&net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1234})
 	remoteAddr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 5678}
@@ -741,7 +740,9 @@ func TestBuildI2NPFragmentBlocks_MessageIDConsistent(t *testing.T) {
 	dh2, err := noise.DH25519.GenerateKeypair(nil)
 	require.NoError(t, err)
 	config.StaticKey = dh.Private
-	config.RemoteRouterHash = dh2.Public
+	var rh3 data.Hash
+	copy(rh3[:], dh2.Public)
+	config.RemoteRouterHash = &rh3
 
 	mockConn := newMockPacketConn(&net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1234})
 	remoteAddr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 5678}

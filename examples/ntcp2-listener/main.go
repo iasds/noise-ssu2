@@ -9,6 +9,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/go-i2p/common/data"
 	ntcp2shared "github.com/go-i2p/go-noise/examples/ntcp2-shared"
 	"github.com/go-i2p/go-noise/examples/shared"
 	"github.com/go-i2p/go-noise/ntcp2"
@@ -28,7 +29,9 @@ func main() {
 
 // createDemoConfig creates and displays an NTCP2 config for demo purposes
 func createDemoConfig(routerHash, staticKey []byte, args *ntcp2shared.NTCP2Args) {
-	config, err := ntcp2.NewNTCP2Config(routerHash, false) // false = responder
+	var rh data.Hash
+	copy(rh[:], routerHash)
+	config, err := ntcp2.NewNTCP2Config(rh, false) // false = responder
 	if err != nil {
 		log.Fatalf("Failed to create NTCP2 config: %v", err)
 	}
@@ -78,7 +81,9 @@ func runNTCP2ListenerDemo(args *ntcp2shared.NTCP2Args) {
 
 // createNTCP2ListenerConfig creates and validates NTCP2 configuration for the listener
 func createNTCP2ListenerConfig(args *ntcp2shared.NTCP2Args, routerHash, staticKey []byte) *ntcp2.NTCP2Config {
-	config, err := ntcp2.NewNTCP2Config(routerHash, false) // false = responder
+	var rh data.Hash
+	copy(rh[:], routerHash)
+	config, err := ntcp2.NewNTCP2Config(rh, false) // false = responder
 	if err != nil {
 		log.Fatalf("Failed to create NTCP2 config: %v", err)
 	}
@@ -150,7 +155,8 @@ func handleNTCP2Connection(conn net.Conn, connID int) {
 
 	// Cast to NTCP2Conn to access I2P-specific methods
 	if ntcp2Conn, ok := conn.(*ntcp2.NTCP2Conn); ok {
-		fmt.Printf("🔗 [Conn %d] Router hash: %x...\n", connID, ntcp2Conn.RouterHash()[:8])
+		rHash := ntcp2Conn.RouterHash()
+		fmt.Printf("🔗 [Conn %d] Router hash: %x...\n", connID, rHash[:8])
 		fmt.Printf("🔗 [Conn %d] Role: %s\n", connID, ntcp2Conn.Role())
 		fmt.Printf("🔗 [Conn %d] IdentHash: %x\n", connID, ntcp2Conn.RemoteAddr().(*ntcp2.NTCP2Addr).IdentHash())
 	}

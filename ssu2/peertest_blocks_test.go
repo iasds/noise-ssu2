@@ -46,10 +46,8 @@ func makePeerTestBlock(msg PeerTestMessageCode) *PeerTestBlock {
 		Signature:   make([]byte, 64),
 	}
 	if b.hasRouterHash() {
-		b.RouterHash = make([]byte, 32)
-		for i := range b.RouterHash {
-			b.RouterHash[i] = byte(i)
-		}
+		h := generateRandomHash()
+		b.RouterHash = &h
 	}
 	return b
 }
@@ -71,7 +69,8 @@ func TestEncodePeerTestBlock_AllMessages(t *testing.T) {
 
 			off := 3
 			if block.hasRouterHash() {
-				assert.Equal(t, block.RouterHash, d[off:off+32])
+				hBytes := block.RouterHash.Bytes()
+				assert.Equal(t, hBytes[:], d[off:off+32])
 				off += 32
 			}
 			assert.Equal(t, block.Version, d[off])
@@ -134,7 +133,7 @@ func TestEncodePeerTestBlock_MissingHash(t *testing.T) {
 	block.RouterHash = nil
 	_, err := EncodePeerTestBlock(block)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "RouterHash must be 32 bytes")
+	assert.Contains(t, err.Error(), "RouterHash must be set for message")
 }
 
 // TestDecodePeerTestBlock_Msg1 tests decoding a message 1 (no hash).

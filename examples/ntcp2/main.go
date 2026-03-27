@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 
+	"github.com/go-i2p/common/data"
 	shared "github.com/go-i2p/go-noise/examples/ntcp2-shared"
 	"github.com/go-i2p/go-noise/ntcp2"
 )
@@ -42,8 +43,8 @@ func demonstrateNTCP2Addressing() {
 	}
 
 	// Create a sample router hash (32 bytes)
-	routerHash := make([]byte, 32)
-	copy(routerHash, []byte("example_router_hash_32_bytes...."))
+	var routerHash data.Hash
+	copy(routerHash[:], []byte("example_router_hash_32_bytes...."))
 
 	// Create an NTCP2 address for an initiator
 	ntcpAddr, err := ntcp2.NewNTCP2Addr(tcpAddr, routerHash, "initiator")
@@ -111,7 +112,9 @@ func demonstrateNTCP2AddressingWithKeys(routerHash, remoteRouterHash, destHash, 
 		Port: 7654,
 	}
 
-	ntcpAddr, err := ntcp2.NewNTCP2Addr(tcpAddr, routerHash, "initiator")
+	var rh data.Hash
+	copy(rh[:], routerHash)
+	ntcpAddr, err := ntcp2.NewNTCP2Addr(tcpAddr, rh, "initiator")
 	if err != nil {
 		log.Fatalf("Failed to create NTCP2 address: %v", err)
 	}
