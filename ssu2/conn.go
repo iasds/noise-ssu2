@@ -5,7 +5,9 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
+	"fmt"
 	"net"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -1389,8 +1391,13 @@ func (h *SSU2Conn) recvLoop() {
 				continue
 			}
 
+			fmt.Fprintf(os.Stderr, "RECVLOOP: got %d bytes from %v\n", n, addr)
 			if packet := h.parseInboundPacket(buf[:n], addr); packet != nil {
+				fmt.Fprintf(os.Stderr, "RECVLOOP: parsed packet type=%d pktnum=%d payload_len=%d\n",
+					packet.MessageType, packet.PacketNumber, len(packet.Payload))
 				h.processInboundPacket(packet)
+			} else {
+				fmt.Fprintf(os.Stderr, "RECVLOOP: parseInboundPacket returned nil\n")
 			}
 		}
 	}
