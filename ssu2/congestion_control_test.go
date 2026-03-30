@@ -181,8 +181,8 @@ func TestCongestionController_CongestionAvoidance(t *testing.T) {
 		// ACK an entire CWND worth of data
 		cc.OnAck(initialCWND)
 
-		// CWND should increase by MinCongestionWindow (one MSS)
-		assert.Equal(t, initialCWND+MinCongestionWindow, cc.GetCWND())
+		// CWND should increase by one MSS (session MTU, default MaxPacketSizeIPv4)
+		assert.Equal(t, initialCWND+MaxPacketSizeIPv4, cc.GetCWND())
 	})
 
 	t.Run("partial ACKs accumulate", func(t *testing.T) {
@@ -201,7 +201,7 @@ func TestCongestionController_CongestionAvoidance(t *testing.T) {
 
 		// ACK the other half
 		cc.OnAck(initialCWND / 2)
-		assert.Equal(t, initialCWND+MinCongestionWindow, cc.GetCWND()) // Now increases
+		assert.Equal(t, initialCWND+MaxPacketSizeIPv4, cc.GetCWND()) // Now increases
 	})
 }
 

@@ -37,10 +37,15 @@ type RegisteredIntroducer struct {
 	// RouterHash is the 32-byte I2P router identity
 	RouterHash []byte
 
-	// StaticKey is the introducer's static public key for RouterInfo (44-byte base64)
+	// StaticKey is the introducer's static public key for RouterInfo publication.
+	// This is the 44-byte base64-encoded form (encoding 32 raw bytes) as required
+	// by the RouterInfo address format. Other key fields in this package (e.g.,
+	// IntroKeySize in key_rotation.go) use raw 32-byte slices (M-5).
 	StaticKey []byte
 
-	// IntroKey is the introducer's introduction key for RouterInfo (44-byte base64)
+	// IntroKey is the introducer's introduction key for RouterInfo publication.
+	// This is the 44-byte base64-encoded form (encoding 32 raw bytes) as required
+	// by the RouterInfo address format (M-5).
 	IntroKey []byte
 
 	// RelayTag is the tag assigned by this introducer

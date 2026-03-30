@@ -56,6 +56,9 @@ type SSU2Listener struct {
 	// router routes packets to sessions
 	router *PacketRouter
 
+	// sessionRateLimiter limits SessionRequest processing per source IP (M-6)
+	sessionRateLimiter *ipRateLimiter
+
 	// Lifecycle management
 	closed       bool
 	closeMutex   sync.Mutex
@@ -117,14 +120,15 @@ func NewSSU2Listener(underlying net.PacketConn, config *SSU2Config) (*SSU2Listen
 	}
 
 	l := &SSU2Listener{
-		underlying:   underlying,
-		config:       config,
-		addr:         addr,
-		sessions:     make(map[uint64]*SSU2Conn),
-		tokenCache:   newTokenCacheFromConfig(config),
-		acceptQueue:  make(chan *SSU2Conn, 100), // Buffer 100 pending connections
-		packetQueue:  make(chan incomingPacket, packetQueueSize),
-		shutdownChan: make(chan struct{}),
+		underlying:         underlying,
+		config:             config,
+		addr:               addr,
+		sessions:           make(map[uint64]*SSU2Conn),
+		tokenCache:         newTokenCacheFromConfig(config),
+		sessionRateLimiter: newIPRateLimiter(sessionRequestsPerSecond, sessionRateLimiterMaxIPs),
+		acceptQueue:        make(chan *SSU2Conn, 100), // Buffer 100 pending connections
+		packetQueue:        make(chan incomingPacket, packetQueueSize),
+		shutdownChan:       make(chan struct{}),
 	}
 
 	// Create packet router with session creation callback
@@ -158,6 +162,11 @@ func (l *SSU2Listener) Start() error {
 	// Start packet receive loop
 	l.wg.Add(1)
 	go l.receiveLoop()
+
+	// G-5: Start periodic token cache cleanup to prevent expired token
+	// accumulation under sustained connection churn.
+	l.wg.Add(1)
+	go l.tokenCleanupLoop()
 
 	return nil
 }
@@ -202,6 +211,10 @@ func (l *SSU2Listener) Close() error {
 	l.closed = true
 	close(l.shutdownChan)
 
+	// M-2: Close the underlying connection first to unblock ReadFrom
+	// in receiveLoop, rather than relying on deadline-based polling.
+	closeErr := l.underlying.Close()
+
 	// Wait for goroutines to finish before closing channels.
 	// This prevents send-on-closed-channel panics in handleNewSession.
 	l.wg.Wait()
@@ -209,9 +222,8 @@ func (l *SSU2Listener) Close() error {
 	// Safe to close accept queue now — all senders have exited
 	close(l.acceptQueue)
 
-	// Close underlying packet connection
-	if err := l.underlying.Close(); err != nil {
-		return oops.Wrapf(err, "failed to close underlying connection")
+	if closeErr != nil {
+		return oops.Wrapf(closeErr, "failed to close underlying connection")
 	}
 
 	return nil
@@ -227,49 +239,39 @@ func (l *SSU2Listener) Addr() net.Addr {
 
 // receiveLoop continuously reads packets from the underlying connection
 // and routes them to appropriate sessions or creates new sessions.
+// M-2: Blocking ReadFrom is used instead of 100ms deadline polling.
+// The loop exits when the underlying connection is closed by Close().
 func (l *SSU2Listener) receiveLoop() {
 	defer l.wg.Done()
 
 	buf := make([]byte, MaxPacketSizeIPv4)
-	_ = l.underlying.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 
 	for {
+		n, remoteAddr, err := l.underlying.ReadFrom(buf)
+		if err != nil {
+			// Check if we're shutting down
+			select {
+			case <-l.shutdownChan:
+				return
+			default:
+			}
+			// Non-shutdown error (transient); continue reading
+			continue
+		}
+
+		udpAddr, ok := remoteAddr.(*net.UDPAddr)
+		if !ok {
+			continue
+		}
+
+		packetData := make([]byte, n)
+		copy(packetData, buf[:n])
+
 		select {
-		case <-l.shutdownChan:
-			return
+		case l.packetQueue <- incomingPacket{data: packetData, remoteAddr: udpAddr}:
 		default:
-			l.readAndQueuePacket(buf)
 		}
 	}
-}
-
-// readAndQueuePacket reads a single packet from the UDP socket,
-// copies it, and enqueues it for worker processing.
-func (l *SSU2Listener) readAndQueuePacket(buf []byte) {
-	n, remoteAddr, err := l.underlying.ReadFrom(buf)
-	if err != nil {
-		select {
-		case <-l.shutdownChan:
-		default:
-			_ = l.underlying.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
-		}
-		return
-	}
-
-	udpAddr, ok := remoteAddr.(*net.UDPAddr)
-	if !ok {
-		return
-	}
-
-	packetData := make([]byte, n)
-	copy(packetData, buf[:n])
-
-	select {
-	case l.packetQueue <- incomingPacket{data: packetData, remoteAddr: udpAddr}:
-	default:
-	}
-
-	_ = l.underlying.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 }
 
 // packetWorker drains the packet queue and processes packets.
@@ -318,6 +320,14 @@ func (l *SSU2Listener) handleIncomingPacket(data []byte, remoteAddr *net.UDPAddr
 // instead of accepting the session. The initiator is expected to resend
 // SessionRequest including the token from the Retry.
 func (l *SSU2Listener) handleNewSession(remoteAddr *net.UDPAddr, packet *SSU2Packet) (*SSU2Conn, error) {
+	// M-6: Rate-limit SessionRequest processing per source IP.
+	if !l.sessionRateLimiter.Allow(remoteAddr.IP.String()) {
+		return nil, oops.
+			Code("RATE_LIMITED").
+			In("ssu2_listener").
+			Errorf("SessionRequest rate limit exceeded for %s", remoteAddr.IP)
+	}
+
 	// For SessionRequest, validate token or trigger Retry
 	if packet.MessageType == MessageTypeSessionRequest {
 		if err := l.validateSessionRequestToken(packet, remoteAddr); err != nil {
@@ -346,6 +356,26 @@ func (l *SSU2Listener) handleNewSession(remoteAddr *net.UDPAddr, packet *SSU2Pac
 	connID, err := GenerateConnectionID()
 	if err != nil {
 		return nil, oops.Wrapf(err, "failed to generate connection ID")
+	}
+
+	// G-6: Verify the generated connection ID is not already in use by an
+	// active session. With 8-byte crypto-random IDs the collision probability
+	// is negligible, but the spec uses MUST language for uniqueness.
+	l.sessionMutex.RLock()
+	_, exists := l.sessions[connID]
+	l.sessionMutex.RUnlock()
+	if exists {
+		// Regenerate once; a second collision is astronomically unlikely.
+		connID, err = GenerateConnectionID()
+		if err != nil {
+			return nil, oops.Wrapf(err, "failed to regenerate connection ID")
+		}
+		l.sessionMutex.RLock()
+		_, exists = l.sessions[connID]
+		l.sessionMutex.RUnlock()
+		if exists {
+			return nil, oops.Errorf("connection ID collision after regeneration (%d)", connID)
+		}
 	}
 
 	// Derive initial router hash from the SessionRequest ephemeral key.
@@ -589,4 +619,98 @@ func (l *SSU2Listener) SessionCount() int {
 	defer l.sessionMutex.RUnlock()
 
 	return len(l.sessions)
+}
+
+// tokenCleanupInterval is how often the listener removes expired tokens (G-5).
+const tokenCleanupInterval = 60 * time.Second
+
+// tokenCleanupLoop periodically removes expired tokens from the cache (G-5).
+func (l *SSU2Listener) tokenCleanupLoop() {
+	defer l.wg.Done()
+
+	ticker := time.NewTicker(tokenCleanupInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-l.shutdownChan:
+			return
+		case <-ticker.C:
+			l.tokenCache.Cleanup()
+		}
+	}
+}
+
+// M-6: Per-IP rate limiter for SessionRequest processing.
+
+const (
+	// sessionRequestsPerSecond is the maximum SessionRequests per IP per second.
+	sessionRequestsPerSecond = 10
+
+	// sessionRateLimiterMaxIPs is the maximum number of IPs tracked.
+	sessionRateLimiterMaxIPs = 10000
+)
+
+// ipRateLimiter implements a simple per-IP rate limiter using a token bucket
+// approximation. Each IP is allowed a fixed number of requests per second.
+type ipRateLimiter struct {
+	entries map[string]*rateLimitEntry
+	rate    int // max requests per second
+	maxIPs  int
+	mutex   sync.Mutex
+}
+
+type rateLimitEntry struct {
+	tokens    float64
+	lastCheck time.Time
+}
+
+func newIPRateLimiter(rate, maxIPs int) *ipRateLimiter {
+	return &ipRateLimiter{
+		entries: make(map[string]*rateLimitEntry),
+		rate:    rate,
+		maxIPs:  maxIPs,
+	}
+}
+
+// Allow returns true if the request from the given IP should be permitted.
+func (rl *ipRateLimiter) Allow(ip string) bool {
+	rl.mutex.Lock()
+	defer rl.mutex.Unlock()
+
+	now := time.Now()
+	entry, exists := rl.entries[ip]
+	if !exists {
+		if len(rl.entries) >= rl.maxIPs {
+			// Evict oldest entry
+			var oldestIP string
+			var oldestTime time.Time
+			for k, v := range rl.entries {
+				if oldestIP == "" || v.lastCheck.Before(oldestTime) {
+					oldestIP = k
+					oldestTime = v.lastCheck
+				}
+			}
+			delete(rl.entries, oldestIP)
+		}
+		rl.entries[ip] = &rateLimitEntry{
+			tokens:    float64(rl.rate) - 1,
+			lastCheck: now,
+		}
+		return true
+	}
+
+	// Refill tokens based on elapsed time
+	elapsed := now.Sub(entry.lastCheck).Seconds()
+	entry.tokens += elapsed * float64(rl.rate)
+	if entry.tokens > float64(rl.rate) {
+		entry.tokens = float64(rl.rate)
+	}
+	entry.lastCheck = now
+
+	if entry.tokens >= 1 {
+		entry.tokens--
+		return true
+	}
+	return false
 }

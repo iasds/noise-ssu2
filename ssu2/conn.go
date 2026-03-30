@@ -303,6 +303,7 @@ func NewSSU2Conn(
 
 	// Initialize path validator for connection migration (G-7)
 	conn.pathValidator = NewPathValidator(conn)
+	conn.pathValidator.SetCongestionController(conn.congestionController)
 
 	// Initialize header protection if intro keys are provided
 	if len(config.IntroKey) == HeaderKeySize {
@@ -679,13 +680,20 @@ func (h *SSU2Conn) finalizeHandshake() error {
 
 	// Apply negotiated padding parameters (G-3). If the peer sent an
 	// Options block, the negotiated values override the local defaults.
-	// G-6: Log when options negotiation is incomplete (one-sided).
+	// M-3: Log structured warnings when options negotiation is one-sided
+	// to aid deployment debugging.
 	localOpts := h.handshakeHandler.LocalOptions()
 	peerOpts := h.handshakeHandler.PeerOptions()
 	if localOpts != nil && peerOpts == nil {
-		log.Warn("Options negotiation one-sided: local options set but peer did not send Options block (G-6)")
+		log.WithFields(map[string]interface{}{
+			"side": "local_only",
+			"peer": h.remoteAddr.String(),
+		}).Warn("Options negotiation one-sided: local options set but peer did not send Options block (M-3)")
 	} else if localOpts == nil && peerOpts != nil {
-		log.Warn("Options negotiation one-sided: peer sent Options but no local options configured (G-6)")
+		log.WithFields(map[string]interface{}{
+			"side": "peer_only",
+			"peer": h.remoteAddr.String(),
+		}).Warn("Options negotiation one-sided: peer sent Options but no local options configured (M-3)")
 	}
 
 	if negotiated := h.handshakeHandler.NegotiatedPadding(); negotiated != nil {
@@ -738,6 +746,23 @@ func (h *SSU2Conn) installCipherStates() error {
 	h.cipherMutex.Unlock()
 
 	cbs := h.dataHandler.getCallbacks()
+
+	// G-2: Warn if signature verification callbacks are not configured.
+	// Relay, peer-test, and hole-punch traffic will be silently rejected
+	// when the corresponding verifier is nil.
+	if cbs.VerifyPeerTestSignature == nil {
+		log.Warn("PeerTest signature verifier not configured; peer test messages will be rejected (G-2)")
+	}
+	if cbs.VerifyRelayRequestSignature == nil {
+		log.Warn("RelayRequest signature verifier not configured; relay requests will be rejected (G-2)")
+	}
+	if cbs.VerifyRelayResponseSignature == nil {
+		log.Warn("RelayResponse signature verifier not configured; signed relay responses will be rejected (G-2)")
+	}
+	if cbs.VerifyRelayIntroSignature == nil {
+		log.Warn("RelayIntro signature verifier not configured; relay intros will be rejected (G-2)")
+	}
+
 	// Wire NextNonce callback only if enabled (G-1). When disabled,
 	// inbound NextNonce blocks are silently ignored.
 	if h.config.EnableNextNonce {
@@ -1410,6 +1435,11 @@ func (h *SSU2Conn) parseInboundPacket(data []byte, addr net.Addr) *SSU2Packet {
 	cipher := h.recvCipher
 	if cipher != nil && packet.MessageType == MessageTypeData && len(packet.Payload) > 0 {
 		// Per SSU2 spec: nonce is the packet number, AD is the 16-byte header.
+		// Bytes 14-15 must be zeroed before AEAD decryption because the sender
+		// encrypts with bytes 14-15 = 0 (they are set to the obfuscated length
+		// only AFTER encryption). Without this, the AD mismatch causes every
+		// data packet to fail AEAD verification.
+		binary.BigEndian.PutUint16(packet.Header[14:16], 0)
 		cipher.SetNonce(uint64(packet.PacketNumber))
 		decrypted, err := cipher.Decrypt(nil, packet.Header[:ShortHeaderSize], packet.Payload)
 		if err != nil {

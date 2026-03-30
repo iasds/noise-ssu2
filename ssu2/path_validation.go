@@ -40,6 +40,10 @@ type PathValidator struct {
 	// tokenCache is the optional token cache for invalidation on migration
 	tokenCache *TokenCache
 
+	// congestionController is reset after successful path migration (G-7).
+	// Per spec, path changes should trigger congestion window reset.
+	congestionController *CongestionController
+
 	// discoveredMTU is the largest packet size that received a response
 	// during MTU probing. 0 means no probe has completed yet.
 	discoveredMTU int
@@ -151,6 +155,11 @@ func NewPathValidator(conn PathValidationConn) *PathValidator {
 // Per spec, tokens are bound to an IP:port and must be invalidated on address change.
 func (pv *PathValidator) SetTokenCache(tc *TokenCache) {
 	pv.tokenCache = tc
+}
+
+// SetCongestionController sets the congestion controller to reset on path migration (G-7).
+func (pv *PathValidator) SetCongestionController(cc *CongestionController) {
+	pv.congestionController = cc
 }
 
 // InitiatePathValidation starts path validation for a new address.
@@ -365,6 +374,12 @@ func (pv *PathValidator) ValidatePath(challengeID uint64) error {
 	if err := pv.conn.SetRemoteAddr(newAddr); err != nil {
 		pv.FailPath(challengeID, err)
 		return oops.Wrapf(err, "failed to set remote address")
+	}
+
+	// G-7: Reset congestion controller after successful path migration
+	// to re-enter slow start on the new path.
+	if pv.congestionController != nil {
+		pv.congestionController.Reset()
 	}
 
 	// Clean up challenge after successful migration

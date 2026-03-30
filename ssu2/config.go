@@ -199,7 +199,8 @@ type SSU2Config struct {
 	IdleTimeout time.Duration
 
 	// FragmentTimeout is the duration after which incomplete fragment sets
-	// are discarded by the DataHandler. The spec recommends timely cleanup.
+	// are discarded by the DataHandler. The SSU2 spec does not prescribe
+	// a specific value; 10 seconds matches the Java I2P default (M-4).
 	// Default: 10 seconds.
 	FragmentTimeout time.Duration
 

@@ -141,6 +141,10 @@ type CongestionController struct {
 	// over-reducing cwnd from multiple losses in the same window (G-1).
 	congestionEpochStart time.Time
 
+	// mtu is the session's Maximum Segment Size, used as the linear increment
+	// in congestion avoidance (M-1). Defaults to MinCongestionWindow (1280).
+	mtu int
+
 	// mutex protects all fields for concurrent access
 	mutex sync.RWMutex
 }
@@ -168,6 +172,7 @@ func NewCongestionControllerWithMTU(rttEstimator *RTTEstimator, mtu int) *Conges
 		bytesAcked:    0,
 		bytesInFlight: 0,
 		rttEstimator:  rttEstimator,
+		mtu:           mtu,
 	}
 }
 
@@ -299,11 +304,18 @@ func (cc *CongestionController) handleCongestionAvoidanceAck(ackedBytes int) {
 	// Accumulate acknowledged bytes
 	cc.bytesAcked += ackedBytes
 
+	// M-1: Use the session's actual MTU as MSS increment instead of
+	// the minimum (1280). This correctly handles IPv4 (1472) and IPv6 (1452).
+	mss := cc.mtu
+	if mss < MinCongestionWindow {
+		mss = MinCongestionWindow
+	}
+
 	// Increase CWND by MSS when we've acknowledged CWND bytes
 	// This gives approximately one MSS increase per RTT
 	if cc.bytesAcked >= cc.cwnd {
-		cc.cwnd += MinCongestionWindow // Increase by one MSS
-		cc.bytesAcked -= cc.cwnd       // Carry over excess
+		cc.cwnd += mss
+		cc.bytesAcked -= cc.cwnd // Carry over excess
 		if cc.bytesAcked < 0 {
 			cc.bytesAcked = 0
 		}
