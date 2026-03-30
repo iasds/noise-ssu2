@@ -283,10 +283,13 @@ func (h *DataHandler) ProcessDataPacket(packet *SSU2Packet) ([]*SSU2Block, error
 func (h *DataHandler) processBlock(block *SSU2Block) error {
 	switch block.Type {
 	case BlockTypeI2NPMessage:
+		log.WithField("data_len", len(block.Data)).Debug("DataHandler: processing I2NPMessage block")
 		return h.handleI2NPMessage(block.Data)
 	case BlockTypeFirstFragment:
+		log.WithField("data_len", len(block.Data)).Debug("DataHandler: processing FirstFragment block")
 		return h.handleFirstFragment(block.Data)
 	case BlockTypeFollowOnFragment:
+		log.WithField("data_len", len(block.Data)).Debug("DataHandler: processing FollowOnFragment block")
 		return h.handleFollowOnFragment(block.Data)
 	case BlockTypePadding:
 		return nil
@@ -386,6 +389,13 @@ func (h *DataHandler) handleFirstFragment(data []byte) error {
 	messageID := binary.BigEndian.Uint32(data[1:5])
 	shortExpiration := binary.BigEndian.Uint32(data[5:9])
 	fragmentData := data[9:]
+
+	log.WithFields(map[string]interface{}{
+		"i2np_type":  i2npType,
+		"message_id": messageID,
+		"short_exp":  shortExpiration,
+		"frag_len":   len(fragmentData),
+	}).Debug("handleFirstFragment: parsed header")
 
 	h.mutex.Lock()
 	defer h.mutex.Unlock()
@@ -528,6 +538,12 @@ func (h *DataHandler) reassembleMessage(messageID uint32) error {
 	for i := uint8(0); i <= fragmentSet.LastFragNum; i++ {
 		message = append(message, fragmentSet.Fragments[i]...)
 	}
+
+	log.WithFields(map[string]interface{}{
+		"message_id": messageID,
+		"total_len":  len(message),
+		"num_frags":  fragmentSet.LastFragNum + 1,
+	}).Debug("reassembleMessage: reassembled")
 
 	// Queue complete message
 	select {

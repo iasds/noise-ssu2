@@ -1633,10 +1633,16 @@ func (h *SSU2Conn) processInboundPacket(packet *SSU2Packet) {
 
 // processDataPacket handles a data-phase packet: parses blocks and retires ACKed packets.
 func (h *SSU2Conn) processDataPacket(packet *SSU2Packet) {
+	log.WithFields(map[string]interface{}{
+		"pkt_num":     packet.PacketNumber,
+		"payload_len": len(packet.Payload),
+	}).Debug("processDataPacket: processing")
 	blocks, err := h.dataHandler.ProcessDataPacket(packet)
 	if err != nil {
+		log.WithField("error", err.Error()).Debug("processDataPacket: ProcessDataPacket error")
 		return
 	}
+	log.WithField("num_blocks", len(blocks)).Debug("processDataPacket: processed blocks")
 
 	// Process ACK blocks
 	for _, block := range blocks {
