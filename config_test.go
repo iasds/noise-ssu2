@@ -347,8 +347,8 @@ func TestConnConfigValidationExtended(t *testing.T) {
 				Initiator:        true,
 				HandshakeTimeout: 30 * time.Second,
 			},
-			shouldError: false, // Current validation only checks if pattern is empty, not if it's valid
-			description: "Pattern validation happens during handshake, not in config validation",
+			shouldError: true,
+			description: "Pattern validation now rejects unrecognized pattern names",
 		},
 		{
 			name: "Zero handshake timeout",

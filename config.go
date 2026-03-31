@@ -7,6 +7,7 @@ import (
 	"github.com/go-i2p/go-noise/handshake"
 	"github.com/go-i2p/go-noise/internal"
 	"github.com/go-i2p/noise"
+	"github.com/samber/oops"
 )
 
 // ConnConfig contains configuration for creating a NoiseConn.
@@ -241,9 +242,19 @@ func (c *ConnConfig) Validate() error {
 	return nil
 }
 
-// validatePattern checks if the noise pattern is set and non-empty.
+// validatePattern checks if the noise pattern is set, non-empty, and recognized.
 func (c *ConnConfig) validatePattern() error {
-	return internal.ValidatePattern(c.Pattern, "noise")
+	if err := internal.ValidatePattern(c.Pattern, "noise"); err != nil {
+		return err
+	}
+	if _, err := parseHandshakePattern(c.Pattern); err != nil {
+		return oops.
+			Code("INVALID_PATTERN").
+			In("noise").
+			With("pattern", c.Pattern).
+			Wrapf(err, "unrecognized noise pattern")
+	}
+	return nil
 }
 
 // validateHandshakeTimeout checks if the handshake timeout is positive.

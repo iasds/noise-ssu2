@@ -71,7 +71,7 @@ type ConnConfig struct {
 	WriteTimeout time.Duration
 
 	// HandshakeRetries is the number of handshake retry attempts
-	// Default: 3 attempts (0 = no retries, -1 = infinite retries)
+	// Default: 0 (no retries; -1 = infinite retries)
 	HandshakeRetries int
 
 	// RetryBackoff is the base delay between retry attempts
