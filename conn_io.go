@@ -36,6 +36,28 @@ func (nc *NoiseConn) applyInboundModifier(data []byte) ([]byte, error) {
 	return chain.ModifyInbound(handshake.PhaseData, data)
 }
 
+// applyHandshakeOutbound passes outgoing handshake data through the modifier
+// chain for the given handshake phase. Called by sendNoiseHandshakeMsg after
+// WriteMessage and before writeFramedMessage.
+func (nc *NoiseConn) applyHandshakeOutbound(phase handshake.HandshakePhase, data []byte) ([]byte, error) {
+	chain := nc.config.GetModifierChain()
+	if chain == nil {
+		return data, nil
+	}
+	return chain.ModifyOutbound(phase, data)
+}
+
+// applyHandshakeInbound passes incoming handshake data through the modifier
+// chain for the given handshake phase. Called by receiveNoiseHandshakeMsg after
+// readFramedMessage and before ReadMessage.
+func (nc *NoiseConn) applyHandshakeInbound(phase handshake.HandshakePhase, data []byte) ([]byte, error) {
+	chain := nc.config.GetModifierChain()
+	if chain == nil {
+		return data, nil
+	}
+	return chain.ModifyInbound(phase, data)
+}
+
 // validateWriteState validates the connection state before writing.
 func (nc *NoiseConn) validateWriteState() error {
 	if nc.isClosed() {

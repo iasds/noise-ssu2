@@ -1,19 +1,13 @@
 package ssu2
 
 import (
-	"context"
-	"crypto/rand"
-	"crypto/sha256"
 	"encoding/binary"
-	"fmt"
 	"net"
-	"os"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/go-i2p/common/data"
-	i2phkdf "github.com/go-i2p/crypto/hkdf"
 	"github.com/go-i2p/noise"
 	"github.com/samber/oops"
 )
@@ -43,9 +37,9 @@ const (
 	// sides to switch to the new key before the counter is exhausted (M-3).
 	//
 	// WARNING: NextNonce (block type 11) is based on an UNFINALIZED spec
-	// area (marked "TODO only if we rotate keys" with size "TBD").
-	// This threshold and the rekey mechanism may need revision for
-	// interoperability when the spec is finalised.
+	// area (see SSU2 spec §3.7 "NextNonce") with size "TBD".
+	// UNFINALIZED_SPEC: This threshold and the rekey mechanism may need
+	// revision for interoperability when the spec is finalised.
 	rekeyThreshold uint32 = 0xFFFF_FF00
 
 	// maxPacketRetries is the maximum number of retransmission attempts
@@ -63,6 +57,7 @@ const (
 	destroyTimeout = 11 * time.Second
 )
 
+// String returns a human-readable state name.
 // String returns a human-readable state name.
 func (s ConnState) String() string {
 	switch s {
@@ -206,6 +201,16 @@ type PendingPacket struct {
 // - initiator: true if we initiate handshake, false if responding
 // - staticKey: our static X25519 private key (32 bytes)
 // - remoteStaticKey: peer's static public key (32 bytes, required for initiator)
+// NewSSU2Conn creates a new SSU2 connection.
+// The connection starts in StateInit and must call Handshake() before data transfer.
+//
+// Parameters:
+// - underlying: UDP PacketConn for sending/receiving
+// - remoteAddr: Peer's UDP address
+// - config: SSU2 configuration (validated before use)
+// - initiator: true if we initiate handshake, false if responding
+// - staticKey: our static X25519 private key (32 bytes)
+// - remoteStaticKey: peer's static public key (32 bytes, required for initiator)
 func NewSSU2Conn(
 	underlying net.PacketConn,
 	remoteAddr *net.UDPAddr,
@@ -214,74 +219,108 @@ func NewSSU2Conn(
 	staticKey []byte,
 	remoteStaticKey []byte,
 ) (*SSU2Conn, error) {
-	if underlying == nil {
-		return nil, oops.Errorf("underlying PacketConn is nil")
-	}
-	if remoteAddr == nil {
-		return nil, oops.Errorf("remoteAddr is nil")
-	}
-	if config == nil {
-		return nil, oops.Errorf("config is nil")
+	if err := validateConnInputs(underlying, remoteAddr, config); err != nil {
+		return nil, err
 	}
 
-	// Validate configuration
-	if err := config.Validate(); err != nil {
-		return nil, oops.Wrapf(err, "invalid config")
+	connID, err := resolveConnectionID(config)
+	if err != nil {
+		return nil, err
 	}
 
-	// Determine connection ID before creating handshake handler (needed for prologue)
-	connID := config.ConnectionID
-	if connID == 0 {
-		var genErr error
-		connID, genErr = GenerateConnectionID()
-		if genErr != nil {
-			return nil, oops.Wrapf(genErr, "failed to generate connection ID")
-		}
-	}
-
-	// Per spec: Source and Destination Connection IDs must NOT be identical.
 	if config.InitiatorConnectionID != 0 && config.InitiatorConnectionID == connID {
 		return nil, oops.Errorf("connection ID collision: source and destination IDs are identical (%d)", connID)
 	}
 
-	// Build Noise prologue — per spec, prologue is null (empty).
-	prologue := buildSSU2Prologue()
+	handshakeHandler, err := buildHandshakeHandler(initiator, staticKey, remoteStaticKey, config)
+	if err != nil {
+		return nil, err
+	}
 
-	// Create handshake handler with prologue binding
-	handshakeHandler, err := NewHandshakeHandler(initiator, staticKey, remoteStaticKey, prologue)
+	ssu2Addr, err := newSSU2AddrForConn(remoteAddr, config.RouterHash, connID, initiator)
+	if err != nil {
+		return nil, err
+	}
+
+	conn := assembleSSU2Conn(underlying, remoteAddr, ssu2Addr, config, initiator, handshakeHandler)
+
+	if err := conn.initHeaderProtection(config, initiator); err != nil {
+		return nil, err
+	}
+
+	conn.dataHandler.StartReaper()
+
+	return conn, nil
+}
+
+func validateConnInputs(underlying net.PacketConn, remoteAddr *net.UDPAddr, config *SSU2Config) error {
+	if underlying == nil {
+		return oops.Errorf("underlying PacketConn is nil")
+	}
+	if remoteAddr == nil {
+		return oops.Errorf("remoteAddr is nil")
+	}
+	if config == nil {
+		return oops.Errorf("config is nil")
+	}
+	if err := config.Validate(); err != nil {
+		return oops.Wrapf(err, "invalid config")
+	}
+	return nil
+}
+
+func resolveConnectionID(config *SSU2Config) (uint64, error) {
+	connID := config.ConnectionID
+	if connID == 0 {
+		var err error
+		connID, err = GenerateConnectionID()
+		if err != nil {
+			return 0, oops.Wrapf(err, "failed to generate connection ID")
+		}
+	}
+	return connID, nil
+}
+
+func buildHandshakeHandler(initiator bool, staticKey, remoteStaticKey []byte, config *SSU2Config) (*HandshakeHandler, error) {
+	prologue := buildSSU2Prologue()
+	handler, err := NewHandshakeHandler(initiator, staticKey, remoteStaticKey, prologue)
 	if err != nil {
 		return nil, oops.Wrapf(err, "failed to create handshake handler")
 	}
 
-	// Override replay cache TTL if configured (M-2).
 	if config.ReplayCacheTTL > 0 && !initiator {
-		handshakeHandler.ReconfigureReplayCache(config.ReplayCacheTTL)
+		handler.ReconfigureReplayCache(config.ReplayCacheTTL)
 	}
-
-	// Set timestamp skew tolerance from config (G-1).
-	handshakeHandler.maxClockSkew = config.MaxClockSkew
-
-	// Populate local Options from config so the handshake advertises our
-	// padding preferences to the peer (G-3).
-	handshakeHandler.SetLocalOptions(&OptionsParams{
-		TMinRatio: 0, // we allow any transmit padding
+	handler.maxClockSkew = config.MaxClockSkew
+	handler.SetLocalOptions(&OptionsParams{
+		TMinRatio: 0,
 		TMaxRatio: config.PaddingRatio,
 		RMinRatio: 0,
 		RMaxRatio: config.PaddingRatio,
 	})
+	return handler, nil
+}
 
-	// Create SSU2 address from config
+func newSSU2AddrForConn(remoteAddr *net.UDPAddr, routerHash data.Hash, connID uint64, initiator bool) (*SSU2Addr, error) {
 	role := "initiator"
 	if !initiator {
 		role = "responder"
 	}
-
-	ssu2Addr, err := NewSSU2Addr(remoteAddr, config.RouterHash, connID, role)
+	addr, err := NewSSU2Addr(remoteAddr, routerHash, connID, role)
 	if err != nil {
 		return nil, oops.Wrapf(err, "failed to create SSU2 address")
 	}
+	return addr, nil
+}
 
-	// Create connection instance
+func assembleSSU2Conn(
+	underlying net.PacketConn,
+	remoteAddr *net.UDPAddr,
+	ssu2Addr *SSU2Addr,
+	config *SSU2Config,
+	initiator bool,
+	handshakeHandler *HandshakeHandler,
+) *SSU2Conn {
 	rttEst := NewRTTEstimator()
 	conn := &SSU2Conn{
 		underlying:           underlying,
@@ -290,11 +329,11 @@ func NewSSU2Conn(
 		config:               config,
 		initiator:            initiator,
 		handshakeHandler:     handshakeHandler,
-		dataHandler:          newDataHandlerFromConfig(config), // M-3: fragment timeout from config
+		dataHandler:          newDataHandlerFromConfig(config),
 		ackHandler:           NewACKHandler(),
 		rttEstimator:         rttEst,
 		congestionController: NewCongestionControllerWithMTU(rttEst, config.MTU),
-		recvWindow:           NewReceiveWindow(0, config.ReceiveWindowSize), // configurable via SSU2Config (M-3)
+		recvWindow:           NewReceiveWindow(0, config.ReceiveWindowSize),
 		state:                StateInit,
 		closeChan:            make(chan struct{}),
 		sendQueue:            make(chan *SSU2Packet, 64),
@@ -303,24 +342,24 @@ func NewSSU2Conn(
 		lastActivity:         time.Now(),
 	}
 
-	// Initialize path validator for connection migration (G-7)
 	conn.pathValidator = NewPathValidator(conn)
 	conn.pathValidator.SetCongestionController(conn.congestionController)
-
-	// Initialize header protection if intro keys are provided
-	if len(config.IntroKey) == HeaderKeySize {
-		hpm, hpErr := NewHeaderProtectorManager(config.IntroKey, config.RemoteIntroKey, initiator)
-		if hpErr != nil {
-			return nil, oops.Wrapf(hpErr, "failed to create header protector")
-		}
-		conn.headerProtector = hpm
-	}
-
-	conn.dataHandler.StartReaper()
-
-	return conn, nil
+	return conn
 }
 
+func (c *SSU2Conn) initHeaderProtection(config *SSU2Config, initiator bool) error {
+	if len(config.IntroKey) == HeaderKeySize {
+		hpm, err := NewHeaderProtectorManager(config.IntroKey, config.RemoteIntroKey, initiator)
+		if err != nil {
+			return oops.Wrapf(err, "failed to create header protector")
+		}
+		c.headerProtector = hpm
+	}
+	return nil
+}
+
+// messageTypeToHeaderType maps an SSU2 message type to the corresponding
+// header protection type used for key selection.
 // messageTypeToHeaderType maps an SSU2 message type to the corresponding
 // header protection type used for key selection.
 func messageTypeToHeaderType(msgType uint8) HeaderType {
@@ -347,6 +386,8 @@ func messageTypeToHeaderType(msgType uint8) HeaderType {
 
 // expectedInboundHeaderType returns the header type to use when decrypting
 // inbound packets, based on the current connection state.
+// expectedInboundHeaderType returns the header type to use when decrypting
+// inbound packets, based on the current connection state.
 func (h *SSU2Conn) expectedInboundHeaderType() HeaderType {
 	h.stateMutex.RLock()
 	state := h.state
@@ -367,734 +408,16 @@ func (h *SSU2Conn) expectedInboundHeaderType() HeaderType {
 // For responders: receives SessionRequest, sends SessionCreated, receives SessionConfirmed
 //
 // After successful handshake, connection state transitions to StateEstablished.
-func (h *SSU2Conn) Handshake(ctx context.Context) error {
-	h.stateMutex.Lock()
-	if h.state != StateInit {
-		h.stateMutex.Unlock()
-		return oops.Errorf("invalid state for handshake: %s", h.state)
-	}
-	h.state = StateHandshaking
-	h.stateMutex.Unlock()
-
-	// Start recvLoop (needed during handshake for receivePacketWithTimeout).
-	// Started here rather than in the constructor so that callers who create
-	// a conn but never call Handshake or Close don't leak a goroutine.
-	h.wg.Add(1)
-	go h.recvLoop()
-
-	if h.initiator {
-		return h.handshakeInitiator(ctx)
-	}
-	return h.handshakeResponder(ctx)
-}
-
-// handshakeInitiator performs the initiator side of XK handshake.
-func (h *SSU2Conn) handshakeInitiator(ctx context.Context) error {
-	// Step 1: Create SessionRequest
-	sessionRequest, err := h.handshakeHandler.CreateSessionRequest(h.config.ConnectionID, 0)
-	if err != nil {
-		return oops.Wrapf(err, "failed to create SessionRequest")
-	}
-
-	// After message 1 (→ e, es), install the SessCreateHeader key so the
-	// HeaderProtectorManager can decrypt the incoming SessionCreated header.
-	if h.headerProtector != nil {
-		if k := h.handshakeHandler.SessCreateHeaderKey(); len(k) > 0 {
-			if err := h.headerProtector.SetSessCreateHeaderKey(k); err != nil {
-				return oops.Wrapf(err, "failed to set SessCreateHeader key")
-			}
-		}
-	}
-
-	// Step 2: Send SessionRequest and wait for SessionCreated, with retransmit.
-	// Per spec: handshake packets are retransmitted whole with identical contents.
-	if err := h.sendPacketDirect(sessionRequest); err != nil {
-		return oops.Wrapf(err, "failed to send SessionRequest")
-	}
-
-	response, err := h.receiveHandshakeWithRetransmit(ctx, sessionRequest, h.config.HandshakeTimeout)
-	if err != nil {
-		return oops.Wrapf(err, "failed to receive SessionCreated")
-	}
-
-	// Handle Retry: responder may require a token before proceeding.
-	if response.MessageType == MessageTypeRetry {
-		// Validate the Retry's destination connection ID matches our source
-		// connection ID, confirming the Retry is a response to OUR SessionRequest
-		// and was header-encrypted with the expected intro key (G-3).
-		if len(response.Header) >= 8 {
-			retryDestID := binary.BigEndian.Uint64(response.Header[0:8])
-			if retryDestID != h.config.ConnectionID {
-				return oops.Errorf("Retry dest connection ID %d does not match our source ID %d (possible injection)", retryDestID, h.config.ConnectionID)
-			}
-		}
-
-		token, err := h.extractRetryToken(response)
-		if err != nil {
-			return oops.Wrapf(err, "failed to extract Retry token")
-		}
-
-		// Resend SessionRequest with the token inserted at header bytes 24-31.
-		// CreateSessionRequestWithToken resets the handshake state internally (C-3).
-		sessionRequest, err = h.handshakeHandler.CreateSessionRequestWithToken(
-			h.config.ConnectionID, 0, token,
-		)
-		if err != nil {
-			return oops.Wrapf(err, "failed to create SessionRequest with Retry token")
-		}
-
-		// After the handshake state reset and new message 1, re-install
-		// the SessCreateHeader key for decrypting SessionCreated (C-3).
-		if h.headerProtector != nil {
-			if k := h.handshakeHandler.SessCreateHeaderKey(); len(k) > 0 {
-				if err := h.headerProtector.SetSessCreateHeaderKey(k); err != nil {
-					return oops.Wrapf(err, "failed to set SessCreateHeader key after Retry")
-				}
-			}
-		}
-
-		if err := h.sendPacketDirect(sessionRequest); err != nil {
-			return oops.Wrapf(err, "failed to send SessionRequest with token")
-		}
-		response, err = h.receiveHandshakeWithRetransmit(ctx, sessionRequest, h.config.HandshakeTimeout)
-		if err != nil {
-			return oops.Wrapf(err, "failed to receive SessionCreated after Retry")
-		}
-	}
-
-	if response.MessageType != MessageTypeSessionCreated {
-		return oops.Errorf("expected SessionCreated, got type %d", response.MessageType)
-	}
-
-	// Step 3: Process SessionCreated
-	if err := h.handshakeHandler.ProcessSessionCreated(response); err != nil {
-		return oops.Wrapf(err, "failed to process SessionCreated")
-	}
-
-	// Extract the responder's Source Connection ID from the SessionCreated
-	// long header (bytes 16-23). Per SSU2 spec §Session Created, this is
-	// the responder's chosen connection ID that the initiator must use as
-	// dest_conn_id in all subsequent messages.
-	if len(response.Header) >= 24 {
-		h.remoteConnectionID = binary.BigEndian.Uint64(response.Header[16:24])
-	}
-
-	// After message 2 (← e, ee), install the SessionConfirmed header key so
-	// the HeaderProtectorManager can encrypt the outgoing SessionConfirmed header.
-	if h.headerProtector != nil {
-		if k := h.handshakeHandler.SessionConfirmedHeaderKey(); len(k) > 0 {
-			if err := h.headerProtector.SetSessionConfirmedHeaderKey(k); err != nil {
-				return oops.Wrapf(err, "failed to set SessionConfirmed header key")
-			}
-		}
-	}
-
-	// Step 4: Create and send SessionConfirmed (3rd XK message) with RouterInfo.
-	// Use CreateSessionConfirmedFragments to support large RouterInfo that
-	// requires splitting across multiple packets per SSU2 spec §Session Confirmed.
-	// Per spec: "Packet Number :: 0 always, for all fragments, even if retransmitted."
-	// Per spec §Session Confirmed: dest_conn_id = responder's Source Connection ID.
-	fragments, err := h.handshakeHandler.CreateSessionConfirmedFragments(h.remoteConnectionID, 0, h.config.RouterHash[:])
-	if err != nil {
-		return oops.Wrapf(err, "failed to create SessionConfirmed")
-	}
-
-	for _, frag := range fragments {
-		if err := h.sendPacketDirect(frag); err != nil {
-			return oops.Wrapf(err, "failed to send SessionConfirmed fragment")
-		}
-	}
-
-	// Step 5: Finalize handshake
-	return h.finalizeHandshake()
-}
-
-// handshakeResponder performs the responder side of XK handshake.
-func (h *SSU2Conn) handshakeResponder(ctx context.Context) error {
-	// Step 1: Wait for SessionRequest (no retransmit on first receive)
-	sessionRequest, err := h.receivePacketWithTimeout(ctx, h.config.HandshakeTimeout)
-	if err != nil {
-		return oops.Wrapf(err, "failed to receive SessionRequest")
-	}
-
-	if sessionRequest.MessageType != MessageTypeSessionRequest {
-		return oops.Errorf("expected SessionRequest, got type %d", sessionRequest.MessageType)
-	}
-
-	// Step 2: Process SessionRequest
-	_, err = h.handshakeHandler.ProcessSessionRequest(sessionRequest)
-	if err != nil {
-		return oops.Wrapf(err, "failed to process SessionRequest")
-	}
-
-	// Extract the initiator's Source Connection ID from the SessionRequest
-	// long header (bytes 16-23). Per SSU2 spec §Session Request, this is
-	// the initiator's chosen connection ID. The responder must echo this
-	// as dest_conn_id in SessionCreated and use it for future routing.
-	var initiatorConnID uint64
-	if len(sessionRequest.Header) >= 24 {
-		initiatorConnID = binary.BigEndian.Uint64(sessionRequest.Header[16:24])
-	}
-	h.remoteConnectionID = initiatorConnID
-
-	// After message 1 (→ e, es), install the SessCreateHeader key so the
-	// HeaderProtectorManager can encrypt the outgoing SessionCreated header.
-	if h.headerProtector != nil {
-		if k := h.handshakeHandler.SessCreateHeaderKey(); len(k) > 0 {
-			if err := h.headerProtector.SetSessCreateHeaderKey(k); err != nil {
-				return oops.Wrapf(err, "failed to set SessCreateHeader key")
-			}
-		}
-	}
-
-	// Step 3: Create and send SessionCreated.
-	// Per SSU2 spec §Session Created:
-	//   src_conn_id  = responder's own connection ID
-	//   dest_conn_id = initiator's Source Connection ID from SessionRequest
-	sessionCreated, err := h.handshakeHandler.CreateSessionCreated(h.config.ConnectionID, initiatorConnID)
-	if err != nil {
-		return oops.Wrapf(err, "failed to create SessionCreated")
-	}
-
-	// After message 2 (← e, ee), install the SessionConfirmed header key so
-	// the HeaderProtectorManager can decrypt the incoming SessionConfirmed header.
-	if h.headerProtector != nil {
-		if k := h.handshakeHandler.SessionConfirmedHeaderKey(); len(k) > 0 {
-			if err := h.headerProtector.SetSessionConfirmedHeaderKey(k); err != nil {
-				return oops.Wrapf(err, "failed to set SessionConfirmed header key")
-			}
-		}
-	}
-
-	if err := h.sendPacketDirect(sessionCreated); err != nil {
-		return oops.Wrapf(err, "failed to send SessionCreated")
-	}
-
-	// Step 4: Wait for SessionConfirmed, retransmitting SessionCreated if needed.
-	// Per spec: handshake packets are retransmitted whole with identical contents.
-	sessionConfirmed, err := h.receiveHandshakeWithRetransmit(ctx, sessionCreated, h.config.HandshakeTimeout)
-	if err != nil {
-		return oops.Wrapf(err, "failed to receive SessionConfirmed")
-	}
-
-	if sessionConfirmed.MessageType != MessageTypeSessionConfirmed {
-		return oops.Errorf("expected SessionConfirmed, got type %d", sessionConfirmed.MessageType)
-	}
-
-	// Collect additional fragments if the first packet indicates fragmentation.
-	// Per SSU2 spec §Session Confirmed, the frag byte encodes:
-	//   bits 3-0 = total fragments (1-15)
-	//   bits 7-4 = fragment index (0-based)
-	fragments := []*SSU2Packet{sessionConfirmed}
-	if len(sessionConfirmed.Header) >= 14 {
-		totalFrags := int(sessionConfirmed.Header[13] & 0x0F)
-		if totalFrags < 1 || totalFrags > 15 {
-			return oops.Errorf("invalid SessionConfirmed total fragment count: %d (must be 1-15)", totalFrags)
-		}
-		if totalFrags > 1 {
-			// Track seen fragment indices to detect duplicates.
-			// Per spec, all SessionConfirmed fragments use packet number 0
-			// even when retransmitted, so we must handle duplicate
-			// reception gracefully by skipping rather than failing.
-			seen := make(map[int]bool)
-			firstIdx := int((sessionConfirmed.Header[13] >> 4) & 0x0F)
-			seen[firstIdx] = true
-
-			for len(seen) < totalFrags {
-				frag, fErr := h.receivePacketWithTimeout(ctx, h.config.HandshakeTimeout)
-				if fErr != nil {
-					return oops.Wrapf(fErr, "failed to receive SessionConfirmed fragment (%d of %d received)", len(seen), totalFrags)
-				}
-				if frag.MessageType != MessageTypeSessionConfirmed {
-					return oops.Errorf("expected SessionConfirmed fragment, got type %d", frag.MessageType)
-				}
-				// Validate fragment metadata
-				if len(frag.Header) < 14 {
-					return oops.Errorf("SessionConfirmed fragment has truncated header")
-				}
-				fragTotal := int(frag.Header[13] & 0x0F)
-				if fragTotal != totalFrags {
-					return oops.Errorf("SessionConfirmed fragment total mismatch: first=%d, got=%d", totalFrags, fragTotal)
-				}
-				fragIdx := int((frag.Header[13] >> 4) & 0x0F)
-				if seen[fragIdx] {
-					// Duplicate fragment (retransmission) — skip
-					continue
-				}
-				seen[fragIdx] = true
-				fragments = append(fragments, frag)
-			}
-
-			// Sort fragments by index so ProcessSessionConfirmedFragments
-			// receives them in the correct order regardless of arrival order.
-			sortFragmentsByIndex(fragments)
-		}
-	}
-
-	// Step 5: Process SessionConfirmed (all fragments)
-	if err := h.handshakeHandler.ProcessSessionConfirmedFragments(fragments); err != nil {
-		return oops.Wrapf(err, "failed to process SessionConfirmed")
-	}
-
-	// Step 6: Finalize handshake
-	return h.finalizeHandshake()
-}
-
-// finalizeHandshake checks completion, installs cipher states, transitions to
-// established, and starts data loops. Shared by both initiator and responder.
-func (h *SSU2Conn) finalizeHandshake() error {
-	if !h.handshakeHandler.IsHandshakeComplete() {
-		return oops.Errorf("handshake not complete after SessionConfirmed")
-	}
-	if err := h.installCipherStates(); err != nil {
-		return oops.Wrapf(err, "failed to install cipher states")
-	}
-
-	// Install KDF-derived header protection keys for data phase
-	var sendKHeader2, recvKHeader2 []byte
-	if h.headerProtector != nil {
-		var err error
-		sendKHeader2, recvKHeader2, err = h.handshakeHandler.DeriveHeaderKeys()
-		if err != nil {
-			return oops.Wrapf(err, "failed to derive header protection keys")
-		}
-		if err := h.headerProtector.SetKDFKeys(sendKHeader2, recvKHeader2); err != nil {
-			return oops.Wrapf(err, "failed to set header protection KDF keys")
-		}
-	} else {
-		var err error
-		sendKHeader2, recvKHeader2, err = h.handshakeHandler.DeriveHeaderKeys()
-		if err != nil {
-			return oops.Wrapf(err, "failed to derive data-phase keys")
-		}
-	}
-
-	// Derive SipHash keys for data-phase length obfuscation (G-2).
-	sipMod, sipErr := deriveSipHashModifier(sendKHeader2, recvKHeader2)
-	if sipErr != nil {
-		return oops.Wrapf(sipErr, "failed to derive SipHash keys")
-	}
-	h.sipHashModifier.Store(sipMod)
-
-	h.stateMutex.Lock()
-	h.state = StateEstablished
-	h.stateMutex.Unlock()
-
-	// Apply negotiated padding parameters (G-3). If the peer sent an
-	// Options block, the negotiated values override the local defaults.
-	// M-3: Log structured warnings when options negotiation is one-sided
-	// to aid deployment debugging.
-	localOpts := h.handshakeHandler.LocalOptions()
-	peerOpts := h.handshakeHandler.PeerOptions()
-	if localOpts != nil && peerOpts == nil {
-		log.WithFields(map[string]interface{}{
-			"side": "local_only",
-			"peer": h.remoteAddr.String(),
-		}).Warn("Options negotiation one-sided: local options set but peer did not send Options block (M-3)")
-	} else if localOpts == nil && peerOpts != nil {
-		log.WithFields(map[string]interface{}{
-			"side": "peer_only",
-			"peer": h.remoteAddr.String(),
-		}).Warn("Options negotiation one-sided: peer sent Options but no local options configured (M-3)")
-	}
-
-	if negotiated := h.handshakeHandler.NegotiatedPadding(); negotiated != nil {
-		h.config.PaddingRatio = negotiated.TMaxRatio
-		if negotiated.TMinRatio > 0 {
-			minBytes := int(negotiated.TMinRatio * float64(h.config.MTU))
-			if minBytes > h.config.MinPaddingSize {
-				h.config.MinPaddingSize = minBytes
-			}
-		}
-
-		// Push the negotiated values into the live SSU2PaddingModifier
-		// instance so that data-phase padding is actually applied. Without
-		// this, only the config fields are updated and the modifier
-		// continues using the original (default) parameters.
-		for _, mod := range h.config.Modifiers {
-			if pm, ok := mod.(*SSU2PaddingModifier); ok {
-				maxBytes := h.config.MaxPaddingSize
-				if negotiated.TMaxRatio > 0 {
-					maxBytes = int(negotiated.TMaxRatio * float64(h.config.MTU))
-				}
-				_ = pm.UpdatePaddingParams(h.config.MinPaddingSize, maxBytes, negotiated.TMaxRatio)
-				break
-			}
-		}
-	}
-
-	h.startDataLoops()
-	return nil
-}
-
-// startDataLoops starts background goroutines for data transport.
-// Called after handshake completes to avoid wasting resources on failed connections.
-func (h *SSU2Conn) startDataLoops() {
-	h.wg.Add(3)
-	go h.sendLoop()
-	go h.keepaliveLoop()
-	go h.retransmitLoop()
-}
-
-// installCipherStates transfers transport cipher states from the handshake handler.
-func (h *SSU2Conn) installCipherStates() error {
-	send, recv, err := h.handshakeHandler.GetCipherStates()
-	if err != nil {
-		return err
-	}
-	h.cipherMutex.Lock()
-	h.sendCipher = send
-	h.recvCipher = recv
-	h.cipherMutex.Unlock()
-
-	cbs := h.dataHandler.getCallbacks()
-
-	// G-2: Warn if signature verification callbacks are not configured.
-	// Relay, peer-test, and hole-punch traffic will be silently rejected
-	// when the corresponding verifier is nil.
-	if cbs.VerifyPeerTestSignature == nil {
-		log.Warn("PeerTest signature verifier not configured; peer test messages will be rejected (G-2)")
-	}
-	if cbs.VerifyRelayRequestSignature == nil {
-		log.Warn("RelayRequest signature verifier not configured; relay requests will be rejected (G-2)")
-	}
-	if cbs.VerifyRelayResponseSignature == nil {
-		log.Warn("RelayResponse signature verifier not configured; signed relay responses will be rejected (G-2)")
-	}
-	if cbs.VerifyRelayIntroSignature == nil {
-		log.Warn("RelayIntro signature verifier not configured; relay intros will be rejected (G-2)")
-	}
-
-	// Wire NextNonce callback only if enabled (G-1). When disabled,
-	// inbound NextNonce blocks are silently ignored.
-	if h.config.EnableNextNonce {
-		cbs.OnNextNonce = h.handlePeerNextNonce
-	}
-	// Wire Congestion callback so RequestACK flag triggers immediate ACK (G-6).
-	cbs.OnCongestion = h.handleCongestionBlock
-	// Wire PathChallenge/PathResponse callbacks for path validation (G-7).
-	cbs.OnPathChallenge = h.handlePathChallengeData
-	cbs.OnPathResponse = h.handlePathResponseData
-
-	// Wire default Address block handler for passive NAT detection (G-6).
-	if cbs.OnAddress == nil {
-		cbs.OnAddress = h.handleAddressBlock
-	}
-
-	// Wire Termination callback to compare peer-reported received count
-	// against our sent count for packet-loss diagnostics (G-7).
-	existingOnTermination := cbs.OnTermination
-	cbs.OnTermination = func(peerReceived uint64, reason uint8, additionalData []byte) {
-		sent := h.validDataPacketsSent.Load()
-		if sent > 0 {
-			lost := int64(sent) - int64(peerReceived)
-			log.WithFields(map[string]interface{}{
-				"sent":         sent,
-				"peerReceived": peerReceived,
-				"lost":         lost,
-				"reason":       reason,
-			}).Info("Termination packet loss summary (G-7)")
-		}
-		if existingOnTermination != nil {
-			existingOnTermination(peerReceived, reason, additionalData)
-		}
-	}
-
-	h.dataHandler.SetCallbacks(cbs)
-
-	// Update router hash from peer's static key if available
-	if peerKey := h.handshakeHandler.GetRemoteStaticKey(); len(peerKey) == 32 {
-		hash := sha256.Sum256(peerKey)
-		h.ssu2Addr.UpdateRouterHash(data.NewHash(hash))
-
-		// Validate the RouterInfo against the Noise-authenticated static key
-		// per SSU2 spec §Session Confirmed (C-2).
-		if h.config.RouterInfoValidator != nil {
-			if ri := h.handshakeHandler.GetPeerRouterInfo(); len(ri) > 0 {
-				if err := h.config.RouterInfoValidator(ri, peerKey); err != nil {
-					return oops.Wrapf(err, "RouterInfo validation failed against authenticated static key")
-				}
-			}
-		}
-	}
-
-	return nil
-}
-
-// deriveSipHashModifier derives per-direction SipHash-2-4 keys and IVs for
-// data-phase length obfuscation from the header protection keys using HKDF.
-// Per SSU2 spec:
-//
-//	sipk_ab = HKDF(k_header_2_ab, ZEROLEN, "SipHashKey", 16) → two 8-byte keys
-//	sipiv_ab = HKDF(k_header_2_ab, ZEROLEN, "SipHashIV", 8)  → one 8-byte IV
-//	sipk_ba = HKDF(k_header_2_ba, ZEROLEN, "SipHashKey", 16)
-//	sipiv_ba = HKDF(k_header_2_ba, ZEROLEN, "SipHashIV", 8)
-func deriveSipHashModifier(sendKHeader2, recvKHeader2 []byte) (*SipHashLengthModifier, error) {
-	deriver := i2phkdf.NewHKDF()
-	infoKey := []byte("SipHashKey")
-	infoIV := []byte("SipHashIV")
-
-	sendKeys, err := deriver.Derive(nil, sendKHeader2, infoKey, 16)
-	if err != nil {
-		return nil, oops.Wrapf(err, "failed to derive send SipHash keys")
-	}
-	sendIVData, err := deriver.Derive(nil, sendKHeader2, infoIV, 8)
-	if err != nil {
-		return nil, oops.Wrapf(err, "failed to derive send SipHash IV")
-	}
-	recvKeys, err := deriver.Derive(nil, recvKHeader2, infoKey, 16)
-	if err != nil {
-		return nil, oops.Wrapf(err, "failed to derive recv SipHash keys")
-	}
-	recvIVData, err := deriver.Derive(nil, recvKHeader2, infoIV, 8)
-	if err != nil {
-		return nil, oops.Wrapf(err, "failed to derive recv SipHash IV")
-	}
-
-	outKeys := [2]uint64{
-		binary.LittleEndian.Uint64(sendKeys[0:8]),
-		binary.LittleEndian.Uint64(sendKeys[8:16]),
-	}
-	outIV := binary.LittleEndian.Uint64(sendIVData[0:8])
-
-	inKeys := [2]uint64{
-		binary.LittleEndian.Uint64(recvKeys[0:8]),
-		binary.LittleEndian.Uint64(recvKeys[8:16]),
-	}
-	inIV := binary.LittleEndian.Uint64(recvIVData[0:8])
-
-	return NewSipHashLengthModifierDirectional("ssu2-data-siphash", outKeys, inKeys, outIV, inIV), nil
-}
-
-// deriveRekeyKey derives a new cipher key from the current cipher state
-// using HKDF per SSU2 spec §NextNonce: newKey = HKDF(currentKey, ZEROLEN, "WrapCipherKey", 32).
-func deriveRekeyKey(cs *noise.CipherState) ([32]byte, error) {
-	key := cs.UnsafeKey()
-	deriver := i2phkdf.NewHKDF()
-	derived, err := deriver.Derive(nil, key[:], []byte("WrapCipherKey"), 32)
-	if err != nil {
-		return [32]byte{}, oops.Wrapf(err, "HKDF rekey derivation failed")
-	}
-	var newKey [32]byte
-	copy(newKey[:], derived)
-	return newKey, nil
-}
-
-// validateReadyForIO checks that the connection is in the Established state
-// and ready for read/write operations.
-func (h *SSU2Conn) validateReadyForIO() error {
-	h.stateMutex.RLock()
-	state := h.state
-	h.stateMutex.RUnlock()
-
-	if state != StateEstablished {
-		return oops.Errorf("connection not established: %s", state)
-	}
-	return nil
-}
-
-// Read implements net.Conn.Read.
-// Reads data from the connection, reassembling I2NP messages from Data packets.
-// Blocks until data is available, the read deadline expires, or the connection closes.
-func (h *SSU2Conn) Read(b []byte) (int, error) {
-	if err := h.validateReadyForIO(); err != nil {
-		return 0, err
-	}
-
-	// Block until a message arrives, the connection closes, or the deadline expires
-	var msg []byte
-	select {
-	case msg = <-h.dataHandler.MessageChan():
-		// Message received
-	case <-h.closeChan:
-		return 0, oops.Errorf("connection closed")
-	case <-h.getReadDeadline():
-		return 0, oops.Errorf("read deadline exceeded")
-	}
-
-	// Copy message to buffer
-	n := copy(b, msg)
-	if n < len(msg) {
-		return n, oops.Errorf("buffer too small: need %d bytes, got %d", len(msg), len(b))
-	}
-
-	return n, nil
-}
-
-// Write implements net.Conn.Write.
-// Writes data to the connection. If the data exceeds the per-packet payload
-// capacity (determined by MTU), it is automatically split into FirstFragment
-// and FollowOnFragment blocks per SSU2 spec §FirstFragment/§FollowOnFragment.
-//
-// For unfragmented messages, b is sent as-is in a BlockTypeI2NPMessage block.
-// Per the SSU2 spec, block type 3 (I2NP) data must already contain the 9-byte
-// I2NP short header: [I2NPType:1][MessageID:4][ShortExpiry:4] followed by the
-// message body. The caller is responsible for prepending this header.
-//
-// For fragmented messages, the implementation generates its own MessageID and
-// ShortExpiry for the FirstFragment/FollowOnFragment blocks, treating b[0] as
-// the I2NP type byte and the rest as body data.
-func (h *SSU2Conn) Write(b []byte) (int, error) {
-	if err := h.validateReadyForIO(); err != nil {
-		return 0, err
-	}
-
-	// Maximum block data that fits in a single Data packet.
-	// Available = MTU - IP(40) - UDP(8) - SSU2_header(16) - AEAD_MAC(16) - block_TLV(3)
-	maxBlockData := h.config.MTU - 80 - minBlockHeaderSize
-
-	if len(b)+minBlockHeaderSize <= maxBlockData+minBlockHeaderSize {
-		// Fits in a single I2NP message block
-		block := &SSU2Block{
-			Type: BlockTypeI2NPMessage,
-			Data: copyBytes(b),
-		}
-		if err := h.writeBlock(block); err != nil {
-			return 0, err
-		}
-		return len(b), nil
-	}
-
-	// Fragment the message using FirstFragment + FollowOnFragment blocks.
-	blocks, err := h.buildI2NPFragmentBlocks(b, maxBlockData)
-	if err != nil {
-		return 0, oops.Wrapf(err, "failed to build I2NP fragment blocks")
-	}
-
-	if err := h.WriteBlocks(blocks); err != nil {
-		return 0, err
-	}
-	return len(b), nil
-}
-
-// buildI2NPFragmentBlocks splits a large I2NP message into FirstFragment and
-// FollowOnFragment blocks per SSU2 spec.
-//
-// FirstFragment (type 4): I2NPType(1) + MessageID(4) + ShortExpiry(4) + data
-// FollowOnFragment (type 5): FragInfo(1) + MessageID(4) + data
-func (h *SSU2Conn) buildI2NPFragmentBlocks(data []byte, maxBlockData int) ([]*SSU2Block, error) {
-	const (
-		firstFragHeaderSize    = 9 // type(1) + msgID(4) + shortExpiry(4)
-		followOnFragHeaderSize = 5 // fragInfo(1) + msgID(4)
-	)
-
-	// Generate a random message ID for fragment correlation.
-	var msgIDBuf [4]byte
-	if _, err := rand.Read(msgIDBuf[:]); err != nil {
-		return nil, oops.Wrapf(err, "failed to generate fragment message ID")
-	}
-	messageID := binary.BigEndian.Uint32(msgIDBuf[:])
-
-	// I2NP type: use first byte if present, else 0.
-	var i2npType uint8
-	if len(data) > 0 {
-		i2npType = data[0]
-	}
-	// Short expiration: current time + 120 seconds, in seconds since epoch.
-	shortExpiry := uint32(time.Now().Unix()) + 120
-
-	maxFirstData := maxBlockData - firstFragHeaderSize
-	if maxFirstData <= 0 {
-		return nil, oops.Errorf("MTU too small for fragmentation")
-	}
-
-	end := maxFirstData
-	if end > len(data) {
-		end = len(data)
-	}
-
-	// Build FirstFragment block.
-	firstData := make([]byte, firstFragHeaderSize+end)
-	firstData[0] = i2npType
-	binary.BigEndian.PutUint32(firstData[1:5], messageID)
-	binary.BigEndian.PutUint32(firstData[5:9], shortExpiry)
-	copy(firstData[9:], data[:end])
-
-	blocks := []*SSU2Block{{Type: BlockTypeFirstFragment, Data: firstData}}
-	offset := end
-	fragNum := uint8(1)
-
-	maxFollowData := maxBlockData - followOnFragHeaderSize
-	for offset < len(data) {
-		fEnd := offset + maxFollowData
-		if fEnd > len(data) {
-			fEnd = len(data)
-		}
-		isLast := fEnd == len(data)
-		fragInfo := fragNum << 1
-		if isLast {
-			fragInfo |= 0x01
-		}
-
-		followData := make([]byte, followOnFragHeaderSize+(fEnd-offset))
-		followData[0] = fragInfo
-		binary.BigEndian.PutUint32(followData[1:5], messageID)
-		copy(followData[5:], data[offset:fEnd])
-
-		blocks = append(blocks, &SSU2Block{Type: BlockTypeFollowOnFragment, Data: followData})
-		offset = fEnd
-		fragNum++
-	}
-
-	return blocks, nil
-}
-
-// WriteBlocks sends the provided SSU2 blocks as individual Data packets (one
-// packet per block). Unlike Write, this bypasses the BlockTypeI2NPMessage
-// wrapper and sends pre-built blocks directly. Use this to send fragment
-// blocks (BlockTypeFirstFragment / BlockTypeFollowOnFragment) for large I2NP
-// messages.
-func (h *SSU2Conn) WriteBlocks(blocks []*SSU2Block) error {
-	if err := h.validateReadyForIO(); err != nil {
-		return err
-	}
-	for _, block := range blocks {
-		if err := h.writeBlock(block); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// writeBlock sends a single SSU2Block as a Data packet.
-func (h *SSU2Conn) writeBlock(block *SSU2Block) error {
-	pktNum := h.nextSendSequence()
-	hdr := make([]byte, ShortHeaderSize)
-	binary.BigEndian.PutUint64(hdr[0:8], h.remoteConnectionID)
-	binary.BigEndian.PutUint32(hdr[8:12], pktNum)
-	// byte 12 = MessageType will be written by Serialize()
-	packet := &SSU2Packet{
-		MessageType:  MessageTypeData,
-		PacketNumber: pktNum,
-		Payload:      nil,
-		Header:       hdr,
-		MAC:          make([]byte, MACSize), // placeholder; real MAC is in encrypted payload
-	}
-
-	// Serialize block into payload
-	payload, err := SerializeBlocks([]*SSU2Block{block})
-	if err != nil {
-		return oops.Wrapf(err, "failed to serialize block")
-	}
-	packet.Payload = payload
-
-	// Enqueue for sending
-	select {
-	case h.sendQueue <- packet:
-		return nil
-	case <-h.closeChan:
-		return oops.Errorf("connection closed")
-	case <-h.getWriteDeadline():
-		return oops.Errorf("write deadline exceeded")
-	}
-}
-
 // Close implements net.Conn.Close.
 // Sends a Termination block with reason NormalClose and closes the connection.
 func (h *SSU2Conn) Close() error {
 	return h.CloseWithReason(TerminationNormalClose, nil)
 }
 
+// CloseWithReason sends a Termination block with the given reason code
+// and optional additional data, then closes the connection.
+// Per spec §Termination, the data is: validDataPacketsReceived (8 bytes)
+// + reason (1 byte) + additional data (optional).
 // CloseWithReason sends a Termination block with the given reason code
 // and optional additional data, then closes the connection.
 // Per spec §Termination, the data is: validDataPacketsReceived (8 bytes)
@@ -1176,6 +499,7 @@ func (h *SSU2Conn) CloseWithReason(reason TerminationReason, additionalData []by
 }
 
 // LocalAddr implements net.Conn.LocalAddr.
+// LocalAddr implements net.Conn.LocalAddr.
 func (h *SSU2Conn) LocalAddr() net.Addr {
 	if localUDPAddr, ok := h.underlying.LocalAddr().(*net.UDPAddr); ok {
 		role := "initiator"
@@ -1191,10 +515,12 @@ func (h *SSU2Conn) LocalAddr() net.Addr {
 }
 
 // RemoteAddr implements net.Conn.RemoteAddr.
+// RemoteAddr implements net.Conn.RemoteAddr.
 func (h *SSU2Conn) RemoteAddr() net.Addr {
 	return h.ssu2Addr
 }
 
+// SendToAddress sends a block to a specific UDP address (implements PathValidationConn).
 // SendToAddress sends a block to a specific UDP address (implements PathValidationConn).
 func (h *SSU2Conn) SendToAddress(block *SSU2Block, addr *net.UDPAddr) error {
 	pktNum := h.nextSendSequence()
@@ -1221,10 +547,12 @@ func (h *SSU2Conn) SendToAddress(block *SSU2Block, addr *net.UDPAddr) error {
 }
 
 // GetRemoteAddr returns the current remote UDP address (implements PathValidationConn).
+// GetRemoteAddr returns the current remote UDP address (implements PathValidationConn).
 func (h *SSU2Conn) GetRemoteAddr() *net.UDPAddr {
 	return h.remoteAddr
 }
 
+// SetRemoteAddr updates the remote address after successful path validation (implements PathValidationConn).
 // SetRemoteAddr updates the remote address after successful path validation (implements PathValidationConn).
 func (h *SSU2Conn) SetRemoteAddr(addr *net.UDPAddr) error {
 	if addr == nil {
@@ -1235,6 +563,7 @@ func (h *SSU2Conn) SetRemoteAddr(addr *net.UDPAddr) error {
 }
 
 // SetDeadline implements net.Conn.SetDeadline.
+// SetDeadline implements net.Conn.SetDeadline.
 func (h *SSU2Conn) SetDeadline(t time.Time) error {
 	h.deadlineMutex.Lock()
 	defer h.deadlineMutex.Unlock()
@@ -1244,6 +573,7 @@ func (h *SSU2Conn) SetDeadline(t time.Time) error {
 }
 
 // SetReadDeadline implements net.Conn.SetReadDeadline.
+// SetReadDeadline implements net.Conn.SetReadDeadline.
 func (h *SSU2Conn) SetReadDeadline(t time.Time) error {
 	h.deadlineMutex.Lock()
 	defer h.deadlineMutex.Unlock()
@@ -1251,6 +581,7 @@ func (h *SSU2Conn) SetReadDeadline(t time.Time) error {
 	return nil
 }
 
+// SetWriteDeadline implements net.Conn.SetWriteDeadline.
 // SetWriteDeadline implements net.Conn.SetWriteDeadline.
 func (h *SSU2Conn) SetWriteDeadline(t time.Time) error {
 	h.deadlineMutex.Lock()
@@ -1260,12 +591,15 @@ func (h *SSU2Conn) SetWriteDeadline(t time.Time) error {
 }
 
 // GetState returns the current connection state.
+// GetState returns the current connection state.
 func (h *SSU2Conn) GetState() ConnState {
 	h.stateMutex.RLock()
 	defer h.stateMutex.RUnlock()
 	return h.state
 }
 
+// RecvStats returns error counters from the receive loop for observability.
+// Keys: "read_errors", "parse_errors", "decrypt_errors".
 // RecvStats returns error counters from the receive loop for observability.
 // Keys: "read_errors", "parse_errors", "decrypt_errors".
 func (h *SSU2Conn) RecvStats() map[string]uint64 {
@@ -1280,758 +614,12 @@ func (h *SSU2Conn) RecvStats() map[string]uint64 {
 // received during the data phase. Call before Handshake() completes to ensure
 // callbacks are active from the first data packet. Safe to call concurrently
 // with an active connection; updates take effect on the next inbound packet.
+// SetDataHandlerCallbacks wires application-level callbacks for SSU2 block types
+// received during the data phase. Call before Handshake() completes to ensure
+// callbacks are active from the first data packet. Safe to call concurrently
+// with an active connection; updates take effect on the next inbound packet.
 func (h *SSU2Conn) SetDataHandlerCallbacks(cbs DataHandlerCallbacks) {
 	h.dataHandler.SetCallbacks(cbs)
 }
 
 // sendLoop handles outbound packet transmission.
-func (h *SSU2Conn) sendLoop() {
-	defer h.wg.Done()
-
-	for {
-		select {
-		case packet := <-h.sendQueue:
-			if err := h.sendPacketDirect(packet); err != nil {
-				// Log error but continue
-				continue
-			}
-		case <-h.closeChan:
-			return
-		}
-	}
-}
-
-// retransmitLoop periodically scans pendingPackets for RTO expiry and
-// re-enqueues expired packets. Packets exceeding maxPacketRetries are dropped.
-func (h *SSU2Conn) retransmitLoop() {
-	defer h.wg.Done()
-
-	ticker := time.NewTicker(retransmitInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ticker.C:
-			h.retransmitExpired()
-		case <-h.closeChan:
-			return
-		}
-	}
-}
-
-// retransmitExpired checks all pending packets and retransmits those that
-// have exceeded their NextRetry deadline.
-func (h *SSU2Conn) retransmitExpired() {
-	now := time.Now()
-	rto := h.rttEstimator.GetRTO()
-
-	h.pendingMutex.Lock()
-	defer h.pendingMutex.Unlock()
-
-	for pn, pp := range h.pendingPackets {
-		if now.Before(pp.NextRetry) {
-			continue
-		}
-
-		if pp.Retries >= maxPacketRetries {
-			delete(h.pendingPackets, pn)
-			continue
-		}
-
-		pp.Retries++
-		// Exponential backoff: double the RTO for each retry
-		backoff := rto * time.Duration(1<<pp.Retries)
-		pp.NextRetry = now.Add(backoff)
-
-		// Per spec: retransmissions must use a fresh packet number.
-		newPktNum := h.nextSendSequence()
-		hdr := make([]byte, ShortHeaderSize)
-		binary.BigEndian.PutUint64(hdr[0:8], h.remoteConnectionID)
-		binary.BigEndian.PutUint32(hdr[8:12], newPktNum)
-		newPacket := &SSU2Packet{
-			MessageType:  MessageTypeData,
-			PacketNumber: newPktNum,
-			Header:       hdr,
-			MAC:          make([]byte, MACSize),
-			Payload:      make([]byte, len(pp.PlaintextPayload)),
-		}
-		copy(newPacket.Payload, pp.PlaintextPayload)
-
-		// Remove old entry; sendPacketDirect will track the new one.
-		delete(h.pendingPackets, pn)
-
-		// Best-effort re-enqueue; drop if sendQueue is full
-		select {
-		case h.sendQueue <- newPacket:
-		default:
-		}
-	}
-}
-
-// recvLoop handles inbound packet reception.
-func (h *SSU2Conn) recvLoop() {
-	defer h.wg.Done()
-
-	// Buffer must hold any valid SSU2 packet; use MaxPacketSizeIPv4 so we
-	// never truncate legitimate packets regardless of the configured MTU.
-	buf := make([]byte, MaxPacketSizeIPv4)
-	for {
-		select {
-		case <-h.closeChan:
-			return
-		default:
-			_ = h.underlying.SetReadDeadline(time.Now().Add(1 * time.Second))
-
-			n, addr, err := h.underlying.ReadFrom(buf)
-			if err != nil {
-				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-					continue
-				}
-				h.readErrors.Add(1)
-				continue
-			}
-
-			fmt.Fprintf(os.Stderr, "RECVLOOP: got %d bytes from %v\n", n, addr)
-			if packet := h.parseInboundPacket(buf[:n], addr); packet != nil {
-				fmt.Fprintf(os.Stderr, "RECVLOOP: parsed packet type=%d pktnum=%d payload_len=%d\n",
-					packet.MessageType, packet.PacketNumber, len(packet.Payload))
-				h.processInboundPacket(packet)
-			} else {
-				fmt.Fprintf(os.Stderr, "RECVLOOP: parseInboundPacket returned nil\n")
-			}
-		}
-	}
-}
-
-// parseInboundPacket validates the source address, deserializes, and decrypts an
-// inbound UDP datagram. Returns nil if the packet should be dropped.
-// Supports connection migration: if a packet from a new address passes AEAD
-// verification, the remote address is updated (per spec §Connection Migration).
-func (h *SSU2Conn) parseInboundPacket(data []byte, addr net.Addr) *SSU2Packet {
-	udpAddr, ok := addr.(*net.UDPAddr)
-	if !ok {
-		return nil
-	}
-
-	addrChanged := !udpAddr.IP.Equal(h.remoteAddr.IP) || udpAddr.Port != h.remoteAddr.Port
-
-	// Decrypt header protection before parsing
-	if h.headerProtector != nil {
-		hType := h.expectedInboundHeaderType()
-		if err := h.headerProtector.DecryptInboundHeader(data, hType); err != nil {
-			h.parseErrors.Add(1)
-			return nil
-		}
-	}
-
-	// SipHash length deobfuscation: recover the data length from header
-	// bytes 14-15 per spec §Data Phase Length Obfuscation (G-2).
-	if mod := h.sipHashModifier.Load(); mod != nil && len(data) >= ShortHeaderSize {
-		mask := mod.NextInboundMask()
-		obfuscated := binary.BigEndian.Uint16(data[14:16])
-		binary.BigEndian.PutUint16(data[14:16], obfuscated^mask)
-	}
-
-	packet := &SSU2Packet{}
-	if err := packet.Deserialize(data); err != nil {
-		h.parseErrors.Add(1)
-		return nil
-	}
-
-	h.cipherMutex.Lock()
-	cipher := h.recvCipher
-	if cipher != nil && packet.MessageType == MessageTypeData && len(packet.Payload) > 0 {
-		// Per SSU2 spec: nonce is the packet number, AD is the 16-byte header.
-		// Bytes 14-15 must be zeroed before AEAD decryption because the sender
-		// encrypts with bytes 14-15 = 0 (they are set to the obfuscated length
-		// only AFTER encryption). Without this, the AD mismatch causes every
-		// data packet to fail AEAD verification.
-		binary.BigEndian.PutUint16(packet.Header[14:16], 0)
-		cipher.SetNonce(uint64(packet.PacketNumber))
-		decrypted, err := cipher.Decrypt(nil, packet.Header[:ShortHeaderSize], packet.Payload)
-		if err != nil {
-			h.cipherMutex.Unlock()
-			h.decryptErrors.Add(1)
-			return nil
-		}
-		packet.Payload = decrypted
-	}
-	h.cipherMutex.Unlock()
-
-	// If the address changed but AEAD passed, initiate path validation (G-7).
-	// Per spec §Connection Migration: packets from a new address require
-	// path validation before accepting the address change.
-	if addrChanged && h.pathValidator != nil {
-		_, _ = h.pathValidator.InitiatePathValidation(udpAddr)
-	}
-
-	h.updateActivity()
-	return packet
-}
-
-// keepaliveLoop manages connection keepalive.
-func (h *SSU2Conn) keepaliveLoop() {
-	defer h.wg.Done()
-
-	ticker := time.NewTicker(h.config.KeepaliveInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ticker.C:
-			h.lastActivityLock.RLock()
-			timeSinceActivity := time.Since(h.lastActivity)
-			h.lastActivityLock.RUnlock()
-
-			// Check if we need to send keepalive
-			if timeSinceActivity >= h.config.KeepaliveInterval {
-				// Send ACK-only packet as keepalive per spec §Keepalive (M-3)
-				ack, err := h.ackHandler.GenerateACK()
-				if err == nil && ack != nil {
-					pktNum := h.nextSendSequence()
-					hdr := make([]byte, ShortHeaderSize)
-					binary.BigEndian.PutUint64(hdr[0:8], h.remoteConnectionID)
-					binary.BigEndian.PutUint32(hdr[8:12], pktNum)
-					packet := &SSU2Packet{
-						MessageType:  MessageTypeData,
-						PacketNumber: pktNum,
-						Header:       hdr,
-						MAC:          make([]byte, MACSize),
-					}
-					payload, _ := SerializeBlocks([]*SSU2Block{ack})
-					packet.Payload = payload
-					_ = h.sendPacketDirect(packet)
-				}
-			}
-
-			// Check for timeout (M-2: configurable idle timeout)
-			idleTimeout := h.config.IdleTimeout
-			if idleTimeout <= 0 {
-				idleTimeout = 5 * time.Minute
-			}
-			if timeSinceActivity >= idleTimeout {
-				h.closeMutex.Lock()
-				h.closeErr = oops.Errorf("idle timeout")
-				h.closeMutex.Unlock()
-				_ = h.Close()
-				return
-			}
-		case <-h.closeChan:
-			return
-		}
-	}
-}
-
-// sendPacketDirect sends a packet directly to the peer.
-// For data packets in the established state, the payload is encrypted with AEAD.
-func (h *SSU2Conn) sendPacketDirect(packet *SSU2Packet) error {
-	// Save plaintext payload before encryption for potential retransmit.
-	var plaintextPayload []byte
-
-	// Encrypt payload for data packets when cipher states are available.
-	// Lock is exclusive because SetNonce+Encrypt must be atomic.
-	h.cipherMutex.Lock()
-	cipher := h.sendCipher
-	if cipher != nil && packet.MessageType == MessageTypeData && len(packet.Payload) > 0 {
-		plaintextPayload = make([]byte, len(packet.Payload))
-		copy(plaintextPayload, packet.Payload)
-		// Per SSU2 spec: nonce is the packet number, AD is the 16-byte header.
-		// The message type byte (header[12]) must be set before AEAD encryption
-		// so that the AD matches what the receiver will see after deserialization.
-		// Serialize() also writes this byte, but that runs after encryption.
-		packet.Header[12] = packet.MessageType
-		cipher.SetNonce(uint64(packet.PacketNumber))
-		encrypted, err := cipher.Encrypt(nil, packet.Header[:ShortHeaderSize], packet.Payload)
-		if err != nil {
-			h.cipherMutex.Unlock()
-			return oops.Wrapf(err, "failed to encrypt payload")
-		}
-		packet.Payload = encrypted
-	}
-	h.cipherMutex.Unlock()
-
-	// SipHash length obfuscation: write obfuscated payload length to header
-	// bytes 14-15 per spec §Data Phase Length Obfuscation (G-2).
-	if mod := h.sipHashModifier.Load(); mod != nil && packet.MessageType == MessageTypeData {
-		dataLen := uint16(len(packet.Payload))
-		mask := mod.NextOutboundMask()
-		binary.BigEndian.PutUint16(packet.Header[14:16], dataLen^mask)
-	}
-
-	// Serialize packet
-	data, err := packet.Serialize()
-	if err != nil {
-		return oops.Wrapf(err, "failed to serialize packet")
-	}
-
-	// Apply header protection if enabled
-	if h.headerProtector != nil {
-		hType := messageTypeToHeaderType(packet.MessageType)
-		if hpErr := h.headerProtector.EncryptOutboundHeader(data, hType); hpErr != nil {
-			return oops.Wrapf(hpErr, "failed to encrypt header")
-		}
-	}
-
-	// Send to peer
-	_, err = h.underlying.WriteTo(data, h.remoteAddr)
-	if err != nil {
-		return oops.Wrapf(err, "failed to write to UDP")
-	}
-
-	// Count successfully sent data packets (G-7)
-	if packet.MessageType == MessageTypeData {
-		h.validDataPacketsSent.Add(1)
-	}
-
-	// Update activity
-	h.updateActivity()
-
-	// Track pending packet if it needs ACK
-	if packet.MessageType == MessageTypeData && packet.PacketNumber > 0 {
-		h.pendingMutex.Lock()
-		h.pendingPackets[packet.PacketNumber] = &PendingPacket{
-			Packet:           packet,
-			PlaintextPayload: plaintextPayload,
-			SentTime:         time.Now(),
-			Retries:          0,
-			NextRetry:        time.Now().Add(h.rttEstimator.GetRTO()),
-		}
-		h.pendingMutex.Unlock()
-	}
-
-	return nil
-}
-
-// processInboundPacket processes a received packet.
-func (h *SSU2Conn) processInboundPacket(packet *SSU2Packet) {
-	switch packet.MessageType {
-	case MessageTypeData:
-		// Enforce receive window: reject duplicate, old, and out-of-window packets
-		if h.recvWindow != nil {
-			if _, err := h.recvWindow.Insert(packet); err != nil {
-				return // silently drop
-			}
-		}
-
-		// Record for ACK only after window acceptance
-		if packet.PacketNumber > 0 {
-			h.ackHandler.RecordReceived(packet.PacketNumber)
-		}
-
-		h.validDataPacketsReceived.Add(1)
-		// Check immediate-ack flag: header byte 13, bit 0 (M-5: this is also
-		// checked via CongestionFlagRequestACK in the Congestion block handler,
-		// providing redundant but harmless ACK triggering)
-		if len(packet.Header) > 13 && packet.Header[13]&0x01 != 0 {
-			h.sendImmediateACK()
-		}
-		h.processDataPacket(packet)
-	case MessageTypeSessionRequest, MessageTypeSessionCreated, MessageTypeSessionConfirmed:
-		// Handshake packets bypass receive window
-		if packet.PacketNumber > 0 {
-			h.ackHandler.RecordReceived(packet.PacketNumber)
-		}
-		select {
-		case h.recvQueue <- packet:
-		default:
-		}
-	}
-}
-
-// processDataPacket handles a data-phase packet: parses blocks and retires ACKed packets.
-func (h *SSU2Conn) processDataPacket(packet *SSU2Packet) {
-	log.WithFields(map[string]interface{}{
-		"pkt_num":     packet.PacketNumber,
-		"payload_len": len(packet.Payload),
-	}).Debug("processDataPacket: processing")
-	blocks, err := h.dataHandler.ProcessDataPacket(packet)
-	if err != nil {
-		log.WithField("error", err.Error()).Debug("processDataPacket: ProcessDataPacket error")
-		return
-	}
-	log.WithField("num_blocks", len(blocks)).Debug("processDataPacket: processed blocks")
-
-	// Process ACK blocks
-	for _, block := range blocks {
-		if block.Type == BlockTypeACK {
-			ackedNums, _ := h.ackHandler.ProcessACK(block)
-			// Remove acknowledged packets from pending queue
-			h.pendingMutex.Lock()
-			for _, num := range ackedNums {
-				delete(h.pendingPackets, num)
-			}
-			h.pendingMutex.Unlock()
-		}
-	}
-}
-
-// sendImmediateACK generates and sends an ACK packet without delay, honoring
-// the immediate-ack flag (header byte 13 bit 0) from the peer.
-func (h *SSU2Conn) sendImmediateACK() {
-	ack, err := h.ackHandler.GenerateACK()
-	if err != nil || ack == nil {
-		return
-	}
-	pktNum := h.nextSendSequence()
-	hdr := make([]byte, ShortHeaderSize)
-	binary.BigEndian.PutUint64(hdr[0:8], h.remoteConnectionID)
-	binary.BigEndian.PutUint32(hdr[8:12], pktNum)
-	packet := &SSU2Packet{
-		MessageType:  MessageTypeData,
-		PacketNumber: pktNum,
-		Header:       hdr,
-		MAC:          make([]byte, MACSize),
-	}
-	payload, _ := SerializeBlocks([]*SSU2Block{ack})
-	packet.Payload = payload
-	_ = h.sendPacketDirect(packet)
-}
-
-// handleCongestionBlock processes a received Congestion block (G-6).
-// If the RequestACK flag (bit 0) is set, triggers an immediate ACK per spec.
-// If the ECN flag (bit 1) is set, signals the congestion controller.
-func (h *SSU2Conn) handleCongestionBlock(flags uint8) error {
-	if flags&CongestionFlagRequestACK != 0 {
-		h.sendImmediateACK()
-	}
-	if flags&CongestionFlagECN != 0 && h.congestionController != nil {
-		h.congestionController.OnECN()
-	}
-	return nil
-}
-
-// handlePathChallengeData wraps PathValidator.HandlePathChallenge for the DataHandler callback (G-7).
-func (h *SSU2Conn) handlePathChallengeData(data []byte) error {
-	block := &SSU2Block{Type: BlockTypePathChallenge, Data: data}
-	return h.pathValidator.HandlePathChallenge(block, h.remoteAddr)
-}
-
-// handlePathResponseData wraps PathValidator.HandlePathResponse for the DataHandler callback (G-7).
-func (h *SSU2Conn) handlePathResponseData(data []byte) error {
-	block := &SSU2Block{Type: BlockTypePathResponse, Data: data}
-	return h.pathValidator.HandlePathResponse(block, h.remoteAddr)
-}
-
-// handleAddressBlock processes an Address block (Type 13) for passive NAT
-// detection (G-6). The block contains the sender's view of our IP and port.
-// Format: IP (4 or 16 bytes) + Port (2 bytes big-endian).
-func (h *SSU2Conn) handleAddressBlock(data []byte) error {
-	if len(data) != 6 && len(data) != 18 {
-		return oops.Errorf("Address block invalid length: %d (expected 6 or 18)", len(data))
-	}
-	portOffset := len(data) - 2
-	ip := net.IP(data[:portOffset])
-	port := binary.BigEndian.Uint16(data[portOffset:])
-
-	localAddr := h.LocalAddr()
-	if udp, ok := localAddr.(*net.UDPAddr); ok {
-		if !udp.IP.Equal(ip) || udp.Port != int(port) {
-			log.WithFields(map[string]interface{}{
-				"reportedIP":   ip.String(),
-				"reportedPort": port,
-				"localIP":      udp.IP.String(),
-				"localPort":    udp.Port,
-			}).Info("Address block reports different address (possible NAT)")
-		}
-	}
-	return nil
-}
-
-// extractRetryToken parses a Retry message and returns the 8-byte token.
-func (h *SSU2Conn) extractRetryToken(retry *SSU2Packet) ([]byte, error) {
-	blocks, err := DeserializeBlocks(retry.Payload)
-	if err != nil {
-		return nil, oops.Wrapf(err, "failed to parse Retry payload")
-	}
-	tokenBlock := FindBlockByType(blocks, BlockTypeNewToken)
-	if tokenBlock == nil {
-		return nil, oops.Errorf("Retry message missing NewToken block")
-	}
-	parsed, err := ParseNewTokenBlock(tokenBlock)
-	if err != nil {
-		return nil, oops.Wrapf(err, "failed to parse NewToken block from Retry")
-	}
-	return parsed.Token, nil
-}
-
-// receivePacketWithTimeout waits for a packet with timeout.
-func (h *SSU2Conn) receivePacketWithTimeout(ctx context.Context, timeout time.Duration) (*SSU2Packet, error) {
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-
-	select {
-	case packet := <-h.recvQueue:
-		return packet, nil
-	case <-timer.C:
-		return nil, oops.Errorf("timeout waiting for packet")
-	case <-ctx.Done():
-		return nil, oops.Wrapf(ctx.Err(), "context cancelled")
-	case <-h.closeChan:
-		return nil, oops.Errorf("connection closed")
-	}
-}
-
-// receiveHandshakeWithRetransmit waits for the next handshake message, retransmitting
-// lastSent if no response arrives within a per-attempt interval.
-// Per spec: handshake packets MUST be retransmitted with the same packet number
-// and identical encrypted contents.
-//
-// The spec recommends specific retransmission intervals:
-//   - Session Request: 1.25s, 2.5s, 5s
-//   - Session Created: 1s, 2s, 4s
-func (h *SSU2Conn) receiveHandshakeWithRetransmit(ctx context.Context, lastSent *SSU2Packet, totalTimeout time.Duration) (*SSU2Packet, error) {
-	// Use spec-recommended exponential backoff intervals based on message type.
-	var intervals []time.Duration
-	if lastSent != nil && lastSent.MessageType == MessageTypeSessionCreated {
-		intervals = []time.Duration{1 * time.Second, 2 * time.Second, 4 * time.Second}
-	} else {
-		intervals = []time.Duration{1250 * time.Millisecond, 2500 * time.Millisecond, 5 * time.Second}
-	}
-
-	deadline := time.Now().Add(totalTimeout)
-	for attempt := 0; attempt <= len(intervals); attempt++ {
-		remaining := time.Until(deadline)
-		if remaining <= 0 {
-			break
-		}
-		var wait time.Duration
-		if attempt < len(intervals) {
-			wait = intervals[attempt]
-		} else {
-			wait = remaining
-		}
-		if wait > remaining {
-			wait = remaining
-		}
-
-		pkt, err := h.receivePacketWithTimeout(ctx, wait)
-		if err == nil {
-			return pkt, nil
-		}
-
-		// On context cancellation or connection close, don't retry.
-		select {
-		case <-ctx.Done():
-			return nil, oops.Wrapf(ctx.Err(), "context cancelled during handshake retransmit")
-		case <-h.closeChan:
-			return nil, oops.Errorf("connection closed during handshake retransmit")
-		default:
-		}
-
-		// Retransmit the last sent handshake packet with identical contents.
-		if attempt < len(intervals) {
-			_ = h.sendPacketDirect(lastSent)
-		}
-	}
-	return nil, oops.Errorf("handshake timeout after %d retransmits", len(intervals))
-}
-
-// nextSendSequence returns the next packet sequence number.
-// When the sequence crosses rekeyThreshold, it fires a one-shot
-// NextNonce rekey so the cipher is refreshed before the 32-bit
-// counter wraps. Per SSU2 spec, the packet number must not wrap
-// around to zero (G-1); if the counter reaches 0xFFFFFFFF the
-// connection is closed.
-//
-// NOTE: The SSU2 spec marks NextNonce (block type 11) as "TODO only if we
-// rotate keys" with size "TBD". This rekey mechanism is based on an
-// unfinalized spec area and may need revision when the spec is updated.
-func (h *SSU2Conn) nextSendSequence() uint32 {
-	h.sendSeqMutex.Lock()
-	defer h.sendSeqMutex.Unlock()
-
-	// Hard reject: do not wrap past 0xFFFFFFFF (G-1).
-	if h.sendSequence == 0xFFFFFFFF {
-		log.Error("packet number exhausted (0xFFFFFFFF): closing connection per SSU2 spec")
-		go h.Close()
-		return 0xFFFFFFFF
-	}
-
-	seq := h.sendSequence
-	h.sendSequence++
-
-	// Trigger rekey exactly once when we cross the threshold,
-	// but only if NextNonce is enabled via config (G-1).
-	if h.config.EnableNextNonce && seq >= rekeyThreshold && !h.rekeyInFlight.Load() {
-		if h.rekeyInFlight.CompareAndSwap(false, true) {
-			go h.initiateRekey()
-		}
-	}
-	return seq
-}
-
-// initiateRekey sends a NextNonce block to the peer, then rekeys the local
-// send cipher and resets the send sequence counter.
-//
-// The NextNonce block MUST be encrypted with the OLD key so the receiver can
-// decrypt it and learn about the rekey. Only after the NextNonce packet is
-// fully encrypted and transmitted do we switch to the new key.
-//
-// This function bypasses the normal sendQueue path and sends inline under
-// cipherMutex to guarantee atomic key transition: no packet can be encrypted
-// between NextNonce send and the key switch.
-func (h *SSU2Conn) initiateRekey() {
-	h.cipherMutex.Lock()
-	defer h.cipherMutex.Unlock()
-
-	if h.sendCipher == nil {
-		return
-	}
-
-	log.Warn("initiating NextNonce rekey (unfinalized spec area — interoperability not guaranteed)")
-
-	// Derive new send cipher key per SSU2 spec §NextNonce:
-	// newKey = HKDF(currentKey, ZEROLEN, "WrapCipherKey", 32).
-	newKey, err := deriveRekeyKey(h.sendCipher)
-	if err != nil {
-		log.WithField("error", err).Error("failed to derive rekey for send cipher")
-		return
-	}
-
-	// Send NextNonce block encrypted with the OLD key before rekeying.
-	if err := h.sendNextNonceInline(); err != nil {
-		log.WithField("error", err).Error("failed to send NextNonce block")
-		return
-	}
-
-	// NOW rekey the cipher to the new key.
-	h.sendCipher.UnsafeSetKey(newKey)
-	h.sendCipher.SetNonce(0)
-
-	// Reset send sequence so new packets start at 0.
-	h.sendSeqMutex.Lock()
-	h.sendSequence = 0
-	h.sendSeqMutex.Unlock()
-}
-
-// sendNextNonceInline builds, encrypts, and sends a NextNonce block directly,
-// bypassing the sendQueue. Must be called while holding cipherMutex so the
-// packet is encrypted with the current (old) key atomically.
-func (h *SSU2Conn) sendNextNonceInline() error {
-	// Allocate packet number from the current sequence counter.
-	h.sendSeqMutex.Lock()
-	pktNum := h.sendSequence
-	h.sendSequence++
-	h.sendSeqMutex.Unlock()
-
-	// Build NextNonce block with new starting nonce (0).
-	var nonceBuf [8]byte
-	block := &SSU2Block{Type: BlockTypeNextNonce, Data: nonceBuf[:]}
-
-	payload, err := SerializeBlocks([]*SSU2Block{block})
-	if err != nil {
-		return oops.Wrapf(err, "serialize NextNonce block")
-	}
-
-	hdr := make([]byte, ShortHeaderSize)
-	binary.BigEndian.PutUint64(hdr[0:8], h.remoteConnectionID)
-	binary.BigEndian.PutUint32(hdr[8:12], pktNum)
-	hdr[12] = MessageTypeData
-
-	// Encrypt with the current (OLD) key.
-	h.sendCipher.SetNonce(uint64(pktNum))
-	encrypted, err := h.sendCipher.Encrypt(nil, hdr[:ShortHeaderSize], payload)
-	if err != nil {
-		return oops.Wrapf(err, "encrypt NextNonce block")
-	}
-
-	packet := &SSU2Packet{
-		MessageType:  MessageTypeData,
-		PacketNumber: pktNum,
-		Header:       hdr,
-		Payload:      encrypted,
-		MAC:          make([]byte, MACSize),
-	}
-
-	// SipHash length obfuscation.
-	if mod := h.sipHashModifier.Load(); mod != nil {
-		dataLen := uint16(len(encrypted))
-		mask := mod.NextOutboundMask()
-		binary.BigEndian.PutUint16(packet.Header[14:16], dataLen^mask)
-	}
-
-	data, err := packet.Serialize()
-	if err != nil {
-		return oops.Wrapf(err, "serialize NextNonce packet")
-	}
-
-	if h.headerProtector != nil {
-		hType := messageTypeToHeaderType(packet.MessageType)
-		_ = h.headerProtector.EncryptOutboundHeader(data, hType)
-	}
-
-	_, err = h.underlying.WriteTo(data, h.remoteAddr)
-	if err != nil {
-		return oops.Wrapf(err, "send NextNonce packet")
-	}
-
-	h.updateActivity()
-	return nil
-}
-
-// handlePeerNextNonce is the OnNextNonce callback wired in installCipherStates.
-// When the peer sends us a NextNonce, we rekey the *receive* cipher to match.
-func (h *SSU2Conn) handlePeerNextNonce(newNonce uint64) error {
-	h.cipherMutex.Lock()
-	defer h.cipherMutex.Unlock()
-
-	if h.recvCipher == nil {
-		return oops.Errorf("receive cipher not initialized")
-	}
-
-	// Derive new recv cipher key per SSU2 spec §NextNonce:
-	// newKey = HKDF(currentKey, ZEROLEN, "WrapCipherKey", 32) (G-5).
-	newKey, err := deriveRekeyKey(h.recvCipher)
-	if err != nil {
-		return oops.Wrapf(err, "failed to derive rekey for recv cipher")
-	}
-	h.recvCipher.UnsafeSetKey(newKey)
-	h.recvCipher.SetNonce(newNonce)
-
-	log.WithField("newNonce", newNonce).Info("Applied peer NextNonce rekey on receive cipher")
-	return nil
-}
-
-// updateActivity updates the last activity timestamp.
-func (h *SSU2Conn) updateActivity() {
-	h.lastActivityLock.Lock()
-	defer h.lastActivityLock.Unlock()
-	h.lastActivity = time.Now()
-}
-
-// getReadDeadline returns a channel that closes at read deadline.
-func (h *SSU2Conn) getReadDeadline() <-chan time.Time {
-	h.deadlineMutex.RLock()
-	defer h.deadlineMutex.RUnlock()
-	if h.readDeadline.IsZero() {
-		return nil
-	}
-	return time.After(time.Until(h.readDeadline))
-}
-
-// getWriteDeadline returns a channel that closes at write deadline.
-func (h *SSU2Conn) getWriteDeadline() <-chan time.Time {
-	h.deadlineMutex.RLock()
-	defer h.deadlineMutex.RUnlock()
-	if h.writeDeadline.IsZero() {
-		return nil
-	}
-	return time.After(time.Until(h.writeDeadline))
-}
-
-// sortFragmentsByIndex sorts SessionConfirmed fragments by their fragment
-// index (bits 7-4 of header byte 13). This ensures ProcessSessionConfirmedFragments
-// receives fragments in the correct order regardless of arrival order.
-func sortFragmentsByIndex(fragments []*SSU2Packet) {
-	for i := 1; i < len(fragments); i++ {
-		for j := i; j > 0; j-- {
-			idxJ := int((fragments[j].Header[13] >> 4) & 0x0F)
-			idxPrev := int((fragments[j-1].Header[13] >> 4) & 0x0F)
-			if idxJ < idxPrev {
-				fragments[j], fragments[j-1] = fragments[j-1], fragments[j]
-			} else {
-				break
-			}
-		}
-	}
-}

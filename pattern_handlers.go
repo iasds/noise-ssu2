@@ -3,6 +3,7 @@ package noise
 import (
 	"context"
 
+	"github.com/go-i2p/go-noise/handshake"
 	i2plogger "github.com/go-i2p/logger"
 	"github.com/go-i2p/noise"
 	"github.com/samber/oops"
@@ -104,32 +105,32 @@ func (nc *NoiseConn) performResponderHandshake(ctx context.Context) error {
 
 // performNInitiator handles N pattern as initiator: → e, es
 func (nc *NoiseConn) performNInitiator(ctx context.Context) error {
-	return nc.sendNoiseHandshakeMsg("N")
+	return nc.sendNoiseHandshakeMsg(handshake.PhaseInitial, "N")
 }
 
 // performKInitiator handles K pattern as initiator: → e, es, ss
 func (nc *NoiseConn) performKInitiator(ctx context.Context) error {
-	return nc.sendNoiseHandshakeMsg("K")
+	return nc.sendNoiseHandshakeMsg(handshake.PhaseInitial, "K")
 }
 
 // performXInitiator handles X pattern as initiator: → e, es, s, ss
 func (nc *NoiseConn) performXInitiator(ctx context.Context) error {
-	return nc.sendNoiseHandshakeMsg("X")
+	return nc.sendNoiseHandshakeMsg(handshake.PhaseInitial, "X")
 }
 
 // performNResponder handles N pattern as responder: → e, es
 func (nc *NoiseConn) performNResponder(ctx context.Context) error {
-	return nc.receiveNoiseHandshakeMsg("N")
+	return nc.receiveNoiseHandshakeMsg(handshake.PhaseInitial, "N")
 }
 
 // performKResponder handles K pattern as responder: → e, es, ss
 func (nc *NoiseConn) performKResponder(ctx context.Context) error {
-	return nc.receiveNoiseHandshakeMsg("K")
+	return nc.receiveNoiseHandshakeMsg(handshake.PhaseInitial, "K")
 }
 
 // performXResponder handles X pattern as responder: → e, es, s, ss
 func (nc *NoiseConn) performXResponder(ctx context.Context) error {
-	return nc.receiveNoiseHandshakeMsg("X")
+	return nc.receiveNoiseHandshakeMsg(handshake.PhaseInitial, "X")
 }
 
 // ============================================================================
@@ -138,130 +139,130 @@ func (nc *NoiseConn) performXResponder(ctx context.Context) error {
 
 // performNNInitiator handles NN pattern as initiator
 func (nc *NoiseConn) performNNInitiator(ctx context.Context) error {
-	if err := nc.sendNoiseHandshakeMsg("first NN"); err != nil {
+	if err := nc.sendNoiseHandshakeMsg(handshake.PhaseInitial, "first NN"); err != nil {
 		return err
 	}
-	return nc.receiveNoiseHandshakeMsg("second NN")
+	return nc.receiveNoiseHandshakeMsg(handshake.PhaseExchange, "second NN")
 }
 
 // performNNResponder handles NN pattern as responder
 func (nc *NoiseConn) performNNResponder(ctx context.Context) error {
-	if err := nc.receiveNoiseHandshakeMsg("first NN"); err != nil {
+	if err := nc.receiveNoiseHandshakeMsg(handshake.PhaseInitial, "first NN"); err != nil {
 		return err
 	}
-	return nc.sendNoiseHandshakeMsg("second NN")
+	return nc.sendNoiseHandshakeMsg(handshake.PhaseExchange, "second NN")
 }
 
 // performNKInitiator handles NK pattern as initiator: → e, es, ← e, ee
 func (nc *NoiseConn) performNKInitiator(ctx context.Context) error {
-	if err := nc.sendNoiseHandshakeMsg("first NK"); err != nil {
+	if err := nc.sendNoiseHandshakeMsg(handshake.PhaseInitial, "first NK"); err != nil {
 		return err
 	}
-	return nc.receiveNoiseHandshakeMsg("second NK")
+	return nc.receiveNoiseHandshakeMsg(handshake.PhaseExchange, "second NK")
 }
 
 // performNKResponder handles NK pattern as responder: → e, es, ← e, ee
 func (nc *NoiseConn) performNKResponder(ctx context.Context) error {
-	if err := nc.receiveNoiseHandshakeMsg("first NK"); err != nil {
+	if err := nc.receiveNoiseHandshakeMsg(handshake.PhaseInitial, "first NK"); err != nil {
 		return err
 	}
-	return nc.sendNoiseHandshakeMsg("second NK")
+	return nc.sendNoiseHandshakeMsg(handshake.PhaseExchange, "second NK")
 }
 
 // performNXInitiator handles NX pattern as initiator: → e, ← e, ee, s, es
 func (nc *NoiseConn) performNXInitiator(ctx context.Context) error {
-	if err := nc.sendNoiseHandshakeMsg("first NX"); err != nil {
+	if err := nc.sendNoiseHandshakeMsg(handshake.PhaseInitial, "first NX"); err != nil {
 		return err
 	}
-	return nc.receiveNoiseHandshakeMsg("second NX")
+	return nc.receiveNoiseHandshakeMsg(handshake.PhaseExchange, "second NX")
 }
 
 // performNXResponder handles NX pattern as responder: → e, ← e, ee, s, es
 func (nc *NoiseConn) performNXResponder(ctx context.Context) error {
-	if err := nc.receiveNoiseHandshakeMsg("first NX"); err != nil {
+	if err := nc.receiveNoiseHandshakeMsg(handshake.PhaseInitial, "first NX"); err != nil {
 		return err
 	}
-	return nc.sendNoiseHandshakeMsg("second NX")
+	return nc.sendNoiseHandshakeMsg(handshake.PhaseExchange, "second NX")
 }
 
 // performKNInitiator handles KN pattern as initiator: → e, ← e, ee, se, es
 func (nc *NoiseConn) performKNInitiator(ctx context.Context) error {
-	if err := nc.sendNoiseHandshakeMsg("first KN"); err != nil {
+	if err := nc.sendNoiseHandshakeMsg(handshake.PhaseInitial, "first KN"); err != nil {
 		return err
 	}
-	return nc.receiveNoiseHandshakeMsg("second KN")
+	return nc.receiveNoiseHandshakeMsg(handshake.PhaseExchange, "second KN")
 }
 
 // performKNResponder handles KN pattern as responder: → e, ← e, ee, se, es
 func (nc *NoiseConn) performKNResponder(ctx context.Context) error {
-	if err := nc.receiveNoiseHandshakeMsg("first KN"); err != nil {
+	if err := nc.receiveNoiseHandshakeMsg(handshake.PhaseInitial, "first KN"); err != nil {
 		return err
 	}
-	return nc.sendNoiseHandshakeMsg("second KN")
+	return nc.sendNoiseHandshakeMsg(handshake.PhaseExchange, "second KN")
 }
 
 // performKKInitiator handles KK pattern as initiator: → e, es, ss, ← e, ee, se
 func (nc *NoiseConn) performKKInitiator(ctx context.Context) error {
-	if err := nc.sendNoiseHandshakeMsg("first KK"); err != nil {
+	if err := nc.sendNoiseHandshakeMsg(handshake.PhaseInitial, "first KK"); err != nil {
 		return err
 	}
-	return nc.receiveNoiseHandshakeMsg("second KK")
+	return nc.receiveNoiseHandshakeMsg(handshake.PhaseExchange, "second KK")
 }
 
 // performKKResponder handles KK pattern as responder: → e, es, ss, ← e, ee, se
 func (nc *NoiseConn) performKKResponder(ctx context.Context) error {
-	if err := nc.receiveNoiseHandshakeMsg("first KK"); err != nil {
+	if err := nc.receiveNoiseHandshakeMsg(handshake.PhaseInitial, "first KK"); err != nil {
 		return err
 	}
-	return nc.sendNoiseHandshakeMsg("second KK")
+	return nc.sendNoiseHandshakeMsg(handshake.PhaseExchange, "second KK")
 }
 
 // performINInitiator handles IN pattern as initiator: → e, s, ← e, ee, se, es
 func (nc *NoiseConn) performINInitiator(ctx context.Context) error {
-	if err := nc.sendNoiseHandshakeMsg("first IN"); err != nil {
+	if err := nc.sendNoiseHandshakeMsg(handshake.PhaseInitial, "first IN"); err != nil {
 		return err
 	}
-	return nc.receiveNoiseHandshakeMsg("second IN")
+	return nc.receiveNoiseHandshakeMsg(handshake.PhaseExchange, "second IN")
 }
 
 // performINResponder handles IN pattern as responder: → e, s, ← e, ee, se, es
 func (nc *NoiseConn) performINResponder(ctx context.Context) error {
-	if err := nc.receiveNoiseHandshakeMsg("first IN"); err != nil {
+	if err := nc.receiveNoiseHandshakeMsg(handshake.PhaseInitial, "first IN"); err != nil {
 		return err
 	}
-	return nc.sendNoiseHandshakeMsg("second IN")
+	return nc.sendNoiseHandshakeMsg(handshake.PhaseExchange, "second IN")
 }
 
 // performIKInitiator handles IK pattern as initiator: → e, es, s, ss, ← e, ee, se
 func (nc *NoiseConn) performIKInitiator(ctx context.Context) error {
-	if err := nc.sendNoiseHandshakeMsg("first IK"); err != nil {
+	if err := nc.sendNoiseHandshakeMsg(handshake.PhaseInitial, "first IK"); err != nil {
 		return err
 	}
-	return nc.receiveNoiseHandshakeMsg("second IK")
+	return nc.receiveNoiseHandshakeMsg(handshake.PhaseExchange, "second IK")
 }
 
 // performIKResponder handles IK pattern as responder: → e, es, s, ss, ← e, ee, se
 func (nc *NoiseConn) performIKResponder(ctx context.Context) error {
-	if err := nc.receiveNoiseHandshakeMsg("first IK"); err != nil {
+	if err := nc.receiveNoiseHandshakeMsg(handshake.PhaseInitial, "first IK"); err != nil {
 		return err
 	}
-	return nc.sendNoiseHandshakeMsg("second IK")
+	return nc.sendNoiseHandshakeMsg(handshake.PhaseExchange, "second IK")
 }
 
 // performIXInitiator handles IX pattern as initiator: → e, s, ← e, ee, se, s, es
 func (nc *NoiseConn) performIXInitiator(ctx context.Context) error {
-	if err := nc.sendNoiseHandshakeMsg("first IX"); err != nil {
+	if err := nc.sendNoiseHandshakeMsg(handshake.PhaseInitial, "first IX"); err != nil {
 		return err
 	}
-	return nc.receiveNoiseHandshakeMsg("second IX")
+	return nc.receiveNoiseHandshakeMsg(handshake.PhaseExchange, "second IX")
 }
 
 // performIXResponder handles IX pattern as responder: → e, s, ← e, ee, se, s, es
 func (nc *NoiseConn) performIXResponder(ctx context.Context) error {
-	if err := nc.receiveNoiseHandshakeMsg("first IX"); err != nil {
+	if err := nc.receiveNoiseHandshakeMsg(handshake.PhaseInitial, "first IX"); err != nil {
 		return err
 	}
-	return nc.sendNoiseHandshakeMsg("second IX")
+	return nc.sendNoiseHandshakeMsg(handshake.PhaseExchange, "second IX")
 }
 
 // performKXInitiator handles KX pattern as initiator (2 messages):
@@ -270,10 +271,10 @@ func (nc *NoiseConn) performIXResponder(ctx context.Context) error {
 //	→ e
 //	← e, ee, se, s, es
 func (nc *NoiseConn) performKXInitiator(ctx context.Context) error {
-	if err := nc.sendNoiseHandshakeMsg("first KX"); err != nil {
+	if err := nc.sendNoiseHandshakeMsg(handshake.PhaseInitial, "first KX"); err != nil {
 		return err
 	}
-	return nc.receiveNoiseHandshakeMsg("second KX")
+	return nc.receiveNoiseHandshakeMsg(handshake.PhaseExchange, "second KX")
 }
 
 // performKXResponder handles KX pattern as responder (2 messages):
@@ -282,10 +283,10 @@ func (nc *NoiseConn) performKXInitiator(ctx context.Context) error {
 //	→ e
 //	← e, ee, se, s, es
 func (nc *NoiseConn) performKXResponder(ctx context.Context) error {
-	if err := nc.receiveNoiseHandshakeMsg("first KX"); err != nil {
+	if err := nc.receiveNoiseHandshakeMsg(handshake.PhaseInitial, "first KX"); err != nil {
 		return err
 	}
-	return nc.sendNoiseHandshakeMsg("second KX")
+	return nc.sendNoiseHandshakeMsg(handshake.PhaseExchange, "second KX")
 }
 
 // ============================================================================
@@ -294,24 +295,24 @@ func (nc *NoiseConn) performKXResponder(ctx context.Context) error {
 
 // performXXInitiator handles XX pattern as initiator
 func (nc *NoiseConn) performXXInitiator(ctx context.Context) error {
-	if err := nc.sendNoiseHandshakeMsg("first XX"); err != nil {
+	if err := nc.sendNoiseHandshakeMsg(handshake.PhaseInitial, "first XX"); err != nil {
 		return err
 	}
-	if err := nc.receiveNoiseHandshakeMsg("second XX"); err != nil {
+	if err := nc.receiveNoiseHandshakeMsg(handshake.PhaseExchange, "second XX"); err != nil {
 		return err
 	}
-	return nc.sendNoiseHandshakeMsg("third XX")
+	return nc.sendNoiseHandshakeMsg(handshake.PhaseFinal, "third XX")
 }
 
 // performXXResponder handles XX pattern as responder
 func (nc *NoiseConn) performXXResponder(ctx context.Context) error {
-	if err := nc.receiveNoiseHandshakeMsg("first XX"); err != nil {
+	if err := nc.receiveNoiseHandshakeMsg(handshake.PhaseInitial, "first XX"); err != nil {
 		return err
 	}
-	if err := nc.sendNoiseHandshakeMsg("second XX"); err != nil {
+	if err := nc.sendNoiseHandshakeMsg(handshake.PhaseExchange, "second XX"); err != nil {
 		return err
 	}
-	return nc.receiveNoiseHandshakeMsg("third XX")
+	return nc.receiveNoiseHandshakeMsg(handshake.PhaseFinal, "third XX")
 }
 
 // performXNInitiator handles XN pattern as initiator (3 messages):
@@ -320,13 +321,13 @@ func (nc *NoiseConn) performXXResponder(ctx context.Context) error {
 //	← e, ee
 //	→ s, se
 func (nc *NoiseConn) performXNInitiator(ctx context.Context) error {
-	if err := nc.sendNoiseHandshakeMsg("first XN"); err != nil {
+	if err := nc.sendNoiseHandshakeMsg(handshake.PhaseInitial, "first XN"); err != nil {
 		return err
 	}
-	if err := nc.receiveNoiseHandshakeMsg("second XN"); err != nil {
+	if err := nc.receiveNoiseHandshakeMsg(handshake.PhaseExchange, "second XN"); err != nil {
 		return err
 	}
-	return nc.sendNoiseHandshakeMsg("third XN")
+	return nc.sendNoiseHandshakeMsg(handshake.PhaseFinal, "third XN")
 }
 
 // performXNResponder handles XN pattern as responder (3 messages):
@@ -335,13 +336,13 @@ func (nc *NoiseConn) performXNInitiator(ctx context.Context) error {
 //	← e, ee
 //	→ s, se
 func (nc *NoiseConn) performXNResponder(ctx context.Context) error {
-	if err := nc.receiveNoiseHandshakeMsg("first XN"); err != nil {
+	if err := nc.receiveNoiseHandshakeMsg(handshake.PhaseInitial, "first XN"); err != nil {
 		return err
 	}
-	if err := nc.sendNoiseHandshakeMsg("second XN"); err != nil {
+	if err := nc.sendNoiseHandshakeMsg(handshake.PhaseExchange, "second XN"); err != nil {
 		return err
 	}
-	return nc.receiveNoiseHandshakeMsg("third XN")
+	return nc.receiveNoiseHandshakeMsg(handshake.PhaseFinal, "third XN")
 }
 
 // performXKInitiator handles XK pattern as initiator (3 messages):
@@ -351,13 +352,13 @@ func (nc *NoiseConn) performXNResponder(ctx context.Context) error {
 //	← e, ee
 //	→ s, se
 func (nc *NoiseConn) performXKInitiator(ctx context.Context) error {
-	if err := nc.sendNoiseHandshakeMsg("first XK"); err != nil {
+	if err := nc.sendNoiseHandshakeMsg(handshake.PhaseInitial, "first XK"); err != nil {
 		return err
 	}
-	if err := nc.receiveNoiseHandshakeMsg("second XK"); err != nil {
+	if err := nc.receiveNoiseHandshakeMsg(handshake.PhaseExchange, "second XK"); err != nil {
 		return err
 	}
-	return nc.sendNoiseHandshakeMsg("third XK")
+	return nc.sendNoiseHandshakeMsg(handshake.PhaseFinal, "third XK")
 }
 
 // performXKResponder handles XK pattern as responder (3 messages):
@@ -367,13 +368,13 @@ func (nc *NoiseConn) performXKInitiator(ctx context.Context) error {
 //	← e, ee
 //	→ s, se
 func (nc *NoiseConn) performXKResponder(ctx context.Context) error {
-	if err := nc.receiveNoiseHandshakeMsg("first XK"); err != nil {
+	if err := nc.receiveNoiseHandshakeMsg(handshake.PhaseInitial, "first XK"); err != nil {
 		return err
 	}
-	if err := nc.sendNoiseHandshakeMsg("second XK"); err != nil {
+	if err := nc.sendNoiseHandshakeMsg(handshake.PhaseExchange, "second XK"); err != nil {
 		return err
 	}
-	return nc.receiveNoiseHandshakeMsg("third XK")
+	return nc.receiveNoiseHandshakeMsg(handshake.PhaseFinal, "third XK")
 }
 
 // ============================================================================

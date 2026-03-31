@@ -1170,6 +1170,17 @@ func (m *trackingModifier) ModifyInbound(phase handshake.HandshakePhase, data []
 func (m *trackingModifier) Name() string { return "tracking-modifier" }
 func (m *trackingModifier) Close() error { return nil }
 
+// countCallsByPhase counts the number of call records matching the given phase.
+func countCallsByPhase(calls []callRecord, phase handshake.HandshakePhase) int {
+	n := 0
+	for _, c := range calls {
+		if c.phase == phase {
+			n++
+		}
+	}
+	return n
+}
+
 // TestGetModifierChain_NoModifiers checks nil is returned for a config with no modifiers.
 func TestGetModifierChain_NoModifiers(t *testing.T) {
 	nc, _ := newTestNoiseConn(t, "NN", true)

@@ -382,7 +382,7 @@ func TestXXHandshake_NoPeerStaticNeeded(t *testing.T) {
 
 // TestPhaseData_ModifierInvokedOnWriteAndRead verifies that the modifier chain
 // is called with PhaseData on every Write (outbound) and Read (inbound) after
-// the Noise handshake completes.
+// the Noise handshake completes, and also during handshake messages.
 func TestPhaseData_ModifierInvokedOnWriteAndRead(t *testing.T) {
 	clientPipe, serverPipe := net.Pipe()
 
@@ -415,6 +415,18 @@ func TestPhaseData_ModifierInvokedOnWriteAndRead(t *testing.T) {
 	require.NoError(t, <-hsErr)
 	require.NoError(t, <-hsErr)
 
+	// NN is a 2-message pattern, so the handshake itself should have
+	// invoked the modifier chain during handshake phases.
+	clientMod.mu.Lock()
+	hsOutCalls := countCallsByPhase(clientMod.outboundCalls, handshake.PhaseInitial)
+	clientMod.mu.Unlock()
+	assert.Equal(t, 1, hsOutCalls, "Handshake must invoke ModifyOutbound with PhaseInitial for initiator")
+
+	serverMod.mu.Lock()
+	hsInCalls := countCallsByPhase(serverMod.inboundCalls, handshake.PhaseInitial)
+	serverMod.mu.Unlock()
+	assert.Equal(t, 1, hsInCalls, "Handshake must invoke ModifyInbound with PhaseInitial for responder")
+
 	msg := []byte("PhaseData wiring test message")
 
 	// Client writes; server reads.
@@ -430,27 +442,17 @@ func TestPhaseData_ModifierInvokedOnWriteAndRead(t *testing.T) {
 	require.NoError(t, <-writeErr)
 	assert.Equal(t, msg, buf[:n], "round-trip data must be identical with symmetric modifier")
 
-	// Client modifier must have called ModifyOutbound with PhaseData.
+	// Client modifier must have called ModifyOutbound with PhaseData exactly once.
 	clientMod.mu.Lock()
-	outCalls := len(clientMod.outboundCalls)
-	var outPhase handshake.HandshakePhase
-	if outCalls > 0 {
-		outPhase = clientMod.outboundCalls[0].phase
-	}
+	dataOutCalls := countCallsByPhase(clientMod.outboundCalls, handshake.PhaseData)
 	clientMod.mu.Unlock()
-	require.Equal(t, 1, outCalls, "Write must invoke ModifyOutbound once")
-	assert.Equal(t, handshake.PhaseData, outPhase, "Write must invoke ModifyOutbound with PhaseData")
+	require.Equal(t, 1, dataOutCalls, "Write must invoke ModifyOutbound with PhaseData once")
 
-	// Server modifier must have called ModifyInbound with PhaseData.
+	// Server modifier must have called ModifyInbound with PhaseData exactly once.
 	serverMod.mu.Lock()
-	inCalls := len(serverMod.inboundCalls)
-	var inPhase handshake.HandshakePhase
-	if inCalls > 0 {
-		inPhase = serverMod.inboundCalls[0].phase
-	}
+	dataInCalls := countCallsByPhase(serverMod.inboundCalls, handshake.PhaseData)
 	serverMod.mu.Unlock()
-	require.Equal(t, 1, inCalls, "Read must invoke ModifyInbound once")
-	assert.Equal(t, handshake.PhaseData, inPhase, "Read must invoke ModifyInbound with PhaseData")
+	require.Equal(t, 1, dataInCalls, "Read must invoke ModifyInbound with PhaseData once")
 }
 
 // TestHandshakeTimeoutWithStalledPeer verifies that a stalled peer (one that

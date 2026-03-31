@@ -21,6 +21,8 @@ This package MUST NOT use any of the following libraries.
  - [go-i2p/go-i2p](https://github.com/go-i2p/go-i2p): I2P router implementation
  - I2P Common datastructures are not allowed in the root, unmodified noise directory.
 
+> **Note:** The root Go package is `package noise` even though the repository directory is `go-noise`. This follows the standard Go convention where import-path–friendly repo names (with a `go-` prefix) differ from the short package name used in code. Import as `github.com/go-i2p/go-noise` and reference as `noise.NewConnConfig(...)`.
+
 ## Features
 
 - **Configurable Noise Patterns**: Support for all standard Noise Protocol patterns  

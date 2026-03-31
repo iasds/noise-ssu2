@@ -320,123 +320,144 @@ func (l *SSU2Listener) handleIncomingPacket(data []byte, remoteAddr *net.UDPAddr
 // instead of accepting the session. The initiator is expected to resend
 // SessionRequest including the token from the Retry.
 func (l *SSU2Listener) handleNewSession(remoteAddr *net.UDPAddr, packet *SSU2Packet) (*SSU2Conn, error) {
-	// M-6: Rate-limit SessionRequest processing per source IP.
+	if err := l.enforceRateLimit(remoteAddr); err != nil {
+		return nil, err
+	}
+
+	if err := l.handleSessionRequestToken(packet, remoteAddr); err != nil {
+		return nil, err
+	}
+
+	connID, err := l.generateUniqueConnectionID()
+	if err != nil {
+		return nil, err
+	}
+
+	connConfig := l.buildConnConfig(packet, connID)
+
+	if connConfig.InitiatorConnectionID != 0 && connConfig.InitiatorConnectionID == connID {
+		return nil, oops.Errorf("connection ID collision: source and destination IDs are identical (%d)", connID)
+	}
+
+	conn, err := NewSSU2Conn(l.underlying, remoteAddr, connConfig, false, l.config.StaticKey, nil)
+	if err != nil {
+		return nil, oops.Wrapf(err, "failed to create SSU2 connection")
+	}
+
+	return l.registerAndQueueConn(conn, connID)
+}
+
+// enforceRateLimit checks if the source IP has exceeded the SessionRequest rate.
+func (l *SSU2Listener) enforceRateLimit(remoteAddr *net.UDPAddr) error {
 	if !l.sessionRateLimiter.Allow(remoteAddr.IP.String()) {
-		return nil, oops.
+		return oops.
 			Code("RATE_LIMITED").
 			In("ssu2_listener").
 			Errorf("SessionRequest rate limit exceeded for %s", remoteAddr.IP)
 	}
+	return nil
+}
 
-	// For SessionRequest, validate token or trigger Retry
-	if packet.MessageType == MessageTypeSessionRequest {
-		if err := l.validateSessionRequestToken(packet, remoteAddr); err != nil {
-			if errors.Is(err, errNoTokenPresent) && l.config.RequireRetry {
-				// Per spec §Retry: responder sends Retry to validate
-				// the initiator's source address before continuing.
-				if retryErr := l.processTokenRequest(packet, remoteAddr); retryErr != nil {
-					return nil, oops.Wrapf(retryErr, "failed to send Retry")
-				}
-				return nil, oops.
-					Code("RETRY_SENT").
-					In("ssu2_listener").
-					Errorf("sent Retry to %s, awaiting re-request with token", remoteAddr)
-			}
-			if !errors.Is(err, errNoTokenPresent) {
-				return nil, oops.
-					Code("TOKEN_VALIDATION_FAILED").
-					In("ssu2_listener").
-					Wrap(err)
-			}
-			// errNoTokenPresent but RequireRetry is false — accept without token
-		}
+// handleSessionRequestToken validates the token in a SessionRequest, sending
+// a Retry if required by config and no token is present.
+func (l *SSU2Listener) handleSessionRequestToken(packet *SSU2Packet, remoteAddr *net.UDPAddr) error {
+	if packet.MessageType != MessageTypeSessionRequest {
+		return nil
 	}
 
-	// Generate connection ID for new session
+	err := l.validateSessionRequestToken(packet, remoteAddr)
+	if err == nil {
+		return nil
+	}
+
+	if errors.Is(err, errNoTokenPresent) && l.config.RequireRetry {
+		if retryErr := l.processTokenRequest(packet, remoteAddr); retryErr != nil {
+			return oops.Wrapf(retryErr, "failed to send Retry")
+		}
+		return oops.
+			Code("RETRY_SENT").
+			In("ssu2_listener").
+			Errorf("sent Retry to %s, awaiting re-request with token", remoteAddr)
+	}
+
+	if !errors.Is(err, errNoTokenPresent) {
+		return oops.
+			Code("TOKEN_VALIDATION_FAILED").
+			In("ssu2_listener").
+			Wrap(err)
+	}
+	return nil
+}
+
+// generateUniqueConnectionID generates a connection ID and verifies uniqueness
+// among active sessions.
+func (l *SSU2Listener) generateUniqueConnectionID() (uint64, error) {
 	connID, err := GenerateConnectionID()
 	if err != nil {
-		return nil, oops.Wrapf(err, "failed to generate connection ID")
+		return 0, oops.Wrapf(err, "failed to generate connection ID")
 	}
 
-	// G-6: Verify the generated connection ID is not already in use by an
-	// active session. With 8-byte crypto-random IDs the collision probability
-	// is negligible, but the spec uses MUST language for uniqueness.
 	l.sessionMutex.RLock()
 	_, exists := l.sessions[connID]
 	l.sessionMutex.RUnlock()
-	if exists {
-		// Regenerate once; a second collision is astronomically unlikely.
-		connID, err = GenerateConnectionID()
-		if err != nil {
-			return nil, oops.Wrapf(err, "failed to regenerate connection ID")
-		}
-		l.sessionMutex.RLock()
-		_, exists = l.sessions[connID]
-		l.sessionMutex.RUnlock()
-		if exists {
-			return nil, oops.Errorf("connection ID collision after regeneration (%d)", connID)
-		}
+	if !exists {
+		return connID, nil
 	}
 
-	// Derive initial router hash from the SessionRequest ephemeral key.
-	// The ephemeral key (32-byte X25519 public key) is available in cleartext
-	// and uniquely identifies this handshake session. The real router hash
-	// (SHA-256 of the peer's RouterInfo) is installed post-handshake by
-	// installCipherStates once the peer's static key is known.
+	connID, err = GenerateConnectionID()
+	if err != nil {
+		return 0, oops.Wrapf(err, "failed to regenerate connection ID")
+	}
+
+	l.sessionMutex.RLock()
+	_, exists = l.sessions[connID]
+	l.sessionMutex.RUnlock()
+	if exists {
+		return 0, oops.Errorf("connection ID collision after regeneration (%d)", connID)
+	}
+	return connID, nil
+}
+
+// buildConnConfig creates a connection-specific config from the listener config
+// and the incoming SessionRequest packet.
+func (l *SSU2Listener) buildConnConfig(packet *SSU2Packet, connID uint64) *SSU2Config {
 	var routerHash data.Hash
 	if len(packet.EphemeralKey) == 32 {
 		routerHash = data.NewHash(sha256.Sum256(packet.EphemeralKey))
 	}
 
-	// Create a connection-specific config with the generated connection ID
-	// and derived router hash so NewSSU2Conn initializes all fields properly
-	// (handshakeHandler, dataHandler, ackHandler, rttEstimator, recvWindow,
-	// sendQueue, recvQueue, pendingPackets, lastActivity).
 	connConfig := *l.config
 	connConfig.ConnectionID = connID
 	connConfig.RouterHash = routerHash
 	connConfig.Initiator = false
 
-	// Extract initiator's source connection ID from the SessionRequest header
-	// per spec §LongHeader: src_conn_id is at bytes 16-23.
 	if len(packet.Header) >= 24 {
 		connConfig.InitiatorConnectionID = binary.BigEndian.Uint64(packet.Header[16:24])
 	}
+	return &connConfig
+}
 
-	// Per spec: Source and Destination IDs must NOT be identical.
-	if connConfig.InitiatorConnectionID != 0 && connConfig.InitiatorConnectionID == connID {
-		return nil, oops.Errorf("connection ID collision: source and destination IDs are identical (%d)", connID)
-	}
-
-	conn, err := NewSSU2Conn(l.underlying, remoteAddr, &connConfig, false, l.config.StaticKey, nil)
-	if err != nil {
-		return nil, oops.Wrapf(err, "failed to create SSU2 connection")
-	}
-
-	// Add to sessions map
+// registerAndQueueConn registers the connection in the sessions map and
+// queues it for acceptance.
+func (l *SSU2Listener) registerAndQueueConn(conn *SSU2Conn, connID uint64) (*SSU2Conn, error) {
 	l.sessionMutex.Lock()
 	l.sessions[connID] = conn
 	l.sessionMutex.Unlock()
 
-	// Queue for acceptance
 	select {
 	case l.acceptQueue <- conn:
-		// Connection queued successfully
+		return conn, nil
 	case <-l.shutdownChan:
-		// Listener shutting down
 		return nil, oops.
 			Code("LISTENER_CLOSED").
 			In("ssu2_listener").
 			Errorf("listener closed during session creation")
 	default:
-		// Accept queue full, drop connection
 		return nil, oops.
 			Code("ACCEPT_QUEUE_FULL").
 			In("ssu2_listener").
 			Errorf("accept queue full, connection dropped")
 	}
-
-	return conn, nil
 }
 
 // validateSessionRequestToken extracts and validates the token from a SessionRequest.

@@ -35,18 +35,9 @@ func BuildPeerTestSignedData(
 	alicePort uint16,
 	aliceIP net.IP,
 ) ([]byte, error) {
-	ip4 := aliceIP.To4()
-	var ipBytes []byte
-	var asz uint8
-	if ip4 != nil {
-		ipBytes = ip4
-		asz = 6
-	} else {
-		ipBytes = aliceIP.To16()
-		if ipBytes == nil {
-			return nil, oops.Errorf("invalid aliceIP")
-		}
-		asz = 18
+	ipBytes, asz, err := normalizeIP(aliceIP)
+	if err != nil {
+		return nil, oops.Wrapf(err, "invalid aliceIP")
 	}
 
 	// prologue(16) + bhash(32) + [ahash(32)] + ver(1) + nonce(4) + timestamp(4) + asz(1) + port(2) + ip
@@ -95,7 +86,7 @@ func SignPeerTest(
 	if err != nil {
 		return nil, oops.Wrapf(err, "failed to build peer test signed data")
 	}
-	return ed25519.Sign(privateKey, data), nil
+	return signData(privateKey, data), nil
 }
 
 // VerifyPeerTestSignature verifies a peer test signature.
@@ -113,5 +104,5 @@ func VerifyPeerTestSignature(
 	if err != nil {
 		return false, oops.Wrapf(err, "failed to build peer test signed data for verification")
 	}
-	return ed25519.Verify(publicKey, data, signature), nil
+	return verifyData(publicKey, data, signature), nil
 }

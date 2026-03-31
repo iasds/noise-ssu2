@@ -4,8 +4,8 @@ import (
 	"encoding/binary"
 	"sync"
 
-	"github.com/go-i2p/crypto/siphash"
 	"github.com/go-i2p/go-noise/handshake"
+	"github.com/go-i2p/go-noise/internal"
 )
 
 // SipHashLengthModifier implements NTCP2's SipHash-2-4 length obfuscation
@@ -103,14 +103,7 @@ func (slm *SipHashLengthModifier) applyMask(phase handshake.HandshakePhase, data
 // Uses a stack-allocated [8]byte to avoid a heap allocation on every frame.
 // The IV is updated in-place for the next iteration.
 func (slm *SipHashLengthModifier) computeNextMask(keys [2]uint64, iv *uint64) uint16 {
-	var input [SipHashIVSize]byte
-	binary.LittleEndian.PutUint64(input[:], *iv)
-
-	hash := siphash.Hash(keys[0], keys[1], input[:])
-
-	*iv = hash
-
-	return uint16(hash & 0xFFFF)
+	return internal.SipHashNextMask(keys, iv)
 }
 
 // getNextOutboundMask generates the next SipHash mask for outbound data.

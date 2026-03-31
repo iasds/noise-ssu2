@@ -279,19 +279,9 @@ func EncodeRelayResponse(resp *RelayResponseBlock) (*SSU2Block, error) {
 }
 
 func encodeRelayResponseAccepted(resp *RelayResponseBlock) (*SSU2Block, error) {
-	ip4 := resp.CharlieIP.To4()
-	var ipBytes []byte
-	var csz uint8
-	if ip4 != nil {
-		ipBytes = ip4
-		csz = 6
-	} else {
-		ip6 := resp.CharlieIP.To16()
-		if ip6 == nil {
-			return nil, oops.Errorf("invalid CharlieIP for accepted response")
-		}
-		ipBytes = ip6
-		csz = 18
+	ipBytes, csz, err := normalizeIP(resp.CharlieIP)
+	if err != nil || csz == 0 {
+		return nil, oops.Errorf("invalid CharlieIP for accepted response")
 	}
 	if len(resp.Token) != 8 {
 		return nil, oops.Errorf("token must be 8 bytes for accepted response, got %d", len(resp.Token))
@@ -315,21 +305,7 @@ func encodeRelayResponseAccepted(resp *RelayResponseBlock) (*SSU2Block, error) {
 }
 
 func encodeRelayResponseCharlieRejection(resp *RelayResponseBlock) (*SSU2Block, error) {
-	var ipBytes []byte
-	var csz uint8
-	if resp.CharlieIP != nil {
-		ip4 := resp.CharlieIP.To4()
-		if ip4 != nil {
-			ipBytes = ip4
-			csz = 6
-		} else {
-			ip6 := resp.CharlieIP.To16()
-			if ip6 != nil {
-				ipBytes = ip6
-				csz = 18
-			}
-		}
-	}
+	ipBytes, csz, _ := normalizeIP(resp.CharlieIP)
 	// flag(1)+code(1)+nonce(4)+ts(4)+ver(1)+csz(1)+[port(2)+ip]+sig
 	dataSize := 1 + 1 + 4 + 4 + 1 + 1 + len(resp.Signature)
 	if csz > 0 {

@@ -542,14 +542,20 @@ func (nc *NoiseConn) Handshake(ctx context.Context) error {
 }
 
 // sendNoiseHandshakeMsg writes a Noise handshake message to the underlying connection
-// and updates cipher states. The label parameter identifies the message for error context.
-func (nc *NoiseConn) sendNoiseHandshakeMsg(label string) error {
+// and updates cipher states. The phase parameter specifies the handshake phase for
+// modifier chain application. The label parameter identifies the message for error context.
+func (nc *NoiseConn) sendNoiseHandshakeMsg(phase handshake.HandshakePhase, label string) error {
 	msg, cs1, cs2, err := nc.handshakeState.WriteMessage(nil, nil)
 	if err != nil {
 		return oops.
 			Code("WRITE_MESSAGE_FAILED").
 			In("noise").
 			Wrapf(err, "failed to create %s handshake message", label)
+	}
+
+	msg, err = nc.applyHandshakeOutbound(phase, msg)
+	if err != nil {
+		return err
 	}
 
 	if err := nc.writeFramedMessage(msg); err != nil {
@@ -565,14 +571,20 @@ func (nc *NoiseConn) sendNoiseHandshakeMsg(label string) error {
 
 // receiveNoiseHandshakeMsg reads a length-prefixed Noise handshake message from
 // the underlying connection, processes it via the handshake state, and updates
-// cipher states. The label parameter identifies the message for error context.
-func (nc *NoiseConn) receiveNoiseHandshakeMsg(label string) error {
+// cipher states. The phase parameter specifies the handshake phase for modifier
+// chain application. The label parameter identifies the message for error context.
+func (nc *NoiseConn) receiveNoiseHandshakeMsg(phase handshake.HandshakePhase, label string) error {
 	buffer, err := nc.readFramedMessage()
 	if err != nil {
 		return oops.
 			Code("READ_MESSAGE_FAILED").
 			In("noise").
 			Wrapf(err, "failed to read %s handshake message", label)
+	}
+
+	buffer, err = nc.applyHandshakeInbound(phase, buffer)
+	if err != nil {
+		return err
 	}
 
 	_, cs1, cs2, err := nc.handshakeState.ReadMessage(nil, buffer)

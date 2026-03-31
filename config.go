@@ -1,6 +1,7 @@
 package noise
 
 import (
+	"sync"
 	"time"
 
 	"github.com/go-i2p/go-noise/handshake"
@@ -94,6 +95,9 @@ type ConnConfig struct {
 	// chainCached indicates whether cachedChain has been computed.
 	// Needed to distinguish "no modifiers (nil chain)" from "not yet computed".
 	chainCached bool
+
+	// chainMu protects cachedChain and chainCached from concurrent access.
+	chainMu sync.Mutex
 }
 
 // NewConnConfig creates a new ConnConfig with sensible defaults.
@@ -188,6 +192,8 @@ func (c *ConnConfig) ClearModifiers() *ConnConfig {
 // and cached; subsequent calls return the same instance until the modifier
 // list is mutated via WithModifiers, AddModifier, or ClearModifiers.
 func (c *ConnConfig) GetModifierChain() *handshake.ModifierChain {
+	c.chainMu.Lock()
+	defer c.chainMu.Unlock()
 	if c.chainCached {
 		return c.cachedChain
 	}
@@ -203,8 +209,10 @@ func (c *ConnConfig) GetModifierChain() *handshake.ModifierChain {
 // invalidateModifierCache resets the cached modifier chain so it will be
 // recomputed on the next call to GetModifierChain.
 func (c *ConnConfig) invalidateModifierCache() {
+	c.chainMu.Lock()
 	c.cachedChain = nil
 	c.chainCached = false
+	c.chainMu.Unlock()
 }
 
 // Validate checks if the configuration is valid and complete.
