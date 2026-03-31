@@ -372,26 +372,11 @@ func (h *SSU2Conn) finalizeHandshake() error {
 		return oops.Wrapf(err, "failed to install cipher states")
 	}
 
-	// Install KDF-derived header protection keys for data phase
-	var sendKHeader2, recvKHeader2 []byte
-	if h.headerProtector != nil {
-		var err error
-		sendKHeader2, recvKHeader2, err = h.handshakeHandler.DeriveHeaderKeys()
-		if err != nil {
-			return oops.Wrapf(err, "failed to derive header protection keys")
-		}
-		if err := h.headerProtector.SetKDFKeys(sendKHeader2, recvKHeader2); err != nil {
-			return oops.Wrapf(err, "failed to set header protection KDF keys")
-		}
-	} else {
-		var err error
-		sendKHeader2, recvKHeader2, err = h.handshakeHandler.DeriveHeaderKeys()
-		if err != nil {
-			return oops.Wrapf(err, "failed to derive data-phase keys")
-		}
+	sendKHeader2, recvKHeader2, err := h.deriveDataPhaseKeys()
+	if err != nil {
+		return err
 	}
 
-	// Derive SipHash keys for data-phase length obfuscation (G-2).
 	sipMod, sipErr := deriveSipHashModifier(sendKHeader2, recvKHeader2)
 	if sipErr != nil {
 		return oops.Wrapf(sipErr, "failed to derive SipHash keys")
@@ -402,12 +387,52 @@ func (h *SSU2Conn) finalizeHandshake() error {
 	h.state = StateEstablished
 	h.stateMutex.Unlock()
 
-	// Apply negotiated padding parameters (G-3). If the peer sent an
-	// Options block, the negotiated values override the local defaults.
-	// M-3: Log structured warnings when options negotiation is one-sided
-	// to aid deployment debugging.
+	h.applyNegotiatedPadding()
+	h.startDataLoops()
+	return nil
+}
+
+// deriveDataPhaseKeys installs KDF-derived header protection keys and returns
+// the send/receive kHeader2 values for SipHash derivation.
+func (h *SSU2Conn) deriveDataPhaseKeys() (sendKHeader2, recvKHeader2 []byte, err error) {
+	sendKHeader2, recvKHeader2, err = h.handshakeHandler.DeriveHeaderKeys()
+	if err != nil {
+		return nil, nil, oops.Wrapf(err, "failed to derive data-phase keys")
+	}
+
+	if h.headerProtector != nil {
+		if err := h.headerProtector.SetKDFKeys(sendKHeader2, recvKHeader2); err != nil {
+			return nil, nil, oops.Wrapf(err, "failed to set header protection KDF keys")
+		}
+	}
+
+	return sendKHeader2, recvKHeader2, nil
+}
+
+// applyNegotiatedPadding updates padding config from peer options negotiation.
+func (h *SSU2Conn) applyNegotiatedPadding() {
 	localOpts := h.handshakeHandler.LocalOptions()
 	peerOpts := h.handshakeHandler.PeerOptions()
+	h.logOptionsNegotiationWarnings(localOpts, peerOpts)
+
+	negotiated := h.handshakeHandler.NegotiatedPadding()
+	if negotiated == nil {
+		return
+	}
+
+	h.config.PaddingRatio = negotiated.TMaxRatio
+	if negotiated.TMinRatio > 0 {
+		minBytes := int(negotiated.TMinRatio * float64(h.config.MTU))
+		if minBytes > h.config.MinPaddingSize {
+			h.config.MinPaddingSize = minBytes
+		}
+	}
+
+	h.pushNegotiatedPaddingToModifier(negotiated)
+}
+
+// logOptionsNegotiationWarnings logs M-3 warnings when options negotiation is one-sided.
+func (h *SSU2Conn) logOptionsNegotiationWarnings(localOpts, peerOpts *OptionsParams) {
 	if localOpts != nil && peerOpts == nil {
 		log.WithFields(map[string]interface{}{
 			"side": "local_only",
@@ -419,34 +444,21 @@ func (h *SSU2Conn) finalizeHandshake() error {
 			"peer": h.remoteAddr.String(),
 		}).Warn("Options negotiation one-sided: peer sent Options but no local options configured (M-3)")
 	}
+}
 
-	if negotiated := h.handshakeHandler.NegotiatedPadding(); negotiated != nil {
-		h.config.PaddingRatio = negotiated.TMaxRatio
-		if negotiated.TMinRatio > 0 {
-			minBytes := int(negotiated.TMinRatio * float64(h.config.MTU))
-			if minBytes > h.config.MinPaddingSize {
-				h.config.MinPaddingSize = minBytes
+// pushNegotiatedPaddingToModifier updates the live SSU2PaddingModifier
+// with negotiated values so data-phase padding reflects the agreement.
+func (h *SSU2Conn) pushNegotiatedPaddingToModifier(negotiated *OptionsParams) {
+	for _, mod := range h.config.Modifiers {
+		if pm, ok := mod.(*SSU2PaddingModifier); ok {
+			maxBytes := h.config.MaxPaddingSize
+			if negotiated.TMaxRatio > 0 {
+				maxBytes = int(negotiated.TMaxRatio * float64(h.config.MTU))
 			}
-		}
-
-		// Push the negotiated values into the live SSU2PaddingModifier
-		// instance so that data-phase padding is actually applied. Without
-		// this, only the config fields are updated and the modifier
-		// continues using the original (default) parameters.
-		for _, mod := range h.config.Modifiers {
-			if pm, ok := mod.(*SSU2PaddingModifier); ok {
-				maxBytes := h.config.MaxPaddingSize
-				if negotiated.TMaxRatio > 0 {
-					maxBytes = int(negotiated.TMaxRatio * float64(h.config.MTU))
-				}
-				_ = pm.UpdatePaddingParams(h.config.MinPaddingSize, maxBytes, negotiated.TMaxRatio)
-				break
-			}
+			_ = pm.UpdatePaddingParams(h.config.MinPaddingSize, maxBytes, negotiated.TMaxRatio)
+			break
 		}
 	}
-
-	h.startDataLoops()
-	return nil
 }
 
 // startDataLoops starts background goroutines for data transport.

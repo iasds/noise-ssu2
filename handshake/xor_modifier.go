@@ -2,6 +2,7 @@ package handshake
 
 import (
 	"io"
+	"sync"
 
 	"github.com/go-i2p/crypto/rand"
 	"github.com/go-i2p/logger"
@@ -25,6 +26,7 @@ var randReader io.Reader = rand.Reader
 // cause XOR to become a no-op (identity function), passing data through
 // without any obfuscation.
 type XORModifier struct {
+	mu      sync.Mutex
 	name    string
 	xorKey  []byte
 	keySize int
@@ -67,6 +69,9 @@ func NewXORModifier(name string, xorKey []byte) *XORModifier {
 // ModifyOutbound applies XOR obfuscation to outbound handshake data.
 // Returns an error if Close() has been called.
 func (xm *XORModifier) ModifyOutbound(phase HandshakePhase, data []byte) ([]byte, error) {
+	xm.mu.Lock()
+	defer xm.mu.Unlock()
+
 	if xm.closed {
 		return nil, oops.
 			Code("MODIFIER_CLOSED").
@@ -103,6 +108,9 @@ func (xm *XORModifier) Name() string {
 // ModifyOutbound and ModifyInbound will return an error to prevent silent
 // security degradation from XOR with an all-zero key.
 func (xm *XORModifier) Close() error {
+	xm.mu.Lock()
+	defer xm.mu.Unlock()
+
 	for i := range xm.xorKey {
 		xm.xorKey[i] = 0
 	}

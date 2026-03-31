@@ -564,6 +564,29 @@ func (nc *NTCP2Config) createSipHashModifierIfEnabled() *SipHashLengthModifier {
 	return NewSipHashLengthModifier("ntcp2-siphash", nc.SipHashKeys, 0)
 }
 
+// createPaddingModifierIfEnabled creates an NTCP2 padding modifier if enabled.
+// Uses AEAD padding (block format with type 254) for the data phase.
+// Cleartext padding for handshake messages 1-2 is handled at the transport
+// layer (appended after the fixed-size Noise message; receiver ignores it).
+func (nc *NTCP2Config) createPaddingModifierIfEnabled() (handshake.HandshakeModifier, error) {
+	if !nc.FramePaddingEnabled {
+		return nil, nil
+	}
+	mod, err := NewNTCP2PaddingModifier(
+		"ntcp2-padding",
+		nc.MinPaddingSize,
+		nc.MaxPaddingSize,
+		true, // AEAD padding for data phase (phase >= PhaseFinal)
+	)
+	if err != nil {
+		return nil, oops.
+			Code("PADDING_MODIFIER_FAILED").
+			In("ntcp2").
+			Wrap(err)
+	}
+	return mod, nil
+}
+
 // SipHashModifier returns the SipHash length modifier created during ToConnConfig().
 // Returns nil if SipHash length obfuscation is disabled or ToConnConfig() hasn't been called.
 // Each call to ToConnConfig() creates a fresh modifier instance, so configs can be safely

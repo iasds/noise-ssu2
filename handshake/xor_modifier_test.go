@@ -283,6 +283,44 @@ func TestNewXORModifier_NormalRandReaderRestored(t *testing.T) {
 	}
 }
 
+// TestXORModifier_ConcurrentClose exercises Close() concurrently with
+// ModifyOutbound and ModifyInbound to verify that the sync.Mutex prevents
+// data races on `closed` and `xorKey`. Run with: go test -race ./handshake/...
+func TestXORModifier_ConcurrentClose(t *testing.T) {
+	modifier := NewXORModifier("race-close", []byte{0x5A, 0xA5})
+	testData := []byte("concurrent close test data")
+
+	const goroutines = 16
+	var wg sync.WaitGroup
+
+	// Launch goroutines that call ModifyOutbound/ModifyInbound continuously
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 100; j++ {
+				_, _ = modifier.ModifyOutbound(PhaseData, testData)
+				_, _ = modifier.ModifyInbound(PhaseData, testData)
+			}
+		}()
+	}
+
+	// Concurrently close the modifier
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_ = modifier.Close()
+	}()
+
+	wg.Wait()
+
+	// After Close, further calls must return an error
+	_, err := modifier.ModifyOutbound(PhaseData, testData)
+	if err == nil {
+		t.Error("ModifyOutbound after Close should return error")
+	}
+}
+
 // TestXORModifier_UseAfterClose verifies that ModifyOutbound and ModifyInbound
 // return errors after Close() has been called, preventing silent security
 // degradation where zeroed key material would cause XOR to become a no-op.

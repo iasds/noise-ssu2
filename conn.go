@@ -519,7 +519,10 @@ func (nc *NoiseConn) Handshake(ctx context.Context) error {
 	defer handshakeCtx.cancel()
 
 	if err := nc.executeRoleBasedHandshake(handshakeCtx.ctx); err != nil {
-		// On failure, return to init state for potential retry
+		// On failure, recreate the handshake state so that retry attempts
+		// start with fresh nonce counters and chaining key, as required by
+		// the Noise protocol specification.
+		nc.resetHandshakeState()
 		nc.setState(internal.StateInit)
 		return err
 	}
@@ -797,6 +800,22 @@ func (nc *NoiseConn) markHandshakeComplete() {
 	nc.setState(internal.StateEstablished)
 	nc.metrics.SetHandshakeEnd()
 	nc.logger.Info("Noise handshake completed successfully")
+}
+
+// resetHandshakeState recreates the HandshakeState from the original config
+// so that retry attempts begin with fresh nonce counters and chaining key.
+// Any partial cipher states from a failed handshake are also cleared.
+func (nc *NoiseConn) resetHandshakeState() {
+	hs, err := createHandshakeState(nc.config)
+	if err != nil {
+		nc.logger.WithFields(i2plogger.Fields{
+			"error": err.Error(),
+		}).Error("failed to recreate handshake state for retry")
+		return
+	}
+	nc.handshakeState = hs
+	nc.sendCipherState = nil
+	nc.recvCipherState = nil
 }
 
 // isClosed returns true if the connection is closed

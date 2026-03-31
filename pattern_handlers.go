@@ -382,37 +382,39 @@ func (nc *NoiseConn) performXKResponder(ctx context.Context) error {
 // ============================================================================
 
 // parseHandshakePattern maps pattern name strings to go-i2p/noise HandshakePattern types.
+// Accepts short names (e.g., "XX") and full Noise protocol names for both
+// AESGCM and ChaChaPoly cipher suites (e.g., "Noise_XX_25519_ChaChaPoly_SHA256").
 func parseHandshakePattern(patternName string) (noise.HandshakePattern, error) {
 	switch patternName {
-	case "Noise_NN_25519_AESGCM_SHA256", "NN":
+	case "Noise_NN_25519_AESGCM_SHA256", "Noise_NN_25519_ChaChaPoly_SHA256", "NN":
 		return noise.HandshakeNN, nil
-	case "Noise_NK_25519_AESGCM_SHA256", "NK":
+	case "Noise_NK_25519_AESGCM_SHA256", "Noise_NK_25519_ChaChaPoly_SHA256", "NK":
 		return noise.HandshakeNK, nil
-	case "Noise_NX_25519_AESGCM_SHA256", "NX":
+	case "Noise_NX_25519_AESGCM_SHA256", "Noise_NX_25519_ChaChaPoly_SHA256", "NX":
 		return noise.HandshakeNX, nil
-	case "Noise_XN_25519_AESGCM_SHA256", "XN":
+	case "Noise_XN_25519_AESGCM_SHA256", "Noise_XN_25519_ChaChaPoly_SHA256", "XN":
 		return noise.HandshakeXN, nil
-	case "Noise_XK_25519_AESGCM_SHA256", "XK":
+	case "Noise_XK_25519_AESGCM_SHA256", "Noise_XK_25519_ChaChaPoly_SHA256", "XK":
 		return noise.HandshakeXK, nil
-	case "Noise_XX_25519_AESGCM_SHA256", "XX":
+	case "Noise_XX_25519_AESGCM_SHA256", "Noise_XX_25519_ChaChaPoly_SHA256", "XX":
 		return noise.HandshakeXX, nil
-	case "Noise_KN_25519_AESGCM_SHA256", "KN":
+	case "Noise_KN_25519_AESGCM_SHA256", "Noise_KN_25519_ChaChaPoly_SHA256", "KN":
 		return noise.HandshakeKN, nil
-	case "Noise_KK_25519_AESGCM_SHA256", "KK":
+	case "Noise_KK_25519_AESGCM_SHA256", "Noise_KK_25519_ChaChaPoly_SHA256", "KK":
 		return noise.HandshakeKK, nil
-	case "Noise_KX_25519_AESGCM_SHA256", "KX":
+	case "Noise_KX_25519_AESGCM_SHA256", "Noise_KX_25519_ChaChaPoly_SHA256", "KX":
 		return noise.HandshakeKX, nil
-	case "Noise_IN_25519_AESGCM_SHA256", "IN":
+	case "Noise_IN_25519_AESGCM_SHA256", "Noise_IN_25519_ChaChaPoly_SHA256", "IN":
 		return noise.HandshakeIN, nil
-	case "Noise_IK_25519_AESGCM_SHA256", "IK":
+	case "Noise_IK_25519_AESGCM_SHA256", "Noise_IK_25519_ChaChaPoly_SHA256", "IK":
 		return noise.HandshakeIK, nil
-	case "Noise_IX_25519_AESGCM_SHA256", "IX":
+	case "Noise_IX_25519_AESGCM_SHA256", "Noise_IX_25519_ChaChaPoly_SHA256", "IX":
 		return noise.HandshakeIX, nil
-	case "Noise_N_25519_AESGCM_SHA256", "N":
+	case "Noise_N_25519_AESGCM_SHA256", "Noise_N_25519_ChaChaPoly_SHA256", "N":
 		return noise.HandshakeN, nil
-	case "Noise_K_25519_AESGCM_SHA256", "K":
+	case "Noise_K_25519_AESGCM_SHA256", "Noise_K_25519_ChaChaPoly_SHA256", "K":
 		return noise.HandshakeK, nil
-	case "Noise_X_25519_AESGCM_SHA256", "X":
+	case "Noise_X_25519_AESGCM_SHA256", "Noise_X_25519_ChaChaPoly_SHA256", "X":
 		return noise.HandshakeX, nil
 	default:
 		return noise.HandshakePattern{}, oops.

@@ -717,3 +717,31 @@ func TestParseHandshakePatternConcurrency(t *testing.T) {
 		}
 	}
 }
+
+// TestParseHandshakePatternChaChaPoly verifies that ChaChaPoly full pattern names
+// are accepted alongside AESGCM variants.
+func TestParseHandshakePatternChaChaPoly(t *testing.T) {
+	chachaPatterns := []string{
+		"Noise_NN_25519_ChaChaPoly_SHA256",
+		"Noise_NK_25519_ChaChaPoly_SHA256",
+		"Noise_NX_25519_ChaChaPoly_SHA256",
+		"Noise_XN_25519_ChaChaPoly_SHA256",
+		"Noise_XK_25519_ChaChaPoly_SHA256",
+		"Noise_XX_25519_ChaChaPoly_SHA256",
+		"Noise_KN_25519_ChaChaPoly_SHA256",
+		"Noise_KK_25519_ChaChaPoly_SHA256",
+		"Noise_KX_25519_ChaChaPoly_SHA256",
+		"Noise_IN_25519_ChaChaPoly_SHA256",
+		"Noise_IK_25519_ChaChaPoly_SHA256",
+		"Noise_IX_25519_ChaChaPoly_SHA256",
+		"Noise_N_25519_ChaChaPoly_SHA256",
+		"Noise_K_25519_ChaChaPoly_SHA256",
+		"Noise_X_25519_ChaChaPoly_SHA256",
+	}
+	for _, p := range chachaPatterns {
+		_, err := parseHandshakePattern(p)
+		if err != nil {
+			t.Errorf("parseHandshakePattern(%q) should succeed but got: %v", p, err)
+		}
+	}
+}
