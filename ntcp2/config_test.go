@@ -266,7 +266,7 @@ func TestNTCP2ConfigToConnConfig(t *testing.T) {
 	assert.Equal(t, 2*time.Second, connConfig.RetryBackoff)
 
 	// Verify NTCP2-specific modifiers are added
-	assert.Len(t, connConfig.Modifiers, 2) // AES + SipHash
+	assert.Len(t, connConfig.Modifiers, 3) // AES + SipHash + Padding
 }
 
 func TestNTCP2ConfigToConnConfigWithDisabledModifiers(t *testing.T) {
@@ -283,8 +283,8 @@ func TestNTCP2ConfigToConnConfigWithDisabledModifiers(t *testing.T) {
 	connConfig, err := ntcp2Config.ToConnConfig()
 	require.NoError(t, err)
 
-	// Should have no NTCP2-specific modifiers
-	assert.Len(t, connConfig.Modifiers, 0)
+	// Padding is still enabled by default (FramePaddingEnabled=true)
+	assert.Len(t, connConfig.Modifiers, 1) // Padding only
 }
 
 func TestNTCP2ConfigToConnConfigWithCustomModifiers(t *testing.T) {
@@ -306,11 +306,11 @@ func TestNTCP2ConfigToConnConfigWithCustomModifiers(t *testing.T) {
 	require.NoError(t, err)
 
 	// Should have NTCP2 modifiers + custom modifiers
-	assert.Len(t, connConfig.Modifiers, 4) // AES + SipHash + 2 custom
+	assert.Len(t, connConfig.Modifiers, 5) // AES + SipHash + Padding + 2 custom
 
 	// Custom modifiers should be at the end
-	assert.Equal(t, "custom-xor", connConfig.Modifiers[2].Name())
-	assert.Equal(t, "custom-padding", connConfig.Modifiers[3].Name())
+	assert.Equal(t, "custom-xor", connConfig.Modifiers[3].Name())
+	assert.Equal(t, "custom-padding", connConfig.Modifiers[4].Name())
 }
 
 func TestNTCP2ConfigBuilderDefensiveCopying(t *testing.T) {

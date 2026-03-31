@@ -1152,10 +1152,12 @@ func buildI2PBlock(blockType byte, data []byte) []byte {
 	return append(header, data...)
 }
 
-// TestAuditFix_RemoveAEADPadding_BlocksAfterPaddingReturnsError verifies that
-// a payload where a data block follows a padding block is rejected with
-// BLOCK_ORDER_VIOLATION.  Per the I2P NTCP2 spec, padding MUST be the last block.
-func TestAuditFix_RemoveAEADPadding_BlocksAfterPaddingReturnsError(t *testing.T) {
+// TestAuditFix_RemoveAEADPadding_BlocksAfterPaddingReturnsData verifies that
+// a payload where a data block follows a padding block is returned unchanged.
+// Forward block parsing is no longer used (it misparses raw data), so block
+// order violations are not detected at this layer — the trailing padding scan
+// simply finds no valid trailing padding block and returns the original data.
+func TestAuditFix_RemoveAEADPadding_BlocksAfterPaddingReturnsData(t *testing.T) {
 	modifier, err := NewNTCP2PaddingModifier("test", 0, 64, false)
 	require.NoError(t, err)
 
@@ -1165,9 +1167,9 @@ func TestAuditFix_RemoveAEADPadding_BlocksAfterPaddingReturnsError(t *testing.T)
 	buf = append(buf, buildI2PBlock(PaddingBlockType, []byte{0x00, 0x00})...)
 	buf = append(buf, buildI2PBlock(0x00, []byte("world"))...) // spec violation
 
-	_, err = modifier.removeAEADPadding(buf)
-	require.Error(t, err, "data block after padding must be rejected")
-	assert.Contains(t, err.Error(), "padding block must be last")
+	result, err := modifier.removeAEADPadding(buf)
+	require.NoError(t, err, "trailing scan returns data unchanged when no trailing padding found")
+	assert.Equal(t, buf, result, "data should be returned unchanged")
 }
 
 // TestAuditFix_ParseBlockStructure_BlocksAfterPaddingDetected verifies that

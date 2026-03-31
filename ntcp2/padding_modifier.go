@@ -289,41 +289,23 @@ func (npm *NTCP2PaddingModifier) addAEADPadding(data []byte, paddingSize int) ([
 	return result, nil
 }
 
-// removeAEADPadding removes AEAD padding blocks (type 254) using forward block parsing.
-// Parses data as I2P block structure [type:1][size:2][data...] from the beginning,
-// tracking the end of the last non-padding block. Falls back to trailing padding
-// block detection when the data is not fully in I2P block format (e.g., raw payload
-// followed by an appended padding block).
+// removeAEADPadding removes a trailing AEAD padding block (type 254) from the data.
 //
-// Per the I2P NTCP2 spec, padding MUST be the last block. If a valid padding block
-// is followed by another data block, removeAEADPadding returns an error rather than
-// silently discarding the trailing data.
+// The modifier always appends exactly one padding block at the end of the payload
+// in the format [type:1][size:2][padding_data]. This function locates that trailing
+// block by scanning for a valid [254][size:2] header whose declared size matches
+// the remaining bytes. The scan runs from paddingSize=0 upward so the first match
+// is always the genuine padding block (its header contains its own size, which
+// cannot collide with raw data at smaller offsets).
+//
+// Forward block parsing is intentionally avoided because the payload before the
+// padding block may be raw user data (not I2P block-formatted), and interpreting
+// arbitrary bytes as block headers produces incorrect truncation.
 func (npm *NTCP2PaddingModifier) removeAEADPadding(data []byte) ([]byte, error) {
 	if len(data) < BlockHeaderSize {
 		return data, nil // No room for block header
 	}
 
-	// Try forward block parsing first (proper I2P block format)
-	result := npm.parseBlockStructure(data)
-
-	// Reject payloads where a non-padding block follows a padding block.
-	// AEAD authentication prevents a malicious peer from forging this, but a
-	// buggy sender could produce it; surface the error rather than silently
-	// truncating the trailing data block.
-	if result.blocksAfterPadding {
-		return nil, oops.
-			Code("BLOCK_ORDER_VIOLATION").
-			In("ntcp2").
-			Errorf("padding block must be last: data block found after padding block")
-	}
-
-	if result.foundValidBlocks && result.lastDataEnd > 0 && result.lastDataEnd <= len(data) {
-		return data[:result.lastDataEnd], nil
-	}
-
-	// Fallback: check for a trailing padding block appended to raw data.
-	// Scan for [254][size:2][padding:size] at the end of the data where the
-	// declared size exactly matches the remaining bytes after the header.
 	return npm.removeTrailingPaddingBlock(data)
 }
 

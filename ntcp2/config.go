@@ -514,6 +514,14 @@ func (nc *NTCP2Config) setupNTCP2Modifiers() ([]handshake.HandshakeModifier, err
 		modifiers = append(modifiers, sipModifier)
 	}
 
+	paddingModifier, err := nc.createPaddingModifierIfEnabled()
+	if err != nil {
+		return nil, err
+	}
+	if paddingModifier != nil {
+		modifiers = append(modifiers, paddingModifier)
+	}
+
 	modifiers = append(modifiers, nc.Modifiers...)
 	return modifiers, nil
 }
