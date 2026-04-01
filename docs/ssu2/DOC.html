@@ -13,7 +13,7 @@
         <a href="../index.html">go-i2p/go-noise</a>
       </h2>
       <div class="repo-meta">
-        📝 257 commits
+        📝 261 commits
          • 📜 License
       </div>
     </div>
@@ -50,17 +50,17 @@
         
           <li><a href="../docs/DOC.html" >noise</a></li>
         
-          <li><a href="../docs/ntcp2/DOC.html" >ntcp2</a></li>
-        
           <li><a href="../docs/examples/ntcp2/DOC.html" >ntcp2</a></li>
+        
+          <li><a href="../docs/ntcp2/DOC.html" >ntcp2</a></li>
         
           <li><a href="../docs/examples/ntcp2-config/DOC.html" >ntcp2-config</a></li>
         
           <li><a href="../docs/examples/ntcp2-listener/DOC.html" >ntcp2-listener</a></li>
         
-          <li><a href="../docs/examples/pool/DOC.html" >pool</a></li>
-        
           <li><a href="../docs/pool/DOC.html" >pool</a></li>
+        
+          <li><a href="../docs/examples/pool/DOC.html" >pool</a></li>
         
           <li><a href="../docs/examples/retry/DOC.html" >retry</a></li>
         
@@ -149,6 +149,17 @@ NTCP2)</p>
 
 <p>Name returns the modifier name for logging and debugging.</p>
 
+<h2 id="known-limitations">Known Limitations</h2>
+
+<h3 id="nextnonce-block-type-11-key-rotation-disabled-by-default">NextNonce (Block Type 11) — Key Rotation Disabled by Default</h3>
+
+<p>The SSU2 spec marks NextNonce as &ldquo;TODO only if we rotate keys&rdquo; with size &ldquo;TBD&rdquo;.
+Accordingly, <code>SSU2Config.EnableNextNonce</code> defaults to <code>false</code>. When disabled,
+inbound NextNonce blocks are silently ignored and no key rotation occurs during
+long-lived sessions. Users expecting full SSU2 spec compliance should be aware
+that key rotation is not available until the spec finalizes this area. Set
+<code>EnableNextNonce: true</code> in <code>SSU2Config</code> to opt in to the experimental behavior.</p>
+
 <p>ssu2</p>
 
 <p>github.com/go-i2p/go-noise/ssu2</p>
@@ -159,7 +170,7 @@ NTCP2)</p>
     </main>
     
     <footer class="page-footer">
-      <p>Generated on 2026-04-01 17:00:27 • <a href="https://github.com/go-i2p/go-noise" target="_blank">View on GitHub</a></p>
+      <p>Generated on 2026-04-01 17:35:39 • <a href="https://github.com/go-i2p/go-noise" target="_blank">View on GitHub</a></p>
     </footer>
   </div>
 </body>
