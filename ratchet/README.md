@@ -43,7 +43,9 @@ than I2P-specific types, ensuring go-noise has zero dependency on go-i2p.
 | Type | Implements |
 |---|---|
 | `SessionManager` | `GarlicSessionManager` (embeds `GarlicEncryptor` + `GarlicDecryptor`) |
-| `BuildRecordCrypto` | `BuildRecordEncryptor`, `BuildReplyEncryptor` |
+| `BuildReplyCrypto` | `BuildReplyEncryptor` (ChaCha20-Poly1305 reply records) |
+| `BuildRequestCrypto` | `BuildRecordEncryptor` (ECIES-X25519 request records) |
+| `BuildRecordCrypto` | **Deprecated.** Combined wrapper; use `BuildReplyCrypto` or `BuildRequestCrypto` instead. Will be removed in the next major version. |
 
 ## Usage
 

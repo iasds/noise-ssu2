@@ -1,0 +1,116 @@
+package ntcp2
+
+import (
+	"encoding/binary"
+	"net"
+	"time"
+
+	"github.com/go-i2p/crypto/rand"
+	"github.com/samber/oops"
+)
+
+// guardReadNonce rejects read operations when the nonce counter has reached MaxNonce.
+// Per the spec: "Connection must be dropped and restarted after it reaches that value."
+func (nc *NTCP2Conn) guardReadNonce() error {
+	if nc.readNonce >= MaxNonce {
+		nc.broken.Store(true)
+		return oops.
+			Code("NONCE_EXHAUSTED").
+			In("ntcp2").
+			With("read_nonce", nc.readNonce).
+			With("max_nonce", MaxNonce).
+			Errorf("read nonce exhausted (reached %d), connection must be terminated", nc.readNonce)
+	}
+	return nil
+}
+
+// guardWriteNonce rejects write operations when the nonce counter has reached MaxNonce.
+// Per the spec: "Connection must be dropped and restarted after it reaches that value."
+func (nc *NTCP2Conn) guardWriteNonce() error {
+	if nc.writeNonce >= MaxNonce {
+		nc.broken.Store(true)
+		return oops.
+			Code("NONCE_EXHAUSTED").
+			In("ntcp2").
+			With("write_nonce", nc.writeNonce).
+			With("max_nonce", MaxNonce).
+			Errorf("write nonce exhausted (reached %d), connection must be terminated", nc.writeNonce)
+	}
+	return nil
+}
+
+// applyProbingResistanceDelay applies the same probing-resistance delay
+// as handleAEADError, per the NTCP2 spec: "Take the same error action
+// for an invalid length field value in the data phase."
+func (nc *NTCP2Conn) applyProbingResistanceDelay() {
+	if underlying := nc.noiseConn.Underlying(); underlying != nil {
+		nc.handleAEADError(underlying)
+	}
+}
+
+// handleAEADError implements probing-resistance behaviour on AEAD authentication
+// failure. Per the NTCP2 spec, the receiver should:
+//  1. Read a random number of junk bytes for a random duration.
+//  2. Send a TCP RST (abnormal close) rather than a graceful FIN.
+//  3. Mark the connection as broken.
+//
+// Termination blocks (reason code 4 = AEAD failure) are handled by the
+// router transport layer (go-i2p/go-i2p/lib/transport/ntcp).
+func (nc *NTCP2Conn) handleAEADError(underlying net.Conn) {
+	nc.broken.Store(true)
+
+	// Generate a random byte count (0–AEADErrorMaxJunkBytes) to read before returning.
+	// Use crypto/rand with rejection sampling to avoid modulo bias.
+	var rndBuf [2]byte
+	if _, err := rand.Read(rndBuf[:]); err != nil {
+		nc.sendTCPRST(underlying)
+		return // best effort
+	}
+	junkLen := int(binary.BigEndian.Uint16(rndBuf[:]) & (AEADErrorMaxJunkBytes - 1))
+	if junkLen > 0 {
+		// Randomize the timeout duration within [AEADErrorTimeoutMin, AEADErrorTimeoutMax]
+		// to avoid creating a timing fingerprint (per spec: "random timeout").
+		timeout := randomAEADTimeout()
+		underlying.SetReadDeadline(time.Now().Add(timeout)) //nolint:errcheck
+		junk := make([]byte, junkLen)
+		underlying.Read(junk) //nolint:errcheck // best effort
+	}
+
+	// Per the spec: "This should be an abnormal close (TCP RST)"
+	nc.sendTCPRST(underlying)
+}
+
+// randomAEADTimeout returns a uniformly random duration in the range
+// [AEADErrorTimeoutMin, AEADErrorTimeoutMax] for probing-resistance delays.
+// The spec says "random timeout (range TBD)" — we randomize to avoid creating
+// a timing fingerprint that would allow an attacker to identify AEAD failures.
+func randomAEADTimeout() time.Duration {
+	spread := AEADErrorTimeoutMax - AEADErrorTimeoutMin
+	var buf [8]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		// Fallback to midpoint on entropy failure (best effort)
+		return AEADErrorTimeoutMin + spread/2
+	}
+	n := binary.BigEndian.Uint64(buf[:])
+	offset := time.Duration(n % uint64(spread+1))
+	return AEADErrorTimeoutMin + offset
+}
+
+// sendTCPRST sends a TCP RST by setting SO_LINGER to 0 (immediate close without
+// FIN handshake) and then closing the connection. Per the NTCP2 spec, AEAD failures
+// should result in an abnormal close. If the underlying connection is not a
+// *net.TCPConn, falls back to a normal Close().
+//
+// Sets underlyingClosed so that the subsequent NTCP2Conn.Close() call skips a
+// second close of the same socket, avoiding an fd-reuse double-close race.
+func (nc *NTCP2Conn) sendTCPRST(conn net.Conn) {
+	if tcpConn, ok := conn.(*net.TCPConn); ok {
+		tcpConn.SetLinger(0) //nolint:errcheck
+		tcpConn.Close()      //nolint:errcheck
+	} else {
+		conn.Close() //nolint:errcheck
+	}
+	// Mark the underlying socket as already closed so Close() does not attempt
+	// a second close on the same fd (see underlyingClosed field).
+	nc.underlyingClosed.Store(true)
+}

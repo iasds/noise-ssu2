@@ -578,38 +578,34 @@ func (hpm *HeaderProtectorManager) SetKDFKeys(sendKH2, recvKH2 []byte) error {
 	return nil
 }
 
-// SetSessCreateHeaderKey sets the k_header_2 for SessionCreated header
-// protection, derived from the chainKey after handshake message 1 using
-// info string "SessCreateHeader".
-func (hpm *HeaderProtectorManager) SetSessCreateHeaderKey(key []byte) error {
+// setHeaderKey validates, copies, and stores a header key into the
+// specified destination slice pointer. Caller must NOT hold hpm.mu.
+func (hpm *HeaderProtectorManager) setHeaderKey(dst *[]byte, key []byte, label string) error {
 	if len(key) != HeaderKeySize {
 		return oops.
 			Code("INVALID_KEY_SIZE").
 			In("ssu2").
-			Errorf("SessCreateHeader key must be exactly %d bytes", HeaderKeySize)
+			Errorf("%s key must be exactly %d bytes", label, HeaderKeySize)
 	}
 	hpm.mu.Lock()
 	defer hpm.mu.Unlock()
-	hpm.sessCreateHeader2 = make([]byte, HeaderKeySize)
-	copy(hpm.sessCreateHeader2, key)
+	*dst = make([]byte, HeaderKeySize)
+	copy(*dst, key)
 	return nil
+}
+
+// SetSessCreateHeaderKey sets the k_header_2 for SessionCreated header
+// protection, derived from the chainKey after handshake message 1 using
+// info string "SessCreateHeader".
+func (hpm *HeaderProtectorManager) SetSessCreateHeaderKey(key []byte) error {
+	return hpm.setHeaderKey(&hpm.sessCreateHeader2, key, "SessCreateHeader")
 }
 
 // SetSessionConfirmedHeaderKey sets the k_header_2 for SessionConfirmed
 // header protection, derived from the chainKey after handshake message 2
 // using info string "SessionConfirmed".
 func (hpm *HeaderProtectorManager) SetSessionConfirmedHeaderKey(key []byte) error {
-	if len(key) != HeaderKeySize {
-		return oops.
-			Code("INVALID_KEY_SIZE").
-			In("ssu2").
-			Errorf("SessionConfirmed header key must be exactly %d bytes", HeaderKeySize)
-	}
-	hpm.mu.Lock()
-	defer hpm.mu.Unlock()
-	hpm.sessionConfirmedHeader2 = make([]byte, HeaderKeySize)
-	copy(hpm.sessionConfirmedHeader2, key)
-	return nil
+	return hpm.setHeaderKey(&hpm.sessionConfirmedHeader2, key, "SessionConfirmed")
 }
 
 // SetRemoteIntroKey sets the remote peer's intro key.

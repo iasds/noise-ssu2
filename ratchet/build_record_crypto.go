@@ -45,6 +45,9 @@ func NewBuildReplyCrypto() *BuildReplyCrypto {
 //
 // New code should prefer BuildReplyCrypto or BuildRequestCrypto directly so
 // that required key material is explicit at every call site.
+//
+// Deprecated: Use BuildReplyCrypto or BuildRequestCrypto instead.
+// This type will be removed in the next major version.
 type BuildRecordCrypto struct {
 	BuildReplyCrypto
 	BuildRequestCrypto

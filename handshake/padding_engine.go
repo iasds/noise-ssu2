@@ -1,0 +1,269 @@
+package handshake
+
+import (
+	"crypto/rand"
+	"encoding/binary"
+
+	"github.com/samber/oops"
+)
+
+// Shared I2P padding constants used by both NTCP2 and SSU2 transports.
+const (
+	// I2PPaddingBlockType is the I2P block type identifier for padding (type 254).
+	I2PPaddingBlockType byte = 254
+
+	// I2PBlockHeaderSize is the size of an I2P block header: [type:1][size:2].
+	I2PBlockHeaderSize = 3
+
+	// I2PMaxBlockDataSize is the maximum data size for a single I2P block (65516 bytes).
+	I2PMaxBlockDataSize = 65516
+
+	// I2PMaxPaddingRatio is the maximum padding ratio per I2P spec (4.4 fixed-point format).
+	I2PMaxPaddingRatio = 15.9375
+)
+
+// PaddingEngineConfig holds shared padding parameters for the engine.
+// The engine does not manage concurrency — callers must handle locking.
+type PaddingEngineConfig struct {
+	MinPadding   int
+	MaxPadding   int
+	PaddingRatio float64
+	TestMode     bool
+	Domain       string // Error domain for oops messages (e.g., "ntcp2", "ssu2")
+}
+
+// PaddingEngine provides shared padding computation and I2P block wire format
+// operations for transport protocols. Both NTCP2 and SSU2 padding modifiers
+// embed this engine and add protocol-specific constraints.
+//
+// The engine is NOT thread-safe. The embedding modifier handles locking.
+type PaddingEngine struct {
+	Config PaddingEngineConfig
+}
+
+// NewPaddingEngine creates a validated padding engine.
+func NewPaddingEngine(config PaddingEngineConfig) (*PaddingEngine, error) {
+	if err := ValidatePaddingParams(config.Domain, config.MinPadding, config.MaxPadding, config.PaddingRatio); err != nil {
+		return nil, err
+	}
+	return &PaddingEngine{Config: config}, nil
+}
+
+// ValidatePaddingParams validates common I2P padding parameters.
+func ValidatePaddingParams(domain string, minPadding, maxPadding int, paddingRatio float64) error {
+	if minPadding < 0 {
+		return oops.
+			Code("INVALID_PADDING").
+			In(domain).
+			With("min_padding", minPadding).
+			Errorf("minimum padding cannot be negative")
+	}
+
+	if maxPadding < minPadding {
+		return oops.
+			Code("INVALID_PADDING").
+			In(domain).
+			With("min_padding", minPadding).
+			With("max_padding", maxPadding).
+			Errorf("maximum padding cannot be less than minimum padding")
+	}
+
+	if maxPadding > I2PMaxBlockDataSize {
+		return oops.
+			Code("INVALID_PADDING").
+			In(domain).
+			With("max_padding", maxPadding).
+			Errorf("maximum padding cannot exceed %d bytes (I2P spec limit)", I2PMaxBlockDataSize)
+	}
+
+	if paddingRatio < 0.0 || paddingRatio > I2PMaxPaddingRatio {
+		return oops.
+			Code("INVALID_PADDING_RATIO").
+			In(domain).
+			With("padding_ratio", paddingRatio).
+			Errorf("padding ratio must be between 0.0 and %.4f (I2P spec)", I2PMaxPaddingRatio)
+	}
+
+	return nil
+}
+
+// ShouldSkipPadding returns true when no padding is configured.
+func (pe *PaddingEngine) ShouldSkipPadding() bool {
+	return pe.Config.MinPadding == 0 && pe.Config.MaxPadding == 0 && pe.Config.PaddingRatio == 0.0
+}
+
+// CalculatePaddingSize computes the padding size using ratio, random variation,
+// and min/max enforcement. The result is clamped to [MinPadding, MaxPadding].
+func (pe *PaddingEngine) CalculatePaddingSize(dataLen int) int {
+	if pe.ShouldSkipPadding() {
+		return 0
+	}
+
+	paddingSize := pe.calculateRatioPadding(dataLen)
+	paddingSize = pe.enforceMinimumPadding(paddingSize)
+	paddingSize = pe.applyRandomVariation(paddingSize, dataLen)
+	return pe.enforceMaximumPadding(paddingSize)
+}
+
+// UpdateParams updates the engine's padding parameters after validation.
+func (pe *PaddingEngine) UpdateParams(minPad, maxPad int, ratio float64) error {
+	if err := ValidatePaddingParams(pe.Config.Domain, minPad, maxPad, ratio); err != nil {
+		return err
+	}
+	pe.Config.MinPadding = minPad
+	pe.Config.MaxPadding = maxPad
+	pe.Config.PaddingRatio = ratio
+	return nil
+}
+
+// EstimatePaddingSize estimates padding for bandwidth calculations.
+func (pe *PaddingEngine) EstimatePaddingSize(dataLen int) int {
+	if pe.Config.PaddingRatio > 0.0 {
+		ratioPadding := int(float64(dataLen) * pe.Config.PaddingRatio)
+		if ratioPadding < pe.Config.MinPadding {
+			return pe.Config.MinPadding
+		}
+		if ratioPadding > pe.Config.MaxPadding {
+			return pe.Config.MaxPadding
+		}
+		return ratioPadding
+	}
+	return (pe.Config.MinPadding + pe.Config.MaxPadding) / 2
+}
+
+// AddCleartextPadding appends cryptographically random bytes after the data.
+func (pe *PaddingEngine) AddCleartextPadding(data []byte, paddingSize int) ([]byte, error) {
+	result := make([]byte, len(data)+paddingSize)
+	copy(result, data)
+
+	paddingData := result[len(data):]
+	if pe.Config.TestMode {
+		for i := 0; i < paddingSize; i++ {
+			paddingData[i] = byte((i + len(data)) % 256)
+		}
+	} else {
+		if _, err := rand.Read(paddingData); err != nil {
+			return nil, oops.
+				Code("PADDING_GENERATION_FAILED").
+				In(pe.Config.Domain).
+				With("padding_size", paddingSize).
+				Wrapf(err, "failed to generate secure random padding")
+		}
+	}
+
+	return result, nil
+}
+
+// AddAEADPadding appends a padding block in I2P format: [type:1][size:2][random padding].
+func (pe *PaddingEngine) AddAEADPadding(data []byte, paddingSize int) ([]byte, error) {
+	blockSize := I2PBlockHeaderSize + paddingSize
+	result := make([]byte, len(data)+blockSize)
+	copy(result, data)
+
+	offset := len(data)
+	result[offset] = I2PPaddingBlockType
+	binary.BigEndian.PutUint16(result[offset+1:], uint16(paddingSize))
+
+	paddingData := result[offset+3:]
+	if pe.Config.TestMode {
+		for i := 0; i < paddingSize; i++ {
+			paddingData[i] = byte((i + len(data)) % 256)
+		}
+	} else {
+		if _, err := rand.Read(paddingData); err != nil {
+			return nil, oops.
+				Code("AEAD_PADDING_GENERATION_FAILED").
+				In(pe.Config.Domain).
+				With("padding_size", paddingSize).
+				Wrapf(err, "failed to generate secure random AEAD padding")
+		}
+	}
+
+	return result, nil
+}
+
+// RemoveTrailingAEADPadding removes a trailing I2P padding block (type 254)
+// by scanning from paddingSize=0 upward. maxScanPadding limits the search range.
+func (pe *PaddingEngine) RemoveTrailingAEADPadding(data []byte, maxScanPadding int) ([]byte, error) {
+	if len(data) < I2PBlockHeaderSize {
+		return data, nil
+	}
+
+	maxPadding := len(data) - I2PBlockHeaderSize
+	if maxPadding < 0 {
+		return data, nil
+	}
+	if maxScanPadding > 0 && maxPadding > maxScanPadding {
+		maxPadding = maxScanPadding
+	}
+	if maxPadding > I2PMaxBlockDataSize {
+		maxPadding = I2PMaxBlockDataSize
+	}
+
+	for paddingSize := 0; paddingSize <= maxPadding; paddingSize++ {
+		start := len(data) - I2PBlockHeaderSize - paddingSize
+		if start < 0 {
+			break
+		}
+		if data[start] != I2PPaddingBlockType {
+			continue
+		}
+		declaredSize := int(binary.BigEndian.Uint16(data[start+1 : start+3]))
+		if declaredSize == paddingSize {
+			return data[:start], nil
+		}
+	}
+	return data, nil
+}
+
+func (pe *PaddingEngine) calculateRatioPadding(dataLen int) int {
+	if pe.Config.PaddingRatio > 0.0 {
+		return int(float64(dataLen) * pe.Config.PaddingRatio)
+	}
+	return 0
+}
+
+func (pe *PaddingEngine) enforceMinimumPadding(paddingSize int) int {
+	if paddingSize < pe.Config.MinPadding {
+		return pe.Config.MinPadding
+	}
+	return paddingSize
+}
+
+func (pe *PaddingEngine) enforceMaximumPadding(paddingSize int) int {
+	if paddingSize > pe.Config.MaxPadding {
+		return pe.Config.MaxPadding
+	}
+	return paddingSize
+}
+
+func (pe *PaddingEngine) applyRandomVariation(paddingSize, dataLen int) int {
+	paddingRange := pe.Config.MaxPadding - pe.Config.MinPadding
+	if paddingRange <= 0 {
+		return paddingSize
+	}
+
+	if pe.Config.TestMode {
+		return pe.Config.MinPadding + (dataLen%paddingRange+paddingRange)%paddingRange
+	}
+	return pe.calculateSecureRandomPadding(paddingSize, paddingRange)
+}
+
+func (pe *PaddingEngine) calculateSecureRandomPadding(paddingSize, paddingRange int) int {
+	randomBytes := make([]byte, 4)
+	if _, err := rand.Read(randomBytes); err != nil {
+		return paddingSize
+	}
+
+	randomValue := binary.BigEndian.Uint32(randomBytes)
+	// Use unsigned modulus before converting to int to avoid negative values on 32-bit platforms.
+	randomPadding := int(randomValue % uint32(paddingRange+1))
+
+	if pe.Config.PaddingRatio > 0.0 {
+		if randomPadding > paddingSize-pe.Config.MinPadding {
+			return pe.Config.MinPadding + randomPadding
+		}
+		return paddingSize
+	}
+	return pe.Config.MinPadding + randomPadding
+}

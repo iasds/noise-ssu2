@@ -5,8 +5,6 @@ import (
 	"math"
 	"sync"
 
-	"github.com/go-i2p/crypto/rand"
-
 	"github.com/go-i2p/go-noise/handshake"
 	"github.com/samber/oops"
 )
@@ -18,15 +16,16 @@ import (
 // - Cryptographically secure random padding distribution
 // - Configurable padding ratios for traffic analysis resistance
 //
+// Padding computation and I2P block wire format operations are provided by
+// the shared handshake.PaddingEngine. NTCP2-specific concerns (AEAD removal
+// with trailing-block scan, frame validation) remain in this type.
+//
 // All exported methods are safe for concurrent use.
 type NTCP2PaddingModifier struct {
 	mu             sync.Mutex
 	name           string
-	minPadding     int
-	maxPadding     int
-	useAEADPadding bool    // true for message 3+ (AEAD), false for messages 1-2 (cleartext)
-	paddingRatio   float64 // padding to data ratio (0.0 to 15.9375 as per I2P spec)
-	testMode       bool    // if true, use deterministic padding for testing
+	engine         *handshake.PaddingEngine
+	useAEADPadding bool // true for message 3+ (AEAD), false for messages 1-2 (cleartext)
 }
 
 // NewNTCP2PaddingModifier creates a new production-grade NTCP2 padding modifier.
@@ -55,48 +54,21 @@ func NewNTCP2PaddingModifier(name string, minPadding, maxPadding int, useAEADPad
 // A paddingRatio of 0.0 means no ratio-based padding (uses min/max only).
 // A paddingRatio of 1.0 means 100% padding (double the message size).
 func NewNTCP2PaddingModifierWithRatio(name string, minPadding, maxPadding int, useAEADPadding bool, paddingRatio float64) (*NTCP2PaddingModifier, error) {
-	if minPadding < 0 {
-		return nil, oops.
-			Code("INVALID_PADDING").
-			In("ntcp2").
-			With("min_padding", minPadding).
-			Errorf("minimum padding cannot be negative")
-	}
-
-	if maxPadding < minPadding {
-		return nil, oops.
-			Code("INVALID_PADDING").
-			In("ntcp2").
-			With("min_padding", minPadding).
-			With("max_padding", maxPadding).
-			Errorf("maximum padding cannot be less than minimum padding")
-	}
-
-	// I2P NTCP2 spec: maximum single block data size is 65516 bytes
-	if maxPadding > MaxBlockDataSize {
-		return nil, oops.
-			Code("INVALID_PADDING").
-			In("ntcp2").
-			With("max_padding", maxPadding).
-			Errorf("maximum padding cannot exceed %d bytes (I2P NTCP2 spec limit)", MaxBlockDataSize)
-	}
-
-	// I2P NTCP2 spec: padding ratio range is 0.0 to 15.9375
-	if paddingRatio < 0.0 || paddingRatio > MaxPaddingRatio {
-		return nil, oops.
-			Code("INVALID_PADDING_RATIO").
-			In("ntcp2").
-			With("padding_ratio", paddingRatio).
-			Errorf("padding ratio must be between 0.0 and %.4f (I2P NTCP2 spec)", MaxPaddingRatio)
+	engine, err := handshake.NewPaddingEngine(handshake.PaddingEngineConfig{
+		MinPadding:   minPadding,
+		MaxPadding:   maxPadding,
+		PaddingRatio: paddingRatio,
+		TestMode:     false,
+		Domain:       "ntcp2",
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	return &NTCP2PaddingModifier{
 		name:           name,
-		minPadding:     minPadding,
-		maxPadding:     maxPadding,
+		engine:         engine,
 		useAEADPadding: useAEADPadding,
-		paddingRatio:   paddingRatio,
-		testMode:       false,
 	}, nil
 }
 
@@ -107,7 +79,7 @@ func NewNTCP2PaddingModifierForTesting(name string, minPadding, maxPadding int, 
 	if err != nil {
 		return nil, err
 	}
-	modifier.testMode = true
+	modifier.engine.Config.TestMode = true
 	return modifier, nil
 }
 
@@ -116,17 +88,15 @@ func (npm *NTCP2PaddingModifier) ModifyOutbound(phase handshake.HandshakePhase, 
 	npm.mu.Lock()
 	defer npm.mu.Unlock()
 
-	paddingSize := npm.calculatePaddingSize(len(data))
+	paddingSize := npm.engine.CalculatePaddingSize(len(data))
 	if paddingSize == 0 {
 		return data, nil
 	}
 
 	if npm.useAEADPadding && phase >= handshake.PhaseFinal {
-		// AEAD padding: block format with type 254
-		return npm.addAEADPadding(data, paddingSize)
+		return npm.engine.AddAEADPadding(data, paddingSize)
 	} else if !npm.useAEADPadding && phase < handshake.PhaseFinal {
-		// Cleartext padding: simple append
-		return npm.addCleartextPadding(data, paddingSize)
+		return npm.engine.AddCleartextPadding(data, paddingSize)
 	}
 
 	return data, nil
@@ -138,227 +108,22 @@ func (npm *NTCP2PaddingModifier) ModifyInbound(phase handshake.HandshakePhase, d
 	defer npm.mu.Unlock()
 
 	if npm.useAEADPadding && phase >= handshake.PhaseFinal {
-		// Remove AEAD padding (block format)
-		return npm.removeAEADPadding(data)
+		return npm.engine.RemoveTrailingAEADPadding(data, npm.engine.Config.MaxPadding)
 	} else if !npm.useAEADPadding && phase < handshake.PhaseFinal {
-		// Cleartext padding was included in KDF, cannot be removed here
-		// This is handled by the protocol itself
 		return data, nil
 	}
 
 	return data, nil
 }
 
-// calculatePaddingSize determines padding size using production-grade strategies.
-// Uses cryptographically secure random padding distribution aligned with I2P NTCP2 spec.
-func (npm *NTCP2PaddingModifier) calculatePaddingSize(dataLen int) int {
-	if npm.shouldSkipPadding() {
-		return 0
-	}
-
-	paddingSize := npm.calculateRatioPadding(dataLen)
-	paddingSize = npm.enforceMinimumPadding(paddingSize)
-	paddingSize = npm.applyRandomVariation(paddingSize, dataLen)
-	return npm.enforceMaximumPadding(paddingSize)
-}
-
-// shouldSkipPadding checks if padding should be skipped based on configuration.
-func (npm *NTCP2PaddingModifier) shouldSkipPadding() bool {
-	return npm.minPadding == 0 && npm.maxPadding == 0 && npm.paddingRatio == 0.0
-}
-
-// calculateRatioPadding computes padding size based on the configured ratio.
-func (npm *NTCP2PaddingModifier) calculateRatioPadding(dataLen int) int {
-	if npm.paddingRatio > 0.0 {
-		return int(float64(dataLen) * npm.paddingRatio)
-	}
-	return 0
-}
-
-// enforceMinimumPadding ensures the padding size meets the minimum requirement.
-func (npm *NTCP2PaddingModifier) enforceMinimumPadding(paddingSize int) int {
-	if paddingSize < npm.minPadding {
-		return npm.minPadding
-	}
-	return paddingSize
-}
-
-// applyRandomVariation adds cryptographically secure random variation to padding size.
-func (npm *NTCP2PaddingModifier) applyRandomVariation(paddingSize, dataLen int) int {
-	paddingRange := npm.maxPadding - npm.minPadding
-	if paddingRange <= 0 {
-		return paddingSize
-	}
-
-	if npm.testMode {
-		return npm.calculateDeterministicPadding(dataLen, paddingRange)
-	}
-	return npm.calculateSecureRandomPadding(paddingSize, paddingRange)
-}
-
-// calculateDeterministicPadding generates deterministic padding for testing only.
-func (npm *NTCP2PaddingModifier) calculateDeterministicPadding(dataLen, paddingRange int) int {
-	return npm.minPadding + (dataLen%paddingRange+paddingRange)%paddingRange
-}
-
-// calculateSecureRandomPadding generates cryptographically secure random padding.
-func (npm *NTCP2PaddingModifier) calculateSecureRandomPadding(paddingSize, paddingRange int) int {
-	randomBytes := make([]byte, 4)
-	if _, err := rand.Read(randomBytes); err != nil {
-		return paddingSize
-	}
-
-	randomValue := binary.BigEndian.Uint32(randomBytes)
-	// Use unsigned modulus before converting to int to avoid negative values on 32-bit platforms.
-	randomPadding := int(randomValue % uint32(paddingRange+1))
-
-	if npm.paddingRatio > 0.0 {
-		if randomPadding > paddingSize-npm.minPadding {
-			return npm.minPadding + randomPadding
-		}
-		return paddingSize
-	}
-	return npm.minPadding + randomPadding
-}
-
-// enforceMaximumPadding ensures the padding size does not exceed the maximum limit.
-func (npm *NTCP2PaddingModifier) enforceMaximumPadding(paddingSize int) int {
-	if paddingSize > npm.maxPadding {
-		return npm.maxPadding
-	}
-	return paddingSize
-}
-
-// addCleartextPadding adds production-grade cleartext padding for messages 1 and 2.
-// Uses cryptographically secure random padding data as required by I2P NTCP2 spec.
-func (npm *NTCP2PaddingModifier) addCleartextPadding(data []byte, paddingSize int) ([]byte, error) {
-	result := make([]byte, len(data)+paddingSize)
-	copy(result, data)
-
-	// Generate cryptographically secure random padding
-	paddingData := result[len(data):]
-	if npm.testMode {
-		// Deterministic padding for testing (INSECURE - for testing only)
-		for i := 0; i < paddingSize; i++ {
-			paddingData[i] = byte((i + len(data)) % 256)
-		}
-	} else {
-		// Production: use cryptographically secure random padding
-		if _, err := rand.Read(paddingData); err != nil {
-			return nil, oops.
-				Code("PADDING_GENERATION_FAILED").
-				In("ntcp2").
-				With("padding_size", paddingSize).
-				Wrapf(err, "failed to generate secure random padding")
-		}
-	}
-
-	return result, nil
-}
-
-// addAEADPadding adds production-grade AEAD padding in I2P block format (type 254).
-// Follows I2P NTCP2 spec: [type:1][size:2][padding_data] inside AEAD frames.
-func (npm *NTCP2PaddingModifier) addAEADPadding(data []byte, paddingSize int) ([]byte, error) {
-	// Block format: [type:1][size:2][padding_data]
-	blockSize := 3 + paddingSize
-	result := make([]byte, len(data)+blockSize)
-	copy(result, data)
-
-	offset := len(data)
-	result[offset] = PaddingBlockType                                  // Padding block type (I2P NTCP2 spec)
-	binary.BigEndian.PutUint16(result[offset+1:], uint16(paddingSize)) // Padding size (big-endian)
-
-	// Generate cryptographically secure random padding data
-	paddingData := result[offset+3:]
-	if npm.testMode {
-		// Deterministic padding for testing (INSECURE - for testing only)
-		for i := 0; i < paddingSize; i++ {
-			paddingData[i] = byte((i + len(data)) % 256)
-		}
-	} else {
-		// Production: use cryptographically secure random padding
-		if _, err := rand.Read(paddingData); err != nil {
-			return nil, oops.
-				Code("AEAD_PADDING_GENERATION_FAILED").
-				In("ntcp2").
-				With("padding_size", paddingSize).
-				Wrapf(err, "failed to generate secure random AEAD padding")
-		}
-	}
-
-	return result, nil
-}
-
-// removeAEADPadding removes a trailing AEAD padding block (type 254) from the data.
-//
-// The modifier always appends exactly one padding block at the end of the payload
-// in the format [type:1][size:2][padding_data]. This function locates that trailing
-// block by scanning for a valid [254][size:2] header whose declared size matches
-// the remaining bytes. The scan runs from paddingSize=0 upward so the first match
-// is always the genuine padding block (its header contains its own size, which
-// cannot collide with raw data at smaller offsets).
-//
-// Forward block parsing is intentionally avoided because the payload before the
-// padding block may be raw user data (not I2P block-formatted), and interpreting
-// arbitrary bytes as block headers produces incorrect truncation.
+// removeAEADPadding removes a trailing AEAD padding block via the shared engine.
 func (npm *NTCP2PaddingModifier) removeAEADPadding(data []byte) ([]byte, error) {
-	if len(data) < BlockHeaderSize {
-		return data, nil // No room for block header
-	}
-
-	return npm.removeTrailingPaddingBlock(data)
+	return npm.engine.RemoveTrailingAEADPadding(data, npm.engine.Config.MaxPadding)
 }
 
-// removeTrailingPaddingBlock looks for a valid padding block at the end of the data
-// by iterating through possible padding sizes and verifying the block header matches.
-// The search is bounded by the modifier's maxPadding field to avoid O(n) scans on
-// large frames.
+// removeTrailingPaddingBlock delegates to removeAEADPadding for backward compatibility.
 func (npm *NTCP2PaddingModifier) removeTrailingPaddingBlock(data []byte) ([]byte, error) {
-	maxPadding := npm.computeMaxTrailingPaddingScan(len(data))
-	if maxPadding < 0 {
-		return data, nil
-	}
-
-	for paddingSize := 0; paddingSize <= maxPadding; paddingSize++ {
-		if trimmed, ok := npm.matchTrailingPaddingAt(data, paddingSize); ok {
-			return trimmed, nil
-		}
-	}
-	return data, nil
-}
-
-// computeMaxTrailingPaddingScan returns the upper bound of the padding scan range,
-// clamped by both the modifier's maxPadding and MaxBlockDataSize.
-func (npm *NTCP2PaddingModifier) computeMaxTrailingPaddingScan(dataLen int) int {
-	maxPadding := dataLen - BlockHeaderSize
-	if maxPadding < 0 {
-		return -1
-	}
-	if npm.maxPadding > 0 && maxPadding > npm.maxPadding {
-		maxPadding = npm.maxPadding
-	}
-	if maxPadding > MaxBlockDataSize {
-		maxPadding = MaxBlockDataSize
-	}
-	return maxPadding
-}
-
-// matchTrailingPaddingAt checks whether a valid padding block of the given size
-// exists at the expected trailing position in data. Returns the trimmed data and
-// true if a match is found.
-func (npm *NTCP2PaddingModifier) matchTrailingPaddingAt(data []byte, paddingSize int) ([]byte, bool) {
-	start := len(data) - BlockHeaderSize - paddingSize
-	if start < 0 {
-		return nil, false
-	}
-	if data[start] != PaddingBlockType {
-		return nil, false
-	}
-	declaredSize := int(binary.BigEndian.Uint16(data[start+1 : start+3]))
-	if declaredSize == paddingSize {
-		return data[:start], true
-	}
-	return nil, false
+	return npm.removeAEADPadding(data)
 }
 
 // parseBlockStructure analyzes data as I2P block format and tracks parsing state.
@@ -440,7 +205,7 @@ func (npm *NTCP2PaddingModifier) SetPaddingRatio(ratio float64) error {
 			Errorf("padding ratio must be between 0.0 and %.4f (I2P NTCP2 spec)", MaxPaddingRatio)
 	}
 	npm.mu.Lock()
-	npm.paddingRatio = ratio
+	npm.engine.Config.PaddingRatio = ratio
 	npm.mu.Unlock()
 	return nil
 }
@@ -449,47 +214,26 @@ func (npm *NTCP2PaddingModifier) SetPaddingRatio(ratio float64) error {
 func (npm *NTCP2PaddingModifier) GetPaddingRatio() float64 {
 	npm.mu.Lock()
 	defer npm.mu.Unlock()
-	return npm.paddingRatio
+	return npm.engine.Config.PaddingRatio
 }
 
 // GetPaddingLimits returns the current min/max padding limits.
 func (npm *NTCP2PaddingModifier) GetPaddingLimits() (int, int) {
 	npm.mu.Lock()
 	defer npm.mu.Unlock()
-	return npm.minPadding, npm.maxPadding
+	return npm.engine.Config.MinPadding, npm.engine.Config.MaxPadding
 }
 
 // SetPaddingLimits updates the padding limits for dynamic adjustment.
 // Supports I2P NTCP2 options negotiation during data phase.
 func (npm *NTCP2PaddingModifier) SetPaddingLimits(minPadding, maxPadding int) error {
-	if minPadding < 0 {
-		return oops.
-			Code("INVALID_PADDING").
-			In("ntcp2").
-			With("min_padding", minPadding).
-			Errorf("minimum padding cannot be negative")
-	}
-
-	if maxPadding < minPadding {
-		return oops.
-			Code("INVALID_PADDING").
-			In("ntcp2").
-			With("min_padding", minPadding).
-			With("max_padding", maxPadding).
-			Errorf("maximum padding cannot be less than minimum padding")
-	}
-
-	if maxPadding > MaxBlockDataSize {
-		return oops.
-			Code("INVALID_PADDING").
-			In("ntcp2").
-			With("max_padding", maxPadding).
-			Errorf("maximum padding cannot exceed %d bytes (I2P NTCP2 spec limit)", MaxBlockDataSize)
+	if err := handshake.ValidatePaddingParams("ntcp2", minPadding, maxPadding, 0.0); err != nil {
+		return err
 	}
 
 	npm.mu.Lock()
-	npm.minPadding = minPadding
-	npm.maxPadding = maxPadding
+	npm.engine.Config.MinPadding = minPadding
+	npm.engine.Config.MaxPadding = maxPadding
 	npm.mu.Unlock()
 	return nil
 }
@@ -502,19 +246,19 @@ func (npm *NTCP2PaddingModifier) IsAEADMode() bool {
 // EstimatePaddingSize estimates the padding size for a given data length.
 // Useful for pre-allocating buffers and bandwidth calculations.
 func (npm *NTCP2PaddingModifier) EstimatePaddingSize(dataLen int) int {
-	if npm.paddingRatio > 0.0 {
-		ratioPadding := int(math.Ceil(float64(dataLen) * npm.paddingRatio))
-		if ratioPadding < npm.minPadding {
-			return npm.minPadding
+	npm.mu.Lock()
+	defer npm.mu.Unlock()
+	if npm.engine.Config.PaddingRatio > 0.0 {
+		ratioPadding := int(math.Ceil(float64(dataLen) * npm.engine.Config.PaddingRatio))
+		if ratioPadding < npm.engine.Config.MinPadding {
+			return npm.engine.Config.MinPadding
 		}
-		if ratioPadding > npm.maxPadding {
-			return npm.maxPadding
+		if ratioPadding > npm.engine.Config.MaxPadding {
+			return npm.engine.Config.MaxPadding
 		}
 		return ratioPadding
 	}
-
-	// Return average of min/max for estimation
-	return (npm.minPadding + npm.maxPadding) / 2
+	return (npm.engine.Config.MinPadding + npm.engine.Config.MaxPadding) / 2
 }
 
 // ValidateAEADFrame validates that a frame contains properly formatted AEAD blocks.

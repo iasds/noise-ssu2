@@ -130,35 +130,64 @@ func (h *DataHandler) handleCongestion(data []byte) error {
 	return nil
 }
 
-// handleRelayRequest processes a RelayRequest block (Type 7).
-// Per SSU2 spec §Relay Request, signatures MUST be verified before acting (G-2).
-func (h *DataHandler) handleRelayRequest(block *SSU2Block) error {
-	log.WithField("dataLength", len(block.Data)).Debug("Received RelayRequest block")
+// handleSignedRelayBlock is the common handler for relay blocks that require
+// unconditional signature verification: decode → check signature → verify → dispatch.
+func (h *DataHandler) handleSignedRelayBlock(
+	block *SSU2Block,
+	label string,
+	decode func(*SSU2Block) ([]byte, error), // returns signature bytes
+	verify func() error, // nil if no verifier wired
+	dispatch func() error, // nil if no callback wired
+) error {
+	log.WithField("dataLength", len(block.Data)).Debug("Received " + label + " block")
 
-	cbs := h.getCallbacks()
-
-	// Decode to verify signature field is present
-	decoded, err := DecodeRelayRequest(block)
+	sig, err := decode(block)
 	if err != nil {
-		return oops.Wrapf(err, "failed to decode RelayRequest block")
+		return oops.Wrapf(err, "failed to decode %s block", label)
 	}
 
-	if len(decoded.Signature) == 0 {
-		return oops.Code("MISSING_SIGNATURE").Errorf("RelayRequest block has no signature")
+	if len(sig) == 0 {
+		return oops.Code("MISSING_SIGNATURE").Errorf("%s block has no signature", label)
 	}
 
-	// Verify signature if verifier is wired (G-2)
-	if cbs.VerifyRelayRequestSignature != nil {
-		if err := cbs.VerifyRelayRequestSignature(decoded); err != nil {
-			return oops.Code("SIGNATURE_INVALID").Wrapf(err, "RelayRequest signature verification failed")
+	if verify != nil {
+		if err := verify(); err != nil {
+			return oops.Code("SIGNATURE_INVALID").Wrapf(err, "%s signature verification failed", label)
 		}
 	}
 
-	if cbs.OnRelayRequest != nil {
-		return cbs.OnRelayRequest(block)
+	if dispatch != nil {
+		return dispatch()
 	}
 
 	return nil
+}
+
+// handleRelayRequest processes a RelayRequest block (Type 7).
+// Per SSU2 spec §Relay Request, signatures MUST be verified before acting (G-2).
+func (h *DataHandler) handleRelayRequest(block *SSU2Block) error {
+	cbs := h.getCallbacks()
+	decoded, decErr := DecodeRelayRequest(block)
+	return h.handleSignedRelayBlock(block, "RelayRequest",
+		func(b *SSU2Block) ([]byte, error) {
+			if decErr != nil {
+				return nil, decErr
+			}
+			return decoded.Signature, nil
+		},
+		func() error {
+			if cbs.VerifyRelayRequestSignature != nil {
+				return cbs.VerifyRelayRequestSignature(decoded)
+			}
+			return nil
+		},
+		func() error {
+			if cbs.OnRelayRequest != nil {
+				return cbs.OnRelayRequest(block)
+			}
+			return nil
+		},
+	)
 }
 
 // handleRelayResponse processes a RelayResponse block (Type 8).
@@ -196,30 +225,28 @@ func (h *DataHandler) handleRelayResponse(block *SSU2Block) error {
 // handleRelayIntro processes a RelayIntro block (Type 9).
 // Per SSU2 spec §Relay Intro, signatures MUST be verified before acting (G-2).
 func (h *DataHandler) handleRelayIntro(block *SSU2Block) error {
-	log.WithField("dataLength", len(block.Data)).Debug("Received RelayIntro block")
-
 	cbs := h.getCallbacks()
-
-	decoded, err := DecodeRelayIntro(block)
-	if err != nil {
-		return oops.Wrapf(err, "failed to decode RelayIntro block")
-	}
-
-	if len(decoded.Signature) == 0 {
-		return oops.Code("MISSING_SIGNATURE").Errorf("RelayIntro block has no signature")
-	}
-
-	if cbs.VerifyRelayIntroSignature != nil {
-		if err := cbs.VerifyRelayIntroSignature(decoded); err != nil {
-			return oops.Code("SIGNATURE_INVALID").Wrapf(err, "RelayIntro signature verification failed")
-		}
-	}
-
-	if cbs.OnRelayIntro != nil {
-		return cbs.OnRelayIntro(block)
-	}
-
-	return nil
+	decoded, decErr := DecodeRelayIntro(block)
+	return h.handleSignedRelayBlock(block, "RelayIntro",
+		func(b *SSU2Block) ([]byte, error) {
+			if decErr != nil {
+				return nil, decErr
+			}
+			return decoded.Signature, nil
+		},
+		func() error {
+			if cbs.VerifyRelayIntroSignature != nil {
+				return cbs.VerifyRelayIntroSignature(decoded)
+			}
+			return nil
+		},
+		func() error {
+			if cbs.OnRelayIntro != nil {
+				return cbs.OnRelayIntro(block)
+			}
+			return nil
+		},
+	)
 }
 
 // handleRelayTagRequest processes a RelayTagRequest block (Type 15).

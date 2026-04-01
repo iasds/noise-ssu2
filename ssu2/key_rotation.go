@@ -247,39 +247,35 @@ func (krm *KeyRotationManager) GetIntroKey() []byte {
 	return key
 }
 
+// getPreviousKey returns a copy of a previous managed key if it is still
+// within the grace period after rotation. Returns nil otherwise.
+// Caller must NOT hold krm.mu.
+func (krm *KeyRotationManager) getPreviousKey(mk *ManagedKey) []byte {
+	krm.mu.RLock()
+	defer krm.mu.RUnlock()
+
+	if mk == nil || mk.RotatedAt.IsZero() {
+		return nil
+	}
+	if time.Since(mk.RotatedAt) > KeyGracePeriod {
+		return nil
+	}
+	key := make([]byte, len(mk.Key))
+	copy(key, mk.Key)
+	return key
+}
+
 // GetPreviousStaticKey returns a copy of the previous static key if it is
 // still within the grace period after rotation. Returns nil if no previous
 // key exists or the grace period has elapsed.
 func (krm *KeyRotationManager) GetPreviousStaticKey() []byte {
-	krm.mu.RLock()
-	defer krm.mu.RUnlock()
-
-	if krm.previousStaticKey == nil || krm.previousStaticKey.RotatedAt.IsZero() {
-		return nil
-	}
-	if time.Since(krm.previousStaticKey.RotatedAt) > KeyGracePeriod {
-		return nil
-	}
-	key := make([]byte, len(krm.previousStaticKey.Key))
-	copy(key, krm.previousStaticKey.Key)
-	return key
+	return krm.getPreviousKey(krm.previousStaticKey)
 }
 
 // GetPreviousIntroKey returns a copy of the previous intro key if it is
 // still within the grace period after rotation. Returns nil otherwise.
 func (krm *KeyRotationManager) GetPreviousIntroKey() []byte {
-	krm.mu.RLock()
-	defer krm.mu.RUnlock()
-
-	if krm.previousIntroKey == nil || krm.previousIntroKey.RotatedAt.IsZero() {
-		return nil
-	}
-	if time.Since(krm.previousIntroKey.RotatedAt) > KeyGracePeriod {
-		return nil
-	}
-	key := make([]byte, len(krm.previousIntroKey.Key))
-	copy(key, krm.previousIntroKey.Key)
-	return key
+	return krm.getPreviousKey(krm.previousIntroKey)
 }
 
 // GetStaticKeyInfo returns rotation metadata for the static key.

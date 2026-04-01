@@ -190,6 +190,7 @@ func EncodePeerTestBlock(block *PeerTestBlock) (*SSU2Block, error) {
 }
 
 // DecodePeerTestBlock decodes a PeerTest block from wire format per the SSU2 spec.
+// DecodePeerTestBlock decodes a PeerTest block from wire format per the SSU2 spec.
 func DecodePeerTestBlock(ssu2Block *SSU2Block) (*PeerTestBlock, error) {
 	if ssu2Block == nil {
 		return nil, oops.Errorf("block is nil")
@@ -206,59 +207,24 @@ func DecodePeerTestBlock(ssu2Block *SSU2Block) (*PeerTestBlock, error) {
 	}
 
 	block := &PeerTestBlock{}
-	off := 0
-
-	block.MessageCode = PeerTestMessageCode(rawData[off])
-	off++
-	block.Code = rawData[off]
-	off++
-	block.Flag = rawData[off]
-	off++
+	block.MessageCode = PeerTestMessageCode(rawData[0])
+	block.Code = rawData[1]
+	block.Flag = rawData[2]
+	off := 3
 
 	if block.MessageCode < 1 || block.MessageCode > 7 {
 		return nil, oops.Errorf("invalid message code: %d (must be 1-7)", block.MessageCode)
 	}
 
-	// Messages 2 and 4 include a 32-byte router hash
-	if block.hasRouterHash() {
-		if len(rawData) < off+32 {
-			return nil, oops.Errorf("PeerTest block too short for router hash: %d bytes", len(rawData))
-		}
-		var rh [32]byte
-		copy(rh[:], rawData[off:off+32])
-		h := data.NewHash(rh)
-		block.RouterHash = &h
-		off += 32
+	off, err := block.decodeRouterHash(rawData, off)
+	if err != nil {
+		return nil, err
 	}
 
-	// Remaining minimum: ver(1)+nonce(4)+timestamp(4)+asz(1)+port(2)+ip(4) = 16
-	if len(rawData) < off+16 {
-		return nil, oops.Errorf("PeerTest block too short for signed data: %d bytes at offset %d", len(rawData), off)
+	off, err = block.decodeSignedFields(rawData, off)
+	if err != nil {
+		return nil, err
 	}
-
-	block.Version = rawData[off]
-	off++
-	block.Nonce = binary.BigEndian.Uint32(rawData[off : off+4])
-	off += 4
-	block.Timestamp = binary.BigEndian.Uint32(rawData[off : off+4])
-	off += 4
-
-	asz := rawData[off]
-	off++
-	if asz != 6 && asz != 18 {
-		return nil, oops.Errorf("invalid asz: %d (must be 6 or 18)", asz)
-	}
-
-	ipLen := int(asz) - 2
-	if len(rawData) < off+2+ipLen {
-		return nil, oops.Errorf("PeerTest block too short for address: %d bytes", len(rawData))
-	}
-
-	block.AlicePort = binary.BigEndian.Uint16(rawData[off : off+2])
-	off += 2
-	block.AliceIP = make([]byte, ipLen)
-	copy(block.AliceIP, rawData[off:off+ipLen])
-	off += ipLen
 
 	// Remaining bytes are signature (optional for messages 5-7)
 	if off < len(rawData) {
@@ -267,6 +233,57 @@ func DecodePeerTestBlock(ssu2Block *SSU2Block) (*PeerTestBlock, error) {
 	}
 
 	return block, nil
+}
+
+// decodeRouterHash reads the optional 32-byte router hash for messages 2 and 4.
+// Returns the updated offset.
+func (b *PeerTestBlock) decodeRouterHash(rawData []byte, off int) (int, error) {
+	if !b.hasRouterHash() {
+		return off, nil
+	}
+	if len(rawData) < off+32 {
+		return off, oops.Errorf("PeerTest block too short for router hash: %d bytes", len(rawData))
+	}
+	var rh [32]byte
+	copy(rh[:], rawData[off:off+32])
+	h := data.NewHash(rh)
+	b.RouterHash = &h
+	return off + 32, nil
+}
+
+// decodeSignedFields reads version, nonce, timestamp, asz, port, and IP.
+// Returns the updated offset.
+func (b *PeerTestBlock) decodeSignedFields(rawData []byte, off int) (int, error) {
+	// Remaining minimum: ver(1)+nonce(4)+timestamp(4)+asz(1)+port(2)+ip(4) = 16
+	if len(rawData) < off+16 {
+		return off, oops.Errorf("PeerTest block too short for signed data: %d bytes at offset %d", len(rawData), off)
+	}
+
+	b.Version = rawData[off]
+	off++
+	b.Nonce = binary.BigEndian.Uint32(rawData[off : off+4])
+	off += 4
+	b.Timestamp = binary.BigEndian.Uint32(rawData[off : off+4])
+	off += 4
+
+	asz := rawData[off]
+	off++
+	if asz != 6 && asz != 18 {
+		return off, oops.Errorf("invalid asz: %d (must be 6 or 18)", asz)
+	}
+
+	ipLen := int(asz) - 2
+	if len(rawData) < off+2+ipLen {
+		return off, oops.Errorf("PeerTest block too short for address: %d bytes", len(rawData))
+	}
+
+	b.AlicePort = binary.BigEndian.Uint16(rawData[off : off+2])
+	off += 2
+	b.AliceIP = make([]byte, ipLen)
+	copy(b.AliceIP, rawData[off:off+ipLen])
+	off += ipLen
+
+	return off, nil
 }
 
 // ValidateSourceAddress verifies that the IP/port embedded in a PeerTest block
