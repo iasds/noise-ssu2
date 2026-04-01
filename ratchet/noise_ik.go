@@ -269,54 +269,64 @@ func readNoiseIKMessage1(
 
 	ns := initNoiseIK(ourStaticPub)
 
-	// Token e: Read Elligator2-encoded ephemeral key.
-	ephEncoded := message[0:32]
-	ns.MixHash(ephEncoded)
-
-	// Decode Elligator2 representation to get the actual X25519 public key.
-	ephPubBytes, err := elligator2.Decode(ephEncoded)
+	initiatorEphPub, err := readEphemeralKey(ns, message[0:32])
 	if err != nil {
-		return nil, [32]byte{}, nil, nil, false, oops.Wrapf(err, "failed to decode Elligator2 ephemeral key")
+		return nil, [32]byte{}, nil, nil, false, err
 	}
-	var initiatorEphPub [32]byte
-	copy(initiatorEphPub[:], ephPubBytes)
 
 	// Token es: DH(our_static_private, ephemeral). Sets k, resets n=0.
-	sharedES, err := curve25519.SharedKey(ourStaticPriv[:], ephPubBytes)
+	sharedES, err := curve25519.SharedKey(ourStaticPriv[:], initiatorEphPub[:])
 	if err != nil {
 		return nil, [32]byte{}, nil, nil, false, oops.Wrapf(err, "failed to compute DH(s, re)")
 	}
-	ns.MixKey(sharedES) // n=0 after this
+	ns.MixKey(sharedES)
 
-	// Token s / Flags section: decrypt the 48-byte section that is either the
-	// initiator's static key (bound) or 32 zero bytes (unbound).
-	// Uses n=0; after decryption ns.n=1.
+	// Decrypt the static key / flags section (n=0; after decryption ns.n=1).
 	encryptedStatic := message[32 : 32+noiseEncryptedStaticSize]
 	initiatorStaticBytes, err := ns.DecryptAndHash(nil, encryptedStatic)
 	if err != nil {
 		return nil, [32]byte{}, nil, nil, false, oops.Wrapf(err, "failed to decrypt initiator static key / flags section")
 	}
 
-	// Detect unbound variant: spec §1c — "Bob determines whether it's a static
-	// key or a flags section by testing if the 32 bytes are all zeros."
+	encryptedPayload := message[32+noiseEncryptedStaticSize:]
+
 	if isAllZeros(initiatorStaticBytes) {
-		// Unbound (N-pattern): no ss token, no new MixKey.
-		// Payload is encrypted with n=1 (current nonce after flags section).
-		encryptedPayload := message[32+noiseEncryptedStaticSize:]
-		payload, payErr := ns.DecryptAndHash(nil, encryptedPayload)
-		if payErr != nil {
-			return nil, [32]byte{}, nil, nil, true, oops.Wrapf(payErr, "failed to decrypt unbound payload")
-		}
-
-		// No handshake state — unbound sessions are non-repliable (no NSR).
-		keys, kErr := deriveSessionKeysFromSecret(ns.ChainingKey())
-		if kErr != nil {
-			return nil, [32]byte{}, nil, nil, true, oops.Wrapf(kErr, "failed to derive session keys from unbound handshake")
-		}
-		return payload, [32]byte{}, keys, nil, true, nil
+		return readUnboundPayload(ns, encryptedPayload)
 	}
+	return readBoundPayload(ns, ourStaticPriv, initiatorEphPub, initiatorStaticBytes, encryptedPayload)
+}
 
-	// Bound path: initiatorStaticBytes is the initiator's static public key.
+// readEphemeralKey reads and decodes the Elligator2-encoded ephemeral key.
+func readEphemeralKey(ns *noise.SymmetricState, ephEncoded []byte) ([32]byte, error) {
+	ns.MixHash(ephEncoded)
+	ephPubBytes, err := elligator2.Decode(ephEncoded)
+	if err != nil {
+		return [32]byte{}, oops.Wrapf(err, "failed to decode Elligator2 ephemeral key")
+	}
+	var ephPub [32]byte
+	copy(ephPub[:], ephPubBytes)
+	return ephPub, nil
+}
+
+// readUnboundPayload handles the unbound (N-pattern) variant of the IK message.
+func readUnboundPayload(ns *noise.SymmetricState, encryptedPayload []byte) ([]byte, [32]byte, *sessionKeys, *noiseHandshakeState, bool, error) {
+	payload, err := ns.DecryptAndHash(nil, encryptedPayload)
+	if err != nil {
+		return nil, [32]byte{}, nil, nil, true, oops.Wrapf(err, "failed to decrypt unbound payload")
+	}
+	keys, err := deriveSessionKeysFromSecret(ns.ChainingKey())
+	if err != nil {
+		return nil, [32]byte{}, nil, nil, true, oops.Wrapf(err, "failed to derive session keys from unbound handshake")
+	}
+	return payload, [32]byte{}, keys, nil, true, nil
+}
+
+// readBoundPayload handles the bound (IK) variant of the message.
+func readBoundPayload(
+	ns *noise.SymmetricState, ourStaticPriv [32]byte,
+	initiatorEphPub [32]byte, initiatorStaticBytes []byte,
+	encryptedPayload []byte,
+) ([]byte, [32]byte, *sessionKeys, *noiseHandshakeState, bool, error) {
 	var initiatorStaticPub [32]byte
 	copy(initiatorStaticPub[:], initiatorStaticBytes)
 
@@ -325,28 +335,22 @@ func readNoiseIKMessage1(
 	if err != nil {
 		return nil, [32]byte{}, nil, nil, false, oops.Wrapf(err, "failed to compute DH(s, rs)")
 	}
-	ns.MixKey(sharedSS) // n=0 after this
+	ns.MixKey(sharedSS)
 
-	// Decrypt the garlic payload (n=0 after ss MixKey).
-	encryptedPayload := message[32+noiseEncryptedStaticSize:]
 	payload, err := ns.DecryptAndHash(nil, encryptedPayload)
 	if err != nil {
 		return nil, [32]byte{}, nil, nil, false, oops.Wrapf(err, "failed to decrypt payload")
 	}
 
-	// Retain handshake state for New Session Reply (message 2).
 	hs := &noiseHandshakeState{
 		h:               ns.HandshakeHash(),
 		ck:              ns.ChainingKey(),
 		remoteEphPub:    initiatorEphPub,
 		remoteStaticPub: initiatorStaticPub,
 	}
-
-	// Derive session keys from the final chaining key.
 	keys, err := deriveSessionKeysFromSecret(ns.ChainingKey())
 	if err != nil {
 		return nil, [32]byte{}, nil, nil, false, oops.Wrapf(err, "failed to derive session keys from handshake")
 	}
-
 	return payload, initiatorStaticPub, keys, hs, false, nil
 }

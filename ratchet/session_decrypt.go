@@ -24,11 +24,27 @@ func (sm *SessionManager) DecryptGarlicMessage(encryptedGarlic []byte) ([]byte, 
 	var msgTag [8]byte
 	copy(msgTag[:], encryptedGarlic[0:8])
 
-	// Check Existing Session tag index first (most common path).
-	// Phase 1: under sm.mu — look up and atomically remove tag from global index.
-	// Phase 2: under session.mu only — validate session and clean pendingTags.
-	// This two-phase approach ensures sm.mu and session.mu are never held
-	// simultaneously (see lookupSessionByTag for the rationale).
+	// Check Existing Session first (most common path).
+	if plaintext, sessionTag, err, ok := sm.tryDecryptExisting(msgTag, encryptedGarlic); ok {
+		return plaintext, sessionTag, nil, err
+	}
+
+	// Check NSR tag index: initiator receiving a reply to its New Session.
+	if plaintext, err, ok := sm.tryDecryptNSR(msgTag, encryptedGarlic); ok {
+		return plaintext, [8]byte{}, nil, err
+	}
+
+	// Fallthrough: New Session (Noise IK / ECIES).
+	plaintext, sessionHash, err := sm.decryptNewSession(encryptedGarlic)
+	if err != nil {
+		return nil, [8]byte{}, nil, oops.Wrapf(err, "failed to decrypt garlic message")
+	}
+	return plaintext, [8]byte{}, sessionHash, nil
+}
+
+// tryDecryptExisting attempts to decrypt as an Existing Session message.
+// Returns ok=true if a matching session was found (even if decryption failed).
+func (sm *SessionManager) tryDecryptExisting(msgTag [8]byte, encryptedGarlic []byte) ([]byte, [8]byte, error, bool) {
 	sm.mu.Lock()
 	session, counterHint := sm.lookupSessionByTag(msgTag)
 	sm.mu.Unlock()
@@ -41,19 +57,23 @@ func (sm *SessionManager) DecryptGarlicMessage(encryptedGarlic []byte) ([]byte, 
 			session = nil
 		}
 	}
-
-	if session != nil {
-		plaintext, sessionTag, err := sm.decryptExistingSession(session, encryptedGarlic[8:], msgTag, counterHint)
-		if needsReplenish {
-			sm.replenishTagWindowOutsideLock(session)
-		}
-		if err == nil {
-			sm.processDecryptedESBlocks(session, plaintext)
-		}
-		return plaintext, sessionTag, nil, err
+	if session == nil {
+		return nil, [8]byte{}, nil, false
 	}
 
-	// Check NSR tag index: initiator receiving a reply to its New Session.
+	plaintext, sessionTag, err := sm.decryptExistingSession(session, encryptedGarlic[8:], msgTag, counterHint)
+	if needsReplenish {
+		sm.replenishTagWindowOutsideLock(session)
+	}
+	if err == nil {
+		sm.processDecryptedESBlocks(session, plaintext)
+	}
+	return plaintext, sessionTag, err, true
+}
+
+// tryDecryptNSR attempts to decrypt as a New Session Reply message.
+// Returns ok=true if a matching NSR tag was found (even if decryption failed).
+func (sm *SessionManager) tryDecryptNSR(msgTag [8]byte, encryptedGarlic []byte) ([]byte, error, bool) {
 	sm.mu.Lock()
 	nsrSession, isNSR := sm.nsrTagIndex[msgTag]
 	if isNSR {
@@ -64,17 +84,11 @@ func (sm *SessionManager) DecryptGarlicMessage(encryptedGarlic []byte) ([]byte, 
 	}
 	sm.mu.Unlock()
 
-	if isNSR && nsrSession != nil {
-		plaintext, err := sm.decryptIncomingNSR(nsrSession, encryptedGarlic)
-		return plaintext, [8]byte{}, nil, err
+	if !isNSR || nsrSession == nil {
+		return nil, nil, false
 	}
-
-	// Fallthrough: New Session (Noise IK / ECIES).
-	plaintext, sessionHash, err := sm.decryptNewSession(encryptedGarlic)
-	if err != nil {
-		return nil, [8]byte{}, nil, oops.Wrapf(err, "failed to decrypt garlic message")
-	}
-	return plaintext, [8]byte{}, sessionHash, nil
+	plaintext, err := sm.decryptIncomingNSR(nsrSession, encryptedGarlic)
+	return plaintext, err, true
 }
 
 // decryptNewSession decrypts a New Session message using the Noise IK handshake.

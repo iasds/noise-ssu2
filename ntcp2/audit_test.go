@@ -49,7 +49,8 @@ func TestAESObfuscationModifier_Close_Idempotent(t *testing.T) {
 	require.NoError(t, mod.Close()) // second Close should not panic
 }
 
-// TestSipHashLengthModifier_Close verifies that Close() zeroes all keys and IVs.
+// TestSipHashLengthModifier_Close verifies that Close() zeroes all keys and IVs
+// by confirming post-close masks match a fresh zero-key modifier.
 func TestSipHashLengthModifier_Close(t *testing.T) {
 	sipKeys := [2]uint64{0xDEADBEEFCAFE0001, 0xC0FFEE0102030405}
 	mod := NewSipHashLengthModifier("test-siphash", sipKeys, 0xA1B2C3D4E5F60708)
@@ -61,12 +62,11 @@ func TestSipHashLengthModifier_Close(t *testing.T) {
 	err := mod.Close()
 	require.NoError(t, err)
 
-	assert.Equal(t, uint64(0), mod.outboundKeys[0], "outbound k1 should be zeroed")
-	assert.Equal(t, uint64(0), mod.outboundKeys[1], "outbound k2 should be zeroed")
-	assert.Equal(t, uint64(0), mod.inboundKeys[0], "inbound k1 should be zeroed")
-	assert.Equal(t, uint64(0), mod.inboundKeys[1], "inbound k2 should be zeroed")
-	assert.Equal(t, uint64(0), mod.outboundIV, "outbound IV should be zeroed")
-	assert.Equal(t, uint64(0), mod.inboundIV, "inbound IV should be zeroed")
+	// After Close, all keys and IVs should be zero.
+	// Verify by comparing post-close masks with a fresh zero-key modifier.
+	zeroMod := NewSipHashLengthModifier("zero", [2]uint64{0, 0}, 0)
+	assert.Equal(t, zeroMod.NextOutboundMask(), mod.NextOutboundMask(), "outbound mask should match zero-key modifier")
+	assert.Equal(t, zeroMod.NextInboundMask(), mod.NextInboundMask(), "inbound mask should match zero-key modifier")
 }
 
 // TestSipHashLengthModifier_Close_Idempotent verifies Close can be called twice.

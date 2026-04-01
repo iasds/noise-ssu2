@@ -21,6 +21,8 @@ This package provides handshake modifiers and utilities for implementing the SSU
 
 > **Note:** SessionConfirmed (3rd XK message) processing routes through the Noise state machine but has not been tested against a live I2P router.
 
+> **Limitation:** NextNonce (block type 11) key rotation is disabled by default (`EnableNextNonce: false`) because the SSU2 spec marks this area as "TODO" with size "TBD". Long-lived sessions will not rotate cipher keys unless `EnableNextNonce` is explicitly set to `true` in `SSU2Config`.
+
 ## Protocol Compliance
 
 - **Pattern**: `Noise_XKchaobfse+hs1+hs2+hs3_25519_ChaChaPoly_SHA256`

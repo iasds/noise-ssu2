@@ -1132,38 +1132,17 @@ func (h *HandshakeHandler) CreateSessionConfirmedFragments(connID uint64, packet
 		return nil, oops.Errorf("handshake not ready for SessionConfirmed: expected message index 2, got %d", h.handshakeState.MessageIndex())
 	}
 
-	var blocks []*SSU2Block
-	if len(routerInfo) > 0 {
-		blocks = append(blocks, NewSSU2Block(BlockTypeRouterInfo, routerInfo))
-	}
-
-	payload, err := SerializeBlocks(blocks)
+	payload, err := h.serializeConfirmedPayload(routerInfo)
 	if err != nil {
-		return nil, oops.Wrapf(err, "failed to serialize SessionConfirmed blocks")
+		return nil, err
 	}
 
-	// Build the first fragment's 16-byte header for MixHash (before Noise).
-	// Fragment count and frag number will be filled in after we know total size.
-	// Compute expected ciphertext size to determine fragment count before MixHash.
-	// Noise XK message 3 (→ s, se) encrypts: static_key(32+16 MAC) + payload(+16 MAC).
-	expectedCiphertextSize := len(payload) + 64
-	totalFrags := (expectedCiphertextSize + sessionConfirmedMaxPerPacket - 1) / sessionConfirmedMaxPerPacket
-	if totalFrags < 1 {
-		totalFrags = 1
-	}
-	if totalFrags > sessionConfirmedMaxFragments {
-		return nil, oops.Errorf("SessionConfirmed requires %d fragments, max %d", totalFrags, sessionConfirmedMaxFragments)
+	totalFrags, err := computeFragmentCount(len(payload) + 64)
+	if err != nil {
+		return nil, err
 	}
 
-	// Build the first fragment's 16-byte header for MixHash (before Noise).
-	header := make([]byte, ShortHeaderSize)
-	binary.BigEndian.PutUint64(header[0:8], connID)
-	binary.BigEndian.PutUint32(header[8:12], packetNumber)
-	header[12] = MessageTypeSessionConfirmed
-	// frag byte: fragment 0 of totalFrags
-	header[13] = byte(0<<4) | byte(totalFrags)
-
-	// MixHash(header) — only the first fragment's header is mixed.
+	header := buildSessionConfirmedHeader(connID, packetNumber, 0, totalFrags)
 	h.handshakeState.MixHash(header)
 
 	ciphertext, cs1, cs2, err := h.handshakeState.WriteMessage(nil, payload)
@@ -1172,6 +1151,49 @@ func (h *HandshakeHandler) CreateSessionConfirmedFragments(connID uint64, packet
 	}
 	h.updateCipherStates(cs1, cs2)
 
+	packets := buildFragmentPackets(ciphertext, connID, packetNumber, totalFrags)
+	packets[0].Header = header
+
+	return packets, nil
+}
+
+// serializeConfirmedPayload serializes the RouterInfo block for SessionConfirmed.
+func (h *HandshakeHandler) serializeConfirmedPayload(routerInfo []byte) ([]byte, error) {
+	var blocks []*SSU2Block
+	if len(routerInfo) > 0 {
+		blocks = append(blocks, NewSSU2Block(BlockTypeRouterInfo, routerInfo))
+	}
+	payload, err := SerializeBlocks(blocks)
+	if err != nil {
+		return nil, oops.Wrapf(err, "failed to serialize SessionConfirmed blocks")
+	}
+	return payload, nil
+}
+
+// computeFragmentCount returns the number of fragments needed for the given ciphertext size.
+func computeFragmentCount(ciphertextSize int) (int, error) {
+	totalFrags := (ciphertextSize + sessionConfirmedMaxPerPacket - 1) / sessionConfirmedMaxPerPacket
+	if totalFrags < 1 {
+		totalFrags = 1
+	}
+	if totalFrags > sessionConfirmedMaxFragments {
+		return 0, oops.Errorf("SessionConfirmed requires %d fragments, max %d", totalFrags, sessionConfirmedMaxFragments)
+	}
+	return totalFrags, nil
+}
+
+// buildSessionConfirmedHeader builds a 16-byte SessionConfirmed short header.
+func buildSessionConfirmedHeader(connID uint64, packetNumber uint32, fragNum, totalFrags int) []byte {
+	header := make([]byte, ShortHeaderSize)
+	binary.BigEndian.PutUint64(header[0:8], connID)
+	binary.BigEndian.PutUint32(header[8:12], packetNumber)
+	header[12] = MessageTypeSessionConfirmed
+	header[13] = byte(fragNum<<4) | byte(totalFrags)
+	return header
+}
+
+// buildFragmentPackets splits ciphertext into fragment packets.
+func buildFragmentPackets(ciphertext []byte, connID uint64, packetNumber uint32, totalFrags int) []*SSU2Packet {
 	packets := make([]*SSU2Packet, 0, totalFrags)
 	offset := 0
 	for i := 0; i < totalFrags; i++ {
@@ -1180,15 +1202,8 @@ func (h *HandshakeHandler) CreateSessionConfirmedFragments(connID uint64, packet
 			end = len(ciphertext)
 		}
 		chunk := ciphertext[offset:end]
+		fragHeader := buildSessionConfirmedHeader(connID, packetNumber, i, totalFrags)
 
-		fragHeader := make([]byte, ShortHeaderSize)
-		binary.BigEndian.PutUint64(fragHeader[0:8], connID)
-		// Per spec: "Packet Number :: 0 always, for all fragments, even if retransmitted."
-		binary.BigEndian.PutUint32(fragHeader[8:12], packetNumber)
-		fragHeader[12] = MessageTypeSessionConfirmed
-		fragHeader[13] = byte(i<<4) | byte(totalFrags)
-
-		// For the last fragment, separate trailing MAC (16 bytes).
 		var pktPayload, mac []byte
 		if i == totalFrags-1 && len(chunk) >= MACSize {
 			pktPayload = chunk[:len(chunk)-MACSize]
@@ -1208,11 +1223,7 @@ func (h *HandshakeHandler) CreateSessionConfirmedFragments(connID uint64, packet
 		})
 		offset = end
 	}
-
-	// Fragment 0 uses the header that was MixHash'd.
-	packets[0].Header = header
-
-	return packets, nil
+	return packets
 }
 
 // ProcessSessionConfirmedFragments reassembles and processes a fragmented
@@ -1227,13 +1238,37 @@ func (h *HandshakeHandler) ProcessSessionConfirmedFragments(packets []*SSU2Packe
 	if len(packets) == 0 {
 		return oops.Errorf("no SessionConfirmed fragments provided")
 	}
-
-	// Verify handshake state.
 	if h.handshakeState.MessageIndex() != 2 {
 		return oops.Errorf("handshake not ready for SessionConfirmed: expected message index 2, got %d", h.handshakeState.MessageIndex())
 	}
 
-	// Validate fragment ordering and completeness.
+	if err := h.validateFragmentOrdering(packets); err != nil {
+		return err
+	}
+
+	// MixHash(header) — only the first fragment's header is mixed.
+	h.handshakeState.MixHash(packets[0].Header)
+
+	noiseMessage := reassembleFragments(packets)
+
+	payload, cs1, cs2, err := h.handshakeState.ReadMessage(nil, noiseMessage)
+	if err != nil {
+		return oops.Wrapf(err, "failed to process SessionConfirmed handshake message")
+	}
+	h.updateCipherStates(cs1, cs2)
+
+	if ps := h.handshakeState.PeerStatic(); len(ps) > 0 {
+		h.remoteStaticKey = copyBytes(ps)
+	}
+
+	h.extractPeerRouterInfo(payload)
+
+	return nil
+}
+
+// validateFragmentOrdering checks that the fragment ordering and completeness
+// is correct for a set of SessionConfirmed packets.
+func (h *HandshakeHandler) validateFragmentOrdering(packets []*SSU2Packet) error {
 	totalFrags := int(packets[0].Header[13] & 0x0F)
 	if totalFrags < 1 {
 		totalFrags = 1
@@ -1250,12 +1285,12 @@ func (h *HandshakeHandler) ProcessSessionConfirmedFragments(packets []*SSU2Packe
 			return oops.Errorf("fragment %d: unexpected fragment number %d", i, fragNum)
 		}
 	}
+	return nil
+}
 
-	// MixHash(header) — only the first fragment's header is mixed.
-	h.handshakeState.MixHash(packets[0].Header)
-
-	// Reassemble the Noise ciphertext from all fragments.
-	// Each fragment contributes Payload bytes; the last fragment also has the MAC.
+// reassembleFragments concatenates payload data from ordered fragments into a
+// single Noise ciphertext. The last fragment's MAC is appended.
+func reassembleFragments(packets []*SSU2Packet) []byte {
 	totalSize := 0
 	for _, pkt := range packets {
 		totalSize += len(pkt.Payload)
@@ -1269,22 +1304,7 @@ func (h *HandshakeHandler) ProcessSessionConfirmedFragments(packets []*SSU2Packe
 			noiseMessage = append(noiseMessage, pkt.MAC...)
 		}
 	}
-
-	payload, cs1, cs2, err := h.handshakeState.ReadMessage(nil, noiseMessage)
-	if err != nil {
-		return oops.Wrapf(err, "failed to process SessionConfirmed handshake message")
-	}
-	h.updateCipherStates(cs1, cs2)
-
-	if ps := h.handshakeState.PeerStatic(); len(ps) > 0 {
-		h.remoteStaticKey = copyBytes(ps)
-	}
-
-	// Extract the RouterInfo block from the decrypted payload so it can
-	// be validated against the Noise-authenticated static key (C-2).
-	h.extractPeerRouterInfo(payload)
-
-	return nil
+	return noiseMessage
 }
 
 // Close releases resources held by the HandshakeHandler, including the

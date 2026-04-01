@@ -507,6 +507,29 @@ func (h *SSU2Conn) receivePacketWithTimeout(ctx context.Context, timeout time.Du
 //   - Session Request: 1.25s, 2.5s, 5s
 //   - Session Created: 1s, 2s, 4s
 //
+// retransmitSchedule returns the spec-recommended exponential backoff intervals
+// for the given handshake message type.
+func retransmitSchedule(msgType uint8) []time.Duration {
+	if msgType == MessageTypeSessionCreated {
+		return []time.Duration{1 * time.Second, 2 * time.Second, 4 * time.Second}
+	}
+	return []time.Duration{1250 * time.Millisecond, 2500 * time.Millisecond, 5 * time.Second}
+}
+
+// retransmitWait returns the wait duration for the given attempt, capping at the remaining time.
+func retransmitWait(attempt int, intervals []time.Duration, remaining time.Duration) time.Duration {
+	var wait time.Duration
+	if attempt < len(intervals) {
+		wait = intervals[attempt]
+	} else {
+		wait = remaining
+	}
+	if wait > remaining {
+		wait = remaining
+	}
+	return wait
+}
+
 // receiveHandshakeWithRetransmit waits for the next handshake message, retransmitting
 // lastSent if no response arrives within a per-attempt interval.
 // Per spec: handshake packets MUST be retransmitted with the same packet number
@@ -516,50 +539,42 @@ func (h *SSU2Conn) receivePacketWithTimeout(ctx context.Context, timeout time.Du
 //   - Session Request: 1.25s, 2.5s, 5s
 //   - Session Created: 1s, 2s, 4s
 func (h *SSU2Conn) receiveHandshakeWithRetransmit(ctx context.Context, lastSent *SSU2Packet, totalTimeout time.Duration) (*SSU2Packet, error) {
-	// Use spec-recommended exponential backoff intervals based on message type.
-	var intervals []time.Duration
-	if lastSent != nil && lastSent.MessageType == MessageTypeSessionCreated {
-		intervals = []time.Duration{1 * time.Second, 2 * time.Second, 4 * time.Second}
-	} else {
-		intervals = []time.Duration{1250 * time.Millisecond, 2500 * time.Millisecond, 5 * time.Second}
-	}
-
+	intervals := retransmitSchedule(lastSent.MessageType)
 	deadline := time.Now().Add(totalTimeout)
+
 	for attempt := 0; attempt <= len(intervals); attempt++ {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
 			break
 		}
-		var wait time.Duration
-		if attempt < len(intervals) {
-			wait = intervals[attempt]
-		} else {
-			wait = remaining
-		}
-		if wait > remaining {
-			wait = remaining
-		}
+		wait := retransmitWait(attempt, intervals, remaining)
 
 		pkt, err := h.receivePacketWithTimeout(ctx, wait)
 		if err == nil {
 			return pkt, nil
 		}
 
-		// On context cancellation or connection close, don't retry.
-		select {
-		case <-ctx.Done():
-			return nil, oops.Wrapf(ctx.Err(), "context cancelled during handshake retransmit")
-		case <-h.closeChan:
-			return nil, oops.Errorf("connection closed during handshake retransmit")
-		default:
+		if err := h.checkHandshakeCancelled(ctx); err != nil {
+			return nil, err
 		}
 
-		// Retransmit the last sent handshake packet with identical contents.
 		if attempt < len(intervals) {
 			_ = h.sendPacketDirect(lastSent)
 		}
 	}
 	return nil, oops.Errorf("handshake timeout after %d retransmits", len(intervals))
+}
+
+// checkHandshakeCancelled returns an error if the context or connection is closed.
+func (h *SSU2Conn) checkHandshakeCancelled(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return oops.Wrapf(ctx.Err(), "context cancelled during handshake retransmit")
+	case <-h.closeChan:
+		return oops.Errorf("connection closed during handshake retransmit")
+	default:
+		return nil
+	}
 }
 
 // nextSendSequence returns the next packet sequence number.

@@ -561,12 +561,10 @@ func TestZeroKeyMaterial(t *testing.T) {
 
 	conn.zeroKeyMaterial()
 
-	assert.Equal(t, uint64(0), slm.outboundKeys[0])
-	assert.Equal(t, uint64(0), slm.outboundKeys[1])
-	assert.Equal(t, uint64(0), slm.inboundKeys[0])
-	assert.Equal(t, uint64(0), slm.inboundKeys[1])
-	assert.Equal(t, uint64(0), slm.outboundIV)
-	assert.Equal(t, uint64(0), slm.inboundIV)
+	// After zeroing, masks should match a fresh zero-key modifier
+	zeroMod := NewSipHashLengthModifier("zero", [2]uint64{0, 0}, 0)
+	assert.Equal(t, zeroMod.NextOutboundMask(), slm.NextOutboundMask())
+	assert.Equal(t, zeroMod.NextInboundMask(), slm.NextInboundMask())
 
 	conn.readMu.Lock()
 	assert.Nil(t, conn.readBuffer)

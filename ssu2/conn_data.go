@@ -25,7 +25,6 @@ func (h *SSU2Conn) startDataLoops() {
 }
 
 // installCipherStates transfers transport cipher states from the handshake handler.
-// installCipherStates transfers transport cipher states from the handshake handler.
 func (h *SSU2Conn) installCipherStates() error {
 	send, recv, err := h.handshakeHandler.GetCipherStates()
 	if err != nil {
@@ -36,11 +35,40 @@ func (h *SSU2Conn) installCipherStates() error {
 	h.recvCipher = recv
 	h.cipherMutex.Unlock()
 
+	h.wireDataCallbacks()
+
+	if err := h.validatePeerRouterInfo(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// wireDataCallbacks wires internal handler callbacks for data-phase processing.
+func (h *SSU2Conn) wireDataCallbacks() {
 	cbs := h.dataHandler.getCallbacks()
 
 	// G-2: Warn if signature verification callbacks are not configured.
-	// Relay, peer-test, and hole-punch traffic will be silently rejected
-	// when the corresponding verifier is nil.
+	h.warnMissingSignatureVerifiers(&cbs)
+
+	// Wire NextNonce callback only if enabled (G-1).
+	if h.config.EnableNextNonce {
+		cbs.OnNextNonce = h.handlePeerNextNonce
+	}
+	cbs.OnCongestion = h.handleCongestionBlock
+	cbs.OnPathChallenge = h.handlePathChallengeData
+	cbs.OnPathResponse = h.handlePathResponseData
+
+	if cbs.OnAddress == nil {
+		cbs.OnAddress = h.handleAddressBlock
+	}
+
+	h.wrapTerminationCallback(&cbs)
+	h.dataHandler.SetCallbacks(cbs)
+}
+
+// warnMissingSignatureVerifiers logs warnings for unset signature verifiers (G-2).
+func (h *SSU2Conn) warnMissingSignatureVerifiers(cbs *DataHandlerCallbacks) {
 	if cbs.VerifyPeerTestSignature == nil {
 		log.Warn("PeerTest signature verifier not configured; peer test messages will be rejected (G-2)")
 	}
@@ -53,25 +81,10 @@ func (h *SSU2Conn) installCipherStates() error {
 	if cbs.VerifyRelayIntroSignature == nil {
 		log.Warn("RelayIntro signature verifier not configured; relay intros will be rejected (G-2)")
 	}
+}
 
-	// Wire NextNonce callback only if enabled (G-1). When disabled,
-	// inbound NextNonce blocks are silently ignored.
-	if h.config.EnableNextNonce {
-		cbs.OnNextNonce = h.handlePeerNextNonce
-	}
-	// Wire Congestion callback so RequestACK flag triggers immediate ACK (G-6).
-	cbs.OnCongestion = h.handleCongestionBlock
-	// Wire PathChallenge/PathResponse callbacks for path validation (G-7).
-	cbs.OnPathChallenge = h.handlePathChallengeData
-	cbs.OnPathResponse = h.handlePathResponseData
-
-	// Wire default Address block handler for passive NAT detection (G-6).
-	if cbs.OnAddress == nil {
-		cbs.OnAddress = h.handleAddressBlock
-	}
-
-	// Wire Termination callback to compare peer-reported received count
-	// against our sent count for packet-loss diagnostics (G-7).
+// wrapTerminationCallback wraps the Termination callback to log packet-loss diagnostics (G-7).
+func (h *SSU2Conn) wrapTerminationCallback(cbs *DataHandlerCallbacks) {
 	existingOnTermination := cbs.OnTermination
 	cbs.OnTermination = func(peerReceived uint64, reason uint8, additionalData []byte) {
 		sent := h.validDataPacketsSent.Load()
@@ -88,25 +101,28 @@ func (h *SSU2Conn) installCipherStates() error {
 			existingOnTermination(peerReceived, reason, additionalData)
 		}
 	}
+}
 
-	h.dataHandler.SetCallbacks(cbs)
-
-	// Update router hash from peer's static key if available
-	if peerKey := h.handshakeHandler.GetRemoteStaticKey(); len(peerKey) == 32 {
-		hash := sha256.Sum256(peerKey)
-		h.ssu2Addr.UpdateRouterHash(data.NewHash(hash))
-
-		// Validate the RouterInfo against the Noise-authenticated static key
-		// per SSU2 spec §Session Confirmed (C-2).
-		if h.config.RouterInfoValidator != nil {
-			if ri := h.handshakeHandler.GetPeerRouterInfo(); len(ri) > 0 {
-				if err := h.config.RouterInfoValidator(ri, peerKey); err != nil {
-					return oops.Wrapf(err, "RouterInfo validation failed against authenticated static key")
-				}
-			}
-		}
+// validatePeerRouterInfo validates the peer's RouterInfo against the Noise-authenticated
+// static key per SSU2 spec §Session Confirmed (C-2).
+func (h *SSU2Conn) validatePeerRouterInfo() error {
+	peerKey := h.handshakeHandler.GetRemoteStaticKey()
+	if len(peerKey) != 32 {
+		return nil
 	}
+	hash := sha256.Sum256(peerKey)
+	h.ssu2Addr.UpdateRouterHash(data.NewHash(hash))
 
+	if h.config.RouterInfoValidator == nil {
+		return nil
+	}
+	ri := h.handshakeHandler.GetPeerRouterInfo()
+	if len(ri) == 0 {
+		return nil
+	}
+	if err := h.config.RouterInfoValidator(ri, peerKey); err != nil {
+		return oops.Wrapf(err, "RouterInfo validation failed against authenticated static key")
+	}
 	return nil
 }
 

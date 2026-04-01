@@ -56,7 +56,16 @@ func (com *ChaChaObfuscationModifier) Name() string
 ```
 Name returns the modifier name for logging and debugging.
 
+## Known Limitations
 
+### NextNonce (Block Type 11) — Key Rotation Disabled by Default
+
+The SSU2 spec marks NextNonce as "TODO only if we rotate keys" with size "TBD".
+Accordingly, `SSU2Config.EnableNextNonce` defaults to `false`. When disabled,
+inbound NextNonce blocks are silently ignored and no key rotation occurs during
+long-lived sessions. Users expecting full SSU2 spec compliance should be aware
+that key rotation is not available until the spec finalizes this area. Set
+`EnableNextNonce: true` in `SSU2Config` to opt in to the experimental behavior.
 
 ssu2 
 

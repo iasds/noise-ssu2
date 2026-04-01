@@ -1208,24 +1208,24 @@ func TestAuditFix_RemoveAEADPadding_CompliantOrderSucceeds(t *testing.T) {
 	assert.Equal(t, expected, result, "data block must be preserved; padding block must be stripped")
 }
 
-// TestAuditFix_SipHashMask_StackAllocZero verifies that getNextOutboundMask and
-// getNextInboundMask produce zero heap allocations after replacing
-// `make([]byte, 8)` with a stack-allocated `var input [8]byte`.
+// TestAuditFix_SipHashMask_StackAllocZero verifies that NextOutboundMask and
+// NextInboundMask produce zero heap allocations. The underlying implementation
+// uses a stack-allocated [8]byte instead of make([]byte, 8).
 func TestAuditFix_SipHashMask_StackAllocZero(t *testing.T) {
 	sipKeys := [2]uint64{0xDEADBEEFCAFE0001, 0xC0FFEE0102030405}
 	mod := NewSipHashLengthModifier("alloc_test", sipKeys, 0xA1B2C3D4E5F60708)
 
 	// Warm up: flush any one-time initialisation allocations.
-	mod.getNextOutboundMask()
-	mod.getNextInboundMask()
+	mod.NextOutboundMask()
+	mod.NextInboundMask()
 
 	outboundAllocs := testing.AllocsPerRun(200, func() {
-		mod.getNextOutboundMask()
+		mod.NextOutboundMask()
 	})
 	inboundAllocs := testing.AllocsPerRun(200, func() {
-		mod.getNextInboundMask()
+		mod.NextInboundMask()
 	})
 
-	assert.Zero(t, outboundAllocs, "getNextOutboundMask must not heap-allocate (uses stack [8]byte)")
-	assert.Zero(t, inboundAllocs, "getNextInboundMask must not heap-allocate (uses stack [8]byte)")
+	assert.Zero(t, outboundAllocs, "NextOutboundMask must not heap-allocate (uses stack [8]byte)")
+	assert.Zero(t, inboundAllocs, "NextInboundMask must not heap-allocate (uses stack [8]byte)")
 }

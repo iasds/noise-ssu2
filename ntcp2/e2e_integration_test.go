@@ -325,13 +325,10 @@ func TestE2E_ZeroKeyMaterial_OnClose(t *testing.T) {
 	// Verify key material is zeroed
 	loaded := conn.lengthObfuscator.Load()
 	if loaded != nil {
-		// Keys should be zeroed
-		loaded.mu.Lock()
-		assert.Equal(t, uint64(0), loaded.outboundKeys[0], "Outbound key 0 should be zeroed")
-		assert.Equal(t, uint64(0), loaded.outboundKeys[1], "Outbound key 1 should be zeroed")
-		assert.Equal(t, uint64(0), loaded.inboundKeys[0], "Inbound key 0 should be zeroed")
-		assert.Equal(t, uint64(0), loaded.inboundKeys[1], "Inbound key 1 should be zeroed")
-		loaded.mu.Unlock()
+		// After zeroing, masks should match a fresh zero-key modifier
+		zeroMod := NewSipHashLengthModifier("zero", [2]uint64{0, 0}, 0)
+		assert.Equal(t, zeroMod.NextOutboundMask(), loaded.NextOutboundMask(), "Outbound mask should match zero-key modifier")
+		assert.Equal(t, zeroMod.NextInboundMask(), loaded.NextInboundMask(), "Inbound mask should match zero-key modifier")
 	}
 }
 
