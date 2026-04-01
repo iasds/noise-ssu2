@@ -275,6 +275,10 @@ func (nc *NTCP2Config) Validate() error {
 		return err
 	}
 
+	if err := nc.validateModifiers(); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -359,6 +363,20 @@ func (nc *NTCP2Config) validateFrameConfiguration() error {
 		return err
 	}
 
+	return nil
+}
+
+// validateModifiers rejects incompatible modifiers in the NTCP2 modifier chain.
+func (nc *NTCP2Config) validateModifiers() error {
+	for _, mod := range nc.Modifiers {
+		if _, ok := mod.(*handshake.PaddingModifier); ok {
+			return oops.
+				Code("INCOMPATIBLE_MODIFIER").
+				In("ntcp2").
+				With("modifier", mod.Name()).
+				Errorf("PaddingModifier is not NTCP2-compatible; use NTCP2PaddingModifier")
+		}
+	}
 	return nil
 }
 

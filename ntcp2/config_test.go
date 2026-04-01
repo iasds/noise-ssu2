@@ -290,27 +290,24 @@ func TestNTCP2ConfigToConnConfigWithDisabledModifiers(t *testing.T) {
 func TestNTCP2ConfigToConnConfigWithCustomModifiers(t *testing.T) {
 	m := newTestCryptoMaterial(t)
 
-	// Create custom modifiers
+	// Create custom modifiers — only compatible ones
 	xorMod := handshake.NewXORModifier("custom-xor", []byte{0xCC, 0xDD})
-	paddingMod, err := handshake.NewPaddingModifier("custom-padding", 8, 16)
-	require.NoError(t, err)
 
 	ntcp2Config, err := NewNTCP2Config(m.routerHash, false)
 	require.NoError(t, err)
 
 	ntcp2Config = ntcp2Config.
 		WithAESObfuscation(true, m.obfuscationIV).
-		WithModifiers(xorMod, paddingMod)
+		WithModifiers(xorMod)
 
 	connConfig, err := ntcp2Config.ToConnConfig()
 	require.NoError(t, err)
 
-	// Should have NTCP2 modifiers + custom modifiers
-	assert.Len(t, connConfig.Modifiers, 5) // AES + SipHash + Padding + 2 custom
+	// Should have NTCP2 modifiers + custom modifier
+	assert.Len(t, connConfig.Modifiers, 4) // AES + SipHash + Padding + 1 custom
 
-	// Custom modifiers should be at the end
+	// Custom modifier should be at the end
 	assert.Equal(t, "custom-xor", connConfig.Modifiers[3].Name())
-	assert.Equal(t, "custom-padding", connConfig.Modifiers[4].Name())
 }
 
 func TestNTCP2ConfigBuilderDefensiveCopying(t *testing.T) {
@@ -941,4 +938,31 @@ func TestConfigSipHashModifier_Disabled(t *testing.T) {
 
 	// Modifier should be nil
 	assert.Nil(t, config.SipHashModifier())
+}
+
+func TestNTCP2ConfigRejectsPaddingModifier(t *testing.T) {
+	routerHash := generateRandomHash()
+	config, err := NewNTCP2Config(routerHash, false)
+	require.NoError(t, err)
+
+	// Add incompatible PaddingModifier
+	pm, pmErr := handshake.NewPaddingModifier("bad-padding", 0, 32)
+	require.NoError(t, pmErr)
+	config.Modifiers = []handshake.HandshakeModifier{pm}
+
+	err = config.Validate()
+	require.Error(t, err, "Validate should reject PaddingModifier in NTCP2 config")
+	assert.Contains(t, err.Error(), "NTCP2-compatible")
+}
+
+func TestNTCP2ConfigAcceptsValidModifiers(t *testing.T) {
+	routerHash := generateRandomHash()
+	config, err := NewNTCP2Config(routerHash, false)
+	require.NoError(t, err)
+
+	// Add a compatible custom modifier (not PaddingModifier)
+	config.Modifiers = []handshake.HandshakeModifier{&testModifier{name: "ok"}}
+
+	err = config.Validate()
+	assert.NoError(t, err, "Validate should accept non-PaddingModifier modifiers")
 }
