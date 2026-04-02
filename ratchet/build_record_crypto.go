@@ -14,8 +14,6 @@ import (
 	"github.com/samber/oops"
 )
 
-var log = logger.GetGoI2PLogger()
-
 // Compile-time interface checks for the focused types.
 var (
 	_ BuildReplyEncryptor = (*BuildReplyCrypto)(nil)

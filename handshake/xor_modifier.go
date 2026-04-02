@@ -5,11 +5,8 @@ import (
 	"sync"
 
 	"github.com/go-i2p/crypto/rand"
-	"github.com/go-i2p/logger"
 	"github.com/samber/oops"
 )
-
-var log = logger.GetGoI2PLogger()
 
 // randReader is the random source used by NewXORModifier. It is a package-level
 // variable to allow tests to inject a failing reader for the entropy-failure

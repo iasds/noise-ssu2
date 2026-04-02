@@ -3,12 +3,8 @@ package ssu2
 import (
 	"sync"
 
-	"github.com/go-i2p/logger"
 	"github.com/samber/oops"
 )
-
-// Package-level logger for ssu2
-var log = logger.GetGoI2PLogger()
 
 // BlockHandler defines the interface for processing SSU2 blocks.
 // Implementations handle specific block types or categories.

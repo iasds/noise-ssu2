@@ -197,6 +197,7 @@ func readNoiseIKMessage2(
 	ourStaticPriv [32]byte,
 	message []byte,
 ) ([]byte, *nsrSessionKeys, error) {
+	log.Debug("Processing received New Session Reply")
 	if len(message) < nsrMinMessageSize {
 		return nil, nil, oops.Errorf(
 			"NSR message too short: %d bytes (minimum %d)", len(message), nsrMinMessageSize)

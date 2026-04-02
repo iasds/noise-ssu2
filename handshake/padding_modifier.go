@@ -33,6 +33,7 @@ type PaddingModifier struct {
 // NewPaddingModifier creates a new padding modifier with the specified
 // minimum and maximum padding sizes.
 func NewPaddingModifier(name string, minPadding, maxPadding int) (*PaddingModifier, error) {
+	log.WithField("name", name).WithField("min", minPadding).WithField("max", maxPadding).Debug("Creating padding modifier")
 	if minPadding < 0 {
 		return nil, oops.
 			Code("INVALID_PADDING").
@@ -72,6 +73,8 @@ func (pm *PaddingModifier) ModifyOutbound(phase HandshakePhase, data []byte) ([]
 	if pm.minPadding == 0 && pm.maxPadding == 0 {
 		return data, nil // No padding configured
 	}
+
+	log.WithField("modifier", pm.name).WithField("phase", phase.String()).WithField("data_len", len(data)).Debug("Padding modifier outbound")
 
 	// Guard: reject data larger than the 4-byte length prefix can encode.
 	// This branch is unreachable on 32-bit platforms (where len() <= MaxInt32 < MaxUint32)
@@ -139,6 +142,8 @@ func (pm *PaddingModifier) ModifyInbound(phase HandshakePhase, data []byte) ([]b
 	if pm.minPadding == 0 && pm.maxPadding == 0 {
 		return data, nil // No padding configured, return data unchanged
 	}
+
+	log.WithField("modifier", pm.name).WithField("phase", phase.String()).WithField("data_len", len(data)).Debug("Padding modifier inbound")
 
 	if len(data) < 4 {
 		return nil, oops.

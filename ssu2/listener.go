@@ -88,6 +88,7 @@ const packetQueueSize = 256
 //
 // Returns a new SSU2Listener ready to start, or an error if configuration is invalid.
 func NewSSU2Listener(underlying net.PacketConn, config *SSU2Config) (*SSU2Listener, error) {
+	log.Debug("Creating new SSU2 listener")
 	if underlying == nil {
 		return nil, oops.
 			Code("INVALID_PACKET_CONN").

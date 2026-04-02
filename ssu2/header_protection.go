@@ -84,6 +84,7 @@ type HeaderProtector struct {
 // Both keys must be exactly 32 bytes (ChaCha20 key size).
 // headerType determines the packet type for appropriate header size handling.
 func NewHeaderProtector(kHeader1, kHeader2 []byte, headerType HeaderType) (*HeaderProtector, error) {
+	log.WithField("headerType", headerType).Debug("Creating new HeaderProtector")
 	if len(kHeader1) != HeaderKeySize {
 		return nil, oops.
 			Code("INVALID_KEY_SIZE").
@@ -128,6 +129,7 @@ func NewHeaderProtectorFromIntroKey(introKey []byte, headerType HeaderType) (*He
 // The packet must be the complete SSU2 packet including header, payload, and MAC.
 // Per SSU2 spec, encryption order: ChaCha20 extension first, then XOR masks.
 func (hp *HeaderProtector) EncryptHeader(packet []byte) error {
+	log.WithField("packetLen", len(packet)).Debug("Encrypting header")
 	hp.mu.Lock()
 	defer hp.mu.Unlock()
 
@@ -151,6 +153,7 @@ func (hp *HeaderProtector) EncryptHeader(packet []byte) error {
 // DecryptHeader decrypts the header bytes of an SSU2 packet in place.
 // Per SSU2 spec, decryption order: XOR masks first, then ChaCha20 extension.
 func (hp *HeaderProtector) DecryptHeader(packet []byte) error {
+	log.WithField("packetLen", len(packet)).Debug("Decrypting header")
 	hp.mu.Lock()
 	defer hp.mu.Unlock()
 
@@ -298,6 +301,7 @@ func (hp *HeaderProtector) encryptLongHeaderExtension(packet []byte) error {
 // This is used when transitioning between handshake phases.
 // Both keys must be exactly 32 bytes.
 func (hp *HeaderProtector) UpdateKeys(kHeader1, kHeader2 []byte) error {
+	log.Debug("Updating header protection keys")
 	if len(kHeader1) != HeaderKeySize {
 		return oops.
 			Code("INVALID_KEY_SIZE").

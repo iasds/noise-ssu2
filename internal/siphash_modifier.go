@@ -25,6 +25,7 @@ type SipHashLengthModifier struct {
 // NewSipHashLengthModifier creates a new SipHash length modifier with shared
 // keys for both directions.
 func NewSipHashLengthModifier(name string, sipKeys [2]uint64, initialIV uint64) *SipHashLengthModifier {
+	log.WithField("name", name).Debug("Creating SipHash length modifier")
 	return &SipHashLengthModifier{
 		name:         name,
 		outboundKeys: sipKeys,
@@ -37,6 +38,7 @@ func NewSipHashLengthModifier(name string, sipKeys [2]uint64, initialIV uint64) 
 // NewSipHashLengthModifierDirectional creates a SipHash length modifier with
 // per-direction keys as required by the NTCP2 and SSU2 specifications.
 func NewSipHashLengthModifierDirectional(name string, outKeys, inKeys [2]uint64, outIV, inIV uint64) *SipHashLengthModifier {
+	log.WithField("name", name).Debug("Creating directional SipHash length modifier")
 	return &SipHashLengthModifier{
 		name:         name,
 		outboundKeys: outKeys,
@@ -103,6 +105,7 @@ func (slm *SipHashLengthModifier) NextOutboundMask() uint16 {
 
 // ZeroKeys zeroes all SipHash key material and IVs.
 func (slm *SipHashLengthModifier) ZeroKeys() {
+	log.WithField("name", slm.name).Debug("Zeroing SipHash key material")
 	slm.mu.Lock()
 	slm.outboundKeys[0] = 0
 	slm.outboundKeys[1] = 0

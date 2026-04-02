@@ -68,6 +68,7 @@ func GetGlobalShutdownManager() *ShutdownManager {
 // GracefulShutdown initiates graceful shutdown of all global components.
 // This includes the global connection pool and all registered connections/listeners.
 func GracefulShutdown() error {
+	log.Debug("Initiating graceful shutdown of global components")
 	globalMu.RLock()
 	sm := globalShutdownManager
 	globalMu.RUnlock()
@@ -136,6 +137,7 @@ func openAndWrapTransport[R shutdownRegisterer](
 // This is a convenience function that combines net.Dial and NewNoiseConn.
 // For more control over the underlying connection, use net.Dial followed by NewNoiseConn.
 func DialNoise(network, addr string, config *ConnConfig) (*NoiseConn, error) {
+	log.WithField("network", network).WithField("address", addr).Debug("DialNoise starting")
 	return openAndWrapTransport(
 		func() error { return validateDialParams(network, addr, config) },
 		func() (io.Closer, error) { return createNewConn(network, addr) },
@@ -149,6 +151,7 @@ func DialNoise(network, addr string, config *ConnConfig) (*NoiseConn, error) {
 // This is a convenience function that combines net.Listen and NewNoiseListener.
 // For more control over the underlying listener, use net.Listen followed by NewNoiseListener.
 func ListenNoise(network, addr string, config *ListenerConfig) (*NoiseListener, error) {
+	log.WithField("network", network).WithField("address", addr).Debug("ListenNoise starting")
 	return openAndWrapTransport(
 		func() error { return validateListenParams(network, addr, config) },
 		func() (io.Closer, error) { return createNewListener(network, addr) },
@@ -223,6 +226,7 @@ func validateListenParams(network, addr string, config *ListenerConfig) error {
 // Otherwise, a new connection is created. The connection will be automatically
 // returned to the pool when the NoiseConn is closed.
 func DialNoiseWithPool(network, addr string, config *ConnConfig) (*NoiseConn, error) {
+	log.WithField("network", network).WithField("address", addr).Debug("DialNoiseWithPool starting")
 	if err := validateDialParams(network, addr, config); err != nil {
 		return nil, err
 	}
@@ -274,8 +278,10 @@ func tryGetPooledConn(addr string) (net.Conn, bool) {
 // createNewConn establishes a new network connection to the specified address.
 // Returns an error with detailed context if the connection fails.
 func createNewConn(network, addr string) (net.Conn, error) {
+	log.WithField("network", network).WithField("address", addr).Debug("Dialing new connection")
 	conn, err := net.Dial(network, addr)
 	if err != nil {
+		log.WithError(err).WithField("network", network).WithField("address", addr).Error("Dial failed")
 		return nil, oops.
 			Code("DIAL_FAILED").
 			In("transport").
@@ -289,8 +295,10 @@ func createNewConn(network, addr string) (net.Conn, error) {
 // createNoiseConn wraps a network connection with NoiseConn configuration.
 // Returns an error with detailed context if NoiseConn creation fails.
 func createNoiseConn(conn net.Conn, config *ConnConfig, network, addr string) (*NoiseConn, error) {
+	log.WithField("network", network).WithField("address", addr).Debug("Creating NoiseConn wrapper")
 	noiseConn, err := NewNoiseConn(conn, config)
 	if err != nil {
+		log.WithError(err).Error("Failed to create NoiseConn")
 		return nil, oops.
 			Code("NOISE_CONN_FAILED").
 			In("transport").
@@ -304,8 +312,10 @@ func createNoiseConn(conn net.Conn, config *ConnConfig, network, addr string) (*
 // createNewListener establishes a new network listener on the specified address.
 // Returns an error with detailed context if the listen call fails.
 func createNewListener(network, addr string) (net.Listener, error) {
+	log.WithField("network", network).WithField("address", addr).Debug("Creating new listener")
 	listener, err := net.Listen(network, addr)
 	if err != nil {
+		log.WithError(err).WithField("network", network).WithField("address", addr).Error("Listen failed")
 		return nil, wrapTransportError("LISTEN_FAILED", network, addr,
 			"failed to listen on %s://%s", err, network, addr)
 	}

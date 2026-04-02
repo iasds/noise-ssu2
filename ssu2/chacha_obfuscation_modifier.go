@@ -32,6 +32,7 @@ var chachaNonce = make([]byte, 12)
 // introKey must be 32 bytes (Bob's intro key per the SSU2 spec).
 // Returns error if parameters are invalid.
 func NewChaChaObfuscationModifier(name string, introKey []byte) (*ChaChaObfuscationModifier, error) {
+	log.WithField("name", name).Debug("Creating new ChaChaObfuscationModifier")
 	if len(introKey) != 32 {
 		return nil, oops.
 			Code("INVALID_INTRO_KEY").
@@ -55,6 +56,7 @@ func NewChaChaObfuscationModifier(name string, introKey []byte) (*ChaChaObfuscat
 // 32 bytes (ephemeral key only) for backward compatibility.
 // Message 3+: No obfuscation
 func (com *ChaChaObfuscationModifier) ModifyOutbound(phase handshake.HandshakePhase, data []byte) ([]byte, error) {
+	log.WithField("phase", phase).WithField("dataLen", len(data)).Debug("ChaCha obfuscation ModifyOutbound")
 	if len(data) != 48 && len(data) != 32 {
 		return data, nil
 	}
@@ -71,6 +73,7 @@ func (com *ChaChaObfuscationModifier) ModifyOutbound(phase handshake.HandshakePh
 // ChaCha20 is symmetric (XOR-based), so encryption and decryption are identical.
 // Accepts 48 bytes (spec-compliant) or 32 bytes (backward compatibility).
 func (com *ChaChaObfuscationModifier) ModifyInbound(phase handshake.HandshakePhase, data []byte) ([]byte, error) {
+	log.WithField("phase", phase).WithField("dataLen", len(data)).Debug("ChaCha obfuscation ModifyInbound")
 	if len(data) != 48 && len(data) != 32 {
 		return data, nil
 	}

@@ -41,6 +41,7 @@ type PacketRouter struct {
 //
 // Returns a new PacketRouter ready to route packets.
 func NewPacketRouter(newSessionHandler func(*net.UDPAddr, *SSU2Packet) (*SSU2Conn, error)) *PacketRouter {
+	log.Debug("Creating new PacketRouter")
 	return &PacketRouter{
 		sessions:          make(map[uint64]*SSU2Conn),
 		newSessionHandler: newSessionHandler,
@@ -55,6 +56,7 @@ func NewPacketRouter(newSessionHandler func(*net.UDPAddr, *SSU2Packet) (*SSU2Con
 //
 // Returns error if the connection ID is already registered.
 func (pr *PacketRouter) AddSession(conn *SSU2Conn) error {
+	log.Debug("Adding session to packet router")
 	if conn == nil {
 		return oops.
 			Code("INVALID_SESSION").
@@ -92,6 +94,7 @@ func (pr *PacketRouter) AddSession(conn *SSU2Conn) error {
 // Parameters:
 //   - connID: The connection ID to remove
 func (pr *PacketRouter) RemoveSession(connID uint64) {
+	log.WithField("connID", connID).Debug("Removing session from packet router")
 	pr.sessionMutex.Lock()
 	defer pr.sessionMutex.Unlock()
 
@@ -122,6 +125,7 @@ func (pr *PacketRouter) GetSession(connID uint64) *SSU2Conn {
 //
 // Returns error if routing fails or session doesn't exist.
 func (pr *PacketRouter) RoutePacket(packet *SSU2Packet, remoteAddr *net.UDPAddr) error {
+	log.Debug("Routing incoming packet")
 	if packet == nil {
 		return oops.
 			Code("INVALID_PACKET").

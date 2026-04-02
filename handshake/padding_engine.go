@@ -43,6 +43,7 @@ type PaddingEngine struct {
 
 // NewPaddingEngine creates a validated padding engine.
 func NewPaddingEngine(config PaddingEngineConfig) (*PaddingEngine, error) {
+	log.WithField("domain", config.Domain).WithField("min", config.MinPadding).WithField("max", config.MaxPadding).Debug("Creating padding engine")
 	if err := ValidatePaddingParams(config.Domain, config.MinPadding, config.MaxPadding, config.PaddingRatio); err != nil {
 		return nil, err
 	}
@@ -102,7 +103,9 @@ func (pe *PaddingEngine) CalculatePaddingSize(dataLen int) int {
 	paddingSize := pe.calculateRatioPadding(dataLen)
 	paddingSize = pe.enforceMinimumPadding(paddingSize)
 	paddingSize = pe.applyRandomVariation(paddingSize, dataLen)
-	return pe.enforceMaximumPadding(paddingSize)
+	result := pe.enforceMaximumPadding(paddingSize)
+	log.WithField("data_len", dataLen).WithField("padding_size", result).Debug("Calculated padding size")
+	return result
 }
 
 // UpdateParams updates the engine's padding parameters after validation.

@@ -45,6 +45,7 @@ type TTLCache struct {
 // New creates a new TTLCache and starts a background cleanup goroutine.
 // Call Close when the cache is no longer needed.
 func New(cfg Config) *TTLCache {
+	log.WithField("ttl", cfg.TTL).WithField("max_size", cfg.MaxSize).Debug("Creating new replay cache")
 	nf := cfg.NowFunc
 	if nf == nil {
 		nf = time.Now
@@ -72,6 +73,7 @@ func (c *TTLCache) CheckAndAdd(key [32]byte) bool {
 
 	if firstSeen, exists := c.entries[key]; exists {
 		if now.Sub(firstSeen) < c.ttl {
+			log.Debug("Replay detected in cache")
 			return true // replay detected
 		}
 		// Entry expired — treat as new.
@@ -95,6 +97,7 @@ func (c *TTLCache) Size() int {
 // Close stops the background cleanup goroutine and releases resources.
 // Close is idempotent — calling it more than once is safe.
 func (c *TTLCache) Close() {
+	log.Debug("Closing replay cache")
 	c.closeOnce.Do(func() { close(c.done) })
 }
 

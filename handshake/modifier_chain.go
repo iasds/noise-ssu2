@@ -37,6 +37,7 @@ func NewModifierChain(name string, modifiers ...HandshakeModifier) *ModifierChai
 		}
 	}
 
+	log.WithField("name", name).WithField("modifier_count", len(chain)).Debug("Creating modifier chain")
 	return &ModifierChain{
 		modifiers: chain,
 		name:      name,
@@ -46,11 +47,13 @@ func NewModifierChain(name string, modifiers ...HandshakeModifier) *ModifierChai
 // ModifyOutbound applies all modifiers in the chain to outbound data.
 // Modifiers are applied in the order they were added to the chain.
 func (mc *ModifierChain) ModifyOutbound(phase HandshakePhase, data []byte) ([]byte, error) {
+	log.WithField("chain", mc.name).WithField("phase", phase.String()).WithField("data_len", len(data)).Debug("Applying modifier chain outbound")
 	result := data
 
 	for i, modifier := range mc.modifiers {
 		modified, err := modifier.ModifyOutbound(phase, result)
 		if err != nil {
+			log.WithError(err).WithField("chain", mc.name).WithField("modifier", modifier.Name()).WithField("index", i).Error("Modifier chain outbound failed")
 			return nil, oops.
 				Code("MODIFIER_CHAIN_ERROR").
 				In("handshake").
@@ -70,6 +73,7 @@ func (mc *ModifierChain) ModifyOutbound(phase HandshakePhase, data []byte) ([]by
 // Modifiers are applied in reverse order to undo the transformations
 // applied during outbound processing.
 func (mc *ModifierChain) ModifyInbound(phase HandshakePhase, data []byte) ([]byte, error) {
+	log.WithField("chain", mc.name).WithField("phase", phase.String()).WithField("data_len", len(data)).Debug("Applying modifier chain inbound")
 	result := data
 
 	// Apply modifiers in reverse order for inbound data
@@ -77,6 +81,7 @@ func (mc *ModifierChain) ModifyInbound(phase HandshakePhase, data []byte) ([]byt
 		modifier := mc.modifiers[i]
 		modified, err := modifier.ModifyInbound(phase, result)
 		if err != nil {
+			log.WithError(err).WithField("chain", mc.name).WithField("modifier", modifier.Name()).WithField("index", i).Error("Modifier chain inbound failed")
 			return nil, oops.
 				Code("MODIFIER_CHAIN_ERROR").
 				In("handshake").
@@ -122,6 +127,7 @@ func (mc *ModifierChain) ModifierNames() []string {
 // Callers should not call Close() concurrently with ModifyOutbound or
 // ModifyInbound.
 func (mc *ModifierChain) Close() error {
+	log.WithField("chain", mc.name).Debug("Closing modifier chain")
 	var errs []error
 	for _, m := range mc.modifiers {
 		if err := m.Close(); err != nil {

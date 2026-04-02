@@ -31,6 +31,7 @@ type ConnPool struct {
 
 // NewConnPool creates a new connection pool with the given configuration
 func NewConnPool(config *PoolConfig) *ConnPool {
+	log.Debug("Creating new connection pool")
 	if config == nil {
 		config = &PoolConfig{
 			MaxSize: 10,
@@ -63,6 +64,7 @@ func (p *ConnPool) Get(remoteAddr string) net.Conn {
 	defer p.mu.Unlock()
 
 	if p.closed {
+		log.Debug("Get called on closed pool")
 		return nil
 	}
 
@@ -149,6 +151,7 @@ func (p *ConnPool) GetOrDial(ctx context.Context, remoteAddr string, dial func(c
 	}
 
 	// Dial outside the pool lock.
+	log.WithField("remote_addr", remoteAddr).Debug("Dialing new connection for pool")
 	conn, err := dial(ctx)
 	if err != nil {
 		return nil, oops.
@@ -214,6 +217,7 @@ func (p *ConnPool) putAndGet(remoteAddr string, conn net.Conn) (net.Conn, error)
 // to ensure the connection is in a usable state.
 func (p *ConnPool) Put(conn net.Conn) error {
 	if conn == nil {
+		log.Warn("Attempted to put nil connection in pool")
 		return oops.
 			Code("INVALID_CONNECTION").
 			In("pool").
@@ -477,6 +481,7 @@ func (p *ConnPool) Close() error {
 		return nil
 	}
 
+	log.Debug("Closing connection pool")
 	p.closed = true
 	close(p.done)
 

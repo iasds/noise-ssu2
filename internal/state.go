@@ -51,6 +51,7 @@ type ConnectionMetrics struct {
 
 // NewConnectionMetrics creates a new ConnectionMetrics instance
 func NewConnectionMetrics() *ConnectionMetrics {
+	log.Debug("Creating new connection metrics")
 	return &ConnectionMetrics{
 		Created: time.Now(),
 	}

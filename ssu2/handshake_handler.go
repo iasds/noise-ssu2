@@ -111,6 +111,7 @@ func buildSSU2Prologue() []byte {
 // For responders, remoteStaticKey is nil and will be learned during handshake.
 // The prologue binds the Noise handshake to SSU2 session context; pass nil to omit.
 func NewHandshakeHandler(initiator bool, staticKey, remoteStaticKey, prologue []byte) (*HandshakeHandler, error) {
+	log.WithField("initiator", initiator).Debug("Creating new HandshakeHandler")
 	if len(staticKey) != 32 {
 		return nil, oops.Errorf("static key must be 32 bytes, got %d", len(staticKey))
 	}
@@ -174,6 +175,7 @@ func NewHandshakeHandler(initiator bool, staticKey, remoteStaticKey, prologue []
 // For responders, remoteStaticKey is nil and will be learned during handshake.
 // The prologue binds the Noise handshake to SSU2 session context; pass nil to omit.
 func NewHandshakeHandlerWithKeys(initiator bool, staticKeypair noise.DHKey, remoteStaticKey, prologue []byte) (*HandshakeHandler, error) {
+	log.WithField("initiator", initiator).Debug("Creating new HandshakeHandler with keys")
 	if len(staticKeypair.Private) != 32 {
 		return nil, oops.Errorf("static private key must be 32 bytes, got %d", len(staticKeypair.Private))
 	}
@@ -623,6 +625,7 @@ func (h *HandshakeHandler) updateCipherStates(cs1, cs2 *noise.CipherState) {
 // split key) so that data-phase AEAD uses the spec-mandated derived key.
 // Returns the send-direction k_header_2 and recv-direction k_header_2.
 func (h *HandshakeHandler) DeriveHeaderKeys() (sendKHeader2, recvKHeader2 []byte, err error) {
+	log.Debug("Deriving data-phase header keys")
 	if h.sendCipher == nil || h.recvCipher == nil {
 		return nil, nil, oops.Errorf("handshake not complete: cipher states not available")
 	}
@@ -715,6 +718,7 @@ func deriveDataPhaseKeys(cs *noise.CipherState) (kData, kHeader2 []byte, err err
 // Close releases resources held by the HandshakeHandler, including the
 // replay cache's background goroutine.
 func (h *HandshakeHandler) Close() {
+	log.Debug("Closing HandshakeHandler")
 	if h.replayCache != nil {
 		h.replayCache.Close()
 	}

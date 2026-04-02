@@ -14,6 +14,7 @@ import (
 //
 // After successful handshake, connection state transitions to StateEstablished.
 func (h *SSU2Conn) Handshake(ctx context.Context) error {
+	log.Debug("Starting SSU2 handshake")
 	h.stateMutex.Lock()
 	if h.state != StateInit {
 		h.stateMutex.Unlock()
@@ -37,6 +38,7 @@ func (h *SSU2Conn) Handshake(ctx context.Context) error {
 // handshakeInitiator performs the initiator side of XK handshake.
 // handshakeInitiator performs the initiator side of XK handshake.
 func (h *SSU2Conn) handshakeInitiator(ctx context.Context) error {
+	log.Debug("Starting SSU2 handshake as initiator")
 	sessionRequest, err := h.sendSessionRequest()
 	if err != nil {
 		return err
@@ -209,6 +211,7 @@ func (h *SSU2Conn) sendSessionConfirmed() error {
 // handshakeResponder performs the responder side of XK handshake.
 // handshakeResponder performs the responder side of XK handshake.
 func (h *SSU2Conn) handshakeResponder(ctx context.Context) error {
+	log.Debug("Starting SSU2 handshake as responder")
 	initiatorConnID, err := h.receiveSessionRequest(ctx)
 	if err != nil {
 		return err
@@ -365,6 +368,7 @@ func (h *SSU2Conn) validateConfirmedFragment(frag *SSU2Packet, expectedTotal int
 // finalizeHandshake checks completion, installs cipher states, transitions to
 // established, and starts data loops. Shared by both initiator and responder.
 func (h *SSU2Conn) finalizeHandshake() error {
+	log.Debug("Finalizing SSU2 handshake")
 	if !h.handshakeHandler.IsHandshakeComplete() {
 		return oops.Errorf("handshake not complete after SessionConfirmed")
 	}

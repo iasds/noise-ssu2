@@ -94,6 +94,7 @@ func writeNoiseIKMessage1(
 	ourStaticPriv, ourStaticPub, responderStaticPub [32]byte,
 	payload []byte,
 ) ([]byte, *sessionKeys, *noiseHandshakeState, error) {
+	log.Debug("Constructing Noise IK New Session message")
 	ns := initNoiseIK(responderStaticPub)
 
 	// Token e: Generate Elligator2-representable ephemeral key pair
@@ -262,6 +263,7 @@ func readNoiseIKMessage1(
 	ourStaticPriv, ourStaticPub [32]byte,
 	message []byte,
 ) ([]byte, [32]byte, *sessionKeys, *noiseHandshakeState, bool, error) {
+	log.Debug("Processing received Noise IK New Session message")
 	if len(message) < noiseIKMinMessageSize {
 		return nil, [32]byte{}, nil, nil, false, oops.Errorf(
 			"new session message too short: %d bytes (minimum %d)", len(message), noiseIKMinMessageSize)

@@ -21,6 +21,7 @@ import (
 // When no length obfuscator is set, delegates directly to NoiseConn.Read.
 func (nc *NTCP2Conn) Read(b []byte) (int, error) {
 	if nc.broken.Load() {
+		log.Warn("Read attempted on broken NTCP2 connection")
 		return 0, oops.
 			Code("CONNECTION_BROKEN").
 			In("ntcp2").
@@ -192,6 +193,7 @@ func (nc *NTCP2Conn) bufferPlaintext(b, plaintext []byte) int {
 // is applied before returning the error.
 func (nc *NTCP2Conn) validateFrameLength(frameLen uint16) error {
 	if frameLen < MinDataPhaseFrameSize {
+		log.WithField("frame_length", frameLen).Warn("Frame length below minimum")
 		nc.applyProbingResistanceDelay()
 		return oops.
 			Code("FRAME_TOO_SMALL").
@@ -223,6 +225,7 @@ func (nc *NTCP2Conn) validateFrameLength(frameLen uint16) error {
 // MaxFrameSize minus Poly1305Overhead bytes of plaintext each.
 func (nc *NTCP2Conn) Write(b []byte) (int, error) {
 	if nc.broken.Load() {
+		log.Warn("Write attempted on broken NTCP2 connection")
 		return 0, oops.
 			Code("CONNECTION_BROKEN").
 			In("ntcp2").

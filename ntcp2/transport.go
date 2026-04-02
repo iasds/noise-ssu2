@@ -13,6 +13,7 @@ import (
 // This is a convenience function that combines net.Dial, NoiseConn creation, and NTCP2 wrapping.
 // For more control over the underlying connection, use net.Dial followed by NewNoiseConn and NewNTCP2Conn.
 func DialNTCP2(network, addr string, config *NTCP2Config) (*NTCP2Conn, error) {
+	log.WithField("address", addr).Debug("Dialing NTCP2 connection")
 	if err := validateDialParams(network, addr, config); err != nil {
 		return nil, err
 	}
@@ -40,6 +41,7 @@ func DialNTCP2WithHandshake(network, addr string, config *NTCP2Config) (*NTCP2Co
 // DialNTCP2WithHandshakeContext creates a connection and performs the NTCP2 handshake with context.
 // The context can be used to cancel the dial or handshake operations.
 func DialNTCP2WithHandshakeContext(ctx context.Context, network, addr string, config *NTCP2Config) (*NTCP2Conn, error) {
+	log.WithField("address", addr).Debug("Dialing NTCP2 with handshake")
 	ntcp2Conn, err := DialNTCP2(network, addr, config)
 	if err != nil {
 		return nil, err
@@ -72,6 +74,7 @@ func DialNTCP2WithHandshakeContext(ctx context.Context, network, addr string, co
 // This is a convenience function that combines net.Listen and NewNTCP2Listener.
 // For more control over the underlying listener, use net.Listen followed by NewNTCP2Listener.
 func ListenNTCP2(network, addr string, config *NTCP2Config) (*NTCP2Listener, error) {
+	log.WithField("address", addr).Debug("Creating NTCP2 listener")
 	if err := validateListenParams(network, addr, config); err != nil {
 		return nil, err
 	}
@@ -105,6 +108,7 @@ func ListenNTCP2(network, addr string, config *NTCP2Config) (*NTCP2Listener, err
 // WrapNTCP2Conn wraps an existing net.Conn with NTCP2Conn.
 // This function creates the necessary Noise wrapper and NTCP2 addressing.
 func WrapNTCP2Conn(conn net.Conn, config *NTCP2Config) (*NTCP2Conn, error) {
+	log.Debug("Wrapping connection with NTCP2")
 	if err := validateWrapConnParams(conn, config); err != nil {
 		return nil, err
 	}

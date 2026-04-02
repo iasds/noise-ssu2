@@ -219,6 +219,7 @@ func NewSSU2Conn(
 	staticKey []byte,
 	remoteStaticKey []byte,
 ) (*SSU2Conn, error) {
+	log.WithField("remote_addr", remoteAddr).Debug("Creating new SSU2 connection")
 	if err := validateConnInputs(underlying, remoteAddr, config); err != nil {
 		return nil, err
 	}
@@ -424,6 +425,7 @@ func (h *SSU2Conn) Close() error {
 // + reason (1 byte) + additional data (optional).
 func (h *SSU2Conn) CloseWithReason(reason TerminationReason, additionalData []byte) error {
 	h.closeOnce.Do(func() {
+		log.WithField("reason", reason).Debug("Closing SSU2 connection")
 		// Update state first
 		h.stateMutex.Lock()
 		h.state = StateClosing

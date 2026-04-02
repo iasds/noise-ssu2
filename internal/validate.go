@@ -8,6 +8,7 @@ import (
 
 // ValidatePattern checks that a Noise protocol pattern is non-empty.
 func ValidatePattern(pattern, pkg string) error {
+	log.WithField("pattern", pattern).WithField("pkg", pkg).Debug("Validating pattern")
 	if pattern == "" {
 		return oops.
 			Code("INVALID_PATTERN").
@@ -44,6 +45,7 @@ func ValidateKeyLength(key []byte, name, pkg string) error {
 // RunValidators executes a sequence of validation functions, returning the
 // first error encountered or nil if all pass.
 func RunValidators(validators ...func() error) error {
+	log.WithField("validator_count", len(validators)).Debug("Running validators")
 	for _, v := range validators {
 		if err := v(); err != nil {
 			return err

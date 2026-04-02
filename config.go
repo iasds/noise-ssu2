@@ -103,6 +103,7 @@ type ConnConfig struct {
 
 // NewConnConfig creates a new ConnConfig with sensible defaults.
 func NewConnConfig(pattern string, initiator bool) *ConnConfig {
+	log.WithField("pattern", pattern).WithField("initiator", initiator).Debug("Creating new ConnConfig")
 	return &ConnConfig{
 		Pattern:          pattern,
 		Initiator:        initiator,
@@ -219,6 +220,7 @@ func (c *ConnConfig) invalidateModifierCache() {
 // Validate checks if the configuration is valid and complete.
 // Returns an error with context if validation fails.
 func (c *ConnConfig) Validate() error {
+	log.WithField("pattern", c.Pattern).Debug("Validating ConnConfig")
 	return internal.RunValidators(
 		c.validatePattern,
 		c.validateHandshakeTimeout,

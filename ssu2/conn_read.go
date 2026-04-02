@@ -2,9 +2,7 @@ package ssu2
 
 import (
 	"encoding/binary"
-	"fmt"
 	"net"
-	"os"
 	"time"
 
 	"github.com/samber/oops"
@@ -74,13 +72,12 @@ func (h *SSU2Conn) recvLoop() {
 				continue
 			}
 
-			fmt.Fprintf(os.Stderr, "RECVLOOP: got %d bytes from %v\n", n, addr)
+			log.WithField("bytes", n).WithField("from", addr).Debug("Received UDP packet")
 			if packet := h.parseInboundPacket(buf[:n], addr); packet != nil {
-				fmt.Fprintf(os.Stderr, "RECVLOOP: parsed packet type=%d pktnum=%d payload_len=%d\n",
-					packet.MessageType, packet.PacketNumber, len(packet.Payload))
+				log.WithField("type", packet.MessageType).WithField("pktnum", packet.PacketNumber).Debug("Parsed inbound packet")
 				h.processInboundPacket(packet)
 			} else {
-				fmt.Fprintf(os.Stderr, "RECVLOOP: parseInboundPacket returned nil\n")
+				log.Debug("Inbound packet dropped (parse returned nil)")
 			}
 		}
 	}

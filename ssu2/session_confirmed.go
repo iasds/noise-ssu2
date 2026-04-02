@@ -29,6 +29,7 @@ const (
 // initiator's identity. routerInfo may be nil for testing.
 // This message completes the XK handshake (→ s, se) and produces transport cipher states.
 func (h *HandshakeHandler) CreateSessionConfirmed(connID uint64, packetNumber uint32, routerInfo []byte) (*SSU2Packet, error) {
+	log.WithField("connID", connID).WithField("packetNumber", packetNumber).Debug("Creating SessionConfirmed")
 	if !h.initiator {
 		return nil, oops.Errorf("only initiator can create SessionConfirmed")
 	}
@@ -112,6 +113,7 @@ func (h *HandshakeHandler) CreateSessionConfirmed(connID uint64, packetNumber ui
 //
 // After this, both sides have completed the handshake and can send Data messages.
 func (h *HandshakeHandler) ProcessSessionConfirmed(packet *SSU2Packet) error {
+	log.Debug("Processing received SessionConfirmed")
 	if h.initiator {
 		return oops.Errorf("initiator cannot process SessionConfirmed")
 	}
@@ -177,6 +179,7 @@ func (h *HandshakeHandler) ProcessSessionConfirmed(packet *SSU2Packet) error {
 // Only the first fragment's header is MixHash'd into the handshake. Subsequent
 // fragment headers carry the same connection ID with incrementing packet numbers.
 func (h *HandshakeHandler) CreateSessionConfirmedFragments(connID uint64, packetNumber uint32, routerInfo []byte) ([]*SSU2Packet, error) {
+	log.WithField("connID", connID).WithField("packetNumber", packetNumber).Debug("Creating SessionConfirmed with fragmentation")
 	if !h.initiator {
 		return nil, oops.Errorf("only initiator can create SessionConfirmed")
 	}
@@ -284,6 +287,7 @@ func buildFragmentPackets(ciphertext []byte, connID uint64, packetNumber uint32,
 //
 // For a single-fragment message, this behaves identically to ProcessSessionConfirmed.
 func (h *HandshakeHandler) ProcessSessionConfirmedFragments(packets []*SSU2Packet) error {
+	log.WithField("fragmentCount", len(packets)).Debug("Processing SessionConfirmed fragments")
 	if h.initiator {
 		return oops.Errorf("initiator cannot process SessionConfirmed")
 	}

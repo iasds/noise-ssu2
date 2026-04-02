@@ -36,7 +36,9 @@ func DeriveSipHashKeys(askMaster, handshakeHash []byte) (
 	sipKeysBA [2]uint64, sipIVBA uint64,
 	err error,
 ) {
+	log.Debug("Deriving SipHash keys from handshake")
 	if len(askMaster) != StaticKeySize {
+		log.WithField("length", len(askMaster)).Error("Invalid ask_master length")
 		return sipKeysAB, 0, sipKeysBA, 0, oops.
 			Code("INVALID_ASK_MASTER").
 			In("ntcp2").
@@ -45,6 +47,7 @@ func DeriveSipHashKeys(askMaster, handshakeHash []byte) (
 	}
 
 	if len(handshakeHash) != StaticKeySize {
+		log.WithField("length", len(handshakeHash)).Error("Invalid handshake hash length")
 		return sipKeysAB, 0, sipKeysBA, 0, oops.
 			Code("INVALID_HANDSHAKE_HASH").
 			In("ntcp2").
@@ -92,5 +95,6 @@ func DeriveSipHashKeys(askMaster, handshakeHash []byte) (
 	internal.SecureZero(step5Data)
 	internal.SecureZero(fullBA[:])
 
+	log.Debug("SipHash key derivation completed successfully")
 	return sipKeysAB, sipIVAB, sipKeysBA, sipIVBA, nil
 }

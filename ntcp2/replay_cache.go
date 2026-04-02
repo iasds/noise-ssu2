@@ -50,6 +50,7 @@ var _ ReplayDetector = (*ReplayCache)(nil)
 // NewReplayCache creates a new replay cache and starts a background cleanup
 // goroutine. Call Close() when the cache is no longer needed.
 func NewReplayCache() *ReplayCache {
+	log.Debug("Creating NTCP2 replay cache")
 	return &ReplayCache{
 		cache: replaycache.New(replaycache.Config{
 			TTL:             replayCacheTTL,
@@ -65,7 +66,11 @@ func NewReplayCache() *ReplayCache {
 //
 // This is the primary method called by the listener before processing message 1.
 func (rc *ReplayCache) CheckAndAdd(ephemeralKey [32]byte) bool {
-	return rc.cache.CheckAndAdd(ephemeralKey)
+	result := rc.cache.CheckAndAdd(ephemeralKey)
+	if result {
+		log.Warn("Replay detected for ephemeral key")
+	}
+	return result
 }
 
 // Size returns the current number of entries in the cache.
@@ -76,5 +81,6 @@ func (rc *ReplayCache) Size() int {
 // Close stops the background cleanup goroutine and releases resources.
 // Close is idempotent — calling it more than once is safe and will not panic.
 func (rc *ReplayCache) Close() {
+	log.Debug("Closing NTCP2 replay cache")
 	rc.cache.Close()
 }

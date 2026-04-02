@@ -23,6 +23,7 @@ import (
 //
 // Returns an SSU2Conn ready for handshake, or an error if creation fails.
 func DialSSU2(localAddr, remoteAddr *net.UDPAddr, config *SSU2Config) (*SSU2Conn, error) {
+	log.WithField("remote_addr", remoteAddr).Debug("Dialing SSU2 connection")
 	if err := validateDialParams(localAddr, remoteAddr, config); err != nil {
 		return nil, err
 	}
@@ -99,6 +100,7 @@ func DialSSU2WithHandshakeContext(ctx context.Context, localAddr, remoteAddr *ne
 //
 // Returns an SSU2Listener ready to accept, or an error if creation fails.
 func ListenSSU2(addr *net.UDPAddr, config *SSU2Config) (*SSU2Listener, error) {
+	log.WithField("address", addr).Debug("Creating SSU2 listener")
 	if err := validateListenParams(addr, config); err != nil {
 		return nil, err
 	}
