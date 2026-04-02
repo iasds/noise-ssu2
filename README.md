@@ -198,6 +198,45 @@ NoiseConn (net.Conn)
 - **go-i2p/logger**: Structured logging support
 - **samber/oops** v1.19.0: Rich error context
 
+## Logging
+
+This library uses [`go-i2p/logger`](https://github.com/go-i2p/logger) for structured logging across all packages. Logging is controlled via environment variables:
+
+| Variable | Values | Description |
+|---|---|---|
+| `DEBUG_I2P` | `debug`, `warn`, `error` | Sets log level. Unset = no output. |
+| `WARNFAIL_I2P` | `true` | Promotes warnings to fatal errors (useful for CI). |
+
+Each package has a dedicated `log.go` file that initializes a package-level logger:
+
+```go
+var log = logger.GetGoI2PLogger()
+```
+
+Log statements use structured fields for context:
+
+```go
+log.WithField("pattern", config.Pattern).Debug("Creating new connection config")
+log.WithError(err).Error("Handshake failed")
+log.WithFields(logger.Fields{
+    "localAddr":  conn.LocalAddr(),
+    "remoteAddr": conn.RemoteAddr(),
+}).Debug("Connection established")
+```
+
+### Running Tests with Logging
+
+```bash
+# Default (no log output)
+go test ./...
+
+# With debug logging
+DEBUG_I2P=debug go test ./...
+
+# With warn-fail mode (warnings become fatal)
+WARNFAIL_I2P=true DEBUG_I2P=debug go test ./...
+```
+
 ## Testing
 
 ```bash
