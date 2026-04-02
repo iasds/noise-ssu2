@@ -59,6 +59,7 @@ func NewSSU2PaddingModifierWithRatio(name string, minPad, maxPad int, aeadMode b
 //
 // This is the primary constructor - all others delegate to it.
 func NewSSU2PaddingModifierWithMTU(name string, minPad, maxPad, mtu int, aeadMode bool, ratio float64) (*SSU2PaddingModifier, error) {
+	log.WithField("name", name).WithField("mtu", mtu).Debug("Creating new SSU2PaddingModifier")
 	engine, err := handshake.NewPaddingEngine(handshake.PaddingEngineConfig{
 		MinPadding:   minPad,
 		MaxPadding:   maxPad,

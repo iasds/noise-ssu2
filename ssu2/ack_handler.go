@@ -56,6 +56,7 @@ type PendingACK struct {
 
 // NewACKHandler creates a new ACK handler with default settings.
 func NewACKHandler() *ACKHandler {
+	log.Debug("Creating new ACKHandler")
 	return &ACKHandler{
 		receivedPackets: make([]uint32, 0, 64),
 		pendingACKs:     make(map[uint32]*PendingACK),
@@ -123,6 +124,7 @@ func (h *ACKHandler) ShouldSendACK(rtt time.Duration) bool {
 // GenerateACK creates an ACK block (Type 12) for all received packets.
 // Returns nil if there are no packets to acknowledge.
 func (h *ACKHandler) GenerateACK() (*SSU2Block, error) {
+	log.Debug("Generating ACK block")
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if len(h.receivedPackets) == 0 {
@@ -198,6 +200,7 @@ func buildACKRanges(sorted []uint32, start, maxBytes int) []byte {
 // ProcessACK handles an incoming ACK block, removing acknowledged packets
 // from the pending queue. Returns the list of acked packet numbers.
 func (h *ACKHandler) ProcessACK(ackBlock *SSU2Block) ([]uint32, error) {
+	log.Debug("Processing ACK block")
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if ackBlock.Type != BlockTypeACK {

@@ -110,6 +110,7 @@ func (s HolePunchState) String() string {
 //
 // Returns a new HolePunchCoordinator with empty state.
 func NewHolePunchCoordinator(manager *RelayManager) *HolePunchCoordinator {
+	log.Debug("Creating new HolePunchCoordinator")
 	return &HolePunchCoordinator{
 		manager:  manager,
 		attempts: make(map[uint64]*HolePunchAttempt),
@@ -131,6 +132,7 @@ func NewHolePunchCoordinator(manager *RelayManager) *HolePunchCoordinator {
 //
 // Returns session ID on success, error otherwise.
 func (hpc *HolePunchCoordinator) InitiateHolePunch(remoteAddr, introducerAddr *net.UDPAddr, relayTag uint32) (uint64, error) {
+	log.WithField("relayTag", relayTag).Debug("Initiating hole punch")
 	if remoteAddr == nil {
 		return 0, oops.
 			Code("INVALID_ADDRESS").
@@ -248,6 +250,7 @@ func (hpc *HolePunchCoordinator) SendHolePunch(sessionID uint64, targetAddr *net
 //
 // Returns error if session not found or signature verification fails.
 func (hpc *HolePunchCoordinator) HandleHolePunch(sessionID uint64, fromAddr *net.UDPAddr, block *RelayIntroBlock, signerKey ed25519.PublicKey) error {
+	log.WithField("sessionID", sessionID).Debug("Handling hole punch")
 	hpc.mutex.Lock()
 	defer hpc.mutex.Unlock()
 
@@ -388,6 +391,7 @@ func (hpc *HolePunchCoordinator) RetryHolePunch(sessionID uint64) error {
 //
 // Returns error if session not found.
 func (hpc *HolePunchCoordinator) CompleteHolePunch(sessionID uint64) error {
+	log.WithField("sessionID", sessionID).Debug("Completing hole punch")
 	if sessionID == 0 {
 		return oops.
 			Code("INVALID_SESSION_ID").
@@ -421,6 +425,7 @@ func (hpc *HolePunchCoordinator) CompleteHolePunch(sessionID uint64) error {
 //
 // Returns error if session not found.
 func (hpc *HolePunchCoordinator) FailHolePunch(sessionID uint64, reason error) error {
+	log.WithField("sessionID", sessionID).Debug("Failing hole punch")
 	if sessionID == 0 {
 		return oops.
 			Code("INVALID_SESSION_ID").

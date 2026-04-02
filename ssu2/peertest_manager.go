@@ -242,6 +242,7 @@ type TestResult struct {
 //
 // Returns a new PeerTestManager with empty state.
 func NewPeerTestManager(listener *SSU2Listener) *PeerTestManager {
+	log.Debug("Creating new PeerTestManager")
 	return &PeerTestManager{
 		listener: listener,
 		tests:    make(map[uint32]*PeerTest),
@@ -261,6 +262,7 @@ func NewPeerTestManager(listener *SSU2Listener) *PeerTestManager {
 //
 // Returns nonce on success, error otherwise.
 func (ptm *PeerTestManager) InitiatePeerTest(bobAddr *net.UDPAddr) (uint32, error) {
+	log.Debug("Initiating peer test")
 	if bobAddr == nil {
 		return 0, oops.
 			Code("INVALID_ADDRESS").
@@ -414,6 +416,7 @@ func (ptm *PeerTestManager) UpdateState(nonce uint32, state PeerTestState) error
 //
 // Returns error if test not found.
 func (ptm *PeerTestManager) CompleteTest(nonce uint32, result *TestResult) error {
+	log.WithField("nonce", nonce).Debug("Completing peer test")
 	if nonce == 0 {
 		return oops.
 			Code("INVALID_NONCE").
@@ -462,6 +465,7 @@ func (ptm *PeerTestManager) CompleteTest(nonce uint32, result *TestResult) error
 //
 // Returns error if test not found.
 func (ptm *PeerTestManager) FailTest(nonce uint32, reason error) error {
+	log.WithField("nonce", nonce).Debug("Failing peer test")
 	return ptm.withTest(nonce, func(test *PeerTest) {
 		test.State = TestFailed
 	})

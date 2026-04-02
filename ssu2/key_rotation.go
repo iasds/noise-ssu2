@@ -158,6 +158,7 @@ type KeyRotationManager struct {
 // staticKey and introKey are the initial keys (32 bytes each).
 // isPublished indicates if these keys are published in router addresses.
 func NewKeyRotationManager(staticKey, introKey []byte, isPublished bool) (*KeyRotationManager, error) {
+	log.WithField("isPublished", isPublished).Debug("Creating new KeyRotationManager")
 	if len(staticKey) != StaticKeySize {
 		return nil, oops.
 			In("ssu2").
@@ -346,6 +347,7 @@ func (krm *KeyRotationManager) SetPublished(isPublished bool) {
 // RotateStaticKey generates a new static key if rotation is allowed.
 // Returns the new key bytes or an error if rotation is not permitted.
 func (krm *KeyRotationManager) RotateStaticKey() ([]byte, error) {
+	log.Debug("Rotating static key")
 	krm.mu.Lock()
 	defer krm.mu.Unlock()
 
@@ -365,6 +367,7 @@ func (krm *KeyRotationManager) RotateStaticKey() ([]byte, error) {
 // ForceRotateStaticKey rotates the static key regardless of age.
 // Use with caution - this bypasses security requirements.
 func (krm *KeyRotationManager) ForceRotateStaticKey() ([]byte, error) {
+	log.Warn("Force rotating static key (bypassing age check)")
 	krm.mu.Lock()
 	defer krm.mu.Unlock()
 
@@ -423,6 +426,7 @@ func (krm *KeyRotationManager) rotateStaticKeyLocked() ([]byte, error) {
 // RotateIntroKey generates a new introduction key if rotation is allowed.
 // Returns the new key bytes or an error if rotation is not permitted.
 func (krm *KeyRotationManager) RotateIntroKey() ([]byte, error) {
+	log.Debug("Rotating intro key")
 	krm.mu.Lock()
 	defer krm.mu.Unlock()
 
@@ -442,6 +446,7 @@ func (krm *KeyRotationManager) RotateIntroKey() ([]byte, error) {
 // ForceRotateIntroKey rotates the introduction key regardless of age.
 // Use with caution - this bypasses security requirements.
 func (krm *KeyRotationManager) ForceRotateIntroKey() ([]byte, error) {
+	log.Warn("Force rotating intro key (bypassing age check)")
 	krm.mu.Lock()
 	defer krm.mu.Unlock()
 
@@ -500,6 +505,7 @@ func (krm *KeyRotationManager) rotateIntroKeyLocked() ([]byte, error) {
 // Returns the new keys or an error. Partial rotation is not performed -
 // if either key cannot be rotated, neither is rotated.
 func (krm *KeyRotationManager) RotateAllKeys() (staticKey, introKey []byte, err error) {
+	log.Debug("Rotating all keys")
 	krm.mu.Lock()
 	defer krm.mu.Unlock()
 
@@ -531,6 +537,7 @@ func (krm *KeyRotationManager) RotateAllKeys() (staticKey, introKey []byte, err 
 // Keys that meet rotation requirements will trigger the rotation callback
 // but will NOT be automatically rotated - the callback should handle rotation.
 func (krm *KeyRotationManager) Start() {
+	log.Debug("Starting key rotation checker")
 	krm.mu.Lock()
 	if krm.running {
 		krm.mu.Unlock()
@@ -545,6 +552,7 @@ func (krm *KeyRotationManager) Start() {
 
 // Stop halts the background key rotation checker.
 func (krm *KeyRotationManager) Stop() {
+	log.Debug("Stopping key rotation checker")
 	krm.mu.Lock()
 	defer krm.mu.Unlock()
 

@@ -41,6 +41,7 @@ type Token struct {
 // NewTokenCache creates a new token cache with the specified TTL.
 // If ttl is zero or negative, defaults to 60 seconds.
 func NewTokenCache(ttl time.Duration) *TokenCache {
+	log.WithField("ttl", ttl).Debug("Creating new TokenCache")
 	if ttl <= 0 {
 		ttl = 60 * time.Second
 	}
@@ -65,6 +66,7 @@ func newTokenCacheFromConfig(config *SSU2Config) *TokenCache {
 // The token is cryptographically random and stored in the cache.
 // Returns the token value.
 func (tc *TokenCache) GenerateToken(addr *net.UDPAddr) ([]byte, error) {
+	log.Debug("Generating new token")
 	if addr == nil {
 		return nil, oops.
 			Code("NIL_ADDRESS").

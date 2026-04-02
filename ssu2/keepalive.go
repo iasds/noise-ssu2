@@ -67,6 +67,7 @@ type SendReceiver interface {
 //
 // Returns an initialized but not yet started manager.
 func NewKeepaliveManager(conn SendReceiver, interval, timeout time.Duration) *KeepaliveManager {
+	log.WithField("interval", interval).WithField("timeout", timeout).Debug("Creating new KeepaliveManager")
 	if interval <= 0 {
 		interval = 15 * time.Second // ssu2.rst default
 	}
@@ -94,6 +95,7 @@ func NewKeepaliveManager(conn SendReceiver, interval, timeout time.Duration) *Ke
 //
 // This method is idempotent - calling Start() multiple times has no effect.
 func (km *KeepaliveManager) Start() {
+	log.Debug("Starting keepalive manager")
 	km.mutex.Lock()
 	defer km.mutex.Unlock()
 
@@ -114,6 +116,7 @@ func (km *KeepaliveManager) Start() {
 // This method blocks until the goroutine has fully stopped.
 // It is idempotent and safe to call multiple times.
 func (km *KeepaliveManager) Stop() {
+	log.Debug("Stopping keepalive manager")
 	km.mutex.Lock()
 	if !km.started {
 		km.mutex.Unlock()

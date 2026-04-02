@@ -145,6 +145,7 @@ const (
 //
 // Returns an initialized validator.
 func NewPathValidator(conn PathValidationConn) *PathValidator {
+	log.Debug("Creating new PathValidator")
 	return &PathValidator{
 		conn:       conn,
 		challenges: make(map[uint64]*PathChallenge),
@@ -175,6 +176,7 @@ func (pv *PathValidator) SetCongestionController(cc *CongestionController) {
 //   - uint64: The challenge ID for tracking this validation
 //   - error: If challenge creation or sending fails
 func (pv *PathValidator) InitiatePathValidation(newAddr *net.UDPAddr) (uint64, error) {
+	log.Debug("Initiating path validation")
 	if newAddr == nil {
 		return 0, oops.Errorf("new address is nil")
 	}
@@ -347,6 +349,7 @@ func (pv *PathValidator) HandlePathResponse(block *SSU2Block, fromAddr *net.UDPA
 //
 // Returns error if migration fails.
 func (pv *PathValidator) ValidatePath(challengeID uint64) error {
+	log.WithField("challengeID", challengeID).Debug("Validating path")
 	pv.mutex.Lock()
 	challenge, exists := pv.challenges[challengeID]
 	if !exists {
@@ -396,6 +399,7 @@ func (pv *PathValidator) ValidatePath(challengeID uint64) error {
 //   - challengeID: The challenge ID to fail
 //   - reason: Error describing why validation failed
 func (pv *PathValidator) FailPath(challengeID uint64, reason error) {
+	log.WithField("challengeID", challengeID).Debug("Path validation failed")
 	pv.mutex.Lock()
 	defer pv.mutex.Unlock()
 
@@ -643,6 +647,7 @@ func (pv *PathValidator) GetDiscoveredMTU() int {
 //
 // RunPMTUD blocks until the search completes or the context expires.
 func (pv *PathValidator) RunPMTUD(addr *net.UDPAddr, low, high int) int {
+	log.WithField("low", low).WithField("high", high).Debug("Running PMTUD")
 	if low < MinMTU {
 		low = MinMTU
 	}

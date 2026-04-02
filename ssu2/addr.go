@@ -35,6 +35,7 @@ type SSU2Addr struct {
 // connID should be a cryptographically secure random 8-byte value (use GenerateConnectionID).
 // role should be either "initiator" or "responder".
 func NewSSU2Addr(underlying net.Addr, routerHash data.Hash, connID uint64, role string) (*SSU2Addr, error) {
+	log.WithField("role", role).WithField("connID", connID).Debug("Creating new SSU2Addr")
 	if underlying == nil {
 		return nil, oops.
 			Code("INVALID_UNDERLYING_ADDR").

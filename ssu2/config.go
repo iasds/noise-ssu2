@@ -257,6 +257,7 @@ type SSU2Config struct {
 // routerHash is the local router identity hash.
 // initiator indicates whether this connection will initiate the handshake.
 func NewSSU2Config(routerHash data.Hash, initiator bool) (*SSU2Config, error) {
+	log.WithField("initiator", initiator).Debug("Creating new SSU2Config")
 	return &SSU2Config{
 		Pattern:                 "XK",
 		Initiator:               initiator,
@@ -480,6 +481,7 @@ func (sc *SSU2Config) WithRouterInfoValidator(validator func(routerInfo []byte, 
 
 // Validate checks if the configuration is valid for SSU2.
 func (sc *SSU2Config) Validate() error {
+	log.Debug("Validating SSU2Config")
 	return internal.RunValidators(
 		sc.validateBasicConfiguration,
 		sc.validateCryptographicParameters,
@@ -623,6 +625,7 @@ func (sc *SSU2Config) validatePaddingConfiguration() error {
 // ToConnConfig converts SSU2Config to a standard ConnConfig for use with NoiseConn.
 // This includes setting up SSU2-specific modifiers based on the configuration.
 func (sc *SSU2Config) ToConnConfig() (*noise.ConnConfig, error) {
+	log.Debug("Converting SSU2Config to ConnConfig")
 	if err := sc.Validate(); err != nil {
 		return nil, oops.
 			Code("INVALID_CONFIG").

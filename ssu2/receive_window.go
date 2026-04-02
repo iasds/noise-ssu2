@@ -64,6 +64,7 @@ const (
 //
 // Returns a new ReceiveWindow ready to accept packets.
 func NewReceiveWindow(expected uint32, maxSize int) *ReceiveWindow {
+	log.WithField("expected", expected).WithField("maxSize", maxSize).Debug("Creating new ReceiveWindow")
 	if maxSize <= 0 {
 		maxSize = DefaultMaxWindowSize
 	}

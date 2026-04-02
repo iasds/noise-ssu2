@@ -63,6 +63,7 @@ const (
 //   - RTTVAR = RTT_sample / 2
 //   - RTO = SRTT + max(G, K*RTTVAR)
 func NewRTTEstimator() *RTTEstimator {
+	log.Debug("Creating new RTTEstimator")
 	return &RTTEstimator{
 		smoothedRTT: 0,
 		rttVariance: 0,

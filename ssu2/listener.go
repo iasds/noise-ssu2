@@ -144,6 +144,7 @@ func NewSSU2Listener(underlying net.PacketConn, config *SSU2Config) (*SSU2Listen
 //
 // Returns error if the listener is already closed.
 func (l *SSU2Listener) Start() error {
+	log.Debug("Starting SSU2 listener")
 	l.closeMutex.Lock()
 	defer l.closeMutex.Unlock()
 
@@ -179,6 +180,7 @@ func (l *SSU2Listener) Start() error {
 //   - net.Conn: The accepted connection
 //   - error: If the listener is closed or an error occurs
 func (l *SSU2Listener) Accept() (net.Conn, error) {
+	log.Debug("Waiting to accept SSU2 connection")
 	select {
 	case conn := <-l.acceptQueue:
 		if conn == nil {
@@ -202,6 +204,7 @@ func (l *SSU2Listener) Accept() (net.Conn, error) {
 //
 // Returns error if close fails.
 func (l *SSU2Listener) Close() error {
+	log.Debug("Closing SSU2 listener")
 	l.closeMutex.Lock()
 	defer l.closeMutex.Unlock()
 

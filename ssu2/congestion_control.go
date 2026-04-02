@@ -162,6 +162,7 @@ func NewCongestionController(rttEstimator *RTTEstimator) *CongestionController {
 // This correctly handles IPv6 sessions where the MTU (1452) differs from
 // the IPv4 default (1472) (M-5).
 func NewCongestionControllerWithMTU(rttEstimator *RTTEstimator, mtu int) *CongestionController {
+	log.WithField("mtu", mtu).Debug("Creating new CongestionController")
 	if mtu <= 0 {
 		mtu = MaxPacketSizeIPv4
 	}
@@ -336,6 +337,7 @@ func (cc *CongestionController) handleCongestionAvoidanceAck(ackedBytes int) {
 // loss triggers a cwnd reduction. Subsequent losses within one RTT of the
 // epoch start are absorbed without further reduction (G-1).
 func (cc *CongestionController) OnPacketLoss() {
+	log.Debug("Congestion controller: packet loss detected")
 	cc.mutex.Lock()
 	defer cc.mutex.Unlock()
 
@@ -368,6 +370,7 @@ func (cc *CongestionController) OnPacketLoss() {
 // OnRetransmissionTimeout handles an RTO event (more severe than packet loss).
 // Uses Westwood+ BWE for ssthresh, then resets to slow start with MinCWND.
 func (cc *CongestionController) OnRetransmissionTimeout() {
+	log.Debug("Congestion controller: retransmission timeout")
 	cc.mutex.Lock()
 	defer cc.mutex.Unlock()
 
@@ -441,6 +444,7 @@ func (cc *CongestionController) PersistentCongestionThreshold() time.Duration {
 // All outstanding data is assumed lost. The congestion window is collapsed to
 // the minimum (2 * MinCongestionWindow per RFC 9002) and slow start is re-entered.
 func (cc *CongestionController) OnPersistentCongestion() {
+	log.Warn("Congestion controller: persistent congestion detected")
 	cc.mutex.Lock()
 	defer cc.mutex.Unlock()
 
@@ -487,6 +491,7 @@ func (cc *CongestionController) DetectPersistentCongestion(
 // Reset returns the controller to initial state.
 // This is useful after connection migration or significant path changes.
 func (cc *CongestionController) Reset() {
+	log.Debug("Congestion controller: resetting to initial state")
 	cc.mutex.Lock()
 	defer cc.mutex.Unlock()
 

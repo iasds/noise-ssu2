@@ -99,6 +99,7 @@ type PendingSession struct {
 //
 // Returns a new RelayManager with empty state.
 func NewRelayManager(listener *SSU2Listener) *RelayManager {
+	log.Debug("Creating new RelayManager")
 	rm := &RelayManager{
 		listener:        listener,
 		introducers:     make([]*IntroducerInfo, 0, 3), // I2P spec allows up to 3
@@ -114,6 +115,7 @@ func NewRelayManager(listener *SSU2Listener) *RelayManager {
 
 // Stop stops the relay manager and cleans up resources.
 func (rm *RelayManager) Stop() {
+	log.Debug("Stopping RelayManager")
 	rm.mutex.Lock()
 	defer rm.mutex.Unlock()
 
@@ -143,6 +145,7 @@ func (rm *RelayManager) Stop() {
 //
 // Returns error if parameters are invalid.
 func (rm *RelayManager) RegisterIntroducer(addr *net.UDPAddr, routerHash data.Hash, relayTag uint32) error {
+	log.WithField("relayTag", relayTag).Debug("Registering introducer")
 	if addr == nil {
 		return oops.
 			Code("INVALID_ADDRESS").
@@ -256,6 +259,7 @@ func (rm *RelayManager) RemoveIntroducer(addr *net.UDPAddr) {
 //
 // Returns the allocated tag, or error if allocation fails.
 func (rm *RelayManager) AllocateRelayTag(addr *net.UDPAddr) (uint32, error) {
+	log.Debug("Allocating relay tag")
 	if addr == nil {
 		return 0, oops.
 			Code("INVALID_ADDRESS").
@@ -366,6 +370,7 @@ func (rm *RelayManager) GetRelayTag(tag uint32) *RelayTag {
 //
 // Returns error if parameters are invalid.
 func (rm *RelayManager) AddPendingSession(sessionID uint64, remoteAddr, introducerAddr *net.UDPAddr, relayTag uint32) error {
+	log.WithField("sessionID", sessionID).Debug("Adding pending session")
 	if sessionID == 0 {
 		return oops.
 			Code("INVALID_SESSION_ID").

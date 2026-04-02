@@ -65,6 +65,7 @@ type RegisteredIntroducer struct {
 //
 // Returns a new IntroducerRegistry.
 func NewIntroducerRegistry(maxCount int) *IntroducerRegistry {
+	log.WithField("maxCount", maxCount).Debug("Creating new IntroducerRegistry")
 	if maxCount <= 0 {
 		maxCount = 3 // Default per I2P spec
 	}
@@ -87,6 +88,7 @@ func NewIntroducerRegistry(maxCount int) *IntroducerRegistry {
 //
 // Returns error if validation fails.
 func (ir *IntroducerRegistry) AddIntroducer(info *RegisteredIntroducer) error {
+	log.Debug("Adding introducer to registry")
 	if err := validateIntroducer(info); err != nil {
 		return err
 	}
