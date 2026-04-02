@@ -129,62 +129,15 @@ func (h *ACKHandler) GenerateACK() (*SSU2Block, error) {
 		return nil, nil
 	}
 
-	// Sort received packets descending and deduplicate
 	sorted := sortDescDedupPackets(h.receivedPackets)
-
 	throughPN := sorted[0]
+	acnt := countConsecutiveFromTop(sorted) - 1
 
-	// Count initial consecutive run from the top (including throughPN)
-	consecutiveCount := 1
-	for i := 1; i < len(sorted); i++ {
-		if sorted[i] == sorted[i-1]-1 {
-			consecutiveCount++
-		} else {
-			break
-		}
-	}
-	acnt := uint8(consecutiveCount - 1) // stored minus 1
+	rangeBytes := buildACKRanges(sorted, int(acnt)+1, h.maxACKDataSize-5)
 
-	// Build optional nack/ack range pairs for remaining packets
-	var rangeBytes []byte
-	// Reserve 5 bytes for the header (throughPN + acnt)
-	maxRangeBytes := h.maxACKDataSize - 5
-	i := consecutiveCount
-	for i < len(sorted) {
-		// Enforce MTU-based size limit on ACK range data
-		if len(rangeBytes)+2 > maxRangeBytes {
-			break
-		}
-		// Gap: number of missing packets between previous run and next acked
-		prevPN := sorted[i-1]
-		nextPN := sorted[i]
-		nackCount := int(prevPN - nextPN - 1)
-		if nackCount < 1 {
-			nackCount = 1
-		}
-		if nackCount > 256 {
-			nackCount = 256 // cap so minus-1 fits in 1 byte
-		}
-
-		// Ack run: count consecutive packets starting at sorted[i]
-		ackRun := 1
-		j := i + 1
-		for j < len(sorted) && sorted[j] == sorted[j-1]-1 {
-			ackRun++
-			j++
-		}
-		if ackRun > 256 {
-			ackRun = 256 // cap so minus-1 fits in 1 byte
-		}
-
-		rangeBytes = append(rangeBytes, uint8(nackCount-1), uint8(ackRun-1))
-		i = j
-	}
-
-	// Encode: 4 bytes throughPN + 1 byte acnt + range pairs
 	data := make([]byte, 5+len(rangeBytes))
 	binary.BigEndian.PutUint32(data[0:4], throughPN)
-	data[4] = acnt
+	data[4] = uint8(acnt)
 	copy(data[5:], rangeBytes)
 
 	block := NewSSU2Block(BlockTypeACK, data)
@@ -192,6 +145,54 @@ func (h *ACKHandler) GenerateACK() (*SSU2Block, error) {
 	h.receivedPackets = h.receivedPackets[:0]
 
 	return block, nil
+}
+
+// countConsecutiveFromTop counts how many packets form a consecutive run
+// from the highest packet number downward.
+func countConsecutiveFromTop(sorted []uint32) int {
+	count := 1
+	for i := 1; i < len(sorted); i++ {
+		if sorted[i] == sorted[i-1]-1 {
+			count++
+		} else {
+			break
+		}
+	}
+	return count
+}
+
+// buildACKRanges builds nack/ack range pairs for non-consecutive packets.
+func buildACKRanges(sorted []uint32, start, maxBytes int) []byte {
+	var rangeBytes []byte
+	i := start
+	for i < len(sorted) {
+		if len(rangeBytes)+2 > maxBytes {
+			break
+		}
+		prevPN := sorted[i-1]
+		nextPN := sorted[i]
+		nackCount := int(prevPN - nextPN - 1)
+		if nackCount < 1 {
+			nackCount = 1
+		}
+		if nackCount > 256 {
+			nackCount = 256
+		}
+
+		ackRun := 1
+		j := i + 1
+		for j < len(sorted) && sorted[j] == sorted[j-1]-1 {
+			ackRun++
+			j++
+		}
+		if ackRun > 256 {
+			ackRun = 256
+		}
+
+		rangeBytes = append(rangeBytes, uint8(nackCount-1), uint8(ackRun-1))
+		i = j
+	}
+	return rangeBytes
 }
 
 // ProcessACK handles an incoming ACK block, removing acknowledged packets

@@ -161,79 +161,74 @@ func (p *SSU2Packet) Serialize() ([]byte, error) {
 //
 // Returns error if data is malformed or too short.
 func (p *SSU2Packet) Deserialize(data []byte) error {
-	// Check minimum size
 	if len(data) < MinPacketSize {
 		return oops.Errorf("packet too short: %d bytes (minimum %d)", len(data), MinPacketSize)
 	}
 
-	// Read the message type from header byte 12 (I2P SSU2 spec).
-	// MinPacketSize (40) > 12, so this index is always safe.
-	// This allows Deserialize to work without needing MessageType pre-set.
 	p.MessageType = data[12]
-
-	// Get expected sizes
 	headerSize := p.getHeaderSize()
-	hasEphemeral := p.hasEphemeralKey()
 
-	// Validate protocol version and network ID for long-header messages
-	// (SessionRequest, SessionCreated, Retry, TokenRequest, PeerTest,
-	// HolePunch) per spec §Session Request bytes 13-14 (G-4).
-	if headerSize == LongHeaderSize {
-		if data[13] != SSU2ProtocolVersion {
-			return oops.Errorf("unsupported protocol version: %d (expected %d)", data[13], SSU2ProtocolVersion)
-		}
-		if data[14] != SSU2NetworkID {
-			return oops.Errorf("wrong network ID: %d (expected %d)", data[14], SSU2NetworkID)
-		}
+	if err := p.validateLongHeader(data, headerSize); err != nil {
+		return err
 	}
 
-	// Calculate minimum expected size
+	if err := p.parsePacketSections(data, headerSize); err != nil {
+		return err
+	}
+
+	p.PacketNumber = binary.BigEndian.Uint32(p.Header[8:12])
+	p.Timestamp = time.Now()
+
+	return nil
+}
+
+// validateLongHeader checks protocol version and network ID for long-header messages.
+func (p *SSU2Packet) validateLongHeader(data []byte, headerSize int) error {
+	if headerSize != LongHeaderSize {
+		return nil
+	}
+	if data[13] != SSU2ProtocolVersion {
+		return oops.Errorf("unsupported protocol version: %d (expected %d)", data[13], SSU2ProtocolVersion)
+	}
+	if data[14] != SSU2NetworkID {
+		return oops.Errorf("wrong network ID: %d (expected %d)", data[14], SSU2NetworkID)
+	}
+	return nil
+}
+
+// parsePacketSections extracts header, ephemeral key, payload, and MAC from wire data.
+func (p *SSU2Packet) parsePacketSections(data []byte, headerSize int) error {
+	hasEphemeral := p.hasEphemeralKey()
 	minSize := headerSize + MACSize
 	if hasEphemeral {
 		minSize += EphemeralKeySize
 	}
-
 	if len(data) < minSize {
 		return oops.Errorf("packet too short: %d bytes (expected at least %d)", len(data), minSize)
 	}
 
-	// Parse header
 	p.Header = make([]byte, headerSize)
 	copy(p.Header, data[:headerSize])
 	offset := headerSize
 
-	// Parse ephemeral key if present
 	if hasEphemeral {
 		p.EphemeralKey = make([]byte, EphemeralKeySize)
 		copy(p.EphemeralKey, data[offset:offset+EphemeralKeySize])
 		offset += EphemeralKeySize
 	}
 
-	// MAC is always last 16 bytes
 	macStart := len(data) - MACSize
 	if macStart < offset {
 		return oops.Errorf("invalid packet structure: MAC position %d < offset %d", macStart, offset)
 	}
 
-	// Parse payload (everything between ephemeral/header and MAC)
-	payloadSize := macStart - offset
-	if payloadSize > 0 {
+	if payloadSize := macStart - offset; payloadSize > 0 {
 		p.Payload = make([]byte, payloadSize)
 		copy(p.Payload, data[offset:macStart])
 	}
 
-	// Parse MAC
 	p.MAC = make([]byte, MACSize)
 	copy(p.MAC, data[macStart:])
-
-	// Extract packet number from header bytes 8-11 (big-endian).
-	// Both short (16-byte) and long (32-byte) headers store the packet
-	// number at this offset per the SSU2 spec.
-	p.PacketNumber = binary.BigEndian.Uint32(p.Header[8:12])
-
-	// Set timestamp to now (received time)
-	p.Timestamp = time.Now()
-
 	return nil
 }
 

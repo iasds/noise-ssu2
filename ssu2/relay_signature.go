@@ -2,7 +2,6 @@ package ssu2
 
 import (
 	"crypto/ed25519"
-	"encoding/binary"
 	"net"
 
 	"github.com/go-i2p/common/data"
@@ -40,37 +39,20 @@ func BuildRelayRequestSignedData(
 	alicePort uint16,
 	aliceIP net.IP,
 ) ([]byte, error) {
-	ipBytes, asz, err := normalizeIP(aliceIP)
+	addrSuffix, err := buildAddrSuffix(aliceIP, alicePort)
 	if err != nil {
 		return nil, oops.Wrapf(err, "invalid aliceIP")
 	}
-
-	// prologue(16) + bhash(32) + chash(32) + nonce(4) + relayTag(4) + timestamp(4) + ver(1) + asz(1) + port(2) + ip
-	size := 16 + 32 + 32 + 4 + 4 + 4 + 1 + 1 + 2 + len(ipBytes)
-	buf := make([]byte, size)
-	off := 0
-
-	copy(buf[off:], RelayRequestPrologue)
-	off += 16
-	copy(buf[off:], bobHash[:])
-	off += 32
-	copy(buf[off:], charlieHash[:])
-	off += 32
-	binary.BigEndian.PutUint32(buf[off:], nonce)
-	off += 4
-	binary.BigEndian.PutUint32(buf[off:], relayTag)
-	off += 4
-	binary.BigEndian.PutUint32(buf[off:], timestamp)
-	off += 4
-	buf[off] = version
-	off++
-	buf[off] = asz
-	off++
-	binary.BigEndian.PutUint16(buf[off:], alicePort)
-	off += 2
-	copy(buf[off:], ipBytes)
-
-	return buf, nil
+	return buildSignatureData(
+		[]byte(RelayRequestPrologue),
+		bobHash[:],
+		charlieHash[:],
+		uint32Bytes(nonce),
+		uint32Bytes(relayTag),
+		uint32Bytes(timestamp),
+		[]byte{version},
+		addrSuffix,
+	), nil
 }
 
 // SignRelayRequest signs a relay request using Alice's Ed25519 private key.
@@ -129,33 +111,18 @@ func BuildRelayResponseSignedData(
 		return nil, oops.Wrapf(err, "invalid charlieIP")
 	}
 
-	// prologue(16) + bhash(32) + nonce(4) + timestamp(4) + ver(1) + csz(1) + [port(2) + ip]
-	size := 16 + 32 + 4 + 4 + 1 + 1
-	if csz > 0 {
-		size += 2 + len(ipBytes)
+	fields := [][]byte{
+		[]byte(RelayAgreementPrologue),
+		bobHash[:],
+		uint32Bytes(nonce),
+		uint32Bytes(timestamp),
+		{version},
+		{csz},
 	}
-	buf := make([]byte, size)
-	off := 0
-
-	copy(buf[off:], RelayAgreementPrologue)
-	off += 16
-	copy(buf[off:], bobHash[:])
-	off += 32
-	binary.BigEndian.PutUint32(buf[off:], nonce)
-	off += 4
-	binary.BigEndian.PutUint32(buf[off:], timestamp)
-	off += 4
-	buf[off] = version
-	off++
-	buf[off] = csz
-	off++
 	if csz > 0 {
-		binary.BigEndian.PutUint16(buf[off:], charliePort)
-		off += 2
-		copy(buf[off:], ipBytes)
+		fields = append(fields, uint16Bytes(charliePort), ipBytes)
 	}
-
-	return buf, nil
+	return buildSignatureData(fields...), nil
 }
 
 // SignRelayResponse signs a relay response using the signer's Ed25519 private key.

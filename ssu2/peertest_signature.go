@@ -2,7 +2,6 @@ package ssu2
 
 import (
 	"crypto/ed25519"
-	"encoding/binary"
 	"net"
 
 	"github.com/go-i2p/common/data"
@@ -35,41 +34,25 @@ func BuildPeerTestSignedData(
 	alicePort uint16,
 	aliceIP net.IP,
 ) ([]byte, error) {
-	ipBytes, asz, err := normalizeIP(aliceIP)
+	addrSuffix, err := buildAddrSuffix(aliceIP, alicePort)
 	if err != nil {
 		return nil, oops.Wrapf(err, "invalid aliceIP")
 	}
 
-	// prologue(16) + bhash(32) + [ahash(32)] + ver(1) + nonce(4) + timestamp(4) + asz(1) + port(2) + ip
-	size := 16 + 32 + 1 + 4 + 4 + 1 + 2 + len(ipBytes)
-	if aliceHash != nil {
-		size += 32
+	fields := [][]byte{
+		[]byte(PeerTestPrologue),
+		bobHash[:],
 	}
-
-	buf := make([]byte, size)
-	off := 0
-
-	copy(buf[off:], PeerTestPrologue)
-	off += 16
-	copy(buf[off:], bobHash[:])
-	off += 32
 	if aliceHash != nil {
-		copy(buf[off:], aliceHash[:])
-		off += 32
+		fields = append(fields, aliceHash[:])
 	}
-	buf[off] = version
-	off++
-	binary.BigEndian.PutUint32(buf[off:], nonce)
-	off += 4
-	binary.BigEndian.PutUint32(buf[off:], timestamp)
-	off += 4
-	buf[off] = asz
-	off++
-	binary.BigEndian.PutUint16(buf[off:], alicePort)
-	off += 2
-	copy(buf[off:], ipBytes)
-
-	return buf, nil
+	fields = append(fields,
+		[]byte{version},
+		uint32Bytes(nonce),
+		uint32Bytes(timestamp),
+		addrSuffix,
+	)
+	return buildSignatureData(fields...), nil
 }
 
 // SignPeerTest signs peer test data using the signer's Ed25519 private key.

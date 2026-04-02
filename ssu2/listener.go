@@ -542,86 +542,80 @@ func (l *SSU2Listener) sendRetry(remoteAddr *net.UDPAddr, token []byte, original
 		return oops.Errorf("token must be exactly %d bytes, got %d", TokenSize, len(token))
 	}
 
-	// Build payload blocks per spec: DateTime + NewToken
+	payload, err := l.buildRetryPayload(token)
+	if err != nil {
+		return err
+	}
+
+	header, err := buildRetryHeader(originalHeader, token)
+	if err != nil {
+		return err
+	}
+
+	retryPacket := NewSSU2Packet(MessageTypeRetry, 0)
+	retryPacket.Header = header
+	retryPacket.Payload = payload
+	retryPacket.MAC = make([]byte, MACSize)
+
+	packetData, err := retryPacket.Serialize()
+	if err != nil {
+		return oops.Wrapf(err, "failed to serialize Retry packet")
+	}
+
+	if incomingSize > 0 && len(packetData) > 3*incomingSize {
+		return oops.Errorf("Retry message (%d bytes) exceeds 3x amplification limit of incoming message (%d bytes)", len(packetData), incomingSize)
+	}
+
+	_, err = l.underlying.WriteTo(packetData, remoteAddr)
+	if err != nil {
+		return oops.Wrapf(err, "failed to send Retry packet")
+	}
+	return nil
+}
+
+// buildRetryPayload creates the DateTime + NewToken payload for a Retry message.
+func (l *SSU2Listener) buildRetryPayload(token []byte) ([]byte, error) {
 	now := time.Now()
 
-	// DateTime block: 4-byte Unix timestamp
 	dtData := make([]byte, 4)
 	binary.BigEndian.PutUint32(dtData, uint32(now.Unix()))
 	dateTimeBlock := NewSSU2Block(BlockTypeDateTime, dtData)
 
-	// NewToken block: expiration + token
 	expiration := now.Add(l.tokenCache.GetTTL())
 	tokenBlock, err := NewNewTokenBlock(expiration, token)
 	if err != nil {
-		return oops.Wrapf(err, "failed to create NewToken block")
+		return nil, oops.Wrapf(err, "failed to create NewToken block")
 	}
 
-	// Serialize both blocks into payload
-	blocks := []*SSU2Block{dateTimeBlock, tokenBlock}
-	payload, err := SerializeBlocks(blocks)
+	payload, err := SerializeBlocks([]*SSU2Block{dateTimeBlock, tokenBlock})
 	if err != nil {
-		return oops.Wrapf(err, "failed to serialize Retry payload blocks")
+		return nil, oops.Wrapf(err, "failed to serialize Retry payload blocks")
 	}
+	return payload, nil
+}
 
-	// Create Retry packet (Type 9, uses long header)
-	retryPacket := NewSSU2Packet(MessageTypeRetry, 0)
-
-	// Build 32-byte long header per spec §Retry:
-	// dest_conn_id(0-7): initiator's source connection ID
-	// pkt_num(8-11): 0
-	// type(12): MessageTypeRetry
-	// ver(13): protocol version
-	// id(14): network ID
-	// flag(15): 0
-	// src_conn_id(16-23): new connection ID for retried request
-	// token(24-31): retry token
+// buildRetryHeader constructs the 32-byte long header for a Retry message.
+func buildRetryHeader(originalHeader []byte, token []byte) ([]byte, error) {
 	header := make([]byte, LongHeaderSize)
 
-	// dest_conn_id from the initiator's source connection ID (bytes 16-23 of the request)
 	if len(originalHeader) >= 24 {
 		copy(header[0:8], originalHeader[16:24])
 	} else if len(originalHeader) >= 8 {
 		copy(header[0:8], originalHeader[0:8])
 	}
 
-	// Set packet fields
 	header[12] = MessageTypeRetry
 	header[13] = SSU2ProtocolVersion
 	header[14] = SSU2NetworkID
 
-	// Generate a new source connection ID for the retried request
 	var srcConnID [8]byte
 	if _, err := rand.Read(srcConnID[:]); err != nil {
-		return oops.Wrapf(err, "failed to generate source connection ID for Retry")
+		return nil, oops.Wrapf(err, "failed to generate source connection ID for Retry")
 	}
 	copy(header[16:24], srcConnID[:])
-
-	// Copy retry token into header bytes 24-31
 	copy(header[24:32], token)
 
-	retryPacket.Header = header
-	retryPacket.Payload = payload
-	retryPacket.MAC = make([]byte, MACSize)
-
-	// Serialize packet
-	packetData, err := retryPacket.Serialize()
-	if err != nil {
-		return oops.Wrapf(err, "failed to serialize Retry packet")
-	}
-
-	// Per spec: Retry message must not be larger than 3x the incoming message.
-	if incomingSize > 0 && len(packetData) > 3*incomingSize {
-		return oops.Errorf("Retry message (%d bytes) exceeds 3x amplification limit of incoming message (%d bytes)", len(packetData), incomingSize)
-	}
-
-	// Send packet
-	_, err = l.underlying.WriteTo(packetData, remoteAddr)
-	if err != nil {
-		return oops.Wrapf(err, "failed to send Retry packet")
-	}
-
-	return nil
+	return header, nil
 }
 
 // removeSession removes a session from the listener's session map.

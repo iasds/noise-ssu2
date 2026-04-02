@@ -219,27 +219,13 @@ func (c *ConnConfig) invalidateModifierCache() {
 // Validate checks if the configuration is valid and complete.
 // Returns an error with context if validation fails.
 func (c *ConnConfig) Validate() error {
-	if err := c.validatePattern(); err != nil {
-		return err
-	}
-
-	if err := c.validateHandshakeTimeout(); err != nil {
-		return err
-	}
-
-	if err := c.validateRetryConfig(); err != nil {
-		return err
-	}
-
-	if err := c.validateStaticKeyLength(); err != nil {
-		return err
-	}
-
-	if err := c.validateRemoteKeyLength(); err != nil {
-		return err
-	}
-
-	return nil
+	return internal.RunValidators(
+		c.validatePattern,
+		c.validateHandshakeTimeout,
+		c.validateRetryConfig,
+		c.validateStaticKeyLength,
+		c.validateRemoteKeyLength,
+	)
 }
 
 // validatePattern checks if the noise pattern is set, non-empty, and recognized.

@@ -94,3 +94,31 @@ func TestValidateRetryConfig_NegativeBackoff(t *testing.T) {
 		t.Fatal("expected error for negative backoff")
 	}
 }
+
+func TestRunValidators_Empty(t *testing.T) {
+	if err := RunValidators(); err != nil {
+		t.Fatalf("no validators should return nil: %v", err)
+	}
+}
+
+func TestRunValidators_AllPass(t *testing.T) {
+	pass := func() error { return nil }
+	if err := RunValidators(pass, pass, pass); err != nil {
+		t.Fatalf("all-pass should return nil: %v", err)
+	}
+}
+
+func TestRunValidators_StopsAtFirstError(t *testing.T) {
+	calls := 0
+	pass := func() error { calls++; return nil }
+	fail := func() error { calls++; return ValidatePattern("", "test") }
+	after := func() error { calls++; return nil }
+
+	err := RunValidators(pass, fail, after)
+	if err == nil {
+		t.Fatal("expected error from failing validator")
+	}
+	if calls != 2 {
+		t.Fatalf("expected 2 calls (pass + fail), got %d", calls)
+	}
+}

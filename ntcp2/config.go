@@ -259,27 +259,13 @@ func (nc *NTCP2Config) WithFrameSettings(maxSize int, paddingEnabled bool, minPa
 
 // Validate checks if the configuration is valid for NTCP2.
 func (nc *NTCP2Config) Validate() error {
-	if err := nc.validateBasicConfiguration(); err != nil {
-		return err
-	}
-
-	if err := nc.validateCryptographicParameters(); err != nil {
-		return err
-	}
-
-	if err := nc.validateTimeoutConfiguration(); err != nil {
-		return err
-	}
-
-	if err := nc.validateFrameConfiguration(); err != nil {
-		return err
-	}
-
-	if err := nc.validateModifiers(); err != nil {
-		return err
-	}
-
-	return nil
+	return internal.RunValidators(
+		nc.validateBasicConfiguration,
+		nc.validateCryptographicParameters,
+		nc.validateTimeoutConfiguration,
+		nc.validateFrameConfiguration,
+		nc.validateModifiers,
+	)
 }
 
 // validateBasicConfiguration checks pattern and router hash requirements.

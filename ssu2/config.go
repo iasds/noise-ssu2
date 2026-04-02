@@ -480,27 +480,13 @@ func (sc *SSU2Config) WithRouterInfoValidator(validator func(routerInfo []byte, 
 
 // Validate checks if the configuration is valid for SSU2.
 func (sc *SSU2Config) Validate() error {
-	if err := sc.validateBasicConfiguration(); err != nil {
-		return err
-	}
-
-	if err := sc.validateCryptographicParameters(); err != nil {
-		return err
-	}
-
-	if err := sc.validateTimeoutConfiguration(); err != nil {
-		return err
-	}
-
-	if err := sc.validateUDPConfiguration(); err != nil {
-		return err
-	}
-
-	if err := sc.validatePaddingConfiguration(); err != nil {
-		return err
-	}
-
-	return nil
+	return internal.RunValidators(
+		sc.validateBasicConfiguration,
+		sc.validateCryptographicParameters,
+		sc.validateTimeoutConfiguration,
+		sc.validateUDPConfiguration,
+		sc.validatePaddingConfiguration,
+	)
 }
 
 // validateBasicConfiguration checks pattern and router hash requirements.

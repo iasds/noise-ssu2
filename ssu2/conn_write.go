@@ -259,81 +259,96 @@ func (h *SSU2Conn) retransmitExpired() {
 // sendPacketDirect sends a packet directly to the peer.
 // For data packets in the established state, the payload is encrypted with AEAD.
 func (h *SSU2Conn) sendPacketDirect(packet *SSU2Packet) error {
-	// Save plaintext payload before encryption for potential retransmit.
-	var plaintextPayload []byte
-
-	// Encrypt payload for data packets when cipher states are available.
-	// Lock is exclusive because SetNonce+Encrypt must be atomic.
-	h.cipherMutex.Lock()
-	cipher := h.sendCipher
-	if cipher != nil && packet.MessageType == MessageTypeData && len(packet.Payload) > 0 {
-		plaintextPayload = make([]byte, len(packet.Payload))
-		copy(plaintextPayload, packet.Payload)
-		// Per SSU2 spec: nonce is the packet number, AD is the 16-byte header.
-		// The message type byte (header[12]) must be set before AEAD encryption
-		// so that the AD matches what the receiver will see after deserialization.
-		// Serialize() also writes this byte, but that runs after encryption.
-		packet.Header[12] = packet.MessageType
-		cipher.SetNonce(uint64(packet.PacketNumber))
-		encrypted, err := cipher.Encrypt(nil, packet.Header[:ShortHeaderSize], packet.Payload)
-		if err != nil {
-			h.cipherMutex.Unlock()
-			return oops.Wrapf(err, "failed to encrypt payload")
-		}
-		packet.Payload = encrypted
-	}
-	h.cipherMutex.Unlock()
-
-	// SipHash length obfuscation: write obfuscated payload length to header
-	// bytes 14-15 per spec §Data Phase Length Obfuscation (G-2).
-	if mod := h.sipHashModifier.Load(); mod != nil && packet.MessageType == MessageTypeData {
-		dataLen := uint16(len(packet.Payload))
-		mask := mod.NextOutboundMask()
-		binary.BigEndian.PutUint16(packet.Header[14:16], dataLen^mask)
+	plaintextPayload, err := h.encryptDataPayload(packet)
+	if err != nil {
+		return err
 	}
 
-	// Serialize packet
+	h.applySipHashObfuscation(packet)
+
 	data, err := packet.Serialize()
 	if err != nil {
 		return oops.Wrapf(err, "failed to serialize packet")
 	}
 
-	// Apply header protection if enabled
-	if h.headerProtector != nil {
-		hType := messageTypeToHeaderType(packet.MessageType)
-		if hpErr := h.headerProtector.EncryptOutboundHeader(data, hType); hpErr != nil {
-			return oops.Wrapf(hpErr, "failed to encrypt header")
-		}
+	if err := h.applyOutboundHeaderProtection(data, packet.MessageType); err != nil {
+		return err
 	}
 
-	// Send to peer
-	_, err = h.underlying.WriteTo(data, h.remoteAddr)
-	if err != nil {
+	if _, err = h.underlying.WriteTo(data, h.remoteAddr); err != nil {
 		return oops.Wrapf(err, "failed to write to UDP")
 	}
 
-	// Count successfully sent data packets (G-7)
 	if packet.MessageType == MessageTypeData {
 		h.validDataPacketsSent.Add(1)
 	}
-
-	// Update activity
 	h.updateActivity()
-
-	// Track pending packet if it needs ACK
-	if packet.MessageType == MessageTypeData && packet.PacketNumber > 0 {
-		h.pendingMutex.Lock()
-		h.pendingPackets[packet.PacketNumber] = &PendingPacket{
-			Packet:           packet,
-			PlaintextPayload: plaintextPayload,
-			SentTime:         time.Now(),
-			Retries:          0,
-			NextRetry:        time.Now().Add(h.rttEstimator.GetRTO()),
-		}
-		h.pendingMutex.Unlock()
-	}
+	h.trackPendingPacket(packet, plaintextPayload)
 
 	return nil
+}
+
+// encryptDataPayload encrypts the payload for data packets using AEAD.
+// Returns a copy of the plaintext payload for potential retransmit.
+func (h *SSU2Conn) encryptDataPayload(packet *SSU2Packet) ([]byte, error) {
+	var plaintextPayload []byte
+
+	h.cipherMutex.Lock()
+	defer h.cipherMutex.Unlock()
+
+	cipher := h.sendCipher
+	if cipher == nil || packet.MessageType != MessageTypeData || len(packet.Payload) == 0 {
+		return nil, nil
+	}
+
+	plaintextPayload = make([]byte, len(packet.Payload))
+	copy(plaintextPayload, packet.Payload)
+
+	packet.Header[12] = packet.MessageType
+	cipher.SetNonce(uint64(packet.PacketNumber))
+	encrypted, err := cipher.Encrypt(nil, packet.Header[:ShortHeaderSize], packet.Payload)
+	if err != nil {
+		return nil, oops.Wrapf(err, "failed to encrypt payload")
+	}
+	packet.Payload = encrypted
+	return plaintextPayload, nil
+}
+
+// applySipHashObfuscation applies SipHash length obfuscation to header bytes 14-15.
+func (h *SSU2Conn) applySipHashObfuscation(packet *SSU2Packet) {
+	if mod := h.sipHashModifier.Load(); mod != nil && packet.MessageType == MessageTypeData {
+		dataLen := uint16(len(packet.Payload))
+		mask := mod.NextOutboundMask()
+		binary.BigEndian.PutUint16(packet.Header[14:16], dataLen^mask)
+	}
+}
+
+// applyOutboundHeaderProtection encrypts the outbound header if protection is enabled.
+func (h *SSU2Conn) applyOutboundHeaderProtection(data []byte, messageType uint8) error {
+	if h.headerProtector == nil {
+		return nil
+	}
+	hType := messageTypeToHeaderType(messageType)
+	if err := h.headerProtector.EncryptOutboundHeader(data, hType); err != nil {
+		return oops.Wrapf(err, "failed to encrypt header")
+	}
+	return nil
+}
+
+// trackPendingPacket records a sent data packet for potential retransmission.
+func (h *SSU2Conn) trackPendingPacket(packet *SSU2Packet, plaintext []byte) {
+	if packet.MessageType != MessageTypeData || packet.PacketNumber == 0 {
+		return
+	}
+	h.pendingMutex.Lock()
+	h.pendingPackets[packet.PacketNumber] = &PendingPacket{
+		Packet:           packet,
+		PlaintextPayload: plaintext,
+		SentTime:         time.Now(),
+		Retries:          0,
+		NextRetry:        time.Now().Add(h.rttEstimator.GetRTO()),
+	}
+	h.pendingMutex.Unlock()
 }
 
 // sendImmediateACK generates and sends an ACK packet without delay, honoring

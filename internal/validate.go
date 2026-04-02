@@ -41,6 +41,17 @@ func ValidateKeyLength(key []byte, name, pkg string) error {
 	return nil
 }
 
+// RunValidators executes a sequence of validation functions, returning the
+// first error encountered or nil if all pass.
+func RunValidators(validators ...func() error) error {
+	for _, v := range validators {
+		if err := v(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // ValidateRetryConfig checks that retry parameters are within valid ranges.
 func ValidateRetryConfig(retries int, backoff time.Duration, pkg string) error {
 	if retries < -1 {
