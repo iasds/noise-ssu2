@@ -116,6 +116,7 @@ func (ir *IntroducerRegistry) AddIntroducer(info *RegisteredIntroducer) error {
 
 // validateIntroducer checks that all required fields are present and valid.
 func validateIntroducer(info *RegisteredIntroducer) error {
+	log.Debug("validateIntroducer: validating introducer fields")
 	if info == nil {
 		return oops.
 			Code("INVALID_INTRODUCER").
@@ -167,6 +168,7 @@ func validateIntroducer(info *RegisteredIntroducer) error {
 // findOldestIndex returns the index of the introducer with the oldest LastSeen time.
 // Must be called with ir.mutex held.
 func (ir *IntroducerRegistry) findOldestIndex() int {
+	log.WithField("count", len(ir.introducers)).Debug("findOldestIndex: locating oldest introducer")
 	oldestIdx := 0
 	oldestTime := ir.introducers[0].LastSeen
 	for i, intro := range ir.introducers[1:] {
@@ -183,6 +185,7 @@ func (ir *IntroducerRegistry) findOldestIndex() int {
 // Parameters:
 //   - addr: UDP address of the introducer to remove
 func (ir *IntroducerRegistry) RemoveIntroducer(addr *net.UDPAddr) {
+	log.Debug("RemoveIntroducer: removing introducer by address")
 	if addr == nil {
 		return
 	}
@@ -247,6 +250,7 @@ func (ir *IntroducerRegistry) UpdateLastSeen(addr *net.UDPAddr) {
 //
 // Returns selected introducers (up to count).
 func (ir *IntroducerRegistry) SelectBestIntroducers(count int) []*RegisteredIntroducer {
+	log.WithField("count", count).Debug("SelectBestIntroducers: selecting best introducers by recency")
 	if count <= 0 {
 		return nil
 	}

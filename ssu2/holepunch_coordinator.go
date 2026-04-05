@@ -224,6 +224,7 @@ func (hpc *HolePunchCoordinator) lookupAttempt(sessionID uint64, addr *net.UDPAd
 //
 // Returns error if session not found or send fails.
 func (hpc *HolePunchCoordinator) SendHolePunch(sessionID uint64, targetAddr *net.UDPAddr) error {
+	log.WithField("sessionID", sessionID).Debug("SendHolePunch: sending hole punch packet")
 	hpc.mutex.Lock()
 	defer hpc.mutex.Unlock()
 
@@ -292,6 +293,7 @@ func (hpc *HolePunchCoordinator) HandleHolePunch(sessionID uint64, fromAddr *net
 //
 // Returns error if session not found or signature verification fails.
 func (hpc *HolePunchCoordinator) ProcessHolePunchResponse(sessionID uint64, addr *net.UDPAddr, block *RelayIntroBlock, signerKey ed25519.PublicKey) error {
+	log.WithField("sessionID", sessionID).Debug("ProcessHolePunchResponse: processing hole punch response")
 	hpc.mutex.Lock()
 	defer hpc.mutex.Unlock()
 

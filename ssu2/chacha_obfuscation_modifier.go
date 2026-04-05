@@ -95,6 +95,7 @@ func (com *ChaChaObfuscationModifier) Name() string {
 // spec and XORs the data. Supports 48-byte (spec-compliant) and 32-byte
 // (ephemeral-only) inputs.
 func (com *ChaChaObfuscationModifier) applyChacha(data []byte) ([]byte, error) {
+	log.WithField("dataLen", len(data)).Debug("applyChacha: applying ChaCha20 XOR")
 	cipher, err := chacha20.NewUnauthenticatedCipher(com.introKey, chachaNonce)
 	if err != nil {
 		return nil, oops.
@@ -114,6 +115,7 @@ func (com *ChaChaObfuscationModifier) applyChacha(data []byte) ([]byte, error) {
 
 // Close releases resources and zeroes sensitive key material.
 func (com *ChaChaObfuscationModifier) Close() error {
+	log.WithField("name", com.name).Debug("Close: releasing ChaChaObfuscationModifier resources")
 	internal.SecureZero(com.introKey)
 	return nil
 }

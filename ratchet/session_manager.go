@@ -9,6 +9,7 @@ import (
 	i2pcurve25519 "github.com/go-i2p/crypto/curve25519"
 	"github.com/go-i2p/crypto/ecies"
 	"github.com/go-i2p/go-noise/internal/replaycache"
+	"github.com/go-i2p/logger"
 	"github.com/samber/oops"
 )
 
@@ -54,6 +55,7 @@ func WithNSMaxFutureAge(d time.Duration) SessionManagerOption {
 //
 // Spec ref: ratchet.md §"Parameters" — max clock skew: −5 minutes to +2 minutes.
 func (sm *SessionManager) validateNSDateTimeFreshness(payload []byte) error {
+	log.WithFields(logger.Fields{"payload_len": len(payload)}).Debug("Validating NS DateTime freshness")
 	blocks, err := ParsePayload(payload)
 	if err != nil {
 		return oops.Wrapf(err, "NS payload parse failed during freshness check")
@@ -177,6 +179,7 @@ func NewSessionManager(privateKey [32]byte, opts ...SessionManagerOption) (*Sess
 
 // GenerateSessionManager creates a session manager with a freshly generated key pair.
 func GenerateSessionManager() (*SessionManager, error) {
+	log.Debug("Generating new session manager with fresh key pair")
 	_, privBytes, err := ecies.GenerateKeyPair()
 	if err != nil {
 		return nil, oops.Wrapf(err, "failed to generate session manager key pair")
@@ -271,6 +274,7 @@ func (sm *SessionManager) ProcessIncomingDHRatchet(sessionTag [8]byte, newRemote
 // (session.mu) are performed in separate, non-overlapping critical sections.
 // Tag replenishment (HKDF) is performed outside both locks.
 func (sm *SessionManager) FindSessionByTag(tag [8]byte) bool {
+	log.Debug("Finding session by tag")
 	sm.mu.Lock()
 	session, _ := sm.lookupSessionByTag(tag)
 	sm.mu.Unlock()
@@ -309,6 +313,7 @@ func (sm *SessionManager) FindSessionByTag(tag [8]byte) bool {
 // other goroutine can claim the same tag between the lookup and the per-session
 // validation step.
 func (sm *SessionManager) lookupSessionByTag(tag [8]byte) (*Session, *uint32) {
+	log.Debug("Looking up session by tag in index")
 	session, exists := sm.tagIndex[tag]
 	if !exists {
 		return nil, nil
@@ -335,6 +340,7 @@ func (sm *SessionManager) lookupSessionByTag(tag [8]byte) (*Session, *uint32) {
 //	valid          — false if the session has expired; callers should discard it.
 //	needsReplenish — true when pendingTags falls below tagReplenishThreshold.
 func (sm *SessionManager) validateAndConsumeTagFromSession(session *Session, tag [8]byte) (valid, needsReplenish bool) {
+	log.Debug("Validating and consuming tag from session")
 	session.mu.Lock()
 	defer session.mu.Unlock()
 
@@ -350,6 +356,7 @@ func (sm *SessionManager) isSessionValid(session *Session) bool {
 }
 
 func (sm *SessionManager) removeTagFromPendingList(tag [8]byte, session *Session) {
+	log.WithFields(logger.Fields{"pending_count": len(session.pendingTags)}).Debug("Removing tag from session pending list")
 	for i, pendingTag := range session.pendingTags {
 		if pendingTag == tag {
 			session.pendingTags[i] = session.pendingTags[len(session.pendingTags)-1]
@@ -448,6 +455,7 @@ type tagWithCounter struct {
 // Returns the new tags with their associated counters, which are not yet
 // registered in sm.tagIndex or sm.tagCounterIndex.
 func generateTagsOutsideLock(session *Session) ([]tagWithCounter, error) {
+	log.WithFields(logger.Fields{"pending_count": len(session.pendingTags), "window_size": tagWindowSize}).Debug("Generating tags outside lock")
 	if session.RecvTagRatchet == nil {
 		return nil, oops.Errorf("RecvTagRatchet is nil for session — cannot replenish incoming tag window")
 	}

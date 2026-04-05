@@ -52,6 +52,7 @@ type BlockRouterStats struct {
 
 // NewBlockRouter creates a new block router.
 func NewBlockRouter() *BlockRouter {
+	log.Debug("NewBlockRouter: creating new block router")
 	return &BlockRouter{
 		handlers: make(map[uint8]BlockHandler),
 		stats: BlockRouterStats{
@@ -74,6 +75,7 @@ func (r *BlockRouter) RegisterHandler(handler BlockHandler) {
 
 // RegisterHandlerFunc registers a simple function handler for specific block types.
 func (r *BlockRouter) RegisterHandlerFunc(blockTypes []uint8, fn BlockHandlerFunc) {
+	log.WithField("blockTypes", blockTypes).Debug("RegisterHandlerFunc: registering function handler")
 	handler := &funcBlockHandler{
 		fn:    fn,
 		types: blockTypes,
@@ -83,6 +85,7 @@ func (r *BlockRouter) RegisterHandlerFunc(blockTypes []uint8, fn BlockHandlerFun
 
 // SetDefaultHandler sets a handler for unregistered block types.
 func (r *BlockRouter) SetDefaultHandler(handler BlockHandler) {
+	log.Debug("SetDefaultHandler: setting default block handler")
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.defaultHandler = handler
@@ -151,6 +154,7 @@ func (r *BlockRouter) RouteBlock(block *SSU2Block) error {
 // Continues routing even if some blocks fail.
 // Returns the first error encountered.
 func (r *BlockRouter) RouteBlocks(blocks []*SSU2Block) error {
+	log.WithField("blockCount", len(blocks)).Debug("RouteBlocks: routing multiple blocks")
 	var firstErr error
 	for _, block := range blocks {
 		if err := r.RouteBlock(block); err != nil {
@@ -183,6 +187,7 @@ func (r *BlockRouter) GetStats() BlockRouterStats {
 
 // HasHandler returns true if a handler is registered for the block type.
 func (r *BlockRouter) HasHandler(blockType uint8) bool {
+	log.WithField("blockType", blockType).Debug("HasHandler: checking for registered handler")
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	_, exists := r.handlers[blockType]

@@ -20,6 +20,7 @@ import (
 
 	"github.com/go-i2p/crypto/curve25519"
 	"github.com/go-i2p/crypto/elligator2"
+	"github.com/go-i2p/logger"
 	"github.com/go-i2p/noise"
 	"github.com/samber/oops"
 )
@@ -53,6 +54,7 @@ const (
 //	h = SHA-256(h || "")                 MixHash(null prologue)  — required by spec
 //	h = SHA-256(h || SHA-256(rs))        MixHash(Hash(rs))       — hs2 pre-message
 func initNoiseIK(responderStaticPub [32]byte) *noise.SymmetricState {
+	log.Debug("Initializing Noise IKelg2+hs2 symmetric state")
 	ns := &noise.SymmetricState{}
 	ns.SetCipherSuite(noise.ChaChaPoly_SHA256())
 	ns.InitializeSymmetric([]byte(noiseProtocolName))
@@ -80,6 +82,7 @@ func initNoiseIK(responderStaticPub [32]byte) *noise.SymmetricState {
 // The spec mandates single-output HKDF for "ee" to prevent accidental use
 // of an intermediate cipher key between the "ee" and "se" steps.
 func mixKeyCKOnly(ns *noise.SymmetricState, ikm []byte) {
+	log.WithFields(logger.Fields{"ikm_len": len(ikm)}).Debug("mixKeyCKOnly: updating chaining key via single-output HKDF")
 	ck1 := noise.HKDF1SHA256(ns.ChainingKey(), ikm)
 	ns.SetChainingKey(ck1[:])
 }
@@ -181,6 +184,7 @@ func writeNoiseIKMessage1Unbound(
 	responderStaticPub [32]byte,
 	payload []byte,
 ) ([]byte, *sessionKeys, error) {
+	log.WithFields(logger.Fields{"payload_len": len(payload)}).Debug("Constructing unbound Noise N New Session message")
 	// Same IK initializer as the bound variant: identical protocol name, null
 	// prologue MixHash, and Hash(rs) pre-message. Spec §1f: "we use the same
 	// initializer for both the IK pattern (bound sessions) and for N pattern
@@ -300,6 +304,7 @@ func readNoiseIKMessage1(
 
 // readEphemeralKey reads and decodes the Elligator2-encoded ephemeral key.
 func readEphemeralKey(ns *noise.SymmetricState, ephEncoded []byte) ([32]byte, error) {
+	log.WithFields(logger.Fields{"encoded_len": len(ephEncoded)}).Debug("Decoding Elligator2 ephemeral key")
 	ns.MixHash(ephEncoded)
 	ephPubBytes, err := elligator2.Decode(ephEncoded)
 	if err != nil {
@@ -312,6 +317,7 @@ func readEphemeralKey(ns *noise.SymmetricState, ephEncoded []byte) ([32]byte, er
 
 // readUnboundPayload handles the unbound (N-pattern) variant of the IK message.
 func readUnboundPayload(ns *noise.SymmetricState, encryptedPayload []byte) ([]byte, [32]byte, *sessionKeys, *noiseHandshakeState, bool, error) {
+	log.WithFields(logger.Fields{"encrypted_len": len(encryptedPayload)}).Debug("Processing unbound (N-pattern) payload")
 	payload, err := ns.DecryptAndHash(nil, encryptedPayload)
 	if err != nil {
 		return nil, [32]byte{}, nil, nil, true, oops.Wrapf(err, "failed to decrypt unbound payload")
@@ -329,6 +335,7 @@ func readBoundPayload(
 	initiatorEphPub [32]byte, initiatorStaticBytes []byte,
 	encryptedPayload []byte,
 ) ([]byte, [32]byte, *sessionKeys, *noiseHandshakeState, bool, error) {
+	log.WithFields(logger.Fields{"encrypted_len": len(encryptedPayload)}).Debug("Processing bound (IK-pattern) payload")
 	var initiatorStaticPub [32]byte
 	copy(initiatorStaticPub[:], initiatorStaticBytes)
 

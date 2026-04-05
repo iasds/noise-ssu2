@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/go-i2p/common/data"
+	"github.com/go-i2p/logger"
 	"github.com/samber/oops"
 )
 
@@ -246,6 +247,7 @@ func (l *SSU2Listener) Addr() net.Addr {
 // M-2: Blocking ReadFrom is used instead of 100ms deadline polling.
 // The loop exits when the underlying connection is closed by Close().
 func (l *SSU2Listener) receiveLoop() {
+	log.Debug("receiveLoop: starting packet receive loop")
 	defer l.wg.Done()
 
 	buf := make([]byte, MaxPacketSizeIPv4)
@@ -281,6 +283,7 @@ func (l *SSU2Listener) receiveLoop() {
 // packetWorker drains the packet queue and processes packets.
 // Multiple workers run concurrently as a bounded pool.
 func (l *SSU2Listener) packetWorker() {
+	log.Debug("packetWorker: starting packet processing worker")
 	defer l.wg.Done()
 
 	for {
@@ -299,6 +302,7 @@ func (l *SSU2Listener) packetWorker() {
 // handleIncomingPacket processes a received packet and routes it appropriately.
 // This is called in a goroutine for each received packet.
 func (l *SSU2Listener) handleIncomingPacket(data []byte, remoteAddr *net.UDPAddr) {
+	log.WithFields(logger.Fields{"remote_addr": remoteAddr.String(), "data_len": len(data)}).Debug("handleIncomingPacket: processing received packet")
 	// Parse packet (basic validation)
 	packet := &SSU2Packet{}
 	if err := packet.Deserialize(data); err != nil {
@@ -324,6 +328,7 @@ func (l *SSU2Listener) handleIncomingPacket(data []byte, remoteAddr *net.UDPAddr
 // instead of accepting the session. The initiator is expected to resend
 // SessionRequest including the token from the Retry.
 func (l *SSU2Listener) handleNewSession(remoteAddr *net.UDPAddr, packet *SSU2Packet) (*SSU2Conn, error) {
+	log.WithField("remote_addr", remoteAddr.String()).Debug("handleNewSession: creating new session for incoming handshake")
 	if err := l.enforceRateLimit(remoteAddr); err != nil {
 		return nil, err
 	}
@@ -353,6 +358,7 @@ func (l *SSU2Listener) handleNewSession(remoteAddr *net.UDPAddr, packet *SSU2Pac
 
 // enforceRateLimit checks if the source IP has exceeded the SessionRequest rate.
 func (l *SSU2Listener) enforceRateLimit(remoteAddr *net.UDPAddr) error {
+	log.WithField("remote_ip", remoteAddr.IP.String()).Debug("enforceRateLimit: checking session request rate")
 	if !l.sessionRateLimiter.Allow(remoteAddr.IP.String()) {
 		return oops.
 			Code("RATE_LIMITED").
@@ -365,6 +371,7 @@ func (l *SSU2Listener) enforceRateLimit(remoteAddr *net.UDPAddr) error {
 // handleSessionRequestToken validates the token in a SessionRequest, sending
 // a Retry if required by config and no token is present.
 func (l *SSU2Listener) handleSessionRequestToken(packet *SSU2Packet, remoteAddr *net.UDPAddr) error {
+	log.WithFields(logger.Fields{"remote_addr": remoteAddr.String(), "message_type": packet.MessageType}).Debug("handleSessionRequestToken: validating session request token")
 	if packet.MessageType != MessageTypeSessionRequest {
 		return nil
 	}
@@ -396,6 +403,7 @@ func (l *SSU2Listener) handleSessionRequestToken(packet *SSU2Packet, remoteAddr 
 // generateUniqueConnectionID generates a connection ID and verifies uniqueness
 // among active sessions.
 func (l *SSU2Listener) generateUniqueConnectionID() (uint64, error) {
+	log.Debug("generateUniqueConnectionID: generating unique connection ID")
 	connID, err := GenerateConnectionID()
 	if err != nil {
 		return 0, oops.Wrapf(err, "failed to generate connection ID")
@@ -425,6 +433,7 @@ func (l *SSU2Listener) generateUniqueConnectionID() (uint64, error) {
 // buildConnConfig creates a connection-specific config from the listener config
 // and the incoming SessionRequest packet.
 func (l *SSU2Listener) buildConnConfig(packet *SSU2Packet, connID uint64) *SSU2Config {
+	log.WithField("conn_id", connID).Debug("buildConnConfig: building connection config from session request")
 	var routerHash data.Hash
 	if len(packet.EphemeralKey) == 32 {
 		routerHash = data.NewHash(sha256.Sum256(packet.EphemeralKey))
@@ -444,6 +453,7 @@ func (l *SSU2Listener) buildConnConfig(packet *SSU2Packet, connID uint64) *SSU2C
 // registerAndQueueConn registers the connection in the sessions map and
 // queues it for acceptance.
 func (l *SSU2Listener) registerAndQueueConn(conn *SSU2Conn, connID uint64) (*SSU2Conn, error) {
+	log.WithField("conn_id", connID).Debug("registerAndQueueConn: registering session and queuing for accept")
 	l.sessionMutex.Lock()
 	l.sessions[connID] = conn
 	l.sessionMutex.Unlock()
@@ -645,6 +655,7 @@ const tokenCleanupInterval = 60 * time.Second
 
 // tokenCleanupLoop periodically removes expired tokens from the cache (G-5).
 func (l *SSU2Listener) tokenCleanupLoop() {
+	log.WithField("interval", tokenCleanupInterval).Debug("tokenCleanupLoop: starting periodic token cache cleanup")
 	defer l.wg.Done()
 
 	ticker := time.NewTicker(tokenCleanupInterval)

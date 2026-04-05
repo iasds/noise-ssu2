@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/go-i2p/common/data"
+	"github.com/go-i2p/logger"
 	"github.com/go-i2p/noise"
 	"github.com/samber/oops"
 )
@@ -255,6 +256,7 @@ func NewSSU2Conn(
 }
 
 func validateConnInputs(underlying net.PacketConn, remoteAddr *net.UDPAddr, config *SSU2Config) error {
+	log.WithField("remote_addr", remoteAddr).Debug("validateConnInputs: validating connection parameters")
 	if underlying == nil {
 		return oops.Errorf("underlying PacketConn is nil")
 	}
@@ -271,6 +273,7 @@ func validateConnInputs(underlying net.PacketConn, remoteAddr *net.UDPAddr, conf
 }
 
 func resolveConnectionID(config *SSU2Config) (uint64, error) {
+	log.WithField("configured_id", config.ConnectionID).Debug("resolveConnectionID: resolving connection ID")
 	connID := config.ConnectionID
 	if connID == 0 {
 		var err error
@@ -283,6 +286,7 @@ func resolveConnectionID(config *SSU2Config) (uint64, error) {
 }
 
 func buildHandshakeHandler(initiator bool, staticKey, remoteStaticKey []byte, config *SSU2Config) (*HandshakeHandler, error) {
+	log.WithFields(logger.Fields{"initiator": initiator, "has_remote_key": len(remoteStaticKey) > 0}).Debug("buildHandshakeHandler: creating handshake handler")
 	prologue := buildSSU2Prologue()
 	handler, err := NewHandshakeHandler(initiator, staticKey, remoteStaticKey, prologue)
 	if err != nil {
@@ -303,6 +307,7 @@ func buildHandshakeHandler(initiator bool, staticKey, remoteStaticKey []byte, co
 }
 
 func newSSU2AddrForConn(remoteAddr *net.UDPAddr, routerHash data.Hash, connID uint64, initiator bool) (*SSU2Addr, error) {
+	log.WithFields(logger.Fields{"remote_addr": remoteAddr, "conn_id": connID, "initiator": initiator}).Debug("newSSU2AddrForConn: building SSU2 address")
 	role := "initiator"
 	if !initiator {
 		role = "responder"
@@ -322,6 +327,7 @@ func assembleSSU2Conn(
 	initiator bool,
 	handshakeHandler *HandshakeHandler,
 ) *SSU2Conn {
+	log.WithFields(logger.Fields{"remote_addr": remoteAddr, "initiator": initiator, "mtu": config.MTU}).Debug("assembleSSU2Conn: assembling connection struct")
 	rttEst := NewRTTEstimator()
 	conn := &SSU2Conn{
 		underlying:           underlying,
@@ -349,6 +355,7 @@ func assembleSSU2Conn(
 }
 
 func (c *SSU2Conn) initHeaderProtection(config *SSU2Config, initiator bool) error {
+	log.WithFields(logger.Fields{"has_intro_key": len(config.IntroKey) == HeaderKeySize, "initiator": initiator}).Debug("initHeaderProtection: initializing header protection")
 	if len(config.IntroKey) == HeaderKeySize {
 		hpm, err := NewHeaderProtectorManager(config.IntroKey, config.RemoteIntroKey, initiator)
 		if err != nil {
@@ -364,6 +371,7 @@ func (c *SSU2Conn) initHeaderProtection(config *SSU2Config, initiator bool) erro
 // messageTypeToHeaderType maps an SSU2 message type to the corresponding
 // header protection type used for key selection.
 func messageTypeToHeaderType(msgType uint8) HeaderType {
+	log.WithField("msg_type", msgType).Debug("messageTypeToHeaderType: mapping message type to header type")
 	switch msgType {
 	case MessageTypeSessionRequest:
 		return HeaderTypeSessionRequest
@@ -393,6 +401,7 @@ func (h *SSU2Conn) expectedInboundHeaderType() HeaderType {
 	h.stateMutex.RLock()
 	state := h.state
 	h.stateMutex.RUnlock()
+	log.WithFields(logger.Fields{"state": state, "initiator": h.initiator}).Debug("expectedInboundHeaderType: determining inbound header type")
 
 	if state == StateEstablished {
 		return HeaderTypeData

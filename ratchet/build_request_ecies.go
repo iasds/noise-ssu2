@@ -123,6 +123,7 @@ func (c *BuildRequestCrypto) DecryptBuildRequest(encrypted [528]byte, privateKey
 //   - encrypted: 528-byte encrypted build request record
 //   - ourIdentityHash: our 32-byte identity hash
 func (c *BuildRequestCrypto) VerifyIdentityHash(encrypted [528]byte, ourIdentityHash [32]byte) bool {
+	log.Debug("Verifying identity hash prefix match")
 	for i := 0; i < 16; i++ {
 		if encrypted[i] != ourIdentityHash[i] {
 			return false

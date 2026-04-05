@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"time"
 
+	"github.com/go-i2p/logger"
 	"github.com/samber/oops"
 )
 
@@ -37,6 +38,7 @@ func (pb *PayloadBuilder) AddBlock(block PayloadBlock) *PayloadBuilder {
 // Returns an error if the payload exceeds maxPayloadSize or block ordering
 // rules are violated.
 func (pb *PayloadBuilder) Build() ([]byte, error) {
+	log.WithFields(logger.Fields{"block_count": len(pb.blocks)}).Debug("Building payload from blocks")
 	if err := pb.validate(); err != nil {
 		return nil, err
 	}
@@ -66,6 +68,7 @@ func (pb *PayloadBuilder) Build() ([]byte, error) {
 // ECIES spec (ratchet.md §"Unencrypted data") and would produce
 // non-interoperable messages if transmitted.
 func (pb *PayloadBuilder) validate() error {
+	log.WithFields(logger.Fields{"block_count": len(pb.blocks)}).Debug("Validating payload block ordering")
 	if len(pb.blocks) == 0 {
 		return nil // empty payload is allowed
 	}
@@ -137,6 +140,7 @@ func ExistingSessionPayloadBuilder() *PayloadBuilder {
 // that will fail interoperability checks with any conformant I2P router.
 // Use NewSessionPayloadBuilder to construct a compliant payload automatically.
 func ValidateNewSessionPayload(payload []byte) error {
+	log.WithFields(logger.Fields{"payload_len": len(payload)}).Debug("Validating New Session payload")
 	if len(payload) == 0 {
 		return oops.Errorf("new session payload must not be empty: spec requires a DateTime block as the first block (ratchet.md §1b)")
 	}
@@ -163,6 +167,7 @@ func ValidateNewSessionPayload(payload []byte) error {
 // Use this when you have a raw garlic byte slice and need to wrap it in the
 // structured NS payload format required by EncryptGarlicMessage.
 func BuildNSPayload(garlicData []byte) ([]byte, error) {
+	log.WithFields(logger.Fields{"garlic_data_len": len(garlicData)}).Debug("Building New Session payload")
 	return NewSessionPayloadBuilder().
 		AddBlock(PayloadBlock{Type: BlockGarlicClove, Data: garlicData}).
 		Build()

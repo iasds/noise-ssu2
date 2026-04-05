@@ -155,11 +155,13 @@ func NewPathValidator(conn PathValidationConn) *PathValidator {
 // SetTokenCache sets the token cache used for invalidation when a path migrates.
 // Per spec, tokens are bound to an IP:port and must be invalidated on address change.
 func (pv *PathValidator) SetTokenCache(tc *TokenCache) {
+	log.Debug("SetTokenCache: setting token cache for path validator")
 	pv.tokenCache = tc
 }
 
 // SetCongestionController sets the congestion controller to reset on path migration (G-7).
 func (pv *PathValidator) SetCongestionController(cc *CongestionController) {
+	log.Debug("SetCongestionController: setting congestion controller for path validator")
 	pv.congestionController = cc
 }
 
@@ -218,6 +220,7 @@ func (pv *PathValidator) InitiatePathValidation(newAddr *net.UDPAddr) (uint64, e
 //
 // Returns error if encoding or sending fails.
 func (pv *PathValidator) SendPathChallenge(challengeID uint64, addr *net.UDPAddr) error {
+	log.WithField("challengeID", challengeID).WithField("addr", addr).Debug("SendPathChallenge: sending path challenge")
 	block := EncodePathChallenge(challengeID)
 	if err := pv.conn.SendToAddress(block, addr); err != nil {
 		return oops.Wrapf(err, "failed to send path challenge to %v", addr)
@@ -237,6 +240,7 @@ func (pv *PathValidator) SendPathChallenge(challengeID uint64, addr *net.UDPAddr
 //
 // Returns error if decoding or response fails.
 func (pv *PathValidator) HandlePathChallenge(block *SSU2Block, fromAddr *net.UDPAddr) error {
+	log.WithField("fromAddr", fromAddr).Debug("HandlePathChallenge: processing received path challenge")
 	if block == nil {
 		return oops.Errorf("block is nil")
 	}
@@ -274,6 +278,7 @@ func (pv *PathValidator) HandlePathChallenge(block *SSU2Block, fromAddr *net.UDP
 //
 // Returns error if encoding or sending fails.
 func (pv *PathValidator) SendPathResponse(challengeID uint64, addr *net.UDPAddr) error {
+	log.WithField("challengeID", challengeID).WithField("addr", addr).Debug("SendPathResponse: sending path response")
 	block := EncodePathResponse(challengeID)
 	if err := pv.conn.SendToAddress(block, addr); err != nil {
 		return oops.Wrapf(err, "failed to send path response to %v", addr)
@@ -294,6 +299,7 @@ func (pv *PathValidator) SendPathResponse(challengeID uint64, addr *net.UDPAddr)
 //
 // Returns error if validation fails.
 func (pv *PathValidator) HandlePathResponse(block *SSU2Block, fromAddr *net.UDPAddr) error {
+	log.WithField("fromAddr", fromAddr).Debug("HandlePathResponse: processing received path response")
 	if block == nil {
 		return oops.Errorf("block is nil")
 	}
@@ -442,6 +448,7 @@ func (pv *PathValidator) GetChallenge(challengeID uint64) (*PathChallenge, bool)
 //
 // Returns the number of challenges cleaned up.
 func (pv *PathValidator) CleanupExpired() int {
+	log.Debug("CleanupExpired: removing expired path validation challenges")
 	pv.mutex.Lock()
 	defer pv.mutex.Unlock()
 

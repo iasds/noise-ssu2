@@ -18,6 +18,7 @@ import (
 	"github.com/go-i2p/crypto/elligator2"
 	"github.com/go-i2p/crypto/kdf"
 	"github.com/go-i2p/crypto/ratchet"
+	"github.com/go-i2p/logger"
 	"github.com/go-i2p/noise"
 	"github.com/samber/oops"
 )
@@ -76,6 +77,7 @@ type nsrSessionKeys struct {
 //
 //	tagset_nsr = DH_INITIALIZE(chainKey, tagsetKey)
 func deriveNSRTagRatchet(chainKey []byte) (*ratchet.TagRatchet, error) {
+	log.WithFields(logger.Fields{"chain_key_len": len(chainKey)}).Debug("Deriving NSR tag ratchet")
 	// Step 1: Derive tagsetKey
 	tagsetKey, err := kdf.StandardHKDF(chainKey, nil, []byte(hkdfInfoSessionReplyTags), 32)
 	if err != nil {
@@ -115,6 +117,7 @@ func writeNoiseIKMessage2(
 	hs *noiseHandshakeState,
 	payload []byte,
 ) (nsrTag [8]byte, wireMsg []byte, keys *nsrSessionKeys, err error) {
+	log.WithFields(logger.Fields{"payload_len": len(payload)}).Debug("Constructing New Session Reply (NSR) message")
 	// Derive NSR tag
 	nsrTagRatchet, err := deriveNSRTagRatchet(hs.ck)
 	if err != nil {
@@ -263,6 +266,7 @@ func readNoiseIKMessage2(
 // derivation. This consolidates the common key derivation logic shared by
 // encryptNSRPayload and decryptNSRPayload.
 func deriveNSRPayloadCipher(ns *noise.SymmetricState) (*chacha20poly1305.AEAD, [32]byte, [32]byte, error) {
+	log.Debug("Deriving NSR payload cipher via split() and HKDF")
 	// split(): keydata = HKDF(chainKey, ZEROLEN, "", 64)
 	kAB, kBA := noise.HKDF2SHA256(ns.ChainingKey(), nil)
 
@@ -285,6 +289,7 @@ func deriveNSRPayloadCipher(ns *noise.SymmetricState) (*chacha20poly1305.AEAD, [
 // encryptNSRPayload performs the split() and payload encryption for NSR.
 // Spec ref: ratchet.md §"KDF for Payload Section Encrypted Contents".
 func encryptNSRPayload(ns *noise.SymmetricState, payload []byte) ([]byte, *nsrSessionKeys, error) {
+	log.WithFields(logger.Fields{"payload_len": len(payload)}).Debug("Encrypting NSR payload")
 	aead, kAB, kBA, err := deriveNSRPayloadCipher(ns)
 	if err != nil {
 		return nil, nil, err
@@ -309,6 +314,7 @@ func encryptNSRPayload(ns *noise.SymmetricState, payload []byte) ([]byte, *nsrSe
 
 // decryptNSRPayload performs the split() and payload decryption for NSR.
 func decryptNSRPayload(ns *noise.SymmetricState, encrypted []byte) ([]byte, *nsrSessionKeys, error) {
+	log.WithFields(logger.Fields{"encrypted_len": len(encrypted)}).Debug("Decrypting NSR payload")
 	if len(encrypted) < 16 {
 		return nil, nil, oops.Errorf("NSR payload too short for auth tag: %d bytes", len(encrypted))
 	}

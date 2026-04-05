@@ -3,6 +3,7 @@ package ratchet
 import (
 	"time"
 
+	"github.com/go-i2p/logger"
 	"github.com/samber/oops"
 )
 
@@ -51,6 +52,7 @@ func (sm *SessionManager) encryptNewSession(
 	destinationHash, destinationPubKey [32]byte,
 	plaintextGarlic []byte,
 ) ([]byte, error) {
+	log.WithFields(logger.Fields{"plaintext_len": len(plaintextGarlic)}).Debug("Encrypting new session message")
 	if err := ValidateNewSessionPayload(plaintextGarlic); err != nil {
 		return nil, oops.Wrapf(err, "new session payload rejected")
 	}
@@ -120,6 +122,7 @@ func (sm *SessionManager) encryptExistingSession(
 	session *Session,
 	plaintextGarlic []byte,
 ) ([]byte, error) {
+	log.WithFields(logger.Fields{"plaintext_len": len(plaintextGarlic)}).Debug("Encrypting existing session message")
 	session.mu.Lock()
 	defer session.mu.Unlock()
 

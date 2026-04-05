@@ -335,6 +335,7 @@ func (ptm *PeerTestManager) InitiatePeerTest(bobAddr *net.UDPAddr) (uint32, erro
 //
 // Returns test copy, or nil if not found.
 func (ptm *PeerTestManager) GetTest(nonce uint32) *PeerTest {
+	log.WithField("nonce", nonce).Debug("GetTest: retrieving peer test")
 	if nonce == 0 {
 		return nil
 	}
@@ -372,6 +373,7 @@ func (ptm *PeerTestManager) GetTest(nonce uint32) *PeerTest {
 // withTest validates a nonce, looks up the test under the mutex, and calls fn
 // with the found test. Returns an error if the nonce is zero or not found.
 func (ptm *PeerTestManager) withTest(nonce uint32, fn func(*PeerTest)) error {
+	log.WithField("nonce", nonce).Debug("withTest: looking up peer test")
 	if nonce == 0 {
 		return oops.
 			Code("INVALID_NONCE").
@@ -403,6 +405,7 @@ func (ptm *PeerTestManager) withTest(nonce uint32, fn func(*PeerTest)) error {
 //
 // Returns error if test not found.
 func (ptm *PeerTestManager) UpdateState(nonce uint32, state PeerTestState) error {
+	log.WithField("nonce", nonce).WithField("state", state).Debug("UpdateState: updating peer test state")
 	return ptm.withTest(nonce, func(test *PeerTest) {
 		test.State = state
 	})
@@ -478,6 +481,7 @@ func (ptm *PeerTestManager) FailTest(nonce uint32, reason error) error {
 //
 // Returns result copy, or nil if not found.
 func (ptm *PeerTestManager) GetResult(addr *net.UDPAddr) *TestResult {
+	log.WithField("addr", addr).Debug("GetResult: retrieving cached test result")
 	if addr == nil {
 		return nil
 	}
@@ -505,6 +509,7 @@ func (ptm *PeerTestManager) GetResult(addr *net.UDPAddr) *TestResult {
 // Parameters:
 //   - nonce: Test nonce
 func (ptm *PeerTestManager) RemoveTest(nonce uint32) {
+	log.WithField("nonce", nonce).Debug("RemoveTest: removing peer test")
 	if nonce == 0 {
 		return
 	}
@@ -517,6 +522,7 @@ func (ptm *PeerTestManager) RemoveTest(nonce uint32) {
 
 // CleanupExpired removes tests that have exceeded their timeout.
 func (ptm *PeerTestManager) CleanupExpired() {
+	log.Debug("CleanupExpired: removing expired peer tests")
 	now := time.Now()
 
 	ptm.mutex.Lock()
@@ -581,6 +587,7 @@ func (ptm *PeerTestManager) GetStats() map[string]int {
 //
 // Returns nonce on success, error otherwise.
 func (ptm *PeerTestManager) CreateRelayTest(nonce uint32, aliceAddr, charlieAddr *net.UDPAddr) (uint32, error) {
+	log.WithField("nonce", nonce).Debug("CreateRelayTest: creating relay test as Bob")
 	if nonce == 0 {
 		return 0, oops.
 			Code("INVALID_NONCE").
@@ -644,6 +651,7 @@ func (ptm *PeerTestManager) CreateRelayTest(nonce uint32, aliceAddr, charlieAddr
 //
 // Returns error on failure.
 func (ptm *PeerTestManager) CreateResponderTest(nonce uint32, aliceAddr, bobAddr *net.UDPAddr) error {
+	log.WithField("nonce", nonce).Debug("CreateResponderTest: creating responder test as Charlie")
 	if nonce == 0 {
 		return oops.
 			Code("INVALID_NONCE").

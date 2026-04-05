@@ -66,6 +66,7 @@ func DialSSU2WithHandshake(localAddr, remoteAddr *net.UDPAddr, config *SSU2Confi
 //
 // Returns an established SSU2Conn, or an error if dial or handshake fails.
 func DialSSU2WithHandshakeContext(ctx context.Context, localAddr, remoteAddr *net.UDPAddr, config *SSU2Config) (*SSU2Conn, error) {
+	log.WithField("remote_addr", remoteAddr).Debug("DialSSU2WithHandshakeContext: dialing with handshake and context")
 	conn, err := DialSSU2(localAddr, remoteAddr, config)
 	if err != nil {
 		return nil, err
@@ -315,6 +316,7 @@ func validateWrapListenerParams(underlying net.PacketConn, config *SSU2Config) e
 
 // createUDPConnection creates a UDP PacketConn bound to the specified local address.
 func createUDPConnection(localAddr *net.UDPAddr) (net.PacketConn, error) {
+	log.WithField("local_addr", localAddr).Debug("createUDPConnection: creating UDP connection")
 	packetConn, err := net.ListenUDP("udp", localAddr)
 	if err != nil {
 		return nil, oops.
@@ -328,6 +330,7 @@ func createUDPConnection(localAddr *net.UDPAddr) (net.PacketConn, error) {
 
 // createSSU2Connection creates an SSU2Conn from a PacketConn and configuration.
 func createSSU2Connection(packetConn net.PacketConn, remoteAddr *net.UDPAddr, config *SSU2Config) (*SSU2Conn, error) {
+	log.WithField("remote_addr", remoteAddr).Debug("createSSU2Connection: creating SSU2 connection wrapper")
 	// Generate connection ID if not set
 	if config.ConnectionID == 0 {
 		connID, err := GenerateConnectionID()

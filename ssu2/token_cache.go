@@ -55,6 +55,7 @@ func NewTokenCache(ttl time.Duration) *TokenCache {
 
 // newTokenCacheFromConfig creates a TokenCache using SSU2Config values.
 func newTokenCacheFromConfig(config *SSU2Config) *TokenCache {
+	log.Debug("newTokenCacheFromConfig: creating token cache from config")
 	tc := NewTokenCache(60 * time.Second)
 	if config != nil && config.TokenCacheMaxSize > 0 {
 		tc.maxSize = config.TokenCacheMaxSize
@@ -107,6 +108,7 @@ func (tc *TokenCache) GenerateToken(addr *net.UDPAddr) ([]byte, error) {
 // ValidateToken checks if a token is valid for the specified address.
 // Returns true if the token exists, matches the address, and hasn't expired.
 func (tc *TokenCache) ValidateToken(tokenValue []byte, addr *net.UDPAddr) bool {
+	log.WithField("addr", addr).Debug("ValidateToken: validating token for address")
 	if addr == nil || len(tokenValue) != TokenSize {
 		return false
 	}
@@ -132,6 +134,7 @@ func (tc *TokenCache) ValidateToken(tokenValue []byte, addr *net.UDPAddr) bool {
 // This should be called when a valid SessionRequest with token is received.
 // Returns true if the token was valid and consumed.
 func (tc *TokenCache) ConsumeToken(tokenValue []byte, addr *net.UDPAddr) bool {
+	log.WithField("addr", addr).Debug("ConsumeToken: validating and consuming token")
 	if addr == nil || len(tokenValue) != TokenSize {
 		return false
 	}
@@ -164,6 +167,7 @@ func (tc *TokenCache) ConsumeToken(tokenValue []byte, addr *net.UDPAddr) bool {
 // Cleanup removes expired tokens from the cache.
 // This should be called periodically to prevent memory leaks.
 func (tc *TokenCache) Cleanup() int {
+	log.Debug("Cleanup: removing expired tokens")
 	tc.mutex.Lock()
 	defer tc.mutex.Unlock()
 

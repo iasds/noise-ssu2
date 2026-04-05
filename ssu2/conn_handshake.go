@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"time"
 
+	"github.com/go-i2p/logger"
 	"github.com/samber/oops"
 )
 
@@ -65,6 +66,7 @@ func (h *SSU2Conn) handshakeInitiator(ctx context.Context) error {
 // sendSessionRequest creates a SessionRequest, installs the SessCreateHeader
 // key, sends the packet, and returns the raw request for retransmission.
 func (h *SSU2Conn) sendSessionRequest() (*SSU2Packet, error) {
+	log.WithField("connectionID", h.config.ConnectionID).Debug("sendSessionRequest: creating and sending SessionRequest")
 	sessionRequest, err := h.handshakeHandler.CreateSessionRequest(h.config.ConnectionID, 0)
 	if err != nil {
 		return nil, oops.Wrapf(err, "failed to create SessionRequest")
@@ -85,6 +87,7 @@ func (h *SSU2Conn) sendSessionRequest() (*SSU2Packet, error) {
 // awaitSessionCreated waits for a SessionCreated response, handling Retry
 // flow if the responder requires a token.
 func (h *SSU2Conn) awaitSessionCreated(ctx context.Context, sessionRequest *SSU2Packet) (*SSU2Packet, error) {
+	log.WithField("timeout", h.config.HandshakeTimeout).Debug("awaitSessionCreated: waiting for SessionCreated response")
 	response, err := h.receiveHandshakeWithRetransmit(ctx, sessionRequest, h.config.HandshakeTimeout)
 	if err != nil {
 		return nil, oops.Wrapf(err, "failed to receive SessionCreated")
@@ -102,6 +105,7 @@ func (h *SSU2Conn) awaitSessionCreated(ctx context.Context, sessionRequest *SSU2
 // handleRetryResponse processes a Retry response and resends the
 // SessionRequest with the extracted token.
 func (h *SSU2Conn) handleRetryResponse(ctx context.Context, response *SSU2Packet) (*SSU2Packet, error) {
+	log.Debug("handleRetryResponse: processing Retry and resending SessionRequest with token")
 	if len(response.Header) >= 8 {
 		retryDestID := binary.BigEndian.Uint64(response.Header[0:8])
 		if retryDestID != h.config.ConnectionID {
@@ -141,6 +145,7 @@ func (h *SSU2Conn) handleRetryResponse(ctx context.Context, response *SSU2Packet
 // installSessCreateHeaderKey installs the SessCreateHeader key into the
 // header protector, if available.
 func (h *SSU2Conn) installSessCreateHeaderKey() error {
+	log.Debug("installSessCreateHeaderKey: installing SessCreateHeader key")
 	if h.headerProtector == nil {
 		return nil
 	}
@@ -159,6 +164,7 @@ func (h *SSU2Conn) installSessCreateHeaderKey() error {
 // processSessionCreated validates and processes the SessionCreated response,
 // extracts the remote connection ID, and installs the SessionConfirmed header key.
 func (h *SSU2Conn) processSessionCreated(response *SSU2Packet) error {
+	log.WithField("messageType", response.MessageType).Debug("processSessionCreated: validating and processing SessionCreated")
 	if response.MessageType != MessageTypeSessionCreated {
 		return oops.Errorf("expected SessionCreated, got type %d", response.MessageType)
 	}
@@ -179,6 +185,7 @@ func (h *SSU2Conn) processSessionCreated(response *SSU2Packet) error {
 // installSessionConfirmedHeaderKey installs the SessionConfirmed header key
 // into the header protector, if available.
 func (h *SSU2Conn) installSessionConfirmedHeaderKey() error {
+	log.Debug("installSessionConfirmedHeaderKey: installing SessionConfirmed header key")
 	if h.headerProtector == nil {
 		return nil
 	}
@@ -195,6 +202,7 @@ func (h *SSU2Conn) installSessionConfirmedHeaderKey() error {
 // sendSessionConfirmed creates and sends SessionConfirmed fragments.
 // sendSessionConfirmed creates and sends SessionConfirmed fragments.
 func (h *SSU2Conn) sendSessionConfirmed() error {
+	log.WithField("remoteConnectionID", h.remoteConnectionID).Debug("sendSessionConfirmed: creating and sending SessionConfirmed fragments")
 	fragments, err := h.handshakeHandler.CreateSessionConfirmedFragments(h.remoteConnectionID, 0, h.config.RouterHash[:])
 	if err != nil {
 		return oops.Wrapf(err, "failed to create SessionConfirmed")
@@ -234,6 +242,7 @@ func (h *SSU2Conn) handshakeResponder(ctx context.Context) error {
 // receiveSessionRequest waits for and processes a SessionRequest, returning
 // the initiator's connection ID.
 func (h *SSU2Conn) receiveSessionRequest(ctx context.Context) (uint64, error) {
+	log.WithField("timeout", h.config.HandshakeTimeout).Debug("receiveSessionRequest: waiting for SessionRequest")
 	sessionRequest, err := h.receivePacketWithTimeout(ctx, h.config.HandshakeTimeout)
 	if err != nil {
 		return 0, oops.Wrapf(err, "failed to receive SessionRequest")
@@ -265,6 +274,7 @@ func (h *SSU2Conn) receiveSessionRequest(ctx context.Context) (uint64, error) {
 // createAndSendSessionCreated creates and sends a SessionCreated response,
 // installing the SessionConfirmed header key afterward.
 func (h *SSU2Conn) createAndSendSessionCreated(initiatorConnID uint64) (*SSU2Packet, error) {
+	log.WithFields(logger.Fields{"connectionID": h.config.ConnectionID, "initiatorConnID": initiatorConnID}).Debug("createAndSendSessionCreated: creating and sending SessionCreated")
 	sessionCreated, err := h.handshakeHandler.CreateSessionCreated(h.config.ConnectionID, initiatorConnID)
 	if err != nil {
 		return nil, oops.Wrapf(err, "failed to create SessionCreated")
@@ -285,6 +295,7 @@ func (h *SSU2Conn) createAndSendSessionCreated(initiatorConnID uint64) (*SSU2Pac
 // receiveAndProcessSessionConfirmed handles receipt of SessionConfirmed,
 // including multi-fragment reassembly.
 func (h *SSU2Conn) receiveAndProcessSessionConfirmed(ctx context.Context, sessionCreated *SSU2Packet) error {
+	log.Debug("receiveAndProcessSessionConfirmed: waiting for SessionConfirmed")
 	sessionConfirmed, err := h.receiveHandshakeWithRetransmit(ctx, sessionCreated, h.config.HandshakeTimeout)
 	if err != nil {
 		return oops.Wrapf(err, "failed to receive SessionConfirmed")
@@ -310,6 +321,7 @@ func (h *SSU2Conn) receiveAndProcessSessionConfirmed(ctx context.Context, sessio
 // collectConfirmedFragments collects all SessionConfirmed fragments if the
 // first packet indicates fragmentation. Returns all fragments sorted by index.
 func (h *SSU2Conn) collectConfirmedFragments(ctx context.Context, first *SSU2Packet) ([]*SSU2Packet, error) {
+	log.Debug("collectConfirmedFragments: collecting SessionConfirmed fragments")
 	fragments := []*SSU2Packet{first}
 	if len(first.Header) < 14 {
 		return fragments, nil
@@ -350,6 +362,7 @@ func (h *SSU2Conn) collectConfirmedFragments(ctx context.Context, first *SSU2Pac
 // validateConfirmedFragment validates a single SessionConfirmed fragment.
 // validateConfirmedFragment validates a single SessionConfirmed fragment.
 func (h *SSU2Conn) validateConfirmedFragment(frag *SSU2Packet, expectedTotal int) error {
+	log.WithFields(logger.Fields{"messageType": frag.MessageType, "expectedTotal": expectedTotal}).Debug("validateConfirmedFragment: validating fragment")
 	if frag.MessageType != MessageTypeSessionConfirmed {
 		return oops.Errorf("expected SessionConfirmed fragment, got type %d", frag.MessageType)
 	}
@@ -399,6 +412,7 @@ func (h *SSU2Conn) finalizeHandshake() error {
 // deriveDataPhaseKeys installs KDF-derived header protection keys and returns
 // the send/receive kHeader2 values for SipHash derivation.
 func (h *SSU2Conn) deriveDataPhaseKeys() (sendKHeader2, recvKHeader2 []byte, err error) {
+	log.Debug("deriveDataPhaseKeys: deriving data-phase header protection keys")
 	sendKHeader2, recvKHeader2, err = h.handshakeHandler.DeriveHeaderKeys()
 	if err != nil {
 		return nil, nil, oops.Wrapf(err, "failed to derive data-phase keys")
@@ -415,6 +429,7 @@ func (h *SSU2Conn) deriveDataPhaseKeys() (sendKHeader2, recvKHeader2 []byte, err
 
 // applyNegotiatedPadding updates padding config from peer options negotiation.
 func (h *SSU2Conn) applyNegotiatedPadding() {
+	log.Debug("applyNegotiatedPadding: applying negotiated padding configuration")
 	localOpts := h.handshakeHandler.LocalOptions()
 	peerOpts := h.handshakeHandler.PeerOptions()
 	h.logOptionsNegotiationWarnings(localOpts, peerOpts)
@@ -453,6 +468,7 @@ func (h *SSU2Conn) logOptionsNegotiationWarnings(localOpts, peerOpts *OptionsPar
 // pushNegotiatedPaddingToModifier updates the live SSU2PaddingModifier
 // with negotiated values so data-phase padding reflects the agreement.
 func (h *SSU2Conn) pushNegotiatedPaddingToModifier(negotiated *OptionsParams) {
+	log.WithField("maxRatio", negotiated.TMaxRatio).Debug("pushNegotiatedPaddingToModifier: updating padding modifier with negotiated values")
 	for _, mod := range h.config.Modifiers {
 		if pm, ok := mod.(*SSU2PaddingModifier); ok {
 			maxBytes := h.config.MaxPaddingSize
@@ -514,6 +530,7 @@ func (h *SSU2Conn) receivePacketWithTimeout(ctx context.Context, timeout time.Du
 // retransmitSchedule returns the spec-recommended exponential backoff intervals
 // for the given handshake message type.
 func retransmitSchedule(msgType uint8) []time.Duration {
+	log.WithField("messageType", msgType).Debug("retransmitSchedule: determining retransmit intervals")
 	if msgType == MessageTypeSessionCreated {
 		return []time.Duration{1 * time.Second, 2 * time.Second, 4 * time.Second}
 	}
@@ -522,6 +539,7 @@ func retransmitSchedule(msgType uint8) []time.Duration {
 
 // retransmitWait returns the wait duration for the given attempt, capping at the remaining time.
 func retransmitWait(attempt int, intervals []time.Duration, remaining time.Duration) time.Duration {
+	log.WithFields(logger.Fields{"attempt": attempt, "remaining": remaining}).Debug("retransmitWait: calculating wait duration")
 	var wait time.Duration
 	if attempt < len(intervals) {
 		wait = intervals[attempt]

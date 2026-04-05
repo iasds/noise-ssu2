@@ -214,6 +214,7 @@ func (h *HandshakeHandler) CreateSessionConfirmedFragments(connID uint64, packet
 
 // serializeConfirmedPayload serializes the RouterInfo block for SessionConfirmed.
 func (h *HandshakeHandler) serializeConfirmedPayload(routerInfo []byte) ([]byte, error) {
+	log.WithField("routerInfoLen", len(routerInfo)).Debug("serializeConfirmedPayload: serializing RouterInfo block")
 	var blocks []*SSU2Block
 	if len(routerInfo) > 0 {
 		blocks = append(blocks, NewSSU2Block(BlockTypeRouterInfo, routerInfo))
@@ -227,6 +228,7 @@ func (h *HandshakeHandler) serializeConfirmedPayload(routerInfo []byte) ([]byte,
 
 // computeFragmentCount returns the number of fragments needed for the given ciphertext size.
 func computeFragmentCount(ciphertextSize int) (int, error) {
+	log.WithField("ciphertextSize", ciphertextSize).Debug("computeFragmentCount: calculating fragment count")
 	totalFrags := (ciphertextSize + sessionConfirmedMaxPerPacket - 1) / sessionConfirmedMaxPerPacket
 	if totalFrags < 1 {
 		totalFrags = 1
@@ -239,6 +241,7 @@ func computeFragmentCount(ciphertextSize int) (int, error) {
 
 // buildSessionConfirmedHeader builds a 16-byte SessionConfirmed short header.
 func buildSessionConfirmedHeader(connID uint64, packetNumber uint32, fragNum, totalFrags int) []byte {
+	log.WithField("connID", connID).WithField("fragNum", fragNum).WithField("totalFrags", totalFrags).Debug("buildSessionConfirmedHeader: building short header")
 	header := make([]byte, ShortHeaderSize)
 	binary.BigEndian.PutUint64(header[0:8], connID)
 	binary.BigEndian.PutUint32(header[8:12], packetNumber)
@@ -249,6 +252,7 @@ func buildSessionConfirmedHeader(connID uint64, packetNumber uint32, fragNum, to
 
 // buildFragmentPackets splits ciphertext into fragment packets.
 func buildFragmentPackets(ciphertext []byte, connID uint64, packetNumber uint32, totalFrags int) []*SSU2Packet {
+	log.WithField("ciphertextLen", len(ciphertext)).WithField("totalFrags", totalFrags).Debug("buildFragmentPackets: splitting ciphertext into fragments")
 	packets := make([]*SSU2Packet, 0, totalFrags)
 	offset := 0
 	for i := 0; i < totalFrags; i++ {
@@ -325,6 +329,7 @@ func (h *HandshakeHandler) ProcessSessionConfirmedFragments(packets []*SSU2Packe
 // validateFragmentOrdering checks that the fragment ordering and completeness
 // is correct for a set of SessionConfirmed packets.
 func (h *HandshakeHandler) validateFragmentOrdering(packets []*SSU2Packet) error {
+	log.WithField("packetCount", len(packets)).Debug("validateFragmentOrdering: checking fragment ordering")
 	totalFrags := int(packets[0].Header[13] & 0x0F)
 	if totalFrags < 1 {
 		totalFrags = 1
@@ -347,6 +352,7 @@ func (h *HandshakeHandler) validateFragmentOrdering(packets []*SSU2Packet) error
 // reassembleFragments concatenates payload data from ordered fragments into a
 // single Noise ciphertext. The last fragment's MAC is appended.
 func reassembleFragments(packets []*SSU2Packet) []byte {
+	log.WithField("fragmentCount", len(packets)).Debug("reassembleFragments: concatenating fragment payloads")
 	totalSize := 0
 	for _, pkt := range packets {
 		totalSize += len(pkt.Payload)

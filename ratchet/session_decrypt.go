@@ -5,6 +5,7 @@ import (
 
 	"github.com/go-i2p/crypto/ratchet"
 	"github.com/go-i2p/crypto/types"
+	"github.com/go-i2p/logger"
 	"github.com/samber/oops"
 )
 
@@ -17,6 +18,7 @@ import (
 //   - sessionHash: SHA-256(initiatorStaticPub) for New Session messages; nil otherwise.
 //     Callers that need to send a New Session Reply must pass this value to EncryptNewSessionReply.
 func (sm *SessionManager) DecryptGarlicMessage(encryptedGarlic []byte) ([]byte, [8]byte, *[32]byte, error) {
+	log.WithFields(logger.Fields{"message_len": len(encryptedGarlic)}).Debug("Decrypting garlic message")
 	if len(encryptedGarlic) < 8 {
 		return nil, [8]byte{}, nil, oops.Errorf("encrypted garlic message too short: %d bytes", len(encryptedGarlic))
 	}
@@ -45,6 +47,7 @@ func (sm *SessionManager) DecryptGarlicMessage(encryptedGarlic []byte) ([]byte, 
 // tryDecryptExisting attempts to decrypt as an Existing Session message.
 // Returns ok=true if a matching session was found (even if decryption failed).
 func (sm *SessionManager) tryDecryptExisting(msgTag [8]byte, encryptedGarlic []byte) ([]byte, [8]byte, error, bool) {
+	log.WithFields(logger.Fields{"message_len": len(encryptedGarlic)}).Debug("Trying to decrypt as Existing Session message")
 	sm.mu.Lock()
 	session, counterHint := sm.lookupSessionByTag(msgTag)
 	sm.mu.Unlock()
@@ -74,6 +77,7 @@ func (sm *SessionManager) tryDecryptExisting(msgTag [8]byte, encryptedGarlic []b
 // tryDecryptNSR attempts to decrypt as a New Session Reply message.
 // Returns ok=true if a matching NSR tag was found (even if decryption failed).
 func (sm *SessionManager) tryDecryptNSR(msgTag [8]byte, encryptedGarlic []byte) ([]byte, error, bool) {
+	log.WithFields(logger.Fields{"message_len": len(encryptedGarlic)}).Debug("Trying to decrypt as New Session Reply")
 	sm.mu.Lock()
 	nsrSession, isNSR := sm.nsrTagIndex[msgTag]
 	if isNSR {
@@ -186,6 +190,7 @@ func (sm *SessionManager) initializeInboundRatchetState(remotePubKey [32]byte, k
 // The tag is derived from the same chain key that the responder will use when
 // constructing its NSR, ensuring both sides agree on the routing tag.
 func (sm *SessionManager) registerNSRTagLocked(session *Session, hs *noiseHandshakeState) error {
+	log.Debug("Registering NSR tag for initiator session")
 	nsrTagRatchet, err := deriveNSRTagRatchet(hs.ck)
 	if err != nil {
 		return oops.Wrapf(err, "failed to derive NSR tag ratchet for initiator registration")
@@ -246,6 +251,7 @@ func (sm *SessionManager) decryptIncomingNSR(session *Session, message []byte) (
 // nsrSessionKeys.keyBA is the responder→initiator direction key.
 // If isInitiator is true, sendKey = keyAB and recvKey = keyBA; vice versa otherwise.
 func (sm *SessionManager) applyNSRKeysToSessionWhileLocked(session *Session, nsrKeys *nsrSessionKeys, isInitiator bool) error {
+	log.WithFields(logger.Fields{"is_initiator": isInitiator}).Debug("Applying NSR keys to session ratchets")
 	var sendKey, recvKey [32]byte
 	if isInitiator {
 		sendKey = nsrKeys.keyAB // A sends to B
@@ -367,6 +373,7 @@ func tryCounterHintDecrypt(
 	sessionTag [8]byte,
 	windowEnd uint32,
 ) ([]byte, uint32, bool) {
+	log.WithFields(logger.Fields{"window_base": session.recvWindowBase, "window_end": windowEnd}).Debug("Attempting counter-hint AEAD decryption")
 	if counterHint == nil {
 		return nil, 0, false
 	}
@@ -395,6 +402,7 @@ func scanWindowDecrypt(
 	sessionTag [8]byte,
 	windowEnd uint32,
 ) ([]byte, uint32, bool) {
+	log.WithFields(logger.Fields{"window_base": session.recvWindowBase, "window_end": windowEnd}).Debug("Scanning receive window for AEAD decryption")
 	for counter := session.recvWindowBase; counter < windowEnd; counter++ {
 		messageKey, inCache := session.recvKeyCache[counter]
 		if !inCache {

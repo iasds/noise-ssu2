@@ -14,6 +14,7 @@ package ratchet
 import (
 	"fmt"
 
+	"github.com/go-i2p/logger"
 	"github.com/samber/oops"
 )
 
@@ -65,6 +66,7 @@ func (s *Session) HasPendingNextKeys() bool {
 //
 // Spec ref: ratchet.md §"DH Ratchet Message Flow".
 func (sm *SessionManager) ProcessReceivedNextKey(sessionTag [8]byte, info NextKeyInfo) error {
+	log.WithFields(logger.Fields{"key_present": info.KeyPresent, "reverse": info.Reverse, "key_id": info.KeyID}).Debug("Processing received NextKey block")
 	session, err := sm.lookupLockedSession(sessionTag)
 	if err != nil {
 		return err
@@ -81,6 +83,7 @@ func (sm *SessionManager) ProcessReceivedNextKey(sessionTag [8]byte, info NextKe
 // This is either a forward key from the peer or a reverse key in response
 // to our forward key.
 func (sm *SessionManager) processNextKeyWithKey(session *Session, info NextKeyInfo) error {
+	log.WithFields(logger.Fields{"reverse": info.Reverse, "key_id": info.KeyID}).Debug("Processing NextKey block with key")
 	if info.Reverse {
 		return sm.processReverseNextKey(session, info)
 	}
@@ -158,6 +161,7 @@ func (sm *SessionManager) processNextKeyAck(session *Session, info NextKeyInfo) 
 // with a new (or existing) remote public key. This is the core
 // operation shared by all NextKey processing paths.
 func (sm *SessionManager) applyIncomingDHKey(session *Session, remotePubKey [32]byte) error {
+	log.Debug("Applying incoming DH key to session ratchet")
 	if err := session.DHRatchet.UpdateKeys(remotePubKey[:]); err != nil {
 		return oops.Wrapf(err, "failed to update remote DH public key")
 	}
@@ -213,6 +217,7 @@ func (sm *SessionManager) generateReverseNextKey(session *Session) error {
 //
 // Must be called with session.mu held.
 func (s *Session) IncrementSendKeyID() error {
+	log.WithFields(logger.Fields{"current_key_id": s.sendKeyID}).Debug("Incrementing send key ID")
 	if s.sendKeyID >= MaxKeyID {
 		return oops.Errorf("send key ID %d has reached maximum %d, must create new session", s.sendKeyID, MaxKeyID)
 	}

@@ -6,6 +6,7 @@ import (
 
 	"github.com/go-i2p/common/data"
 	i2phkdf "github.com/go-i2p/crypto/hkdf"
+	"github.com/go-i2p/logger"
 	"github.com/go-i2p/noise"
 	"github.com/samber/oops"
 )
@@ -13,6 +14,7 @@ import (
 // startDataLoops starts background goroutines for data transport.
 // Called after handshake completes to avoid wasting resources on failed connections.
 func (h *SSU2Conn) startDataLoops() {
+	log.Debug("startDataLoops: starting send, keepalive, and retransmit loops")
 	h.wg.Add(3)
 	go h.sendLoop()
 	go h.keepaliveLoop()
@@ -21,6 +23,7 @@ func (h *SSU2Conn) startDataLoops() {
 
 // installCipherStates transfers transport cipher states from the handshake handler.
 func (h *SSU2Conn) installCipherStates() error {
+	log.Debug("installCipherStates: transferring cipher states from handshake")
 	send, recv, err := h.handshakeHandler.GetCipherStates()
 	if err != nil {
 		return err
@@ -41,6 +44,7 @@ func (h *SSU2Conn) installCipherStates() error {
 
 // wireDataCallbacks wires internal handler callbacks for data-phase processing.
 func (h *SSU2Conn) wireDataCallbacks() {
+	log.WithField("next_nonce_enabled", h.config.EnableNextNonce).Debug("wireDataCallbacks: wiring data-phase callbacks")
 	cbs := h.dataHandler.getCallbacks()
 
 	// G-2: Warn if signature verification callbacks are not configured.
@@ -130,6 +134,7 @@ func (h *SSU2Conn) validatePeerRouterInfo() error {
 //	sipk_ba = HKDF(k_header_2_ba, ZEROLEN, "SipHashKey", 16)
 //	sipiv_ba = HKDF(k_header_2_ba, ZEROLEN, "SipHashIV", 8)
 func deriveSipHashModifier(sendKHeader2, recvKHeader2 []byte) (*SipHashLengthModifier, error) {
+	log.WithFields(logger.Fields{"send_key_len": len(sendKHeader2), "recv_key_len": len(recvKHeader2)}).Debug("deriveSipHashModifier: deriving SipHash keys for length obfuscation")
 	deriver := i2phkdf.NewHKDF()
 	infoKey := []byte("SipHashKey")
 	infoIV := []byte("SipHashIV")

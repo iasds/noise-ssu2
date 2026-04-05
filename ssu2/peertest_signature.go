@@ -5,6 +5,7 @@ import (
 	"net"
 
 	"github.com/go-i2p/common/data"
+	"github.com/go-i2p/logger"
 	"github.com/samber/oops"
 )
 
@@ -34,6 +35,7 @@ func BuildPeerTestSignedData(
 	alicePort uint16,
 	aliceIP net.IP,
 ) ([]byte, error) {
+	log.WithFields(logger.Fields{"nonce": nonce, "version": version, "hasAliceHash": aliceHash != nil}).Debug("BuildPeerTestSignedData: constructing signed data for peer test")
 	addrSuffix, err := buildAddrSuffix(aliceIP, alicePort)
 	if err != nil {
 		return nil, oops.Wrapf(err, "invalid aliceIP")
@@ -65,6 +67,7 @@ func SignPeerTest(
 	alicePort uint16,
 	aliceIP net.IP,
 ) ([]byte, error) {
+	log.WithField("nonce", nonce).Debug("SignPeerTest: signing peer test message")
 	data, err := BuildPeerTestSignedData(bobHash, aliceHash, version, nonce, timestamp, alicePort, aliceIP)
 	if err != nil {
 		return nil, oops.Wrapf(err, "failed to build peer test signed data")
@@ -83,6 +86,7 @@ func VerifyPeerTestSignature(
 	alicePort uint16,
 	aliceIP net.IP,
 ) (bool, error) {
+	log.WithFields(logger.Fields{"nonce": nonce, "sigLen": len(signature)}).Debug("VerifyPeerTestSignature: verifying peer test signature")
 	data, err := BuildPeerTestSignedData(bobHash, aliceHash, version, nonce, timestamp, alicePort, aliceIP)
 	if err != nil {
 		return false, oops.Wrapf(err, "failed to build peer test signed data for verification")

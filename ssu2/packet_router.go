@@ -205,6 +205,7 @@ func (pr *PacketRouter) RoutePacket(packet *SSU2Packet, remoteAddr *net.UDPAddr)
 //   - uint64: The destination connection ID
 //   - error: If header is invalid or too short
 func (pr *PacketRouter) ExtractConnectionID(header []byte) (uint64, error) {
+	log.WithField("headerLen", len(header)).Debug("ExtractConnectionID: extracting connection ID from header")
 	// Validate header size
 	if len(header) < ShortHeaderSize {
 		return 0, oops.

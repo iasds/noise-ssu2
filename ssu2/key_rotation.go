@@ -208,6 +208,7 @@ func NewKeyRotationManagerWithAge(
 	keyAge time.Duration,
 	isPublished bool,
 ) (*KeyRotationManager, error) {
+	log.WithField("keyAge", keyAge).WithField("isPublished", isPublished).Debug("NewKeyRotationManagerWithAge: creating manager with pre-aged keys")
 	mgr, err := NewKeyRotationManager(staticKey, introKey, isPublished)
 	if err != nil {
 		return nil, err
@@ -377,6 +378,7 @@ func (krm *KeyRotationManager) ForceRotateStaticKey() ([]byte, error) {
 // rotateStaticKeyLocked performs the actual key rotation.
 // Caller must hold the write lock.
 func (krm *KeyRotationManager) rotateStaticKeyLocked() ([]byte, error) {
+	log.Debug("rotateStaticKeyLocked: performing static key rotation")
 	// Generate new key
 	newKey := make([]byte, StaticKeySize)
 	if _, err := rand.Read(newKey); err != nil {
@@ -587,6 +589,7 @@ func (krm *KeyRotationManager) runRotationChecker() {
 
 // checkRotation checks if any keys can be rotated and updates their state.
 func (krm *KeyRotationManager) checkRotation() {
+	log.Debug("checkRotation: checking if key rotation is needed")
 	krm.mu.Lock()
 	defer krm.mu.Unlock()
 

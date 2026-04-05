@@ -202,6 +202,7 @@ func (rm *RelayManager) RegisterIntroducer(addr *net.UDPAddr, routerHash data.Ha
 //
 // Returns a slice of IntroducerInfo pointers (defensive copies).
 func (rm *RelayManager) GetIntroducers() []*IntroducerInfo {
+	log.Debug("GetIntroducers: retrieving active introducers")
 	rm.mutex.RLock()
 	defer rm.mutex.RUnlock()
 
@@ -229,6 +230,7 @@ func (rm *RelayManager) GetIntroducers() []*IntroducerInfo {
 // Parameters:
 //   - addr: UDP address of the introducer to remove
 func (rm *RelayManager) RemoveIntroducer(addr *net.UDPAddr) {
+	log.WithField("addr", addr).Debug("RemoveIntroducer: removing introducer")
 	if addr == nil {
 		return
 	}
@@ -311,6 +313,7 @@ func (rm *RelayManager) AllocateRelayTag(addr *net.UDPAddr) (uint32, error) {
 //
 // Returns true if tag is valid and matches address.
 func (rm *RelayManager) ValidateRelayTag(tag uint32, addr *net.UDPAddr) bool {
+	log.WithField("tag", tag).Debug("ValidateRelayTag: validating relay tag")
 	if tag == 0 || addr == nil {
 		return false
 	}
@@ -339,6 +342,7 @@ func (rm *RelayManager) ValidateRelayTag(tag uint32, addr *net.UDPAddr) bool {
 //
 // Returns RelayTag info, or nil if not found.
 func (rm *RelayManager) GetRelayTag(tag uint32) *RelayTag {
+	log.WithField("tag", tag).Debug("GetRelayTag: retrieving relay tag info")
 	if tag == 0 {
 		return nil
 	}
@@ -459,6 +463,7 @@ func (rm *RelayManager) IncrementRetries(sessionID uint64) int {
 // cleanupExpired removes expired relay tags, introducers, and pending sessions.
 // This is called periodically by the cleanup timer.
 func (rm *RelayManager) cleanupExpired() {
+	log.Debug("cleanupExpired: removing expired relay tags and introducers")
 	rm.mutex.Lock()
 	defer rm.mutex.Unlock()
 

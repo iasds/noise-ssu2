@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-i2p/logger"
 	"github.com/samber/oops"
 )
 
@@ -69,6 +70,7 @@ func NewACKHandler() *ACKHandler {
 // RecordReceived marks a packet number as received and needing acknowledgment.
 // This should be called for every successfully processed inbound packet.
 func (h *ACKHandler) RecordReceived(packetNum uint32) {
+	log.WithField("packetNum", packetNum).Debug("RecordReceived: marking packet as received")
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.receivedPackets = append(h.receivedPackets, packetNum)
@@ -77,6 +79,7 @@ func (h *ACKHandler) RecordReceived(packetNum uint32) {
 // SetACKThreshold sets the number of received packets that triggers an
 // immediate ACK. Must be >= 1.
 func (h *ACKHandler) SetACKThreshold(threshold int) {
+	log.WithField("threshold", threshold).Debug("SetACKThreshold: updating ACK threshold")
 	if threshold < 1 {
 		threshold = 1
 	}
@@ -89,6 +92,7 @@ func (h *ACKHandler) SetACKThreshold(threshold int) {
 // This limits ACK blocks to fit within the available MTU. Must be >= 5
 // (minimum ACK block: 4-byte throughPN + 1-byte acnt).
 func (h *ACKHandler) SetMaxACKDataSize(size int) {
+	log.WithField("size", size).Debug("SetMaxACKDataSize: updating max ACK data size")
 	if size < 5 {
 		size = 5
 	}
@@ -100,6 +104,7 @@ func (h *ACKHandler) SetMaxACKDataSize(size int) {
 // ShouldSendACK determines if an ACK should be sent based on timing and packet count.
 // Per ssu2.rst: ACK delay = max(10, min(rtt/6, 150)) ms
 func (h *ACKHandler) ShouldSendACK(rtt time.Duration) bool {
+	log.WithField("rtt", rtt).Debug("ShouldSendACK: checking if ACK should be sent")
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if len(h.receivedPackets) == 0 {
@@ -152,6 +157,7 @@ func (h *ACKHandler) GenerateACK() (*SSU2Block, error) {
 // countConsecutiveFromTop counts how many packets form a consecutive run
 // from the highest packet number downward.
 func countConsecutiveFromTop(sorted []uint32) int {
+	log.WithField("sortedLen", len(sorted)).Debug("countConsecutiveFromTop: counting consecutive packets from top")
 	count := 1
 	for i := 1; i < len(sorted); i++ {
 		if sorted[i] == sorted[i-1]-1 {
@@ -165,6 +171,7 @@ func countConsecutiveFromTop(sorted []uint32) int {
 
 // buildACKRanges builds nack/ack range pairs for non-consecutive packets.
 func buildACKRanges(sorted []uint32, start, maxBytes int) []byte {
+	log.WithFields(logger.Fields{"start": start, "maxBytes": maxBytes, "sortedLen": len(sorted)}).Debug("buildACKRanges: building ACK range pairs")
 	var rangeBytes []byte
 	i := start
 	for i < len(sorted) {
@@ -265,6 +272,7 @@ func (h *ACKHandler) ProcessACK(ackBlock *SSU2Block) ([]uint32, error) {
 
 // AddPending marks a packet as sent and awaiting acknowledgment.
 func (h *ACKHandler) AddPending(packetNum uint32) {
+	log.WithField("packetNum", packetNum).Debug("AddPending: marking packet as pending ACK")
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.pendingACKs[packetNum] = &PendingACK{

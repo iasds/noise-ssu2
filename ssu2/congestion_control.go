@@ -4,6 +4,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-i2p/logger"
 	"github.com/samber/oops"
 )
 
@@ -18,11 +19,13 @@ const (
 
 // EncodeCongestionBlock creates a Congestion block (type 21) with the given flags.
 func EncodeCongestionBlock(flags uint8) *SSU2Block {
+	log.WithField("flags", flags).Debug("EncodeCongestionBlock: encoding congestion block")
 	return NewSSU2Block(BlockTypeCongestion, []byte{flags})
 }
 
 // DecodeCongestionBlock parses a Congestion block and returns the flag byte.
 func DecodeCongestionBlock(block *SSU2Block) (uint8, error) {
+	log.Debug("DecodeCongestionBlock: decoding congestion block")
 	if block == nil {
 		return 0, oops.Errorf("block is nil")
 	}
@@ -154,6 +157,7 @@ type CongestionController struct {
 // Uses the default IPv4 MTU for initial CWND; prefer NewCongestionControllerWithMTU
 // to derive CWND from the session's actual MTU (M-5).
 func NewCongestionController(rttEstimator *RTTEstimator) *CongestionController {
+	log.Debug("NewCongestionController: creating with default IPv4 MTU")
 	return NewCongestionControllerWithMTU(rttEstimator, MaxPacketSizeIPv4)
 }
 
@@ -242,6 +246,7 @@ func (cc *CongestionController) OnPacketSent(packetSize int) {
 // This implements CWND growth based on the current state and updates the
 // Westwood+ bandwidth estimate from ACK inter-arrival times.
 func (cc *CongestionController) OnAck(ackedBytes int) {
+	log.WithField("ackedBytes", ackedBytes).Debug("OnAck: processing acknowledgment")
 	if ackedBytes <= 0 {
 		return
 	}
@@ -284,6 +289,7 @@ func (cc *CongestionController) OnAck(ackedBytes int) {
 // handleSlowStartAck processes ACK during slow start phase.
 // CWND increases by ackedBytes for each ACK (exponential growth).
 func (cc *CongestionController) handleSlowStartAck(ackedBytes int) {
+	log.WithFields(logger.Fields{"ackedBytes": ackedBytes, "cwnd": cc.cwnd}).Debug("handleSlowStartAck: exponential growth")
 	// Increase CWND by the number of bytes acknowledged
 	cc.cwnd += ackedBytes
 
@@ -302,6 +308,7 @@ func (cc *CongestionController) handleSlowStartAck(ackedBytes int) {
 // CWND increases by approximately MSS per RTT (linear growth).
 // We track bytes acked and increase CWND when we've acked CWND bytes.
 func (cc *CongestionController) handleCongestionAvoidanceAck(ackedBytes int) {
+	log.WithFields(logger.Fields{"ackedBytes": ackedBytes, "cwnd": cc.cwnd}).Debug("handleCongestionAvoidanceAck: linear growth")
 	// Accumulate acknowledged bytes
 	cc.bytesAcked += ackedBytes
 
@@ -392,6 +399,7 @@ func (cc *CongestionController) OnRetransmissionTimeout() {
 // ssthresh = max(BWE * minRTT, MinCWND). Falls back to cwnd/2 when BWE or
 // minRTT is unavailable. Caller must hold cc.mutex.
 func (cc *CongestionController) westwoodSSThresh() int {
+	log.WithField("bwe", cc.bandwidthEstimate).Debug("westwoodSSThresh: computing ssthresh")
 	if cc.bandwidthEstimate > 0 && cc.rttEstimator != nil {
 		minRTT := cc.rttEstimator.GetMinRTT()
 		if minRTT > 0 {
@@ -417,6 +425,7 @@ func (cc *CongestionController) westwoodSSThresh() int {
 // ExitRecovery transitions from recovery state to congestion avoidance.
 // This should be called when all lost packets have been acknowledged.
 func (cc *CongestionController) ExitRecovery() {
+	log.Debug("ExitRecovery: transitioning from recovery to congestion avoidance")
 	cc.mutex.Lock()
 	defer cc.mutex.Unlock()
 

@@ -96,6 +96,7 @@ func NewSSU2PaddingModifierForTesting(name string, minPad, maxPad int, aeadMode 
 
 // ModifyOutbound adds MTU-aware padding based on message phase.
 func (spm *SSU2PaddingModifier) ModifyOutbound(phase handshake.HandshakePhase, data []byte) ([]byte, error) {
+	log.WithField("phase", phase).WithField("dataLen", len(data)).Debug("ModifyOutbound: adding MTU-aware padding")
 	spm.mutex.RLock()
 	defer spm.mutex.RUnlock()
 
@@ -115,6 +116,7 @@ func (spm *SSU2PaddingModifier) ModifyOutbound(phase handshake.HandshakePhase, d
 
 // ModifyInbound removes SSU2-specific padding.
 func (spm *SSU2PaddingModifier) ModifyInbound(phase handshake.HandshakePhase, data []byte) ([]byte, error) {
+	log.WithField("phase", phase).WithField("dataLen", len(data)).Debug("ModifyInbound: removing SSU2 padding")
 	spm.mutex.RLock()
 	defer spm.mutex.RUnlock()
 
@@ -139,6 +141,7 @@ func (spm *SSU2PaddingModifier) Close() error {
 // UpdatePaddingParams dynamically updates padding parameters.
 // Thread-safe for concurrent use during connection lifetime.
 func (spm *SSU2PaddingModifier) UpdatePaddingParams(minPad, maxPad int, ratio float64) error {
+	log.WithField("minPad", minPad).WithField("maxPad", maxPad).WithField("ratio", ratio).Debug("UpdatePaddingParams: updating padding parameters")
 	if err := handshake.ValidatePaddingParams("ssu2", minPad, maxPad, ratio); err != nil {
 		return err
 	}
@@ -155,6 +158,7 @@ func (spm *SSU2PaddingModifier) UpdatePaddingParams(minPad, maxPad int, ratio fl
 // SetMTU updates the MTU value for dynamic MTU discovery.
 // Thread-safe for concurrent use during connection lifetime.
 func (spm *SSU2PaddingModifier) SetMTU(mtu int) error {
+	log.WithField("mtu", mtu).Debug("SetMTU: updating MTU value")
 	if err := validateMTU(mtu); err != nil {
 		return err
 	}

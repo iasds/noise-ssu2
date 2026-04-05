@@ -73,6 +73,7 @@ func NewSSU2Addr(underlying net.Addr, routerHash data.Hash, connID uint64, role 
 // WithDestinationHash sets the destination hash for tunnel connections.
 // Returns a new SSU2Addr instance (immutable pattern).
 func (sa *SSU2Addr) WithDestinationHash(destHash data.Hash) *SSU2Addr {
+	log.WithField("connID", sa.connectionID).Debug("WithDestinationHash: setting destination hash")
 	return sa.copyWithModifications(func(newAddr *SSU2Addr) {
 		h := destHash
 		newAddr.destHash = &h
@@ -83,6 +84,7 @@ func (sa *SSU2Addr) WithDestinationHash(destHash data.Hash) *SSU2Addr {
 // introducerAddr is the UDP address of the introducer service.
 // Returns a new SSU2Addr instance (immutable pattern).
 func (sa *SSU2Addr) WithIntroducer(introducerAddr net.Addr) (*SSU2Addr, error) {
+	log.WithField("introducerAddr", introducerAddr).Debug("WithIntroducer: setting introducer address")
 	if introducerAddr == nil {
 		return nil, oops.
 			Code("INVALID_INTRODUCER_ADDR").
@@ -98,6 +100,7 @@ func (sa *SSU2Addr) WithIntroducer(introducerAddr net.Addr) (*SSU2Addr, error) {
 // copyWithModifications creates a defensive copy and applies modifications.
 // Helper function to maintain immutability pattern while reducing code duplication.
 func (sa *SSU2Addr) copyWithModifications(modify func(*SSU2Addr)) *SSU2Addr {
+	log.WithField("connID", sa.connectionID).Debug("copyWithModifications: creating defensive copy of SSU2Addr")
 	newAddr := &SSU2Addr{
 		underlying:   sa.underlying,
 		connectionID: sa.connectionID,

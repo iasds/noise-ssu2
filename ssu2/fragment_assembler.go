@@ -23,6 +23,7 @@ type FragmentSet struct {
 
 // cleanupStaleFragments removes fragment sets that have exceeded the timeout.
 func (h *DataHandler) cleanupStaleFragments() {
+	log.WithField("timeout", h.fragmentTimeout).Debug("cleanupStaleFragments: scanning for stale fragments")
 	h.mutex.Lock()
 	defer h.mutex.Unlock()
 
@@ -109,6 +110,7 @@ func (h *DataHandler) handleFirstFragment(data []byte) error {
 // SSU2 spec format: FragmentInfo(1) + MessageID(4) + Data
 // FragmentInfo: (fragNum << 1) | isLast
 func (h *DataHandler) handleFollowOnFragment(data []byte) error {
+	log.WithField("dataLen", len(data)).Debug("handleFollowOnFragment: processing follow-on fragment")
 	if len(data) < 5 {
 		h.incrementStat(&h.stats.MessagesDropped)
 		return oops.Errorf("follow-on fragment too short: %d bytes, need at least 5", len(data))

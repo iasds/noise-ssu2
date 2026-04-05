@@ -8,6 +8,7 @@ import (
 
 // handleI2NPMessage queues a complete I2NP message for delivery.
 func (h *DataHandler) handleI2NPMessage(data []byte) error {
+	log.WithField("dataLen", len(data)).Debug("handleI2NPMessage: queuing I2NP message for delivery")
 	if len(data) == 0 {
 		h.incrementStat(&h.stats.MessagesDropped)
 		return oops.Errorf("I2NP message block is empty")

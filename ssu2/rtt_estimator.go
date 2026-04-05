@@ -86,6 +86,7 @@ func NewRTTEstimator() *RTTEstimator {
 //   - SRTT = (1-alpha) * SRTT + alpha * sample
 //   - minRTT = min(minRTT, sample)
 func (r *RTTEstimator) Update(sample time.Duration) {
+	log.WithField("sample", sample).Debug("Update: adding RTT sample")
 	if sample <= 0 {
 		return // Ignore invalid samples
 	}
@@ -197,6 +198,7 @@ func (r *RTTEstimator) IsInitialized() bool {
 // Reset clears all state and returns the estimator to uninitialized state.
 // This is useful when connection properties change significantly (e.g., path migration).
 func (r *RTTEstimator) Reset() {
+	log.Debug("Reset: clearing RTT estimator state")
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 

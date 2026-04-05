@@ -198,6 +198,7 @@ func (km *KeepaliveManager) GetTimeSinceLastSent() time.Duration {
 // The keepalive packet is sent via SendKeepalive() which should send a minimal
 // DateTime block to maintain the UDP state without excessive overhead.
 func (km *KeepaliveManager) keepaliveLoop() {
+	log.Debug("keepaliveLoop: starting keepalive loop")
 	defer close(km.done)
 	tickC := km.ticker.C
 	for {

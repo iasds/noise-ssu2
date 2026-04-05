@@ -130,6 +130,7 @@ func (c *BuildReplyCrypto) DecryptReplyRecord(
 // bytes 32-526: Random data (495 bytes)
 // byte 527:     Reply status code
 func SerializeResponseRecord(hash [32]byte, randomData [495]byte, reply byte) []byte {
+	log.WithFields(logger.Fields{"reply_code": reply}).Debug("Serializing response record")
 	buf := make([]byte, 528)
 	copy(buf[0:32], hash[:])
 	copy(buf[32:527], randomData[:])
@@ -140,6 +141,7 @@ func SerializeResponseRecord(hash [32]byte, randomData [495]byte, reply byte) []
 // VerifyResponseRecordHash verifies the SHA-256 hash in a serialized response record.
 // The hash covers bytes 32-527 (randomData + reply byte).
 func VerifyResponseRecordHash(hash [32]byte, randomData [495]byte, reply byte) error {
+	log.WithFields(logger.Fields{"reply_code": reply}).Debug("Verifying response record hash")
 	data := make([]byte, 496)
 	copy(data[0:495], randomData[:])
 	data[495] = reply
@@ -161,6 +163,7 @@ func VerifyResponseRecordHash(hash [32]byte, randomData [495]byte, reply byte) e
 //
 // Returns the SHA-256 hash that should be placed in the first 32 bytes of the record.
 func CreateBuildResponseRecordRaw(reply byte, randomData [495]byte) [32]byte {
+	log.WithFields(logger.Fields{"reply_code": reply}).Debug("Creating build response record hash")
 	data := make([]byte, 496)
 	copy(data[0:495], randomData[:])
 	data[495] = reply
@@ -173,6 +176,7 @@ func (c *BuildReplyCrypto) encryptChaCha20Poly1305(
 	key [32]byte,
 	iv [16]byte,
 ) ([]byte, error) {
+	log.WithFields(logger.Fields{"plaintext_len": len(plaintext)}).Debug("Encrypting with ChaCha20-Poly1305")
 	if len(plaintext) != 528 {
 		return nil, oops.Errorf("plaintext must be 528 bytes, got %d", len(plaintext))
 	}
@@ -213,6 +217,7 @@ func (c *BuildReplyCrypto) decryptChaCha20Poly1305(
 	key [32]byte,
 	iv [16]byte,
 ) ([]byte, error) {
+	log.WithFields(logger.Fields{"ciphertext_len": len(ciphertext)}).Debug("Decrypting with ChaCha20-Poly1305")
 	if len(ciphertext) != 544 {
 		return nil, oops.Errorf("ciphertext must be 544 bytes (528 + 16 tag), got %d", len(ciphertext))
 	}

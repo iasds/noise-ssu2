@@ -9,6 +9,7 @@ import (
 	noise "github.com/go-i2p/go-noise"
 	"github.com/go-i2p/go-noise/handshake"
 	"github.com/go-i2p/go-noise/internal"
+	"github.com/go-i2p/logger"
 	"github.com/samber/oops"
 )
 
@@ -30,6 +31,7 @@ const (
 // the static key authenticated by the Noise handshake corresponds to the
 // key published in the peer's RouterInfo.
 func DefaultRouterInfoValidator(routerInfo []byte, authenticatedStaticKey []byte) error {
+	log.WithFields(logger.Fields{"router_info_len": len(routerInfo), "static_key_len": len(authenticatedStaticKey)}).Debug("DefaultRouterInfoValidator: validating router info against authenticated static key")
 	if len(routerInfo) == 0 {
 		return oops.
 			Code("EMPTY_ROUTER_INFO").
@@ -493,6 +495,7 @@ func (sc *SSU2Config) Validate() error {
 
 // validateBasicConfiguration checks pattern and router hash requirements.
 func (sc *SSU2Config) validateBasicConfiguration() error {
+	log.WithField("pattern", sc.Pattern).Debug("validateBasicConfiguration: checking pattern and router hash")
 	// Validate pattern (SSU2 typically uses XK)
 	if err := internal.ValidatePattern(sc.Pattern, "ssu2"); err != nil {
 		return err
@@ -503,6 +506,7 @@ func (sc *SSU2Config) validateBasicConfiguration() error {
 
 // validateCryptographicParameters checks keys, hashes, and obfuscation settings.
 func (sc *SSU2Config) validateCryptographicParameters() error {
+	log.WithFields(logger.Fields{"initiator": sc.Initiator, "has_static_key": len(sc.StaticKey) > 0}).Debug("validateCryptographicParameters: checking keys and obfuscation settings")
 	// Validate static key if provided
 	if err := internal.ValidateKeyLength(sc.StaticKey, "static key", "ssu2"); err != nil {
 		return err
@@ -549,6 +553,7 @@ func (sc *SSU2Config) validateCryptographicParameters() error {
 
 // validateTimeoutConfiguration checks handshake timeouts and retry settings.
 func (sc *SSU2Config) validateTimeoutConfiguration() error {
+	log.WithFields(logger.Fields{"handshake_timeout": sc.HandshakeTimeout, "keepalive_interval": sc.KeepaliveInterval}).Debug("validateTimeoutConfiguration: checking timeout and retry settings")
 	// Validate handshake timeout
 	if err := internal.ValidateHandshakeTimeout(sc.HandshakeTimeout, "ssu2"); err != nil {
 		return err
@@ -573,6 +578,7 @@ func (sc *SSU2Config) validateTimeoutConfiguration() error {
 
 // validateUDPConfiguration checks MTU, packet size, and fragmentation settings.
 func (sc *SSU2Config) validateUDPConfiguration() error {
+	log.WithFields(logger.Fields{"mtu": sc.MTU, "max_packet_size": sc.MaxPacketSize}).Debug("validateUDPConfiguration: checking MTU and packet size settings")
 	// Validate MTU (IPv6 minimum is 1280, typical Ethernet is 1500)
 	if sc.MTU < 1280 || sc.MTU > 1500 {
 		return oops.
@@ -606,6 +612,7 @@ func (sc *SSU2Config) validateUDPConfiguration() error {
 
 // validatePaddingConfiguration checks padding ranges and ratios.
 func (sc *SSU2Config) validatePaddingConfiguration() error {
+	log.WithFields(logger.Fields{"enabled": sc.PaddingEnabled, "min": sc.MinPaddingSize, "max": sc.MaxPaddingSize, "ratio": sc.PaddingRatio}).Debug("validatePaddingConfiguration: checking padding ranges and ratios")
 	if err := handshake.ValidatePaddingRange("ssu2", sc.MinPaddingSize, sc.MaxPaddingSize); err != nil {
 		return err
 	}

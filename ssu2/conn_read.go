@@ -5,6 +5,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/go-i2p/logger"
 	"github.com/samber/oops"
 )
 
@@ -14,6 +15,7 @@ func (h *SSU2Conn) validateReadyForIO() error {
 	h.stateMutex.RLock()
 	state := h.state
 	h.stateMutex.RUnlock()
+	log.WithField("state", state).Debug("validateReadyForIO: checking connection state")
 
 	if state != StateEstablished {
 		return oops.Errorf("connection not established: %s", state)
@@ -25,6 +27,7 @@ func (h *SSU2Conn) validateReadyForIO() error {
 // Reads data from the connection, reassembling I2NP messages from Data packets.
 // Blocks until data is available, the read deadline expires, or the connection closes.
 func (h *SSU2Conn) Read(b []byte) (int, error) {
+	log.WithField("buf_len", len(b)).Debug("Read: waiting for inbound data")
 	if err := h.validateReadyForIO(); err != nil {
 		return 0, err
 	}
@@ -88,6 +91,7 @@ func (h *SSU2Conn) recvLoop() {
 // Supports connection migration: if a packet from a new address passes AEAD
 // verification, the remote address is updated (per spec §Connection Migration).
 func (h *SSU2Conn) parseInboundPacket(data []byte, addr net.Addr) *SSU2Packet {
+	log.WithFields(logger.Fields{"data_len": len(data), "from": addr}).Debug("parseInboundPacket: parsing inbound UDP datagram")
 	udpAddr, ok := addr.(*net.UDPAddr)
 	if !ok {
 		return nil

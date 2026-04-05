@@ -6,6 +6,7 @@ import (
 	"github.com/go-i2p/crypto/chacha20poly1305"
 	"github.com/go-i2p/crypto/kdf"
 	"github.com/go-i2p/crypto/ratchet"
+	"github.com/go-i2p/logger"
 	"github.com/go-i2p/noise"
 	"github.com/samber/oops"
 )
@@ -59,6 +60,7 @@ const (
 // Returns an error if key derivation fails.
 // Spec ref: ratchet.md §"DH INITIALIZATION KDF".
 func deriveDirectionalKeys(baseKey [32]byte, isInitiator bool) (sendKey, recvKey [32]byte, err error) {
+	log.WithField("is_initiator", isInitiator).Debug("deriveDirectionalKeys: deriving send/recv keys")
 	kd := kdf.NewKeyDerivation(baseKey)
 
 	keys, err := kd.DeriveKeys([]byte(hkdfInfoDHRatchetStep), 2)
@@ -74,6 +76,7 @@ func deriveDirectionalKeys(baseKey [32]byte, isInitiator bool) (sendKey, recvKey
 
 // deriveSessionKeysFromSecret derives root, symmetric, and tag keys from a shared secret.
 func deriveSessionKeysFromSecret(sharedSecret []byte) (*sessionKeys, error) {
+	log.WithField("secret_len", len(sharedSecret)).Debug("deriveSessionKeysFromSecret: deriving root/sym/tag keys from shared secret")
 	var arr [32]byte
 	copy(arr[:], sharedSecret)
 	kd := kdf.NewKeyDerivation(arr)
@@ -88,6 +91,7 @@ func deriveSessionKeysFromSecret(sharedSecret []byte) (*sessionKeys, error) {
 // Format: [ciphertext(N)] + [tag(16)]
 // The nonce is derived from the message counter, not transmitted on the wire.
 func parseExistingSessionMessage(msg []byte) (ciphertext []byte, tag [16]byte, err error) {
+	log.WithField("msg_len", len(msg)).Debug("parseExistingSessionMessage: parsing existing session message")
 	if len(msg) < 16 {
 		return nil, [16]byte{}, oops.Errorf("existing session message too short: %d bytes", len(msg))
 	}
@@ -101,6 +105,7 @@ func parseExistingSessionMessage(msg []byte) (ciphertext []byte, tag [16]byte, e
 // encryptWithSessionKey encrypts plaintext using ChaCha20-Poly1305 with session tag as AAD.
 // The nonce is counter-based: [0,0,0,0 || LE64(messageNumber)] per the spec.
 func encryptWithSessionKey(messageKey [32]byte, plaintext []byte, sessionTag [8]byte, messageNumber uint32) (ciphertext []byte, tag [16]byte, err error) {
+	log.WithFields(logger.Fields{"plaintext_len": len(plaintext), "message_number": messageNumber}).Debug("encryptWithSessionKey: encrypting with session key")
 	aead, err := chacha20poly1305.NewAEAD(messageKey)
 	if err != nil {
 		return nil, [16]byte{}, oops.Wrapf(err, "failed to create AEAD")
@@ -119,6 +124,7 @@ func encryptWithSessionKey(messageKey [32]byte, plaintext []byte, sessionTag [8]
 // decryptWithSessionTag decrypts ciphertext using ChaCha20-Poly1305 with session tag as AAD.
 // The nonce is derived from the message number: [0,0,0,0 || LE64(messageNumber)].
 func decryptWithSessionTag(messageKey [32]byte, ciphertext []byte, tag [16]byte, sessionTag [8]byte, messageNumber uint32) ([]byte, error) {
+	log.WithFields(logger.Fields{"ciphertext_len": len(ciphertext), "message_number": messageNumber}).Debug("decryptWithSessionTag: decrypting with session tag")
 	aead, err := chacha20poly1305.NewAEAD(messageKey)
 	if err != nil {
 		return nil, oops.Wrapf(err, "failed to create AEAD")
@@ -138,6 +144,7 @@ func decryptWithSessionTag(messageKey [32]byte, ciphertext []byte, tag [16]byte,
 // Format: [sessionTag(8)] + [ciphertext(N)] + [authTag(16)]
 // The nonce is not transmitted; both sides derive it from the message counter.
 func buildExistingSessionMessage(sessionTag [8]byte, ciphertext []byte, tag [16]byte) []byte {
+	log.WithField("ciphertext_len", len(ciphertext)).Debug("buildExistingSessionMessage: building wire format message")
 	msg := make([]byte, 8+len(ciphertext)+16)
 	copy(msg[0:8], sessionTag[:])
 	copy(msg[8:8+len(ciphertext)], ciphertext)
@@ -148,6 +155,7 @@ func buildExistingSessionMessage(sessionTag [8]byte, ciphertext []byte, tag [16]
 // advanceRatchets advances the symmetric and tag ratchets to generate message key and session tag.
 // Returns an error if the message counter exceeds MaxMessageNumber (65535).
 func advanceRatchets(session *Session) (messageKey [32]byte, sessionTag [8]byte, err error) {
+	log.WithField("message_counter", session.MessageCounter).Debug("advanceRatchets: advancing symmetric and tag ratchets")
 	if session.MessageCounter > MaxMessageNumber {
 		return [32]byte{}, [8]byte{}, oops.Errorf(
 			"message number %d exceeds maximum %d, session must be ratcheted",
@@ -196,6 +204,7 @@ func attemptDHRatchetRotation(session *Session) error {
 
 // deriveMessageKey advances the symmetric ratchet to produce the next message key.
 func deriveMessageKey(session *Session) ([32]byte, error) {
+	log.WithField("message_counter", session.MessageCounter).Debug("deriveMessageKey: advancing symmetric ratchet for next message key")
 	messageKey, _, err := session.SymmetricRatchet.DeriveMessageKeyAndAdvance(session.MessageCounter)
 	if err != nil {
 		return [32]byte{}, oops.Wrapf(err, "failed to advance symmetric ratchet")
@@ -209,6 +218,7 @@ func deriveMessageKey(session *Session) ([32]byte, error) {
 // Tracking outbound send tags there would pollute the recv window, cause the
 // replenishment threshold to never fire, and silently drain the actual recv window.
 func generateAndTrackSessionTag(session *Session) ([8]byte, error) {
+	log.Debug("generateAndTrackSessionTag: generating next session tag from send-direction ratchet")
 	sessionTag, err := session.TagRatchet.GenerateNextTag()
 	if err != nil {
 		return [8]byte{}, oops.Wrapf(err, "failed to generate session tag")
@@ -225,6 +235,7 @@ func generateAndTrackSessionTag(session *Session) ([8]byte, error) {
 //
 // Spec ref: ratchet.md §"DH INITIALIZATION KDF".
 func deriveTagAndSymKeysFromChainKey(chainKey [32]byte) (tagKey, symKey [32]byte, err error) {
+	log.Debug("deriveTagAndSymKeysFromChainKey: deriving tag and symmetric keys via TagAndKeyGenKeys")
 	kd := kdf.NewKeyDerivation(chainKey)
 	keys, err := kd.DeriveKeys([]byte(hkdfInfoTagAndKeyGenKeys), 2)
 	if err != nil {
@@ -296,6 +307,7 @@ func performDHRatchetStep(session *Session) error {
 // the send-direction SymmetricRatchet, which would permanently desynchronise outgoing crypto.
 // Spec ref: ratchet.md §"Existing Session" — symmetric ratchet advances once per message.
 func fillRecvKeyCache(session *Session, upTo uint32) error {
+	log.WithFields(logger.Fields{"up_to": upTo, "fill_mark": session.recvFillMark}).Debug("fillRecvKeyCache: pre-deriving recv message keys")
 	recvRatchet := session.RecvSymmetricRatchet
 	if recvRatchet == nil {
 		return oops.Errorf("RecvSymmetricRatchet is nil: session ratchet state is uninitialised; " +
@@ -315,6 +327,7 @@ func fillRecvKeyCache(session *Session, upTo uint32) error {
 // resetRecvWindow reinitialises the receive-window fields after an NSR replaces
 // the session ratchet state.  Must be called with session.mu held.
 func resetRecvWindow(session *Session) {
+	log.Debug("resetRecvWindow: reinitialising receive-window fields")
 	session.recvWindowBase = 1
 	session.recvFillMark = 1
 	session.nextRecvTagCounter = 1
@@ -410,6 +423,7 @@ func prependPendingNextKeys(session *Session, plaintext []byte) ([]byte, error) 
 // consolidates the repeated session-lookup-and-lock pattern used by
 // ProcessReceivedNextKey and ProcessIncomingDHRatchet.
 func (sm *SessionManager) lookupLockedSession(sessionTag [8]byte) (*Session, error) {
+	log.WithField("session_tag", fmt.Sprintf("%x", sessionTag)).Debug("lookupLockedSession: looking up session by tag")
 	sm.mu.RLock()
 	session, exists := sm.tagIndex[sessionTag]
 	sm.mu.RUnlock()
@@ -428,6 +442,7 @@ func (sm *SessionManager) lookupLockedSession(sessionTag [8]byte) (*Session, err
 // This consolidates the common PerformRatchet + deriveTagAndSymKeysFromChainKey
 // + assign pattern shared by applyRecvRatchetKeys and applySendRatchetKeys.
 func applyRatchetKeys(session *Session, send bool) error {
+	log.WithField("direction", map[bool]string{true: "send", false: "recv"}[send]).Debug("applyRatchetKeys: performing DH ratchet step and applying derived keys")
 	sendingChainKey, receivingChainKey, err := session.DHRatchet.PerformRatchet()
 	if err != nil {
 		if send {
