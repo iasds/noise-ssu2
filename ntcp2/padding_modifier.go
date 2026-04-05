@@ -85,6 +85,11 @@ func NewNTCP2PaddingModifierForTesting(name string, minPadding, maxPadding int, 
 }
 
 // ModifyOutbound adds NTCP2-specific padding based on message phase.
+//
+// PhaseFinal (message 3) is explicitly skipped because the handshake code
+// manages message 3 padding at the plaintext level — it must be included
+// in m3p2Len which is committed in message 1 before the modifier runs.
+// AEAD padding is only applied during PhaseData (post-handshake frames).
 func (npm *NTCP2PaddingModifier) ModifyOutbound(phase handshake.HandshakePhase, data []byte) ([]byte, error) {
 	npm.mu.Lock()
 	defer npm.mu.Unlock()
@@ -97,7 +102,7 @@ func (npm *NTCP2PaddingModifier) ModifyOutbound(phase handshake.HandshakePhase, 
 
 	log.WithField("padding_size", paddingSize).Debug("Adding NTCP2 outbound padding")
 
-	if npm.useAEADPadding && phase >= handshake.PhaseFinal {
+	if npm.useAEADPadding && phase > handshake.PhaseFinal {
 		return npm.engine.AddAEADPadding(data, paddingSize)
 	} else if !npm.useAEADPadding && phase < handshake.PhaseFinal {
 		return npm.engine.AddCleartextPadding(data, paddingSize)
@@ -107,13 +112,16 @@ func (npm *NTCP2PaddingModifier) ModifyOutbound(phase handshake.HandshakePhase, 
 }
 
 // ModifyInbound removes NTCP2-specific padding.
+//
+// PhaseFinal (message 3) is skipped — padding in message 3 is inside the
+// encrypted payload and parsed by the block-format layer, not the modifier.
 func (npm *NTCP2PaddingModifier) ModifyInbound(phase handshake.HandshakePhase, data []byte) ([]byte, error) {
 	npm.mu.Lock()
 	defer npm.mu.Unlock()
 
 	log.Debug("Removing NTCP2 inbound padding")
 
-	if npm.useAEADPadding && phase >= handshake.PhaseFinal {
+	if npm.useAEADPadding && phase > handshake.PhaseFinal {
 		return npm.engine.RemoveTrailingAEADPadding(data, npm.engine.Config.MaxPadding)
 	} else if !npm.useAEADPadding && phase < handshake.PhaseFinal {
 		return data, nil

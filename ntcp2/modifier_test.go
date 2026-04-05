@@ -380,14 +380,22 @@ func TestNTCP2PaddingModifier_CleartextPadding(t *testing.T) {
 }
 
 func TestNTCP2PaddingModifier_AEADPadding(t *testing.T) {
-	// Test AEAD padding for message 3 and data phase with production-grade implementation
+	// Test AEAD padding for data phase with production-grade implementation.
+	// AEAD padding is only applied during PhaseData (post-handshake), not
+	// PhaseFinal (message 3), because message 3 padding must be included
+	// in m3p2Len which is committed in message 1.
 	modifier, err := NewNTCP2PaddingModifierForTesting("aead_test", 4, 16, true)
 	require.NoError(t, err)
 
 	originalData := []byte("test data phase message")
 
-	// Apply AEAD padding (PhaseFinal)
-	padded, err := modifier.ModifyOutbound(handshake.PhaseFinal, originalData)
+	// PhaseFinal must NOT add AEAD padding (would corrupt handshake framing)
+	notPadded, err := modifier.ModifyOutbound(handshake.PhaseFinal, originalData)
+	require.NoError(t, err)
+	assert.Equal(t, originalData, notPadded, "PhaseFinal must not add AEAD padding")
+
+	// Apply AEAD padding (PhaseData)
+	padded, err := modifier.ModifyOutbound(handshake.PhaseData, originalData)
 	require.NoError(t, err)
 
 	// Debug output
@@ -414,15 +422,8 @@ func TestNTCP2PaddingModifier_AEADPadding(t *testing.T) {
 	expectedLength := len(originalData) + 3 + int(paddingSize) // data + block_header + padding
 	assert.Equal(t, expectedLength, len(padded))
 
-	// Validate AEAD frame structure - skip this for simple data+padding case
-	// In the simple test case, we have raw data + padding block, not full I2P block format
-	// So let's just validate that padding removal works correctly
-	// isValid := modifier.ValidateAEADFrame(padded)
-	// t.Logf("Frame validation result: %v", isValid)
-	// assert.True(t, isValid)
-
 	// Remove padding
-	recovered, err := modifier.ModifyInbound(handshake.PhaseFinal, padded)
+	recovered, err := modifier.ModifyInbound(handshake.PhaseData, padded)
 	require.NoError(t, err)
 	t.Logf("Recovered data length: %d", len(recovered))
 	t.Logf("Recovered data: %x", recovered)
@@ -531,7 +532,7 @@ func TestNTCP2PaddingModifier_ProductionFeatures(t *testing.T) {
 
 		// 1.0 ratio means 100% padding (double the size)
 		testData := []byte("hello world") // 11 bytes
-		result, err := modifier.ModifyOutbound(handshake.PhaseFinal, testData)
+		result, err := modifier.ModifyOutbound(handshake.PhaseData, testData)
 		require.NoError(t, err)
 
 		// Should have padding block (type 254) with approximately 11 bytes of padding
@@ -589,7 +590,7 @@ func TestNTCP2PaddingModifier_ProductionFeatures(t *testing.T) {
 
 		// Create proper I2P block format data
 		i2npBlock := []byte{3, 0, 5, 1, 2, 3, 4, 5} // I2NP block type 3, size 5, data
-		padded, err := modifier.ModifyOutbound(handshake.PhaseFinal, i2npBlock)
+		padded, err := modifier.ModifyOutbound(handshake.PhaseData, i2npBlock)
 		require.NoError(t, err)
 
 		// Valid frame should pass validation
@@ -675,7 +676,7 @@ func TestNTCP2PaddingModifier_SecurityProperties(t *testing.T) {
 
 		// Test malformed block handling - should handle gracefully without error
 		malformedData := []byte{254, 0, 100, 1, 2, 3} // Claims 100 bytes but only has 3
-		result, err := modifier.ModifyInbound(handshake.PhaseFinal, malformedData)
+		result, err := modifier.ModifyInbound(handshake.PhaseData, malformedData)
 		require.NoError(t, err, "Should handle malformed blocks gracefully")
 		// Should return original data since no valid padding found
 		assert.Equal(t, malformedData, result)
@@ -684,7 +685,7 @@ func TestNTCP2PaddingModifier_SecurityProperties(t *testing.T) {
 		oversized := make([]byte, 3+65520) // Larger than spec limit
 		oversized[0] = 254
 		binary.BigEndian.PutUint16(oversized[1:3], 65520)
-		result, err = modifier.ModifyInbound(handshake.PhaseFinal, oversized)
+		result, err = modifier.ModifyInbound(handshake.PhaseData, oversized)
 		require.NoError(t, err)
 		// Should handle gracefully
 		assert.NotNil(t, result)
@@ -716,10 +717,8 @@ func TestNTCP2PaddingModifier_I2PCompliance(t *testing.T) {
 		padded3, err := aeadMod.ModifyOutbound(handshake.PhaseFinal, msg3Data)
 		require.NoError(t, err)
 
-		// Should use AEAD block format if padding is added
-		if len(padded3) > len(msg3Data) {
-			assert.Equal(t, byte(254), padded3[len(msg3Data)]) // AEAD padding block
-		}
+		// PhaseFinal should NOT add AEAD padding (handled by handshake code)
+		assert.Equal(t, msg3Data, padded3, "PhaseFinal must not add AEAD padding")
 	})
 
 	t.Run("Data Phase Block Format", func(t *testing.T) {
@@ -729,7 +728,7 @@ func TestNTCP2PaddingModifier_I2PCompliance(t *testing.T) {
 		// Simulate data phase message with I2NP message block
 		i2npBlock := []byte{3, 0, 20, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20}
 
-		padded, err := modifier.ModifyOutbound(handshake.PhaseFinal, i2npBlock)
+		padded, err := modifier.ModifyOutbound(handshake.PhaseData, i2npBlock)
 		require.NoError(t, err)
 
 		// Should append padding block after I2NP block
@@ -742,7 +741,7 @@ func TestNTCP2PaddingModifier_I2PCompliance(t *testing.T) {
 		}
 
 		// Should be able to remove padding cleanly
-		recovered, err := modifier.ModifyInbound(handshake.PhaseFinal, padded)
+		recovered, err := modifier.ModifyInbound(handshake.PhaseData, padded)
 		require.NoError(t, err)
 		assert.Equal(t, i2npBlock, recovered)
 	})
