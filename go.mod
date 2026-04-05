@@ -34,6 +34,6 @@ require (
 
 //replace github.com/go-i2p/crypto => ../crypto
 
-//replace github.com/go-i2p/noise => ../noise
+replace github.com/go-i2p/noise => ../noise
 
 //replace github.com/go-i2p/common => ../common
