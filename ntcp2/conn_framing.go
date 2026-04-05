@@ -2,6 +2,7 @@ package ntcp2
 
 import (
 	"encoding/binary"
+	"fmt"
 	"io"
 	"net"
 
@@ -144,6 +145,12 @@ func (nc *NTCP2Conn) readObfuscatedFrameLength(underlying net.Conn, slm *SipHash
 		"frame_len", frameLen,
 		"read_nonce", nc.readNonce,
 		"remote_addr", nc.remoteAddr.String())
+
+	nc.logger.Debug("SipHash length deobfuscation",
+		"obfuscated_raw", fmt.Sprintf("0x%04x", obfuscatedLen),
+		"mask", fmt.Sprintf("0x%04x", mask),
+		"result", frameLen,
+		"read_nonce", nc.readNonce)
 
 	if err := nc.validateFrameLength(frameLen); err != nil {
 		nc.broken.Store(true)

@@ -184,12 +184,25 @@ func performResponderHandshake(cfg *NTCP2Config, nc *noise.NoiseConn) error {
 		return oops.Code("MSG1_PROCESS_FAILED").In("ntcp2").
 			Wrapf(err, "failed to process NTCP2 message 1")
 	}
-	// Parse Alice's options to extract m3p2Len (bytes 4-5).
+	// Parse Alice's options to extract padLen (bytes 2-3) and m3p2Len (bytes 4-5).
 	if len(aliceOpts) < ntcp2OptionsSize {
 		return oops.Code("MSG1_OPTIONS_TOO_SHORT").In("ntcp2").
 			Errorf("message 1 options too short: got %d, need %d", len(aliceOpts), ntcp2OptionsSize)
 	}
+	alicePadLen := int(binary.BigEndian.Uint16(aliceOpts[2:4]))
 	m3p2Len := binary.BigEndian.Uint16(aliceOpts[4:6])
+
+	// Read and MixHash Alice's cleartext padding after message 1.
+	// Per NTCP2 spec §4.1: "padding MUST be mixed into the handshake hash"
+	// even when padLen is 0 (no bytes to read, no MixHash needed).
+	if alicePadLen > 0 {
+		pad := make([]byte, alicePadLen)
+		if _, err := io.ReadFull(raw, pad); err != nil {
+			return oops.Code("MSG1_PAD_READ_FAILED").In("ntcp2").
+				Wrapf(err, "failed to read %d cleartext padding bytes after message 1", alicePadLen)
+		}
+		nc.MixHashData(pad)
+	}
 
 	// === Message 2 (Bob -> Alice) ============================================
 	opts2 := buildMessage2Options()

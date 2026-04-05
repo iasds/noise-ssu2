@@ -17,7 +17,11 @@ import (
 //	Step 2: sip_master = HMAC-SHA256(key=temp_key,   data=byte(0x01))
 //	Step 3: temp_key   = HMAC-SHA256(key=sip_master, data=zerolen)
 //	Step 4: sipkeys_ab = HMAC-SHA256(key=temp_key,   data=byte(0x01))[0:24]
-//	Step 5: sipkeys_ba = HMAC-SHA256(key=temp_key,   data=sipkeys_ab || byte(0x02))[0:24]
+//	Step 5: sipkeys_ba = HMAC-SHA256(key=temp_key,   data=sipkeys_ab[0:32] || byte(0x02))[0:24]
+//
+// NOTE: Step 5 uses the full 32-byte HMAC output from step 4 as its input prefix,
+// not just the 24 bytes extracted for sipkeys_ab. This matches the i2pd reference
+// implementation (m_Sipkeysab is 32 bytes; m_Sipkeysab[32]=2 before HMAC call).
 //
 // Each 24-byte output is split into (sipk1, sipk2, sipiv) as little-endian uint64s.
 //
@@ -73,12 +77,13 @@ func DeriveSipHashKeys(askMaster, handshakeHash []byte) (
 	sipKeysAB[1] = binary.LittleEndian.Uint64(fullAB[8:16])
 	sipIVAB = binary.LittleEndian.Uint64(fullAB[16:24])
 
-	// Step 5: sipkeys_ba = HMAC-SHA256(key=temp_key, data=sipkeys_ab[0:24] || byte(0x02))[0:24]
-	// Per spec, the input is the truncated 24-byte sipkeys_ab, not the full 32-byte HMAC output.
-	const sipKeysLen = 24
-	step5Data := make([]byte, sipKeysLen+1)
-	copy(step5Data, fullAB[:sipKeysLen])
-	step5Data[sipKeysLen] = 0x02
+	// Step 5: sipkeys_ba = HMAC-SHA256(key=temp_key, data=sipkeys_ab[0:32] || byte(0x02))[0:24]
+	// Per the i2pd reference implementation, the full 32-byte HMAC output from step 4
+	// (not just the 24 extracted bytes) is used as the input prefix. In i2pd, m_Sipkeysab
+	// holds 32 bytes and m_Sipkeysab[32]=0x02 is set before passing 33 bytes to HMAC.
+	step5Data := make([]byte, len(fullAB[:])+1)
+	copy(step5Data, fullAB[:])
+	step5Data[len(fullAB[:])] = 0x02
 	fullBA := hmac.HMACSHA256(tempKey[:], step5Data)
 	sipKeysBA[0] = binary.LittleEndian.Uint64(fullBA[0:8])
 	sipKeysBA[1] = binary.LittleEndian.Uint64(fullBA[8:16])

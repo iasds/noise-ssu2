@@ -466,8 +466,19 @@ func (nc *NTCP2Config) createPostHandshakeHook() func(*noise.NoiseConn) error {
 		// Store the directional modifier for NTCP2Conn to use.
 		nc.sipHashModifier.Store(modifier)
 
+		role := "responder"
+		if nc.Initiator {
+			role = "initiator"
+		}
 		log.WithField("handshake_hash_len", len(h)).
 			WithField("ask_master_len", len(askMaster)).
+			WithField("role", role).
+			WithField("sipk1_ab", sipKeysAB[0]).
+			WithField("sipk2_ab", sipKeysAB[1]).
+			WithField("sipiv_ab", sipIVAB).
+			WithField("sipk1_ba", sipKeysBA[0]).
+			WithField("sipk2_ba", sipKeysBA[1]).
+			WithField("sipiv_ba", sipIVBA).
 			Debug("PostHandshakeHook: derived per-direction SipHash keys")
 
 		return nil
