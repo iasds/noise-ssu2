@@ -29,10 +29,10 @@ func assertSipHashRoundTrip(
 		data := make([]byte, 2)
 		binary.BigEndian.PutUint16(data, original)
 
-		obfuscated, err := sender.ModifyOutbound(handshake.PhaseFinal, data)
+		obfuscated, err := sender.ModifyOutbound(handshake.PhaseData, data)
 		require.NoError(t, err)
 
-		recovered, err := receiver.ModifyInbound(handshake.PhaseFinal, obfuscated)
+		recovered, err := receiver.ModifyInbound(handshake.PhaseData, obfuscated)
 		require.NoError(t, err)
 
 		got := binary.BigEndian.Uint16(recovered)
@@ -510,7 +510,7 @@ func TestNTCP2Modifiers_Integration(t *testing.T) {
 
 	// Test data phase: SipHash length obfuscation
 	lengthData := []byte{0x04, 0x00} // 1024 bytes
-	obfuscatedLength, err := sipModifier.ModifyOutbound(handshake.PhaseFinal, lengthData)
+	obfuscatedLength, err := sipModifier.ModifyOutbound(handshake.PhaseData, lengthData)
 	require.NoError(t, err)
 
 	// Should be different (unless mask is zero)
@@ -519,7 +519,7 @@ func TestNTCP2Modifiers_Integration(t *testing.T) {
 	}
 
 	// Recovery should work
-	recoveredLength, err := sipModifier.ModifyInbound(handshake.PhaseFinal, obfuscatedLength)
+	recoveredLength, err := sipModifier.ModifyInbound(handshake.PhaseData, obfuscatedLength)
 	require.NoError(t, err)
 	assert.Equal(t, lengthData, recoveredLength)
 }
@@ -849,9 +849,9 @@ func TestAudit_SipHashIVChaining(t *testing.T) {
 	binary.BigEndian.PutUint16(lengthData, 1000)
 
 	for i := 0; i < 20; i++ {
-		result1, err := mod1.ModifyOutbound(handshake.PhaseFinal, lengthData)
+		result1, err := mod1.ModifyOutbound(handshake.PhaseData, lengthData)
 		require.NoError(t, err)
-		result2, err := mod2.ModifyOutbound(handshake.PhaseFinal, lengthData)
+		result2, err := mod2.ModifyOutbound(handshake.PhaseData, lengthData)
 		require.NoError(t, err)
 		assert.Equal(t, result1, result2,
 			"Identically-configured modifiers must produce same mask at step %d", i)
@@ -877,7 +877,7 @@ func TestAudit_SipHashIVChaining_MatchesSpec(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		data := make([]byte, 2)
 		binary.BigEndian.PutUint16(data, 0)
-		result, err := mod.ModifyOutbound(handshake.PhaseFinal, data)
+		result, err := mod.ModifyOutbound(handshake.PhaseData, data)
 		require.NoError(t, err)
 		mask := binary.BigEndian.Uint16(result)
 		assert.Equal(t, expectedMasks[i], mask,
@@ -895,7 +895,7 @@ func TestAudit_SipHashIVChaining_NotCounterBased(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		data := make([]byte, 2)
 		binary.BigEndian.PutUint16(data, 0)
-		result, err := mod.ModifyOutbound(handshake.PhaseFinal, data)
+		result, err := mod.ModifyOutbound(handshake.PhaseData, data)
 		require.NoError(t, err)
 		chainedMasks[i] = binary.BigEndian.Uint16(result)
 	}
@@ -974,8 +974,8 @@ func TestAudit_Quality_ThreadSafety(t *testing.T) {
 				defer func() { done <- struct{}{} }()
 				data := make([]byte, 2)
 				binary.BigEndian.PutUint16(data, 1000)
-				modifier.ModifyOutbound(handshake.PhaseFinal, data) //nolint:errcheck
-				modifier.ModifyInbound(handshake.PhaseFinal, data)  //nolint:errcheck
+				modifier.ModifyOutbound(handshake.PhaseData, data) //nolint:errcheck
+				modifier.ModifyInbound(handshake.PhaseData, data)  //nolint:errcheck
 			}()
 		}
 		for i := 0; i < 10; i++ {
@@ -1052,15 +1052,15 @@ func TestAudit_SipHashDirectional_KeysMatter(t *testing.T) {
 	shared := NewSipHashLengthModifier("shared", keysAB, iv)
 
 	data := make([]byte, 2)
-	out1, _ := directional.ModifyOutbound(handshake.PhaseFinal, data)
-	out2, _ := shared.ModifyOutbound(handshake.PhaseFinal, data)
+	out1, _ := directional.ModifyOutbound(handshake.PhaseData, data)
+	out2, _ := shared.ModifyOutbound(handshake.PhaseData, data)
 	assert.Equal(t, out1, out2, "Outbound with same keys should match")
 
 	directional2 := NewSipHashLengthModifierDirectional("dir2", keysAB, keysBA, iv, iv)
 	shared2 := NewSipHashLengthModifier("shared2", keysAB, iv)
 
-	in1, _ := directional2.ModifyInbound(handshake.PhaseFinal, data)
-	in2, _ := shared2.ModifyInbound(handshake.PhaseFinal, data)
+	in1, _ := directional2.ModifyInbound(handshake.PhaseData, data)
+	in2, _ := shared2.ModifyInbound(handshake.PhaseData, data)
 	assert.NotEqual(t, in1, in2, "Inbound with different keys must differ")
 }
 

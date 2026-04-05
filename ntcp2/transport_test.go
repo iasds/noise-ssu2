@@ -384,11 +384,10 @@ func TestDialNTCP2WithHandshake(t *testing.T) {
 			ntcp2Conn := conn.(*NTCP2Conn)
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			if err := ntcp2Conn.UnderlyingConn().Handshake(ctx); err != nil {
+			if err := ntcp2Conn.Handshake(ctx); err != nil {
 				ntcp2Conn.Close()
 				return
 			}
-			ntcp2Conn.PropagateSipHash()
 			ntcp2Conn.Close()
 		}()
 
@@ -400,7 +399,8 @@ func TestDialNTCP2WithHandshake(t *testing.T) {
 			WithRemoteRouterHash(routerHash).
 			WithRemoteStaticKey(responderKP.Public).
 			WithAESObfuscation(false, nil).
-			WithHandshakeTimeout(5 * time.Second)
+			WithHandshakeTimeout(5 * time.Second).
+			WithLocalRouterInfo([]byte("fake-router-info-for-test"))
 
 		// Dial with handshake — should succeed now that a responder is running
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -664,11 +664,10 @@ func TestDialNTCP2WithHandshake_Wrapper(t *testing.T) {
 			ntcp2Conn := conn.(*NTCP2Conn)
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			if hsErr := ntcp2Conn.UnderlyingConn().Handshake(ctx); hsErr != nil {
+			if hsErr := ntcp2Conn.Handshake(ctx); hsErr != nil {
 				ntcp2Conn.Close()
 				return
 			}
-			ntcp2Conn.PropagateSipHash()
 			ntcp2Conn.Close()
 		}()
 
@@ -680,7 +679,8 @@ func TestDialNTCP2WithHandshake_Wrapper(t *testing.T) {
 			WithRemoteRouterHash(routerHash).
 			WithRemoteStaticKey(responderKP.Public).
 			WithAESObfuscation(false, nil).
-			WithHandshakeTimeout(5 * time.Second)
+			WithHandshakeTimeout(5 * time.Second).
+			WithLocalRouterInfo([]byte("fake-router-info-for-test"))
 
 		ntcp2Addr := listener.Addr().(*NTCP2Addr)
 		underlyingAddr := ntcp2Addr.UnderlyingAddr().String()

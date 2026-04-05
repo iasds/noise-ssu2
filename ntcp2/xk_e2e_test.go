@@ -69,7 +69,8 @@ func TestXKHandshake_NTCP2_FullE2E(t *testing.T) {
 		WithStaticKey(initiatorKP.Private).
 		WithRemoteRouterHash(responderHash).
 		WithRemoteStaticKey(responderKP.Public).
-		WithAESObfuscation(false, nil)
+		WithAESObfuscation(false, nil).
+		WithLocalRouterInfo([]byte("fake-initiator-router-info"))
 
 	// ── Step 5: Start TCP listener ────────────────────────────────────
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -126,14 +127,11 @@ func TestXKHandshake_NTCP2_FullE2E(t *testing.T) {
 		// Perform XK handshake (responder side)
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := noiseConn.Handshake(ctx); err != nil {
+		if err := ntcp2Conn.Handshake(ctx); err != nil {
 			ntcp2Conn.Close()
 			responderErr = err
 			return
 		}
-
-		// Propagate SipHash keys derived by PostHandshakeHook
-		ntcp2Conn.PropagateSipHash()
 
 		responderNTCP2 = ntcp2Conn
 	}()
@@ -337,14 +335,13 @@ func dialAndHandshakeInitiator(
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	err = noiseConn.Handshake(ctx)
+	err = ntcp2Conn.Handshake(ctx)
 	if err != nil {
 		ntcp2Conn.Close()
 		wg.Wait()
 		t.Fatalf("initiator handshake: %v (responder err: %v)", err, *responderErr)
 	}
 
-	ntcp2Conn.PropagateSipHash()
 	return ntcp2Conn
 }
 
@@ -405,13 +402,12 @@ func setupHandshakedPair(t *testing.T) (initiator, responder *NTCP2Conn) {
 
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := noiseConn.Handshake(ctx); err != nil {
+		if err := ntcp2Conn.Handshake(ctx); err != nil {
 			ntcp2Conn.Close()
 			responderErr = err
 			return
 		}
 
-		ntcp2Conn.PropagateSipHash()
 		responderNTCP2 = ntcp2Conn
 	}()
 
@@ -467,7 +463,8 @@ func TestInboundRouterHash(t *testing.T) {
 		WithStaticKey(initiatorKP.Private).
 		WithRemoteRouterHash(responderHash).
 		WithRemoteStaticKey(responderKP.Public).
-		WithAESObfuscation(false, nil)
+		WithAESObfuscation(false, nil).
+		WithLocalRouterInfo([]byte("fake-initiator-router-info"))
 
 	// --- Start NTCP2 listener ---
 	ntcp2Ln, tcpAddr := startTestNTCP2Listener(t, responderConfig)

@@ -257,7 +257,8 @@ func newTestXKConfigPair(t *testing.T) testXKConfigPair {
 		WithStaticKey(initiatorKP.Private).
 		WithRemoteRouterHash(responderHash).
 		WithRemoteStaticKey(responderKP.Public).
-		WithAESObfuscation(false, nil)
+		WithAESObfuscation(false, nil).
+		WithLocalRouterInfo([]byte("fake-initiator-router-info"))
 
 	return testXKConfigPair{
 		initiatorConfig: initiatorConfig,
