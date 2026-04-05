@@ -128,9 +128,10 @@ func (nc *NTCP2Conn) readObfuscatedFrameLength(underlying net.Conn, slm *SipHash
 		return 0, oops.
 			Code("READ_LENGTH_FAILED").
 			In("ntcp2").
+			With("read_nonce", nc.readNonce).
 			With("local_addr", nc.localAddr.String()).
 			With("remote_addr", nc.remoteAddr.String()).
-			Wrapf(err, "failed to read frame length")
+			Wrapf(err, "failed to read frame length (frame #%d)", nc.readNonce)
 	}
 
 	mask := slm.NextInboundMask()
@@ -155,9 +156,10 @@ func (nc *NTCP2Conn) readAndDecryptFrame(underlying net.Conn, frameLen uint16) (
 			Code("READ_FRAME_FAILED").
 			In("ntcp2").
 			With("frame_length", frameLen).
+			With("read_nonce", nc.readNonce).
 			With("local_addr", nc.localAddr.String()).
 			With("remote_addr", nc.remoteAddr.String()).
-			Wrapf(err, "failed to read frame data")
+			Wrapf(err, "failed to read frame data (frame #%d, expected %d bytes)", nc.readNonce, frameLen)
 	}
 
 	plaintext, err := nc.noiseConn.Decrypt(ciphertext)

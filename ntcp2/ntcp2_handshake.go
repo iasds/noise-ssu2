@@ -102,8 +102,9 @@ func (c *NTCP2Conn) Handshake(ctx context.Context) error {
 // performInitiatorHandshake executes the three-message NTCP2 XK exchange.
 func performInitiatorHandshake(cfg *NTCP2Config, nc *noise.NoiseConn) error {
 	riBytes := cfg.LocalRouterInfo
-	// m3p2Len includes the block header (3B), RouterInfo bytes, and the AEAD tag (16B).
-	m3p2Len := uint16(BlockHeaderSize + len(riBytes) + Poly1305Overhead)
+	// m3p2Len includes the block header (3B), flag byte (1B), RouterInfo bytes, and the AEAD tag (16B).
+	// Per the NTCP2 spec, the RouterInfo block (type 2) data starts with a 1-byte flag field.
+	m3p2Len := uint16(BlockHeaderSize + 1 + len(riBytes) + Poly1305Overhead)
 
 	raw := nc.Underlying()
 
@@ -270,15 +271,20 @@ func buildMessage1Options(m3p2Len uint16) []byte {
 // buildMsg3Part2Payload wraps raw RouterInfo bytes in the NTCP2 block frame
 // (type 2) that becomes the plaintext payload of Noise message 3.
 //
+// Per the NTCP2 spec, the RouterInfo block data starts with a 1-byte flag field:
+//   - bit 0: if set, request peer to flood the RouterInfo
+//
 // Wire layout:
 //
 //	byte 0    : block type = 0x02 (RouterInfo)
-//	bytes 1-2 : length of routerInfoBytes (big-endian uint16)
-//	bytes 3+  : routerInfoBytes
+//	bytes 1-2 : block size = 1 + len(routerInfoBytes) (big-endian uint16)
+//	byte 3    : flag = 0x00 (no flood request)
+//	bytes 4+  : routerInfoBytes
 func buildMsg3Part2Payload(routerInfoBytes []byte) []byte {
-	payload := make([]byte, BlockHeaderSize+len(routerInfoBytes))
+	payload := make([]byte, BlockHeaderSize+1+len(routerInfoBytes))
 	payload[0] = routerInfoBlockType
-	binary.BigEndian.PutUint16(payload[1:3], uint16(len(routerInfoBytes)))
-	copy(payload[3:], routerInfoBytes)
+	binary.BigEndian.PutUint16(payload[1:3], uint16(1+len(routerInfoBytes)))
+	payload[3] = 0x00 // flag byte: no flood request
+	copy(payload[4:], routerInfoBytes)
 	return payload
 }
