@@ -522,3 +522,171 @@ func TestInboundRouterHash(t *testing.T) {
 	assert.Equal(t, initiatorKP.Public[:], rhBytes[:],
 		"responder RouterHash should match the initiator's actual static public key")
 }
+
+// TestXKHandshake_NTCP2_AESObfuscation exercises the full NTCP2 pipeline with
+// AES-CBC ephemeral key obfuscation enabled, matching the production code path.
+//
+// All other XK e2e tests disable AES obfuscation via WithAESObfuscation(false, nil),
+// meaning the AES modifier is never exercised in the handshake context. This test
+// closes that gap by:
+//  1. Using a shared 16-byte IV (simulating the "i=" value from the netdb)
+//  2. Passing the responder's router hash (RH_B) to both sides as the AES key
+//  3. Running the full XK handshake with AES-encrypted ephemeral keys
+//  4. Verifying bidirectional SipHash-framed data exchange after handshake
+func TestXKHandshake_NTCP2_AESObfuscation(t *testing.T) {
+	cs := upstreamnoise.NewCipherSuite(
+		upstreamnoise.DH25519,
+		upstreamnoise.CipherChaChaPoly,
+		upstreamnoise.HashSHA256,
+	)
+
+	// ── Step 1: Generate real Curve25519 keypairs ──────────────────────
+	initiatorKP, err := cs.GenerateKeypair(rand.Reader)
+	require.NoError(t, err, "generate initiator keypair")
+
+	responderKP, err := cs.GenerateKeypair(rand.Reader)
+	require.NoError(t, err, "generate responder keypair")
+
+	// ── Step 2: Create test router hashes ─────────────────────────────
+	var initiatorHash data.Hash
+	copy(initiatorHash[:], "initiator-hash-32-bytes-long!!!!")
+
+	var responderHash data.Hash
+	copy(responderHash[:], "responder-hash-32-bytes-long!!!!")
+
+	// ── Step 3: Shared AES IV (simulates Bob's published "i=" value) ──
+	aesIV := make([]byte, IVSize)
+	_, err = rand.Read(aesIV)
+	require.NoError(t, err, "generate AES IV")
+
+	// ── Step 4: Build NTCP2Config for responder (Bob) ─────────────────
+	// Per the NTCP2 spec, the responder passes its own router hash as RH_B.
+	responderConfig, err := NewNTCP2Config(responderHash, false)
+	require.NoError(t, err, "create responder NTCP2Config")
+
+	responderConfig = responderConfig.
+		WithStaticKey(responderKP.Private).
+		WithAESObfuscation(true, aesIV) // AES ENABLED with shared IV
+
+	// ── Step 5: Build NTCP2Config for initiator (Alice) ───────────────
+	// Per the NTCP2 spec, the initiator also uses RH_B (the responder's hash)
+	// as the first parameter. Both sides must use the same AES key (RH_B).
+	initiatorConfig, err := NewNTCP2Config(responderHash, true) // NOTE: responderHash, not initiatorHash
+	require.NoError(t, err, "create initiator NTCP2Config")
+
+	initiatorConfig = initiatorConfig.
+		WithStaticKey(initiatorKP.Private).
+		WithRemoteRouterHash(responderHash).
+		WithRemoteStaticKey(responderKP.Public).
+		WithAESObfuscation(true, aesIV). // AES ENABLED with same IV
+		WithLocalRouterInfo([]byte("fake-initiator-router-info"))
+
+	// ── Step 6: Start TCP listener ────────────────────────────────────
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err, "start TCP listener")
+	defer ln.Close()
+
+	// ── Step 7: Responder goroutine ───────────────────────────────────
+	var wg sync.WaitGroup
+	var responderErr error
+	var responderNTCP2 *NTCP2Conn
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+
+		rawConn, err := ln.Accept()
+		if err != nil {
+			responderErr = err
+			return
+		}
+
+		perConnConfig := responderConfig.Clone()
+		perConnConfig.Initiator = false
+
+		connConfig, err := perConnConfig.ToConnConfig()
+		if err != nil {
+			rawConn.Close()
+			responderErr = err
+			return
+		}
+
+		noiseConn, err := noise.NewNoiseConn(rawConn, connConfig)
+		if err != nil {
+			rawConn.Close()
+			responderErr = err
+			return
+		}
+
+		responderAddr, _ := NewNTCP2Addr(rawConn.LocalAddr(), responderHash, "responder")
+		remoteAddr, _ := NewNTCP2Addr(rawConn.RemoteAddr(), initiatorHash, "initiator")
+		ntcp2Conn, err := NewNTCP2Conn(noiseConn, responderAddr, remoteAddr)
+		if err != nil {
+			noiseConn.Close()
+			responderErr = err
+			return
+		}
+		ntcp2Conn.SetNTCP2Config(perConnConfig)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := ntcp2Conn.Handshake(ctx); err != nil {
+			ntcp2Conn.Close()
+			responderErr = err
+			return
+		}
+
+		responderNTCP2 = ntcp2Conn
+	}()
+
+	// ── Step 8: Initiator side ────────────────────────────────────────
+	initiatorNTCP2 := dialAndHandshakeInitiator(t, ln.Addr().String(),
+		initiatorConfig, initiatorHash, responderHash, &wg, &responderErr)
+
+	wg.Wait()
+	if responderErr != nil {
+		initiatorNTCP2.Close()
+		t.Fatalf("responder handshake failed (AES enabled): %v", responderErr)
+	}
+	defer initiatorNTCP2.Close()
+	defer responderNTCP2.Close()
+
+	// ── Step 9: Verify SipHash obfuscation is active ──────────────────
+	assert.NotNil(t, initiatorNTCP2.lengthObfuscator.Load(),
+		"initiator should have SipHash obfuscator after handshake")
+	assert.NotNil(t, responderNTCP2.lengthObfuscator.Load(),
+		"responder should have SipHash obfuscator after handshake")
+
+	// ── Step 10: Bidirectional framed data exchange ────────────────────
+	payload1 := []byte("hello from initiator via NTCP2 XK with AES obfuscation")
+	n, err := initiatorNTCP2.Write(payload1)
+	require.NoError(t, err, "initiator write")
+	assert.Equal(t, len(payload1), n, "initiator write byte count")
+
+	buf := make([]byte, 4096)
+	n, err = responderNTCP2.Read(buf)
+	require.NoError(t, err, "responder read")
+	assert.Equal(t, string(payload1), string(buf[:n]),
+		"responder should receive initiator's message intact")
+
+	payload2 := []byte("reply from responder via NTCP2 XK with AES obfuscation")
+	n, err = responderNTCP2.Write(payload2)
+	require.NoError(t, err, "responder write")
+	assert.Equal(t, len(payload2), n, "responder write byte count")
+
+	n, err = initiatorNTCP2.Read(buf)
+	require.NoError(t, err, "initiator read")
+	assert.Equal(t, string(payload2), string(buf[:n]),
+		"initiator should receive responder's reply intact")
+
+	// ── Step 11: Verify handshake metadata ────────────────────────────
+	assert.Equal(t, responderKP.Public[:], initiatorNTCP2.PeerStaticKey(),
+		"initiator PeerStatic should be responder's public key")
+	assert.Equal(t, initiatorKP.Public[:], responderNTCP2.PeerStaticKey(),
+		"responder PeerStatic should be initiator's public key")
+
+	assert.Equal(t, initiatorNTCP2.HandshakeHash(), responderNTCP2.HandshakeHash(),
+		"both sides should share the same handshake hash")
+
+	t.Log("Full NTCP2 XK handshake with AES obfuscation + SipHash framing succeeded")
+}
