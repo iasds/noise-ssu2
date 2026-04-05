@@ -102,6 +102,12 @@ type NTCP2Config struct {
 	// Default: 64 bytes
 	MaxPaddingSize int
 
+	// LocalRouterInfo contains Alice's serialized RouterInfo bytes.
+	// Required for outbound NTCP2 connections: its length determines m3p2Len
+	// in the message 1 options block and it is sent as the encrypted payload
+	// in message 3 part 2.
+	LocalRouterInfo []byte
+
 	// sipHashModifier stores the SipHash modifier created during ToConnConfig()
 	// so it can be passed to NTCP2Conn for data-phase framing.
 	// Access is via atomic.Pointer to avoid data races between the
@@ -236,6 +242,17 @@ func (nc *NTCP2Config) WithModifiers(modifiers ...handshake.HandshakeModifier) *
 	// Make defensive copy
 	nc.Modifiers = make([]handshake.HandshakeModifier, len(modifiers))
 	copy(nc.Modifiers, modifiers)
+	return nc
+}
+
+// WithLocalRouterInfo sets Alice's serialized RouterInfo bytes for outbound
+// NTCP2 connections. The length is used to populate m3p2Len in the message 1
+// options block; the bytes are encrypted and sent as message 3 part 2.
+func (nc *NTCP2Config) WithLocalRouterInfo(ri []byte) *NTCP2Config {
+	if len(ri) > 0 {
+		nc.LocalRouterInfo = make([]byte, len(ri))
+		copy(nc.LocalRouterInfo, ri)
+	}
 	return nc
 }
 

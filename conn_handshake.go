@@ -348,3 +348,112 @@ func (nc *NoiseConn) resetHandshakeState() {
 	nc.sendCipherState = nil
 	nc.recvCipherState = nil
 }
+
+// WriteHandshakeMsgToBytes executes one Noise handshake outbound step with the
+// given payload, runs it through the modifier chain, and returns the raw wire
+// bytes WITHOUT any length-prefix framing. This is used by protocol-specific
+// handshake implementations (e.g. NTCP2) that require exact control over wire
+// framing.
+//
+// The caller is responsible for calling StartHandshake before the first call
+// and CompleteHandshake after the final message.
+func (nc *NoiseConn) WriteHandshakeMsgToBytes(phase handshake.HandshakePhase, payload []byte) ([]byte, error) {
+	msg, cs1, cs2, err := nc.handshakeState.WriteMessage(nil, payload)
+	if err != nil {
+		return nil, oops.
+			Code("WRITE_MESSAGE_FAILED").
+			In("noise").
+			Wrapf(err, "failed to create handshake message for phase %v", phase)
+	}
+	msg, err = nc.applyHandshakeOutbound(phase, msg)
+	if err != nil {
+		return nil, err
+	}
+	nc.updateCipherStates(cs1, cs2)
+	return msg, nil
+}
+
+// ReadHandshakeMsgFromBytes processes raw inbound Noise handshake bytes,
+// applies the modifier chain, runs the Noise ReadMessage, and returns the
+// decrypted payload. The caller must supply exactly the bytes that form the
+// wire message (no length prefix).
+//
+// The caller is responsible for calling StartHandshake before the first call
+// and CompleteHandshake after the final message.
+func (nc *NoiseConn) ReadHandshakeMsgFromBytes(phase handshake.HandshakePhase, wireData []byte) ([]byte, error) {
+	data, err := nc.applyHandshakeInbound(phase, wireData)
+	if err != nil {
+		return nil, err
+	}
+	payload, cs1, cs2, err := nc.handshakeState.ReadMessage(nil, data)
+	if err != nil {
+		return nil, oops.
+			Code("PROCESS_MESSAGE_FAILED").
+			In("noise").
+			Wrapf(err, "failed to process handshake message for phase %v", phase)
+	}
+	nc.updateCipherStates(cs1, cs2)
+	return payload, nil
+}
+
+// StartHandshake transitions the connection to the handshaking state and
+// records the handshake start time. Call this once before the first
+// WriteHandshakeMsgToBytes or ReadHandshakeMsgFromBytes call.
+func (nc *NoiseConn) StartHandshake() {
+	nc.setState(internal.StateHandshaking)
+	nc.metrics.SetHandshakeStart()
+}
+
+// CompleteHandshake marks the connection as fully established after the
+// final handshake message has been processed. Call this once after the
+// last WriteHandshakeMsgToBytes / ReadHandshakeMsgFromBytes call.
+func (nc *NoiseConn) CompleteHandshake() {
+	nc.markHandshakeComplete()
+}
+
+// RunPostHandshakeHook executes the PostHandshakeHook configured on this
+// connection, if one is set. Protocol-specific handshake implementations
+// (e.g. NTCP2Conn.Handshake) must call this before CompleteHandshake so
+// that post-handshake key derivation (e.g. SipHash keys) runs correctly.
+//
+// Returns nil if no hook is configured.
+func (nc *NoiseConn) RunPostHandshakeHook() error {
+	if nc.config.PostHandshakeHook == nil {
+		return nil
+	}
+	return nc.config.PostHandshakeHook(nc)
+}
+
+// FailHandshake resets the handshake state machine so that a fresh attempt
+// can be made (or so that close/cleanup code sees a consistent state).
+func (nc *NoiseConn) FailHandshake() {
+	nc.resetHandshakeState()
+	nc.setState(internal.StateInit)
+}
+
+// GetHandshakeHash returns the hash of the handshake transcript from the
+// underlying noise.HandshakeState. This can be used by protocol layers to
+// derive post-handshake key material (e.g. SipHash keys for NTCP2 data phase).
+func (nc *NoiseConn) GetHandshakeHash() []byte {
+	if nc.handshakeState == nil {
+		return nil
+	}
+	h := nc.handshakeState.ChannelBinding()
+	if h == nil {
+		return nil
+	}
+	result := make([]byte, len(h))
+	copy(result, h)
+	return result
+}
+
+// MixHashData mixes additional data into the Noise symmetric hash state.
+// This is required by the NTCP2 spec to authenticate cleartext padding bytes
+// that appear after AEAD frames in messages 1 and 2 (§4.4.1, §4.4.2).
+// Call this after reading and discarding cleartext padding, passing the raw
+// padding bytes so that the hash state stays in sync with the peer.
+func (nc *NoiseConn) MixHashData(data []byte) {
+	if nc.handshakeState != nil && len(data) > 0 {
+		nc.handshakeState.MixHash(data)
+	}
+}
