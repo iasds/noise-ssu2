@@ -74,12 +74,16 @@ func NewAESObfuscationModifier(name string, routerHash, iv []byte) (*AESObfuscat
 // ModifyOutbound applies AES obfuscation to ephemeral keys in handshake messages.
 // For message 1: encrypts X key with RH_B and published IV
 // For message 2: encrypts Y key with RH_B and AES state from message 1
+//
+// The modifier chain receives the full Noise message (e.g. 64 bytes for msg1/msg2:
+// 32-byte ephemeral key + AEAD payload). Only the first 32 bytes (the ephemeral
+// key) are AES-CBC encrypted; the remainder is passed through unchanged.
 func (aom *AESObfuscationModifier) ModifyOutbound(phase handshake.HandshakePhase, data []byte) ([]byte, error) {
 	aom.mu.Lock()
 	defer aom.mu.Unlock()
 
-	// Only apply to 32-byte ephemeral keys (X or Y values)
-	if len(data) != StaticKeySize {
+	// Need at least 32 bytes for the ephemeral key
+	if len(data) < StaticKeySize {
 		return data, nil
 	}
 
@@ -105,9 +109,10 @@ func (aom *AESObfuscationModifier) ModifyOutbound(phase handshake.HandshakePhase
 		return data, nil
 	}
 
-	result := make([]byte, StaticKeySize)
+	// Encrypt only the first 32 bytes (ephemeral key), preserve the rest
+	result := make([]byte, len(data))
 	copy(result, data)
-	mode.CryptBlocks(result, result)
+	mode.CryptBlocks(result[:StaticKeySize], result[:StaticKeySize])
 
 	// Per NTCP2 spec: save the last ciphertext block as AES state for message 2.
 	// For outbound encryption, the state is result[16:32] captured AFTER encryption.
@@ -120,12 +125,16 @@ func (aom *AESObfuscationModifier) ModifyOutbound(phase handshake.HandshakePhase
 }
 
 // ModifyInbound removes AES obfuscation from ephemeral keys in handshake messages.
+//
+// The modifier chain receives the full Noise message (e.g. 64 bytes for msg1/msg2:
+// 32-byte ephemeral key + AEAD payload). Only the first 32 bytes (the ephemeral
+// key) are AES-CBC decrypted; the remainder is passed through unchanged.
 func (aom *AESObfuscationModifier) ModifyInbound(phase handshake.HandshakePhase, data []byte) ([]byte, error) {
 	aom.mu.Lock()
 	defer aom.mu.Unlock()
 
-	// Only apply to 32-byte ephemeral keys (X or Y values)
-	if len(data) != StaticKeySize {
+	// Need at least 32 bytes for the ephemeral key
+	if len(data) < StaticKeySize {
 		return data, nil
 	}
 
@@ -133,7 +142,7 @@ func (aom *AESObfuscationModifier) ModifyInbound(phase handshake.HandshakePhase,
 
 	// Per NTCP2 spec: for inbound (decryption), save the last ciphertext block
 	// BEFORE decryption as the AES state for message 2.
-	// The state is data[16:32] (the last ciphertext block of the 32-byte input).
+	// The state is data[16:32] (the last ciphertext block of the 32-byte ephemeral key).
 	if phase == handshake.PhaseInitial {
 		aom.aesState = make([]byte, IVSize)
 		copy(aom.aesState, data[IVSize:StaticKeySize])
@@ -159,9 +168,10 @@ func (aom *AESObfuscationModifier) ModifyInbound(phase handshake.HandshakePhase,
 		return data, nil
 	}
 
-	result := make([]byte, StaticKeySize)
+	// Decrypt only the first 32 bytes (ephemeral key), preserve the rest
+	result := make([]byte, len(data))
 	copy(result, data)
-	mode.CryptBlocks(result, result)
+	mode.CryptBlocks(result[:StaticKeySize], result[:StaticKeySize])
 
 	// Per NTCP2 spec: validate that the decrypted key is a valid Curve25519 point.
 	// The high bit of byte 31 must be 0. Reject the message if this check fails.
