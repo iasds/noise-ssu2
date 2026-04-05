@@ -70,6 +70,7 @@ func (m *ConnectionMetrics) HandshakeDuration() time.Duration {
 
 // SetHandshakeStart records the handshake start time
 func (m *ConnectionMetrics) SetHandshakeStart() {
+	log.Debug("Recording handshake start time")
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.handshakeStarted = time.Now()
@@ -77,6 +78,7 @@ func (m *ConnectionMetrics) SetHandshakeStart() {
 
 // SetHandshakeEnd records the handshake completion time
 func (m *ConnectionMetrics) SetHandshakeEnd() {
+	log.Debug("Recording handshake end time")
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.handshakeEnded = time.Now()

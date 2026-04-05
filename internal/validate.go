@@ -20,6 +20,7 @@ func ValidatePattern(pattern, pkg string) error {
 
 // ValidateHandshakeTimeout checks that the handshake timeout is positive.
 func ValidateHandshakeTimeout(timeout time.Duration, pkg string) error {
+	log.WithField("timeout", timeout).WithField("pkg", pkg).Debug("Validating handshake timeout")
 	if timeout <= 0 {
 		return oops.
 			Code("INVALID_TIMEOUT").
@@ -32,6 +33,7 @@ func ValidateHandshakeTimeout(timeout time.Duration, pkg string) error {
 
 // ValidateKeyLength checks that a key is either empty or exactly 32 bytes.
 func ValidateKeyLength(key []byte, name, pkg string) error {
+	log.WithField("key_name", name).WithField("key_len", len(key)).WithField("pkg", pkg).Debug("Validating key length")
 	if len(key) > 0 && len(key) != 32 {
 		return oops.
 			Code("INVALID_KEY_LENGTH").
@@ -56,6 +58,7 @@ func RunValidators(validators ...func() error) error {
 
 // ValidateRetryConfig checks that retry parameters are within valid ranges.
 func ValidateRetryConfig(retries int, backoff time.Duration, pkg string) error {
+	log.WithField("retries", retries).WithField("backoff", backoff).WithField("pkg", pkg).Debug("Validating retry config")
 	if retries < -1 {
 		return oops.
 			Code("INVALID_RETRY_COUNT").

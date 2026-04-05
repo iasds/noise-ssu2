@@ -167,6 +167,7 @@ func (p *ConnPool) GetOrDial(ctx context.Context, remoteAddr string, dial func(c
 // putAndGet adds a newly-dialed connection to the pool and returns it
 // as a checked-out PoolConnWrapper in a single atomic step.
 func (p *ConnPool) putAndGet(remoteAddr string, conn net.Conn) (net.Conn, error) {
+	log.WithField("remote_addr", remoteAddr).Debug("putAndGet: adding and checking out connection")
 	conn = unwrapPoolConn(conn)
 
 	if p.readyCheck != nil && !p.readyCheck(conn) {
@@ -375,6 +376,7 @@ func (p *ConnPool) removeConnLocked(remoteAddr string, conn net.Conn) {
 // for the given address (the connection is still closed in this case
 // to avoid resource leaks). Returns nil on success.
 func (p *ConnPool) Remove(remoteAddr string, conn net.Conn) error {
+	log.WithField("remote_addr", remoteAddr).Debug("Remove: removing connection from pool")
 	if wrapper, ok := conn.(*PoolConnWrapper); ok {
 		conn = wrapper.Conn
 	}

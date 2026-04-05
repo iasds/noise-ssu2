@@ -122,6 +122,7 @@ type NTCP2Config struct {
 // peer's router hash.
 // initiator indicates whether this connection will initiate the handshake.
 func NewNTCP2Config(bobRouterHash data.Hash, initiator bool) (*NTCP2Config, error) {
+	log.WithField("initiator", initiator).Debug("Creating new NTCP2Config")
 	return &NTCP2Config{
 		Pattern:              NTCP2Pattern,
 		Initiator:            initiator,
@@ -287,6 +288,7 @@ func (nc *NTCP2Config) Validate() error {
 
 // validateBasicConfiguration checks pattern and router hash requirements.
 func (nc *NTCP2Config) validateBasicConfiguration() error {
+	log.Debug("Validating NTCP2 basic configuration")
 	if err := internal.ValidatePattern(nc.Pattern, "ntcp2"); err != nil {
 		return err
 	}
@@ -298,6 +300,7 @@ func (nc *NTCP2Config) validateBasicConfiguration() error {
 
 // validateCryptographicParameters checks static keys, remote hashes, and obfuscation settings.
 func (nc *NTCP2Config) validateCryptographicParameters() error {
+	log.Debug("Validating NTCP2 cryptographic parameters")
 	if err := internal.ValidateKeyLength(nc.StaticKey, "static key", "ntcp2"); err != nil {
 		return err
 	}
@@ -336,6 +339,7 @@ func (nc *NTCP2Config) validateCryptographicParameters() error {
 
 // validateTimeoutConfiguration checks handshake timeouts and retry settings.
 func (nc *NTCP2Config) validateTimeoutConfiguration() error {
+	log.Debug("Validating NTCP2 timeout configuration")
 	if err := internal.ValidateHandshakeTimeout(nc.HandshakeTimeout, "ntcp2"); err != nil {
 		return err
 	}
@@ -344,6 +348,7 @@ func (nc *NTCP2Config) validateTimeoutConfiguration() error {
 
 // validateFrameConfiguration checks frame size and padding settings.
 func (nc *NTCP2Config) validateFrameConfiguration() error {
+	log.Debug("Validating NTCP2 frame configuration")
 	// Validate frame settings
 	if nc.MaxFrameSize <= 0 {
 		return oops.
@@ -371,6 +376,7 @@ func (nc *NTCP2Config) validateFrameConfiguration() error {
 
 // validateModifiers rejects incompatible modifiers in the NTCP2 modifier chain.
 func (nc *NTCP2Config) validateModifiers() error {
+	log.WithField("modifier_count", len(nc.Modifiers)).Debug("Validating NTCP2 modifiers")
 	for _, mod := range nc.Modifiers {
 		if _, ok := mod.(*handshake.PaddingModifier); ok {
 			return oops.
@@ -388,6 +394,7 @@ func (nc *NTCP2Config) validateModifiers() error {
 // A PostHandshakeHook is automatically registered when SipHash length obfuscation
 // is enabled — the hook captures the handshake hash for future SipHash key derivation.
 func (nc *NTCP2Config) ToConnConfig() (*noise.ConnConfig, error) {
+	log.Debug("Converting NTCP2Config to ConnConfig")
 	if err := nc.Validate(); err != nil {
 		return nil, oops.
 			Code("INVALID_CONFIG").
@@ -526,6 +533,7 @@ func (nc *NTCP2Config) createBaseConnConfig() *noise.ConnConfig {
 
 // setupNTCP2Modifiers creates and configures all NTCP2-specific handshake modifiers.
 func (nc *NTCP2Config) setupNTCP2Modifiers() ([]handshake.HandshakeModifier, error) {
+	log.Debug("Setting up NTCP2-specific modifiers")
 	var modifiers []handshake.HandshakeModifier
 
 	aesModifier, err := nc.createAESModifierIfEnabled()

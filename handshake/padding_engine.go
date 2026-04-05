@@ -52,6 +52,7 @@ func NewPaddingEngine(config PaddingEngineConfig) (*PaddingEngine, error) {
 
 // ValidatePaddingParams validates common I2P padding parameters.
 func ValidatePaddingParams(domain string, minPadding, maxPadding int, paddingRatio float64) error {
+	log.WithField("domain", domain).WithField("min", minPadding).WithField("max", maxPadding).WithField("ratio", paddingRatio).Debug("Validating padding params")
 	if minPadding < 0 {
 		return oops.
 			Code("INVALID_PADDING").
@@ -110,6 +111,7 @@ func (pe *PaddingEngine) CalculatePaddingSize(dataLen int) int {
 
 // UpdateParams updates the engine's padding parameters after validation.
 func (pe *PaddingEngine) UpdateParams(minPad, maxPad int, ratio float64) error {
+	log.WithField("domain", pe.Config.Domain).WithField("min", minPad).WithField("max", maxPad).WithField("ratio", ratio).Debug("Updating padding params")
 	if err := ValidatePaddingParams(pe.Config.Domain, minPad, maxPad, ratio); err != nil {
 		return err
 	}
@@ -188,6 +190,7 @@ func (pe *PaddingEngine) AddAEADPadding(data []byte, paddingSize int) ([]byte, e
 // RemoveTrailingAEADPadding removes a trailing I2P padding block (type 254)
 // by scanning from paddingSize=0 upward. maxScanPadding limits the search range.
 func (pe *PaddingEngine) RemoveTrailingAEADPadding(data []byte, maxScanPadding int) ([]byte, error) {
+	log.WithField("data_len", len(data)).WithField("max_scan", maxScanPadding).Debug("Removing trailing AEAD padding")
 	if len(data) < I2PBlockHeaderSize {
 		return data, nil
 	}

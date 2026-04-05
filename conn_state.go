@@ -38,8 +38,10 @@ func (nc *NoiseConn) GetConnectionState() ConnState {
 // HandshakeState.PeerStatic() is mutex-protected.
 func (nc *NoiseConn) PeerStatic() []byte {
 	if nc.handshakeState == nil {
+		log.Debug("PeerStatic: handshake state is nil")
 		return nil
 	}
+	log.Debug("PeerStatic: returning peer static key")
 	return nc.handshakeState.PeerStatic()
 }
 
@@ -54,8 +56,10 @@ func (nc *NoiseConn) PeerStatic() []byte {
 // HandshakeState.ChannelBinding() is mutex-protected.
 func (nc *NoiseConn) ChannelBinding() []byte {
 	if nc.handshakeState == nil {
+		log.Debug("ChannelBinding: handshake state is nil")
 		return nil
 	}
+	log.Debug("ChannelBinding: returning handshake hash")
 	return nc.handshakeState.ChannelBinding()
 }
 
@@ -80,6 +84,7 @@ func (nc *NoiseConn) RecvCipherState() *noise.CipherState {
 // After calling ZeroKeys, the connection can no longer encrypt or decrypt data.
 // Any subsequent Read/Write calls will fail.
 func (nc *NoiseConn) ZeroKeys() {
+	log.Debug("ZeroKeys: zeroing cipher state key material")
 	if nc.sendCipherState != nil {
 		nc.sendCipherState.ZeroKey()
 	}
@@ -94,9 +99,12 @@ func (nc *NoiseConn) ZeroKeys() {
 // The returned keys correspond 1:1 to the configured AdditionalSymmetricKeyLabels.
 func (nc *NoiseConn) AdditionalSymmetricKeys() [][]byte {
 	if nc.handshakeState == nil {
+		log.Debug("AdditionalSymmetricKeys: handshake state is nil")
 		return nil
 	}
-	return nc.handshakeState.AdditionalSymmetricKeys()
+	keys := nc.handshakeState.AdditionalSymmetricKeys()
+	log.WithField("key_count", len(keys)).Debug("AdditionalSymmetricKeys: returning ASK values")
+	return keys
 }
 
 // Rekey triggers a rekey operation on the underlying cipher state.

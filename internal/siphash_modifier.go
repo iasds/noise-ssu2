@@ -50,11 +50,13 @@ func NewSipHashLengthModifierDirectional(name string, outKeys, inKeys [2]uint64,
 
 // ModifyOutbound obfuscates a 2-byte length field using SipHash.
 func (slm *SipHashLengthModifier) ModifyOutbound(phase handshake.HandshakePhase, data []byte) ([]byte, error) {
+	log.WithField("name", slm.name).WithField("phase", phase).WithField("data_len", len(data)).Debug("SipHash ModifyOutbound")
 	return slm.applyMask(phase, data, slm.getNextOutboundMask)
 }
 
 // ModifyInbound deobfuscates a 2-byte length field using SipHash.
 func (slm *SipHashLengthModifier) ModifyInbound(phase handshake.HandshakePhase, data []byte) ([]byte, error) {
+	log.WithField("name", slm.name).WithField("phase", phase).WithField("data_len", len(data)).Debug("SipHash ModifyInbound")
 	return slm.applyMask(phase, data, slm.getNextInboundMask)
 }
 
@@ -123,6 +125,7 @@ func (slm *SipHashLengthModifier) Name() string {
 
 // Close zeroes all SipHash key material and IVs.
 func (slm *SipHashLengthModifier) Close() error {
+	log.WithField("name", slm.name).Debug("Closing SipHash length modifier")
 	slm.ZeroKeys()
 	return nil
 }

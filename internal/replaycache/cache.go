@@ -103,6 +103,7 @@ func (c *TTLCache) Close() {
 
 // Reset removes all entries from the cache.
 func (c *TTLCache) Reset() {
+	log.Debug("Reset: clearing all replay cache entries")
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for k := range c.entries {

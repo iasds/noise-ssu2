@@ -22,6 +22,7 @@ func (nc *NoiseConn) applyOutboundModifier(data []byte) ([]byte, error) {
 	if chain == nil {
 		return data, nil
 	}
+	log.WithField("data_len", len(data)).Debug("applyOutboundModifier: applying PhaseData modifier chain")
 	return chain.ModifyOutbound(handshake.PhaseData, data)
 }
 
@@ -33,6 +34,7 @@ func (nc *NoiseConn) applyInboundModifier(data []byte) ([]byte, error) {
 	if chain == nil {
 		return data, nil
 	}
+	log.WithField("data_len", len(data)).Debug("applyInboundModifier: applying PhaseData modifier chain")
 	return chain.ModifyInbound(handshake.PhaseData, data)
 }
 
@@ -44,6 +46,7 @@ func (nc *NoiseConn) applyHandshakeOutbound(phase handshake.HandshakePhase, data
 	if chain == nil {
 		return data, nil
 	}
+	log.WithField("phase", phase.String()).WithField("data_len", len(data)).Debug("applyHandshakeOutbound: applying modifier chain")
 	return chain.ModifyOutbound(phase, data)
 }
 
@@ -55,6 +58,7 @@ func (nc *NoiseConn) applyHandshakeInbound(phase handshake.HandshakePhase, data 
 	if chain == nil {
 		return data, nil
 	}
+	log.WithField("phase", phase.String()).WithField("data_len", len(data)).Debug("applyHandshakeInbound: applying modifier chain")
 	return chain.ModifyInbound(phase, data)
 }
 
@@ -89,6 +93,7 @@ func (nc *NoiseConn) validateWriteState() error {
 // configureWriteTimeout sets the write timeout if configured.
 func (nc *NoiseConn) configureWriteTimeout() error {
 	if nc.config.WriteTimeout > 0 {
+		log.WithField("timeout", nc.config.WriteTimeout).Debug("configureWriteTimeout: setting write deadline")
 		if err := nc.underlying.SetWriteDeadline(time.Now().Add(nc.config.WriteTimeout)); err != nil {
 			return oops.
 				Code("SET_DEADLINE_FAILED").

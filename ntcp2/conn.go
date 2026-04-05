@@ -141,6 +141,7 @@ func NewNTCP2Conn(noiseConn *noise.NoiseConn, localAddr, remoteAddr *NTCP2Addr) 
 // When set, Read/Write will use framed I/O with SipHash-obfuscated length prefixes.
 // This is safe to call concurrently with Read/Write (uses atomic.Pointer).
 func (nc *NTCP2Conn) SetLengthObfuscator(slm *SipHashLengthModifier) {
+	log.Debug("SetLengthObfuscator: storing SipHash length obfuscator")
 	nc.lengthObfuscator.Store(slm)
 }
 
@@ -148,6 +149,7 @@ func (nc *NTCP2Conn) SetLengthObfuscator(slm *SipHashLengthModifier) {
 // PropagateSipHash can copy PostHandshakeHook-derived keys after handshake.
 // This is safe to call concurrently with PropagateSipHash (uses atomic.Pointer).
 func (nc *NTCP2Conn) SetNTCP2Config(cfg *NTCP2Config) {
+	log.Debug("SetNTCP2Config: storing NTCP2 config reference")
 	nc.ntcp2Config.Store(cfg)
 }
 
@@ -157,9 +159,11 @@ func (nc *NTCP2Conn) SetNTCP2Config(cfg *NTCP2Config) {
 func (nc *NTCP2Conn) PropagateSipHash() {
 	cfg := nc.ntcp2Config.Load()
 	if cfg == nil {
+		log.Debug("PropagateSipHash: no NTCP2 config stored, skipping")
 		return
 	}
 	if slm := cfg.SipHashModifier(); slm != nil {
+		log.Debug("PropagateSipHash: copying SipHash modifier from config to connection")
 		nc.lengthObfuscator.Store(slm)
 	}
 }
@@ -213,6 +217,7 @@ func (nc *NTCP2Conn) Close() error {
 // sensitive data from lingering in memory after connection close. Per the
 // NTCP2 spec: "routers should zero-out any in-memory ephemeral data".
 func (nc *NTCP2Conn) zeroKeyMaterial() {
+	log.Debug("zeroKeyMaterial: zeroing SipHash keys and buffered plaintext")
 	if slm := nc.lengthObfuscator.Load(); slm != nil {
 		slm.ZeroKeys()
 	}
