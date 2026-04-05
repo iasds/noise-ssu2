@@ -411,12 +411,13 @@ func (nc *NTCP2Conn) writeWireFrame(frame []byte) error {
 
 // getMaxFrameSize returns the configured maximum frame size for frame splitting.
 // If an NTCP2Config is set and has a valid MaxFrameSize, that value is used.
-// Otherwise falls back to the constant MaxFrameSize (65535).
-// Per the spec, senders should prefer smaller frame sizes (a few KB).
+// Otherwise falls back to DefaultMaxFrameSize (16384).
+// Per the spec: "it is recommended that the sender limit frames to a few KB
+// rather than maximizing the frame size."
 func (nc *NTCP2Conn) getMaxFrameSize() int {
 	cfg := nc.ntcp2Config.Load()
 	if cfg != nil && cfg.MaxFrameSize > 0 && cfg.MaxFrameSize <= SpecMaxFrameSize {
 		return cfg.MaxFrameSize
 	}
-	return SpecMaxFrameSize
+	return DefaultMaxFrameSize
 }

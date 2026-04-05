@@ -79,6 +79,14 @@ func (nc *NTCP2Conn) handleAEADError(underlying net.Conn) {
 		underlying.Read(junk) //nolint:errcheck // best effort
 	}
 
+	// If the router transport layer registered a hook, let it send a termination
+	// block (type 4, reason 4 = "AEAD failure") before we RST the socket.
+	// Per spec §4: "the recipient should send a payload with a termination block
+	// containing an 'AEAD failure' reason code, and close the connection."
+	if nc.OnAEADError != nil {
+		nc.OnAEADError(underlying)
+	}
+
 	// Per the spec: "This should be an abnormal close (TCP RST)"
 	nc.sendTCPRST(underlying)
 }

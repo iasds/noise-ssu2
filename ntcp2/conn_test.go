@@ -760,7 +760,7 @@ func TestAuditFix_SendTCPRST_FallbackCloseForNonTCP(t *testing.T) {
 
 func TestAuditFix_GetMaxFrameSize_DefaultsToConstant(t *testing.T) {
 	conn := createTestNTCP2Conn(&mockNoiseConn{})
-	assert.Equal(t, MaxFrameSize, conn.getMaxFrameSize())
+	assert.Equal(t, DefaultMaxFrameSize, conn.getMaxFrameSize())
 }
 
 func TestAuditFix_GetMaxFrameSize_UsesConfigValue(t *testing.T) {
@@ -776,17 +776,17 @@ func TestAuditFix_GetMaxFrameSize_IgnoresZeroConfig(t *testing.T) {
 	cfg := &NTCP2Config{MaxFrameSize: 0}
 	conn.SetNTCP2Config(cfg)
 
-	assert.Equal(t, MaxFrameSize, conn.getMaxFrameSize(),
-		"zero MaxFrameSize in config should fall back to constant")
+	assert.Equal(t, DefaultMaxFrameSize, conn.getMaxFrameSize(),
+		"zero MaxFrameSize in config should fall back to DefaultMaxFrameSize")
 }
 
 func TestAuditFix_GetMaxFrameSize_IgnoresOversizedConfig(t *testing.T) {
 	conn := createTestNTCP2Conn(&mockNoiseConn{})
-	cfg := &NTCP2Config{MaxFrameSize: MaxFrameSize + 100}
+	cfg := &NTCP2Config{MaxFrameSize: SpecMaxFrameSize + 100}
 	conn.SetNTCP2Config(cfg)
 
-	assert.Equal(t, MaxFrameSize, conn.getMaxFrameSize(),
-		"oversized MaxFrameSize should fall back to constant")
+	assert.Equal(t, DefaultMaxFrameSize, conn.getMaxFrameSize(),
+		"oversized MaxFrameSize should fall back to DefaultMaxFrameSize")
 }
 
 func TestAuditFix_SetNTCP2Config_ThreadSafe(t *testing.T) {
@@ -1043,9 +1043,9 @@ func TestAuditFix_HandleAEADError_SetsBroken(t *testing.T) {
 	assert.True(t, p.conn.broken.Load(), "handleAEADError must set broken flag")
 }
 
-func TestAuditFix_GetMaxFrameSize_FallsBackToSpecMax(t *testing.T) {
+func TestAuditFix_GetMaxFrameSize_FallsBackToDefaultMax(t *testing.T) {
 	conn := createTestNTCP2Conn(&mockNoiseConn{})
-	assert.Equal(t, SpecMaxFrameSize, conn.getMaxFrameSize())
+	assert.Equal(t, DefaultMaxFrameSize, conn.getMaxFrameSize())
 }
 
 func TestAuditFix_GetMaxFrameSize_RespectsConfig(t *testing.T) {

@@ -87,6 +87,15 @@ type NTCP2Conn struct {
 	// Only accessed under readMu.
 	readNonce uint64
 
+	// OnAEADError is an optional callback invoked during AEAD failure handling,
+	// after the probing-resistance junk-read phase but before the TCP RST.
+	// The router transport layer can use this to send a termination block
+	// (type 4, reason 4 = "AEAD failure") before the connection is killed.
+	// The callback receives the underlying net.Conn for direct writing;
+	// the NTCP2Conn's broken flag is already set, so normal Write() is blocked.
+	// If nil, no termination block is sent (current behaviour).
+	OnAEADError func(conn net.Conn)
+
 	// logger for connection events (pointer so runtime log-level changes are visible)
 	logger *logger.Logger
 }
