@@ -138,6 +138,13 @@ func (nc *NTCP2Conn) readObfuscatedFrameLength(underlying net.Conn, slm *SipHash
 	obfuscatedLen := binary.BigEndian.Uint16(lengthBuf)
 	frameLen := obfuscatedLen ^ mask
 
+	nc.logger.Trace("Frame length deobfuscated",
+		"obfuscated_len", obfuscatedLen,
+		"mask", mask,
+		"frame_len", frameLen,
+		"read_nonce", nc.readNonce,
+		"remote_addr", nc.remoteAddr.String())
+
 	if err := nc.validateFrameLength(frameLen); err != nil {
 		nc.broken.Store(true)
 		return 0, err
@@ -150,16 +157,24 @@ func (nc *NTCP2Conn) readObfuscatedFrameLength(underlying net.Conn, slm *SipHash
 // probing-resistance behaviour before returning the error.
 func (nc *NTCP2Conn) readAndDecryptFrame(underlying net.Conn, frameLen uint16) ([]byte, error) {
 	ciphertext := make([]byte, frameLen)
-	if _, err := io.ReadFull(underlying, ciphertext); err != nil {
+	nRead, err := io.ReadFull(underlying, ciphertext)
+	if err != nil {
 		nc.broken.Store(true)
+		log.WithField("frame_length", frameLen).
+			WithField("bytes_read", nRead).
+			WithField("read_nonce", nc.readNonce).
+			WithField("remote_addr", nc.remoteAddr.String()).
+			WithError(err).
+			Error("Frame data read failed (SipHash deobfuscated length may be wrong)")
 		return nil, oops.
 			Code("READ_FRAME_FAILED").
 			In("ntcp2").
 			With("frame_length", frameLen).
+			With("bytes_actually_read", nRead).
 			With("read_nonce", nc.readNonce).
 			With("local_addr", nc.localAddr.String()).
 			With("remote_addr", nc.remoteAddr.String()).
-			Wrapf(err, "failed to read frame data (frame #%d, expected %d bytes)", nc.readNonce, frameLen)
+			Wrapf(err, "failed to read frame data (frame #%d, expected %d bytes, got %d)", nc.readNonce, frameLen, nRead)
 	}
 
 	plaintext, err := nc.noiseConn.Decrypt(ciphertext)
