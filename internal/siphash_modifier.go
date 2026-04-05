@@ -59,7 +59,7 @@ func (slm *SipHashLengthModifier) ModifyInbound(phase handshake.HandshakePhase, 
 }
 
 func (slm *SipHashLengthModifier) applyMask(phase handshake.HandshakePhase, data []byte, maskFunc func() uint16) ([]byte, error) {
-	if phase < handshake.PhaseFinal || len(data) != LengthFieldSize {
+	if phase < handshake.PhaseData || len(data) != LengthFieldSize {
 		return data, nil
 	}
 

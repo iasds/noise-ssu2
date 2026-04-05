@@ -50,8 +50,10 @@ func DialNTCP2WithHandshakeContext(ctx context.Context, network, addr string, co
 	// Note: SetNTCP2Config was already called inside DialNTCP2 → buildNTCP2Connection.
 	// No second call needed here.
 
-	// Perform the handshake with the provided context on the underlying NoiseConn
-	if err := ntcp2Conn.UnderlyingConn().Handshake(ctx); err != nil {
+	// Use the NTCP2-specific handshake which writes raw Noise messages without
+	// 2-byte length prefixes. The standard NoiseConn.Handshake() adds length
+	// framing that the NTCP2 spec explicitly forbids on messages 1, 2, and 3.
+	if err := ntcp2Conn.Handshake(ctx); err != nil {
 		ntcp2Conn.Close()
 		return nil, oops.
 			Code("HANDSHAKE_FAILED").
@@ -64,8 +66,6 @@ func DialNTCP2WithHandshakeContext(ctx context.Context, network, addr string, co
 	// Propagate the peer's static key to the remote address so the router
 	// hash is available for session deduplication.
 	ntcp2Conn.PropagatePeerStaticKey()
-	// Propagate SipHash keys derived by the PostHandshakeHook to the conn.
-	ntcp2Conn.PropagateSipHash()
 
 	return ntcp2Conn, nil
 }

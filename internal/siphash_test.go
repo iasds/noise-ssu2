@@ -92,12 +92,12 @@ func TestSipHashLengthModifier_RoundTrip(t *testing.T) {
 		data := make([]byte, 2)
 		binary.BigEndian.PutUint16(data, original)
 
-		obfuscated, err := sender.ModifyOutbound(handshake.PhaseFinal, data)
+		obfuscated, err := sender.ModifyOutbound(handshake.PhaseData, data)
 		if err != nil {
 			t.Fatalf("iteration %d: ModifyOutbound error: %v", i, err)
 		}
 
-		recovered, err := receiver.ModifyInbound(handshake.PhaseFinal, obfuscated)
+		recovered, err := receiver.ModifyInbound(handshake.PhaseData, obfuscated)
 		if err != nil {
 			t.Fatalf("iteration %d: ModifyInbound error: %v", i, err)
 		}
@@ -124,12 +124,12 @@ func TestSipHashLengthModifier_DirectionalRoundTrip(t *testing.T) {
 		data := make([]byte, 2)
 		binary.BigEndian.PutUint16(data, original)
 
-		obfuscated, err := sender.ModifyOutbound(handshake.PhaseFinal, data)
+		obfuscated, err := sender.ModifyOutbound(handshake.PhaseData, data)
 		if err != nil {
 			t.Fatalf("iteration %d: ModifyOutbound error: %v", i, err)
 		}
 
-		recovered, err := receiver.ModifyInbound(handshake.PhaseFinal, obfuscated)
+		recovered, err := receiver.ModifyInbound(handshake.PhaseData, obfuscated)
 		if err != nil {
 			t.Fatalf("iteration %d: ModifyInbound error: %v", i, err)
 		}
@@ -147,10 +147,11 @@ func TestSipHashLengthModifier_PassthroughBeforeFinal(t *testing.T) {
 
 	original := []byte{0x01, 0x02}
 
-	// Phases before PhaseFinal should pass data through unmodified.
+	// Phases before PhaseData should pass data through unmodified.
 	phases := []handshake.HandshakePhase{
 		handshake.PhaseInitial,
 		handshake.PhaseExchange,
+		handshake.PhaseFinal,
 	}
 	for _, phase := range phases {
 		out, err := mod.ModifyOutbound(phase, original)
@@ -169,7 +170,7 @@ func TestSipHashLengthModifier_WrongLengthPassthrough(t *testing.T) {
 
 	// Data that is not exactly 2 bytes should pass through unmodified.
 	data := []byte{0x01, 0x02, 0x03}
-	out, err := mod.ModifyOutbound(handshake.PhaseFinal, data)
+	out, err := mod.ModifyOutbound(handshake.PhaseData, data)
 	if err != nil {
 		t.Fatalf("ModifyOutbound error: %v", err)
 	}
