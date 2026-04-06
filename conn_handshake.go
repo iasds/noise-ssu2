@@ -37,6 +37,8 @@ func (nc *NoiseConn) Handshake(ctx context.Context) error {
 	nc.setState(internal.StateHandshaking)
 	nc.metrics.SetHandshakeStart()
 	nc.logger.WithFields(i2plogger.Fields{
+		"pkg":               "noise",
+		"func":              "NoiseConn.Handshake",
 		"pattern":           nc.config.Pattern,
 		"role":              map[bool]string{true: "initiator", false: "responder"}[nc.config.Initiator],
 		"local_addr":        nc.LocalAddr().String(),
@@ -164,6 +166,8 @@ func (nc *NoiseConn) updateCipherStates(cs1, cs2 *noise.CipherState) {
 	}
 
 	nc.logger.WithFields(i2plogger.Fields{
+		"pkg":             "noise",
+		"func":            "NoiseConn.updateCipherStates",
 		"pattern":         nc.config.Pattern,
 		"role":            map[bool]string{true: "initiator", false: "responder"}[nc.config.Initiator],
 		"has_send_cs":     nc.sendCipherState != nil,
@@ -330,7 +334,7 @@ func (nc *NoiseConn) executeRoleBasedHandshake(ctx context.Context) error {
 func (nc *NoiseConn) markHandshakeComplete() {
 	nc.setState(internal.StateEstablished)
 	nc.metrics.SetHandshakeEnd()
-	nc.logger.Info("Noise handshake completed successfully")
+	nc.logger.WithFields(i2plogger.Fields{"pkg": "noise", "func": "NoiseConn.markHandshakeComplete"}).Info("Noise handshake completed successfully")
 }
 
 // resetHandshakeState recreates the HandshakeState from the original config
@@ -339,8 +343,8 @@ func (nc *NoiseConn) markHandshakeComplete() {
 func (nc *NoiseConn) resetHandshakeState() {
 	hs, err := createHandshakeState(nc.config)
 	if err != nil {
-		nc.logger.WithFields(i2plogger.Fields{
-			"error": err.Error(),
+		nc.logger.WithFields(i2plogger.Fields{"pkg": "noise",
+			"func": "NoiseConn.resetHandshakeState", "error": err.Error(),
 		}).Error("failed to recreate handshake state for retry")
 		return
 	}

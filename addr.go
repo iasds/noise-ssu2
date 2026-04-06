@@ -6,6 +6,8 @@ package noise
 import (
 	"fmt"
 	"net"
+
+	"github.com/go-i2p/logger"
 )
 
 // NoiseAddr implements net.Addr for Noise Protocol connections.
@@ -23,7 +25,7 @@ type NoiseAddr struct {
 // pattern should be a valid Noise protocol pattern (e.g., "Noise_XX_25519_AESGCM_SHA256").
 // role should be either "initiator" or "responder".
 func NewNoiseAddr(underlying net.Addr, pattern, role string) *NoiseAddr {
-	log.WithField("pattern", pattern).WithField("role", role).Debug("Creating new NoiseAddr")
+	log.WithFields(logger.Fields{"pkg": "noise", "func": "NewNoiseAddr", "pattern": pattern, "role": role}).Debug("Creating new NoiseAddr")
 	return &NoiseAddr{
 		underlying: underlying,
 		pattern:    pattern,

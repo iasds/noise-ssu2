@@ -244,6 +244,8 @@ func NewNoiseListener(underlying net.Listener, config *ListenerConfig) (*NoiseLi
 	}
 
 	log.WithFields(i2plogger.Fields{
+		"pkg":               "noise",
+		"func":              "NewNoiseListener",
 		"pattern":           config.Pattern,
 		"listener_address":  underlying.Addr().String(),
 		"handshake_timeout": config.HandshakeTimeout,
@@ -293,6 +295,8 @@ func (nl *NoiseListener) Accept() (net.Conn, error) {
 	}
 
 	nl.logger.WithFields(i2plogger.Fields{
+		"pkg":           "noise",
+		"func":          "NoiseListener.Accept",
 		"listener_addr": nl.addr.String(),
 		"remote_addr":   underlying.RemoteAddr().String(),
 	}).Debug("accepted new noise connection")
@@ -349,6 +353,8 @@ func (nl *NoiseListener) Close() error {
 	err := nl.underlying.Close()
 	if err != nil {
 		nl.logger.WithFields(i2plogger.Fields{
+			"pkg":           "noise",
+			"func":          "NoiseListener.Close",
 			"listener_addr": nl.addr.String(),
 			"error":         err.Error(),
 		}).Error("error closing underlying listener")
@@ -361,6 +367,8 @@ func (nl *NoiseListener) Close() error {
 	}
 
 	nl.logger.WithFields(i2plogger.Fields{
+		"pkg":           "noise",
+		"func":          "NoiseListener.Close",
 		"listener_addr": nl.addr.String(),
 	}).Info("noise listener closed")
 

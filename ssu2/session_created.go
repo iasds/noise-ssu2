@@ -1,6 +1,7 @@
 package ssu2
 
 import (
+	"github.com/go-i2p/logger"
 	"github.com/samber/oops"
 )
 
@@ -13,7 +14,7 @@ import (
 //
 // XK pattern: ← e, ee
 func (h *HandshakeHandler) CreateSessionCreated(sourceConnID, destConnID uint64) (*SSU2Packet, error) {
-	log.WithField("sourceConnID", sourceConnID).WithField("destConnID", destConnID).Debug("Creating SessionCreated")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "CreateSessionCreated", "sourceConnID": sourceConnID, "destConnID": destConnID}).Debug("Creating SessionCreated")
 	if h.initiator {
 		return nil, oops.Errorf("only responder can create SessionCreated")
 	}
@@ -29,7 +30,7 @@ func (h *HandshakeHandler) CreateSessionCreated(sourceConnID, destConnID uint64)
 //
 // After this, the handshake is complete and transport cipher states are available.
 func (h *HandshakeHandler) ProcessSessionCreated(packet *SSU2Packet) error {
-	log.Debug("Processing received SessionCreated")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "ProcessSessionCreated"}).Debug("Processing received SessionCreated")
 	if !h.initiator {
 		return oops.Errorf("responder cannot process SessionCreated")
 	}

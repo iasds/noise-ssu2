@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-i2p/logger"
 	"github.com/samber/oops"
 )
 
@@ -145,7 +146,7 @@ const (
 //
 // Returns an initialized validator.
 func NewPathValidator(conn PathValidationConn) *PathValidator {
-	log.Debug("Creating new PathValidator")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "NewPathValidator"}).Debug("Creating new PathValidator")
 	return &PathValidator{
 		conn:       conn,
 		challenges: make(map[uint64]*PathChallenge),
@@ -155,13 +156,13 @@ func NewPathValidator(conn PathValidationConn) *PathValidator {
 // SetTokenCache sets the token cache used for invalidation when a path migrates.
 // Per spec, tokens are bound to an IP:port and must be invalidated on address change.
 func (pv *PathValidator) SetTokenCache(tc *TokenCache) {
-	log.Debug("SetTokenCache: setting token cache for path validator")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "SetTokenCache"}).Debug("Setting token cache for path validator")
 	pv.tokenCache = tc
 }
 
 // SetCongestionController sets the congestion controller to reset on path migration (G-7).
 func (pv *PathValidator) SetCongestionController(cc *CongestionController) {
-	log.Debug("SetCongestionController: setting congestion controller for path validator")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "SetCongestionController"}).Debug("Setting congestion controller for path validator")
 	pv.congestionController = cc
 }
 
@@ -178,7 +179,7 @@ func (pv *PathValidator) SetCongestionController(cc *CongestionController) {
 //   - uint64: The challenge ID for tracking this validation
 //   - error: If challenge creation or sending fails
 func (pv *PathValidator) InitiatePathValidation(newAddr *net.UDPAddr) (uint64, error) {
-	log.Debug("Initiating path validation")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "InitiatePathValidation"}).Debug("Initiating path validation")
 	if newAddr == nil {
 		return 0, oops.Errorf("new address is nil")
 	}
@@ -220,7 +221,7 @@ func (pv *PathValidator) InitiatePathValidation(newAddr *net.UDPAddr) (uint64, e
 //
 // Returns error if encoding or sending fails.
 func (pv *PathValidator) SendPathChallenge(challengeID uint64, addr *net.UDPAddr) error {
-	log.WithField("challengeID", challengeID).WithField("addr", addr).Debug("SendPathChallenge: sending path challenge")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "SendPathChallenge", "challengeID": challengeID, "addr": addr}).Debug("Sending path challenge")
 	block := EncodePathChallenge(challengeID)
 	if err := pv.conn.SendToAddress(block, addr); err != nil {
 		return oops.Wrapf(err, "failed to send path challenge to %v", addr)
@@ -240,7 +241,7 @@ func (pv *PathValidator) SendPathChallenge(challengeID uint64, addr *net.UDPAddr
 //
 // Returns error if decoding or response fails.
 func (pv *PathValidator) HandlePathChallenge(block *SSU2Block, fromAddr *net.UDPAddr) error {
-	log.WithField("fromAddr", fromAddr).Debug("HandlePathChallenge: processing received path challenge")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "HandlePathChallenge", "fromAddr": fromAddr}).Debug("Processing received path challenge")
 	if block == nil {
 		return oops.Errorf("block is nil")
 	}
@@ -278,7 +279,7 @@ func (pv *PathValidator) HandlePathChallenge(block *SSU2Block, fromAddr *net.UDP
 //
 // Returns error if encoding or sending fails.
 func (pv *PathValidator) SendPathResponse(challengeID uint64, addr *net.UDPAddr) error {
-	log.WithField("challengeID", challengeID).WithField("addr", addr).Debug("SendPathResponse: sending path response")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "SendPathResponse", "challengeID": challengeID, "addr": addr}).Debug("Sending path response")
 	block := EncodePathResponse(challengeID)
 	if err := pv.conn.SendToAddress(block, addr); err != nil {
 		return oops.Wrapf(err, "failed to send path response to %v", addr)
@@ -299,7 +300,7 @@ func (pv *PathValidator) SendPathResponse(challengeID uint64, addr *net.UDPAddr)
 //
 // Returns error if validation fails.
 func (pv *PathValidator) HandlePathResponse(block *SSU2Block, fromAddr *net.UDPAddr) error {
-	log.WithField("fromAddr", fromAddr).Debug("HandlePathResponse: processing received path response")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "HandlePathResponse", "fromAddr": fromAddr}).Debug("Processing received path response")
 	if block == nil {
 		return oops.Errorf("block is nil")
 	}
@@ -355,7 +356,7 @@ func (pv *PathValidator) HandlePathResponse(block *SSU2Block, fromAddr *net.UDPA
 //
 // Returns error if migration fails.
 func (pv *PathValidator) ValidatePath(challengeID uint64) error {
-	log.WithField("challengeID", challengeID).Debug("Validating path")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "ValidatePath", "challengeID": challengeID}).Debug("Validating path")
 	pv.mutex.Lock()
 	challenge, exists := pv.challenges[challengeID]
 	if !exists {
@@ -405,7 +406,7 @@ func (pv *PathValidator) ValidatePath(challengeID uint64) error {
 //   - challengeID: The challenge ID to fail
 //   - reason: Error describing why validation failed
 func (pv *PathValidator) FailPath(challengeID uint64, reason error) {
-	log.WithField("challengeID", challengeID).Debug("Path validation failed")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "FailPath", "challengeID": challengeID}).Debug("Path validation failed")
 	pv.mutex.Lock()
 	defer pv.mutex.Unlock()
 
@@ -448,7 +449,7 @@ func (pv *PathValidator) GetChallenge(challengeID uint64) (*PathChallenge, bool)
 //
 // Returns the number of challenges cleaned up.
 func (pv *PathValidator) CleanupExpired() int {
-	log.Debug("CleanupExpired: removing expired path validation challenges")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "CleanupExpired"}).Debug("Removing expired path validation challenges")
 	pv.mutex.Lock()
 	defer pv.mutex.Unlock()
 
@@ -654,7 +655,7 @@ func (pv *PathValidator) GetDiscoveredMTU() int {
 //
 // RunPMTUD blocks until the search completes or the context expires.
 func (pv *PathValidator) RunPMTUD(addr *net.UDPAddr, low, high int) int {
-	log.WithField("low", low).WithField("high", high).Debug("Running PMTUD")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "RunPMTUD", "low": low, "high": high}).Debug("Running PMTUD")
 	if low < MinMTU {
 		low = MinMTU
 	}

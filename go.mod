@@ -1,13 +1,11 @@
 module github.com/go-i2p/go-noise
 
-go 1.24.5
-
-toolchain go1.24.12
+go 1.25.0
 
 require (
 	github.com/go-i2p/common v0.1.4-0.20260317205637-c40aee7ed134
 	github.com/go-i2p/crypto v0.1.4-0.20260327201310-96101c044a62
-	github.com/go-i2p/logger v0.1.3
+	github.com/go-i2p/logger v0.1.5
 	github.com/go-i2p/noise v1.1.1-0.20260327201800-8e41bb3d9f1e
 	github.com/samber/oops v1.21.0
 	github.com/stretchr/testify v1.11.1
@@ -27,7 +25,7 @@ require (
 	go.opentelemetry.io/otel v1.40.0 // indirect
 	go.opentelemetry.io/otel/trace v1.40.0 // indirect
 	go.step.sm/crypto v0.76.0 // indirect
-	golang.org/x/sys v0.41.0 // indirect
+	golang.org/x/sys v0.42.0 // indirect
 	golang.org/x/text v0.34.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

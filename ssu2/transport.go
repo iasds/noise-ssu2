@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 
+	"github.com/go-i2p/logger"
 	"github.com/samber/oops"
 )
 
@@ -23,7 +24,7 @@ import (
 //
 // Returns an SSU2Conn ready for handshake, or an error if creation fails.
 func DialSSU2(localAddr, remoteAddr *net.UDPAddr, config *SSU2Config) (*SSU2Conn, error) {
-	log.WithField("remote_addr", remoteAddr).Debug("Dialing SSU2 connection")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "DialSSU2", "remote_addr": remoteAddr}).Debug("Dialing SSU2 connection")
 	if err := validateDialParams(localAddr, remoteAddr, config); err != nil {
 		return nil, err
 	}
@@ -66,7 +67,7 @@ func DialSSU2WithHandshake(localAddr, remoteAddr *net.UDPAddr, config *SSU2Confi
 //
 // Returns an established SSU2Conn, or an error if dial or handshake fails.
 func DialSSU2WithHandshakeContext(ctx context.Context, localAddr, remoteAddr *net.UDPAddr, config *SSU2Config) (*SSU2Conn, error) {
-	log.WithField("remote_addr", remoteAddr).Debug("DialSSU2WithHandshakeContext: dialing with handshake and context")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "DialSSU2WithHandshakeContext", "remote_addr": remoteAddr}).Debug("Dialing with handshake and context")
 	conn, err := DialSSU2(localAddr, remoteAddr, config)
 	if err != nil {
 		return nil, err
@@ -101,7 +102,7 @@ func DialSSU2WithHandshakeContext(ctx context.Context, localAddr, remoteAddr *ne
 //
 // Returns an SSU2Listener ready to accept, or an error if creation fails.
 func ListenSSU2(addr *net.UDPAddr, config *SSU2Config) (*SSU2Listener, error) {
-	log.WithField("address", addr).Debug("Creating SSU2 listener")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "ListenSSU2", "address": addr}).Debug("Creating SSU2 listener")
 	if err := validateListenParams(addr, config); err != nil {
 		return nil, err
 	}
@@ -316,7 +317,7 @@ func validateWrapListenerParams(underlying net.PacketConn, config *SSU2Config) e
 
 // createUDPConnection creates a UDP PacketConn bound to the specified local address.
 func createUDPConnection(localAddr *net.UDPAddr) (net.PacketConn, error) {
-	log.WithField("local_addr", localAddr).Debug("createUDPConnection: creating UDP connection")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "createUDPConnection", "local_addr": localAddr}).Debug("Creating UDP connection")
 	packetConn, err := net.ListenUDP("udp", localAddr)
 	if err != nil {
 		return nil, oops.
@@ -330,7 +331,7 @@ func createUDPConnection(localAddr *net.UDPAddr) (net.PacketConn, error) {
 
 // createSSU2Connection creates an SSU2Conn from a PacketConn and configuration.
 func createSSU2Connection(packetConn net.PacketConn, remoteAddr *net.UDPAddr, config *SSU2Config) (*SSU2Conn, error) {
-	log.WithField("remote_addr", remoteAddr).Debug("createSSU2Connection: creating SSU2 connection wrapper")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "createSSU2Connection", "remote_addr": remoteAddr}).Debug("Creating SSU2 connection wrapper")
 	// Generate connection ID if not set
 	if config.ConnectionID == 0 {
 		connID, err := GenerateConnectionID()

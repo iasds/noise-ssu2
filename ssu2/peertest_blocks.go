@@ -131,7 +131,7 @@ func (b *PeerTestBlock) hasRouterHash() bool {
 
 // EncodePeerTestBlock encodes a PeerTest block to wire format per the SSU2 spec.
 func EncodePeerTestBlock(block *PeerTestBlock) (*SSU2Block, error) {
-	log.Debug("EncodePeerTestBlock: encoding peer test block")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "EncodePeerTestBlock"}).Debug("Encoding peer test block")
 	if block == nil {
 		return nil, oops.Errorf("PeerTestBlock is nil")
 	}
@@ -194,7 +194,7 @@ func EncodePeerTestBlock(block *PeerTestBlock) (*SSU2Block, error) {
 // DecodePeerTestBlock decodes a PeerTest block from wire format per the SSU2 spec.
 // DecodePeerTestBlock decodes a PeerTest block from wire format per the SSU2 spec.
 func DecodePeerTestBlock(ssu2Block *SSU2Block) (*PeerTestBlock, error) {
-	log.Debug("DecodePeerTestBlock: decoding peer test block")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "DecodePeerTestBlock"}).Debug("Decoding peer test block")
 	if ssu2Block == nil {
 		return nil, oops.Errorf("block is nil")
 	}
@@ -241,7 +241,7 @@ func DecodePeerTestBlock(ssu2Block *SSU2Block) (*PeerTestBlock, error) {
 // decodeRouterHash reads the optional 32-byte router hash for messages 2 and 4.
 // Returns the updated offset.
 func (b *PeerTestBlock) decodeRouterHash(rawData []byte, off int) (int, error) {
-	log.WithFields(logger.Fields{"msg": b.MessageCode, "offset": off, "dataLen": len(rawData)}).Debug("decodeRouterHash: decoding optional router hash")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "decodeRouterHash", "msg": b.MessageCode, "offset": off, "dataLen": len(rawData)}).Debug("Decoding optional router hash")
 	if !b.hasRouterHash() {
 		return off, nil
 	}
@@ -258,7 +258,7 @@ func (b *PeerTestBlock) decodeRouterHash(rawData []byte, off int) (int, error) {
 // decodeSignedFields reads version, nonce, timestamp, asz, port, and IP.
 // Returns the updated offset.
 func (b *PeerTestBlock) decodeSignedFields(rawData []byte, off int) (int, error) {
-	log.WithFields(logger.Fields{"offset": off, "dataLen": len(rawData)}).Debug("decodeSignedFields: decoding version, nonce, timestamp, address")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "decodeSignedFields", "offset": off, "dataLen": len(rawData)}).Debug("Decoding version, nonce, timestamp, address")
 	// Remaining minimum: ver(1)+nonce(4)+timestamp(4)+asz(1)+port(2)+ip(4) = 16
 	if len(rawData) < off+16 {
 		return off, oops.Errorf("PeerTest block too short for signed data: %d bytes at offset %d", len(rawData), off)
@@ -295,7 +295,7 @@ func (b *PeerTestBlock) decodeSignedFields(rawData []byte, off int) (int, error)
 // matches the actual UDP source address. Per the spec, Charlie must verify that
 // the claimed Alice address matches the packet source to prevent amplification attacks.
 func (b *PeerTestBlock) ValidateSourceAddress(sourceAddr *net.UDPAddr) error {
-	log.WithField("msg", b.MessageCode).Debug("ValidateSourceAddress: validating peer test source address")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "ValidateSourceAddress", "msg": b.MessageCode}).Debug("Validating peer test source address")
 	if sourceAddr == nil {
 		return oops.Errorf("source address is nil")
 	}

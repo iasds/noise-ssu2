@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/go-i2p/crypto/rand"
+	"github.com/go-i2p/logger"
 	"github.com/samber/oops"
 )
 
@@ -46,7 +47,7 @@ func NewXORModifier(name string, xorKey []byte) *XORModifier {
 			// Fall back to a single non-zero byte only if the OS rand source is
 			// completely broken.  This is a security degradation: the resulting
 			// key provides near-zero obfuscation (1 byte, well-known constant).
-			log.Errorf("handshake: XORModifier %q: crypto/rand failed, falling back to degraded 1-byte key: %v", name, err)
+			log.WithFields(logger.Fields{"pkg": "handshake", "func": "NewXORModifier", "name": name}).WithError(err).Error("crypto/rand failed, falling back to degraded 1-byte key")
 			randomKey = []byte{0x01}
 		}
 		xorKey = randomKey

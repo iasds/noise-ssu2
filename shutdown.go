@@ -74,6 +74,8 @@ func (sm *ShutdownManager) RegisterConnection(conn *NoiseConn) {
 
 	sm.connections[conn] = struct{}{}
 	sm.logger.WithFields(i2plogger.Fields{
+		"pkg":         "noise",
+		"func":        "ShutdownManager.RegisterConnection",
 		"local_addr":  conn.LocalAddr().String(),
 		"remote_addr": conn.RemoteAddr().String(),
 		"total_conns": len(sm.connections),
@@ -92,6 +94,8 @@ func (sm *ShutdownManager) UnregisterConnection(conn *NoiseConn) {
 
 	delete(sm.connections, conn)
 	sm.logger.WithFields(i2plogger.Fields{
+		"pkg":         "noise",
+		"func":        "ShutdownManager.UnregisterConnection",
 		"local_addr":  conn.LocalAddr().String(),
 		"remote_addr": conn.RemoteAddr().String(),
 		"total_conns": len(sm.connections),
@@ -110,6 +114,8 @@ func (sm *ShutdownManager) RegisterListener(listener *NoiseListener) {
 
 	sm.listeners[listener] = struct{}{}
 	sm.logger.WithFields(i2plogger.Fields{
+		"pkg":             "noise",
+		"func":            "ShutdownManager.RegisterListener",
 		"listener_addr":   listener.Addr().String(),
 		"total_listeners": len(sm.listeners),
 	}).Debug("registered listener for shutdown management")
@@ -127,6 +133,8 @@ func (sm *ShutdownManager) UnregisterListener(listener *NoiseListener) {
 
 	delete(sm.listeners, listener)
 	sm.logger.WithFields(i2plogger.Fields{
+		"pkg":             "noise",
+		"func":            "ShutdownManager.UnregisterListener",
 		"listener_addr":   listener.Addr().String(),
 		"total_listeners": len(sm.listeners),
 	}).Debug("unregistered listener from shutdown management")
@@ -151,7 +159,7 @@ func (sm *ShutdownManager) Shutdown() error {
 		sm.cancel()
 
 		shutdownErr = sm.executeShutdownSequence()
-		sm.logger.Info("graceful shutdown complete")
+		sm.logger.WithFields(i2plogger.Fields{"pkg": "noise", "func": "ShutdownManager.Shutdown"}).Info("graceful shutdown complete")
 	})
 
 	return shutdownErr
@@ -160,6 +168,8 @@ func (sm *ShutdownManager) Shutdown() error {
 // logShutdownInitiation logs the start of the shutdown process with current state.
 func (sm *ShutdownManager) logShutdownInitiation() {
 	sm.logger.WithFields(i2plogger.Fields{
+		"pkg":            "noise",
+		"func":           "ShutdownManager.logShutdownInitiation",
 		"timeout":        sm.shutdownTimeout.String(),
 		"connections":    len(sm.connections),
 		"listeners":      len(sm.listeners),
@@ -175,7 +185,7 @@ func (sm *ShutdownManager) executeShutdownSequence() error {
 	// Close listeners first to stop accepting new connections
 	shutdownErr = sm.closeListeners()
 	if shutdownErr != nil {
-		sm.logger.WithError(shutdownErr).Error("error closing listeners during shutdown")
+		sm.logger.WithFields(i2plogger.Fields{"pkg": "noise", "func": "ShutdownManager.executeShutdownSequence"}).WithError(shutdownErr).Error("error closing listeners during shutdown")
 	}
 
 	// Handle connection draining with timeout and force close if needed
@@ -198,9 +208,9 @@ func (sm *ShutdownManager) executeShutdownSequence() error {
 // handleConnectionDraining waits for connections to drain or forces closure on timeout.
 func (sm *ShutdownManager) handleConnectionDraining() error {
 	if err := sm.waitForConnectionsDrain(); err != nil {
-		sm.logger.WithError(err).Warn("timeout waiting for connections to drain, forcing close")
+		sm.logger.WithFields(i2plogger.Fields{"pkg": "noise", "func": "ShutdownManager.handleConnectionDraining"}).WithError(err).Warn("timeout waiting for connections to drain, forcing close")
 		if forceErr := sm.forceCloseConnections(); forceErr != nil {
-			sm.logger.WithError(forceErr).Error("error force closing connections")
+			sm.logger.WithFields(i2plogger.Fields{"pkg": "noise", "func": "ShutdownManager.handleConnectionDraining"}).WithError(forceErr).Error("error force closing connections")
 			return forceErr
 		}
 	}
@@ -211,7 +221,7 @@ func (sm *ShutdownManager) handleConnectionDraining() error {
 func (sm *ShutdownManager) closeGlobalConnectionPool() error {
 	if globalConnPool != nil {
 		if err := globalConnPool.Close(); err != nil {
-			sm.logger.WithError(err).Error("error closing global connection pool")
+			sm.logger.WithFields(i2plogger.Fields{"pkg": "noise", "func": "ShutdownManager.closeGlobalConnectionPool"}).WithError(err).Error("error closing global connection pool")
 			return err
 		}
 	}
@@ -236,7 +246,7 @@ func (sm *ShutdownManager) closeListeners() error {
 	var firstError error
 	for _, listener := range listeners {
 		if err := listener.Close(); err != nil {
-			sm.logger.WithError(err).WithField("listener_addr", listener.Addr().String()).
+			sm.logger.WithFields(i2plogger.Fields{"pkg": "noise", "func": "ShutdownManager.closeListeners", "listener_addr": listener.Addr().String()}).WithError(err).
 				Error("error closing listener during shutdown")
 			if firstError == nil {
 				firstError = err
@@ -279,7 +289,7 @@ func (sm *ShutdownManager) waitForConnectionsDrain() error {
 				return nil
 			}
 
-			sm.logger.WithField("remaining_connections", connectionCount).
+			sm.logger.WithFields(i2plogger.Fields{"pkg": "noise", "func": "ShutdownManager.waitForConnectionsDrain", "remaining_connections": connectionCount}).
 				WithField("shutdown_phase", "draining").
 				Debug("waiting for connections to drain")
 		}
@@ -298,10 +308,12 @@ func (sm *ShutdownManager) forceCloseConnections() error {
 	var firstError error
 	for _, conn := range connections {
 		if err := conn.Close(); err != nil {
-			sm.logger.WithError(err).WithFields(i2plogger.Fields{
+			sm.logger.WithFields(i2plogger.Fields{
+				"pkg":         "noise",
+				"func":        "ShutdownManager.forceCloseConnections",
 				"local_addr":  conn.LocalAddr().String(),
 				"remote_addr": conn.RemoteAddr().String(),
-			}).Error("error force closing connection during shutdown")
+			}).WithError(err).Error("error force closing connection during shutdown")
 			if firstError == nil {
 				firstError = err
 			}

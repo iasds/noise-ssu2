@@ -7,6 +7,7 @@ import (
 	"net"
 
 	"github.com/go-i2p/go-noise/handshake"
+	"github.com/go-i2p/logger"
 	"github.com/samber/oops"
 )
 
@@ -22,7 +23,7 @@ import (
 // When no length obfuscator is set, delegates directly to NoiseConn.Read.
 func (nc *NTCP2Conn) Read(b []byte) (int, error) {
 	if nc.broken.Load() {
-		log.Warn("Read attempted on broken NTCP2 connection")
+		log.WithFields(logger.Fields{"pkg": "ntcp2", "func": "NTCP2Conn.Read"}).Warn("Read attempted on broken NTCP2 connection")
 		return 0, oops.
 			Code("CONNECTION_BROKEN").
 			In("ntcp2").
@@ -167,12 +168,14 @@ func (nc *NTCP2Conn) readAndDecryptFrame(underlying net.Conn, frameLen uint16) (
 	nRead, err := io.ReadFull(underlying, ciphertext)
 	if err != nil {
 		nc.broken.Store(true)
-		log.WithField("frame_length", frameLen).
-			WithField("bytes_read", nRead).
-			WithField("read_nonce", nc.readNonce).
-			WithField("remote_addr", nc.remoteAddr.String()).
-			WithError(err).
-			Error("Frame data read failed (SipHash deobfuscated length may be wrong)")
+		log.WithFields(logger.Fields{
+			"pkg":          "ntcp2",
+			"func":         "NTCP2Conn.readAndDecryptFrame",
+			"frame_length": frameLen,
+			"bytes_read":   nRead,
+			"read_nonce":   nc.readNonce,
+			"remote_addr":  nc.remoteAddr.String(),
+		}).WithError(err).Error("Frame data read failed (SipHash deobfuscated length may be wrong)")
 		return nil, oops.
 			Code("READ_FRAME_FAILED").
 			In("ntcp2").
@@ -217,7 +220,7 @@ func (nc *NTCP2Conn) bufferPlaintext(b, plaintext []byte) int {
 // is applied before returning the error.
 func (nc *NTCP2Conn) validateFrameLength(frameLen uint16) error {
 	if frameLen < MinDataPhaseFrameSize {
-		log.WithField("frame_length", frameLen).Warn("Frame length below minimum")
+		log.WithFields(logger.Fields{"pkg": "ntcp2", "func": "NTCP2Conn.validateFrameLength", "frame_length": frameLen}).Warn("Frame length below minimum")
 		nc.applyProbingResistanceDelay()
 		return oops.
 			Code("FRAME_TOO_SMALL").
@@ -249,7 +252,7 @@ func (nc *NTCP2Conn) validateFrameLength(frameLen uint16) error {
 // MaxFrameSize minus Poly1305Overhead bytes of plaintext each.
 func (nc *NTCP2Conn) Write(b []byte) (int, error) {
 	if nc.broken.Load() {
-		log.Warn("Write attempted on broken NTCP2 connection")
+		log.WithFields(logger.Fields{"pkg": "ntcp2", "func": "NTCP2Conn.Write"}).Warn("Write attempted on broken NTCP2 connection")
 		return 0, oops.
 			Code("CONNECTION_BROKEN").
 			In("ntcp2").

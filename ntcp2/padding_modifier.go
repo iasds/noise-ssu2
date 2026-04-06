@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/go-i2p/go-noise/handshake"
+	"github.com/go-i2p/logger"
 	"github.com/samber/oops"
 )
 
@@ -54,7 +55,7 @@ func NewNTCP2PaddingModifier(name string, minPadding, maxPadding int, useAEADPad
 // A paddingRatio of 0.0 means no ratio-based padding (uses min/max only).
 // A paddingRatio of 1.0 means 100% padding (double the message size).
 func NewNTCP2PaddingModifierWithRatio(name string, minPadding, maxPadding int, useAEADPadding bool, paddingRatio float64) (*NTCP2PaddingModifier, error) {
-	log.WithField("name", name).Debug("Creating NTCP2 padding modifier")
+	log.WithFields(logger.Fields{"pkg": "ntcp2", "func": "NewNTCP2PaddingModifierWithRatio", "name": name}).Debug("Creating NTCP2 padding modifier")
 	engine, err := handshake.NewPaddingEngine(handshake.PaddingEngineConfig{
 		MinPadding:   minPadding,
 		MaxPadding:   maxPadding,
@@ -96,11 +97,11 @@ func (npm *NTCP2PaddingModifier) ModifyOutbound(phase handshake.HandshakePhase, 
 
 	paddingSize := npm.engine.CalculatePaddingSize(len(data))
 	if paddingSize == 0 {
-		log.Debug("No padding needed for outbound data")
+		log.WithFields(logger.Fields{"pkg": "ntcp2", "func": "NTCP2PaddingModifier.ModifyOutbound"}).Debug("No padding needed for outbound data")
 		return data, nil
 	}
 
-	log.WithField("padding_size", paddingSize).Debug("Adding NTCP2 outbound padding")
+	log.WithFields(logger.Fields{"pkg": "ntcp2", "func": "NTCP2PaddingModifier.ModifyOutbound", "padding_size": paddingSize}).Debug("Adding NTCP2 outbound padding")
 
 	if npm.useAEADPadding && phase > handshake.PhaseFinal {
 		return npm.engine.AddAEADPadding(data, paddingSize)
@@ -119,7 +120,7 @@ func (npm *NTCP2PaddingModifier) ModifyInbound(phase handshake.HandshakePhase, d
 	npm.mu.Lock()
 	defer npm.mu.Unlock()
 
-	log.Debug("Removing NTCP2 inbound padding")
+	log.WithFields(logger.Fields{"pkg": "ntcp2", "func": "NTCP2PaddingModifier.ModifyInbound"}).Debug("Removing NTCP2 inbound padding")
 
 	if npm.useAEADPadding && phase > handshake.PhaseFinal {
 		return npm.engine.RemoveTrailingAEADPadding(data, npm.engine.Config.MaxPadding)

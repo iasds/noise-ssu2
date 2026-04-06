@@ -3,12 +3,13 @@ package internal
 import (
 	"time"
 
+	"github.com/go-i2p/logger"
 	"github.com/samber/oops"
 )
 
 // ValidatePattern checks that a Noise protocol pattern is non-empty.
 func ValidatePattern(pattern, pkg string) error {
-	log.WithField("pattern", pattern).WithField("pkg", pkg).Debug("Validating pattern")
+	log.WithFields(logger.Fields{"pkg": "internal", "func": "ValidatePattern", "pattern": pattern, "calling_pkg": pkg}).Debug("Validating pattern")
 	if pattern == "" {
 		return oops.
 			Code("INVALID_PATTERN").
@@ -20,7 +21,7 @@ func ValidatePattern(pattern, pkg string) error {
 
 // ValidateHandshakeTimeout checks that the handshake timeout is positive.
 func ValidateHandshakeTimeout(timeout time.Duration, pkg string) error {
-	log.WithField("timeout", timeout).WithField("pkg", pkg).Debug("Validating handshake timeout")
+	log.WithFields(logger.Fields{"pkg": "internal", "func": "ValidateHandshakeTimeout", "timeout": timeout, "calling_pkg": pkg}).Debug("Validating handshake timeout")
 	if timeout <= 0 {
 		return oops.
 			Code("INVALID_TIMEOUT").
@@ -33,7 +34,7 @@ func ValidateHandshakeTimeout(timeout time.Duration, pkg string) error {
 
 // ValidateKeyLength checks that a key is either empty or exactly 32 bytes.
 func ValidateKeyLength(key []byte, name, pkg string) error {
-	log.WithField("key_name", name).WithField("key_len", len(key)).WithField("pkg", pkg).Debug("Validating key length")
+	log.WithFields(logger.Fields{"pkg": "internal", "func": "ValidateKeyLength", "key_name": name, "key_len": len(key), "calling_pkg": pkg}).Debug("Validating key length")
 	if len(key) > 0 && len(key) != 32 {
 		return oops.
 			Code("INVALID_KEY_LENGTH").
@@ -47,7 +48,7 @@ func ValidateKeyLength(key []byte, name, pkg string) error {
 // RunValidators executes a sequence of validation functions, returning the
 // first error encountered or nil if all pass.
 func RunValidators(validators ...func() error) error {
-	log.WithField("validator_count", len(validators)).Debug("Running validators")
+	log.WithFields(logger.Fields{"pkg": "internal", "func": "RunValidators", "validator_count": len(validators)}).Debug("Running validators")
 	for _, v := range validators {
 		if err := v(); err != nil {
 			return err
@@ -58,7 +59,7 @@ func RunValidators(validators ...func() error) error {
 
 // ValidateRetryConfig checks that retry parameters are within valid ranges.
 func ValidateRetryConfig(retries int, backoff time.Duration, pkg string) error {
-	log.WithField("retries", retries).WithField("backoff", backoff).WithField("pkg", pkg).Debug("Validating retry config")
+	log.WithFields(logger.Fields{"pkg": "internal", "func": "ValidateRetryConfig", "retries": retries, "backoff": backoff, "calling_pkg": pkg}).Debug("Validating retry config")
 	if retries < -1 {
 		return oops.
 			Code("INVALID_RETRY_COUNT").

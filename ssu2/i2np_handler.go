@@ -3,12 +3,13 @@ package ssu2
 import (
 	"encoding/binary"
 
+	"github.com/go-i2p/logger"
 	"github.com/samber/oops"
 )
 
 // handleI2NPMessage queues a complete I2NP message for delivery.
 func (h *DataHandler) handleI2NPMessage(data []byte) error {
-	log.WithField("dataLen", len(data)).Debug("handleI2NPMessage: queuing I2NP message for delivery")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "handleI2NPMessage", "dataLen": len(data)}).Debug("Queuing I2NP message for delivery")
 	if len(data) == 0 {
 		h.incrementStat(&h.stats.MessagesDropped)
 		return oops.Errorf("I2NP message block is empty")
@@ -45,7 +46,9 @@ func (h *DataHandler) handleTermination(data []byte) error {
 	reason := data[8]
 	additionalData := data[9:]
 
-	log.WithFields(map[string]interface{}{
+	log.WithFields(logger.Fields{
+		"pkg":               "ssu2",
+		"func":              "handleTermination",
 		"validDataReceived": validDataReceived,
 		"reason":            reason,
 		"additionalDataLen": len(additionalData),
@@ -66,7 +69,7 @@ func (h *DataHandler) handleNewToken(data []byte) error {
 		return oops.Errorf("NewToken block too short: %d bytes, need 12", len(data))
 	}
 
-	log.WithField("tokenLength", len(data)).Debug("Received NewToken block")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "handleNewToken", "tokenLength": len(data)}).Debug("Received NewToken block")
 
 	cbs := h.getCallbacks()
 	if cbs.OnNewToken != nil {
@@ -85,7 +88,7 @@ func (h *DataHandler) handleNextNonce(data []byte) error {
 
 	newNonce := binary.BigEndian.Uint64(data[0:8])
 
-	log.WithField("newNonce", newNonce).Debug("Received NextNonce block")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "handleNextNonce", "newNonce": newNonce}).Debug("Received NextNonce block")
 
 	cbs := h.getCallbacks()
 	if cbs.OnNextNonce != nil {
@@ -103,7 +106,7 @@ func (h *DataHandler) handleFirstPacketNumber(data []byte) error {
 
 	packetNumber := binary.BigEndian.Uint32(data[0:4])
 
-	log.WithField("packetNumber", packetNumber).Debug("Received FirstPacketNumber block")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "handleFirstPacketNumber", "packetNumber": packetNumber}).Debug("Received FirstPacketNumber block")
 
 	cbs := h.getCallbacks()
 	if cbs.OnFirstPacketNumber != nil {
@@ -121,7 +124,7 @@ func (h *DataHandler) handleCongestion(data []byte) error {
 
 	flags := data[0]
 
-	log.WithField("flags", flags).Debug("Received Congestion block")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "handleCongestion", "flags": flags}).Debug("Received Congestion block")
 
 	cbs := h.getCallbacks()
 	if cbs.OnCongestion != nil {
@@ -140,7 +143,7 @@ func (h *DataHandler) handleSignedRelayBlock(
 	verify func() error, // nil if no verifier wired
 	dispatch func() error, // nil if no callback wired
 ) error {
-	log.WithField("dataLength", len(block.Data)).Debug("Received " + label + " block")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "handleSignedRelayBlock", "dataLength": len(block.Data)}).Debug("Received " + label + " block")
 
 	sig, err := decode(block)
 	if err != nil {
@@ -195,7 +198,7 @@ func (h *DataHandler) handleRelayRequest(block *SSU2Block) error {
 // Per SSU2 spec §Relay Response, signatures MUST be verified for
 // accepted (code 0) and Charlie-rejected (code >= 64) responses (G-2).
 func (h *DataHandler) handleRelayResponse(block *SSU2Block) error {
-	log.WithField("dataLength", len(block.Data)).Debug("Received RelayResponse block")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "handleRelayResponse", "dataLength": len(block.Data)}).Debug("Received RelayResponse block")
 
 	cbs := h.getCallbacks()
 
@@ -252,7 +255,7 @@ func (h *DataHandler) handleRelayIntro(block *SSU2Block) error {
 
 // handleRelayTagRequest processes a RelayTagRequest block (Type 15).
 func (h *DataHandler) handleRelayTagRequest(block *SSU2Block) error {
-	log.WithField("dataLength", len(block.Data)).Debug("Received RelayTagRequest block")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "handleRelayTagRequest", "dataLength": len(block.Data)}).Debug("Received RelayTagRequest block")
 
 	cbs := h.getCallbacks()
 	if cbs.OnRelayTagRequest != nil {
@@ -264,7 +267,7 @@ func (h *DataHandler) handleRelayTagRequest(block *SSU2Block) error {
 
 // handleRelayTag processes a RelayTag block (Type 16).
 func (h *DataHandler) handleRelayTag(block *SSU2Block) error {
-	log.WithField("dataLength", len(block.Data)).Debug("Received RelayTag block")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "handleRelayTag", "dataLength": len(block.Data)}).Debug("Received RelayTag block")
 
 	cbs := h.getCallbacks()
 	if cbs.OnRelayTag != nil {
@@ -277,7 +280,7 @@ func (h *DataHandler) handleRelayTag(block *SSU2Block) error {
 // handlePeerTest processes a PeerTest block (Type 10).
 // Per SSU2 spec §Peer Test, signatures MUST be verified for messages 1-4 (G-2).
 func (h *DataHandler) handlePeerTest(block *SSU2Block) error {
-	log.WithField("dataLength", len(block.Data)).Debug("Received PeerTest block")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "handlePeerTest", "dataLength": len(block.Data)}).Debug("Received PeerTest block")
 
 	cbs := h.getCallbacks()
 
@@ -307,7 +310,7 @@ func (h *DataHandler) handlePeerTest(block *SSU2Block) error {
 
 // handlePathChallenge processes a PathChallenge block (Type 18).
 func (h *DataHandler) handlePathChallenge(data []byte) error {
-	log.WithField("dataLength", len(data)).Debug("Received PathChallenge block")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "handlePathChallenge", "dataLength": len(data)}).Debug("Received PathChallenge block")
 
 	cbs := h.getCallbacks()
 	if cbs.OnPathChallenge != nil {
@@ -319,7 +322,7 @@ func (h *DataHandler) handlePathChallenge(data []byte) error {
 
 // handlePathResponse processes a PathResponse block (Type 19).
 func (h *DataHandler) handlePathResponse(data []byte) error {
-	log.WithField("dataLength", len(data)).Debug("Received PathResponse block")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "handlePathResponse", "dataLength": len(data)}).Debug("Received PathResponse block")
 
 	cbs := h.getCallbacks()
 	if cbs.OnPathResponse != nil {
@@ -348,7 +351,7 @@ func (h *DataHandler) handleDateTime(data []byte) error {
 
 // handleOptions processes an Options block (Type 1).
 func (h *DataHandler) handleOptions(data []byte) error {
-	log.WithField("dataLength", len(data)).Debug("Received Options block")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "handleOptions", "dataLength": len(data)}).Debug("Received Options block")
 
 	cbs := h.getCallbacks()
 	if cbs.OnOptions != nil {
@@ -360,7 +363,7 @@ func (h *DataHandler) handleOptions(data []byte) error {
 
 // handleRouterInfo processes a RouterInfo block (Type 2).
 func (h *DataHandler) handleRouterInfo(data []byte) error {
-	log.WithField("dataLength", len(data)).Debug("Received RouterInfo block")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "handleRouterInfo", "dataLength": len(data)}).Debug("Received RouterInfo block")
 
 	cbs := h.getCallbacks()
 	if cbs.OnRouterInfo != nil {
@@ -373,7 +376,7 @@ func (h *DataHandler) handleRouterInfo(data []byte) error {
 // handleAddress processes an Address block (Type 13).
 // Address format: IP (4 or 16 bytes) + Port (2 bytes)
 func (h *DataHandler) handleAddress(data []byte) error {
-	log.WithField("dataLength", len(data)).Debug("Received Address block")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "handleAddress", "dataLength": len(data)}).Debug("Received Address block")
 
 	cbs := h.getCallbacks()
 	if cbs.OnAddress != nil {

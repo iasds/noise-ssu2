@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-i2p/logger"
 	"github.com/samber/oops"
 )
 
@@ -67,7 +68,7 @@ type SendReceiver interface {
 //
 // Returns an initialized but not yet started manager.
 func NewKeepaliveManager(conn SendReceiver, interval, timeout time.Duration) *KeepaliveManager {
-	log.WithField("interval", interval).WithField("timeout", timeout).Debug("Creating new KeepaliveManager")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "NewKeepaliveManager", "interval": interval, "timeout": timeout}).Debug("Creating new KeepaliveManager")
 	if interval <= 0 {
 		interval = 15 * time.Second // ssu2.rst default
 	}
@@ -95,7 +96,7 @@ func NewKeepaliveManager(conn SendReceiver, interval, timeout time.Duration) *Ke
 //
 // This method is idempotent - calling Start() multiple times has no effect.
 func (km *KeepaliveManager) Start() {
-	log.Debug("Starting keepalive manager")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "Start"}).Debug("Starting keepalive manager")
 	km.mutex.Lock()
 	defer km.mutex.Unlock()
 
@@ -116,7 +117,7 @@ func (km *KeepaliveManager) Start() {
 // This method blocks until the goroutine has fully stopped.
 // It is idempotent and safe to call multiple times.
 func (km *KeepaliveManager) Stop() {
-	log.Debug("Stopping keepalive manager")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "Stop"}).Debug("Stopping keepalive manager")
 	km.mutex.Lock()
 	if !km.started {
 		km.mutex.Unlock()
@@ -198,7 +199,7 @@ func (km *KeepaliveManager) GetTimeSinceLastSent() time.Duration {
 // The keepalive packet is sent via SendKeepalive() which should send a minimal
 // DateTime block to maintain the UDP state without excessive overhead.
 func (km *KeepaliveManager) keepaliveLoop() {
-	log.Debug("keepaliveLoop: starting keepalive loop")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "keepaliveLoop"}).Debug("keepaliveLoop: starting keepalive loop")
 	defer close(km.done)
 	tickC := km.ticker.C
 	for {

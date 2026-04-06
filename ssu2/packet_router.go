@@ -5,6 +5,7 @@ import (
 	"net"
 	"sync"
 
+	"github.com/go-i2p/logger"
 	"github.com/samber/oops"
 )
 
@@ -41,7 +42,7 @@ type PacketRouter struct {
 //
 // Returns a new PacketRouter ready to route packets.
 func NewPacketRouter(newSessionHandler func(*net.UDPAddr, *SSU2Packet) (*SSU2Conn, error)) *PacketRouter {
-	log.Debug("Creating new PacketRouter")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "NewPacketRouter"}).Debug("Creating new PacketRouter")
 	return &PacketRouter{
 		sessions:          make(map[uint64]*SSU2Conn),
 		newSessionHandler: newSessionHandler,
@@ -56,7 +57,7 @@ func NewPacketRouter(newSessionHandler func(*net.UDPAddr, *SSU2Packet) (*SSU2Con
 //
 // Returns error if the connection ID is already registered.
 func (pr *PacketRouter) AddSession(conn *SSU2Conn) error {
-	log.Debug("Adding session to packet router")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "AddSession"}).Debug("Adding session to packet router")
 	if conn == nil {
 		return oops.
 			Code("INVALID_SESSION").
@@ -94,7 +95,7 @@ func (pr *PacketRouter) AddSession(conn *SSU2Conn) error {
 // Parameters:
 //   - connID: The connection ID to remove
 func (pr *PacketRouter) RemoveSession(connID uint64) {
-	log.WithField("connID", connID).Debug("Removing session from packet router")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "RemoveSession", "connID": connID}).Debug("Removing session from packet router")
 	pr.sessionMutex.Lock()
 	defer pr.sessionMutex.Unlock()
 
@@ -125,7 +126,7 @@ func (pr *PacketRouter) GetSession(connID uint64) *SSU2Conn {
 //
 // Returns error if routing fails or session doesn't exist.
 func (pr *PacketRouter) RoutePacket(packet *SSU2Packet, remoteAddr *net.UDPAddr) error {
-	log.Debug("Routing incoming packet")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "RoutePacket"}).Debug("Routing incoming packet")
 	if packet == nil {
 		return oops.
 			Code("INVALID_PACKET").
@@ -205,7 +206,7 @@ func (pr *PacketRouter) RoutePacket(packet *SSU2Packet, remoteAddr *net.UDPAddr)
 //   - uint64: The destination connection ID
 //   - error: If header is invalid or too short
 func (pr *PacketRouter) ExtractConnectionID(header []byte) (uint64, error) {
-	log.WithField("headerLen", len(header)).Debug("ExtractConnectionID: extracting connection ID from header")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "ExtractConnectionID", "headerLen": len(header)}).Debug("ExtractConnectionID: extracting connection ID from header")
 	// Validate header size
 	if len(header) < ShortHeaderSize {
 		return 0, oops.

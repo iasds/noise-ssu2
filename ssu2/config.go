@@ -31,7 +31,7 @@ const (
 // the static key authenticated by the Noise handshake corresponds to the
 // key published in the peer's RouterInfo.
 func DefaultRouterInfoValidator(routerInfo []byte, authenticatedStaticKey []byte) error {
-	log.WithFields(logger.Fields{"router_info_len": len(routerInfo), "static_key_len": len(authenticatedStaticKey)}).Debug("DefaultRouterInfoValidator: validating router info against authenticated static key")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "DefaultRouterInfoValidator", "router_info_len": len(routerInfo), "static_key_len": len(authenticatedStaticKey)}).Debug("Validating router info against authenticated static key")
 	if len(routerInfo) == 0 {
 		return oops.
 			Code("EMPTY_ROUTER_INFO").
@@ -259,7 +259,7 @@ type SSU2Config struct {
 // routerHash is the local router identity hash.
 // initiator indicates whether this connection will initiate the handshake.
 func NewSSU2Config(routerHash data.Hash, initiator bool) (*SSU2Config, error) {
-	log.WithField("initiator", initiator).Debug("Creating new SSU2Config")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "NewSSU2Config", "initiator": initiator}).Debug("Creating new SSU2Config")
 	return &SSU2Config{
 		Pattern:                 "XK",
 		Initiator:               initiator,
@@ -483,7 +483,7 @@ func (sc *SSU2Config) WithRouterInfoValidator(validator func(routerInfo []byte, 
 
 // Validate checks if the configuration is valid for SSU2.
 func (sc *SSU2Config) Validate() error {
-	log.Debug("Validating SSU2Config")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "Validate"}).Debug("Validating SSU2Config")
 	return internal.RunValidators(
 		sc.validateBasicConfiguration,
 		sc.validateCryptographicParameters,
@@ -495,7 +495,7 @@ func (sc *SSU2Config) Validate() error {
 
 // validateBasicConfiguration checks pattern and router hash requirements.
 func (sc *SSU2Config) validateBasicConfiguration() error {
-	log.WithField("pattern", sc.Pattern).Debug("validateBasicConfiguration: checking pattern and router hash")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "validateBasicConfiguration", "pattern": sc.Pattern}).Debug("Checking pattern and router hash")
 	// Validate pattern (SSU2 typically uses XK)
 	if err := internal.ValidatePattern(sc.Pattern, "ssu2"); err != nil {
 		return err
@@ -506,7 +506,7 @@ func (sc *SSU2Config) validateBasicConfiguration() error {
 
 // validateCryptographicParameters checks keys, hashes, and obfuscation settings.
 func (sc *SSU2Config) validateCryptographicParameters() error {
-	log.WithFields(logger.Fields{"initiator": sc.Initiator, "has_static_key": len(sc.StaticKey) > 0}).Debug("validateCryptographicParameters: checking keys and obfuscation settings")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "validateCryptographicParameters", "initiator": sc.Initiator, "has_static_key": len(sc.StaticKey) > 0}).Debug("Checking keys and obfuscation settings")
 	// Validate static key if provided
 	if err := internal.ValidateKeyLength(sc.StaticKey, "static key", "ssu2"); err != nil {
 		return err
@@ -553,7 +553,7 @@ func (sc *SSU2Config) validateCryptographicParameters() error {
 
 // validateTimeoutConfiguration checks handshake timeouts and retry settings.
 func (sc *SSU2Config) validateTimeoutConfiguration() error {
-	log.WithFields(logger.Fields{"handshake_timeout": sc.HandshakeTimeout, "keepalive_interval": sc.KeepaliveInterval}).Debug("validateTimeoutConfiguration: checking timeout and retry settings")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "validateTimeoutConfiguration", "handshake_timeout": sc.HandshakeTimeout, "keepalive_interval": sc.KeepaliveInterval}).Debug("Checking timeout and retry settings")
 	// Validate handshake timeout
 	if err := internal.ValidateHandshakeTimeout(sc.HandshakeTimeout, "ssu2"); err != nil {
 		return err
@@ -578,7 +578,7 @@ func (sc *SSU2Config) validateTimeoutConfiguration() error {
 
 // validateUDPConfiguration checks MTU, packet size, and fragmentation settings.
 func (sc *SSU2Config) validateUDPConfiguration() error {
-	log.WithFields(logger.Fields{"mtu": sc.MTU, "max_packet_size": sc.MaxPacketSize}).Debug("validateUDPConfiguration: checking MTU and packet size settings")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "validateUDPConfiguration", "mtu": sc.MTU, "max_packet_size": sc.MaxPacketSize}).Debug("Checking MTU and packet size settings")
 	// Validate MTU (IPv6 minimum is 1280, typical Ethernet is 1500)
 	if sc.MTU < 1280 || sc.MTU > 1500 {
 		return oops.
@@ -612,7 +612,7 @@ func (sc *SSU2Config) validateUDPConfiguration() error {
 
 // validatePaddingConfiguration checks padding ranges and ratios.
 func (sc *SSU2Config) validatePaddingConfiguration() error {
-	log.WithFields(logger.Fields{"enabled": sc.PaddingEnabled, "min": sc.MinPaddingSize, "max": sc.MaxPaddingSize, "ratio": sc.PaddingRatio}).Debug("validatePaddingConfiguration: checking padding ranges and ratios")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "validatePaddingConfiguration", "enabled": sc.PaddingEnabled, "min": sc.MinPaddingSize, "max": sc.MaxPaddingSize, "ratio": sc.PaddingRatio}).Debug("Checking padding ranges and ratios")
 	if err := handshake.ValidatePaddingRange("ssu2", sc.MinPaddingSize, sc.MaxPaddingSize); err != nil {
 		return err
 	}
@@ -632,7 +632,7 @@ func (sc *SSU2Config) validatePaddingConfiguration() error {
 // ToConnConfig converts SSU2Config to a standard ConnConfig for use with NoiseConn.
 // This includes setting up SSU2-specific modifiers based on the configuration.
 func (sc *SSU2Config) ToConnConfig() (*noise.ConnConfig, error) {
-	log.Debug("Converting SSU2Config to ConnConfig")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "ToConnConfig"}).Debug("Converting SSU2Config to ConnConfig")
 	if err := sc.Validate(); err != nil {
 		return nil, oops.
 			Code("INVALID_CONFIG").

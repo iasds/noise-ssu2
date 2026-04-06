@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/go-i2p/crypto/rand"
+	"github.com/go-i2p/logger"
 	"github.com/samber/oops"
 )
 
@@ -14,7 +15,7 @@ import (
 func (nc *NTCP2Conn) guardReadNonce() error {
 	if nc.readNonce >= MaxNonce {
 		nc.broken.Store(true)
-		log.WithField("read_nonce", nc.readNonce).Error("Read nonce exhausted, connection must be terminated")
+		log.WithFields(logger.Fields{"pkg": "ntcp2", "func": "NTCP2Conn.guardReadNonce", "read_nonce": nc.readNonce}).Error("Read nonce exhausted, connection must be terminated")
 		return oops.
 			Code("NONCE_EXHAUSTED").
 			In("ntcp2").
@@ -30,7 +31,7 @@ func (nc *NTCP2Conn) guardReadNonce() error {
 func (nc *NTCP2Conn) guardWriteNonce() error {
 	if nc.writeNonce >= MaxNonce {
 		nc.broken.Store(true)
-		log.WithField("write_nonce", nc.writeNonce).Error("Write nonce exhausted, connection must be terminated")
+		log.WithFields(logger.Fields{"pkg": "ntcp2", "func": "NTCP2Conn.guardWriteNonce", "write_nonce": nc.writeNonce}).Error("Write nonce exhausted, connection must be terminated")
 		return oops.
 			Code("NONCE_EXHAUSTED").
 			In("ntcp2").
@@ -59,7 +60,7 @@ func (nc *NTCP2Conn) applyProbingResistanceDelay() {
 // Termination blocks (reason code 4 = AEAD failure) are handled by the
 // router transport layer (go-i2p/go-i2p/lib/transport/ntcp).
 func (nc *NTCP2Conn) handleAEADError(underlying net.Conn) {
-	log.Warn("AEAD error detected, applying probing-resistance behaviour")
+	log.WithFields(logger.Fields{"pkg": "ntcp2", "func": "NTCP2Conn.handleAEADError"}).Warn("AEAD error detected, applying probing-resistance behaviour")
 	nc.broken.Store(true)
 
 	// Generate a random byte count (0–AEADErrorMaxJunkBytes) to read before returning.
@@ -115,7 +116,7 @@ func randomAEADTimeout() time.Duration {
 // Sets underlyingClosed so that the subsequent NTCP2Conn.Close() call skips a
 // second close of the same socket, avoiding an fd-reuse double-close race.
 func (nc *NTCP2Conn) sendTCPRST(conn net.Conn) {
-	log.Debug("Sending TCP RST (abnormal close) per NTCP2 spec")
+	log.WithFields(logger.Fields{"pkg": "ntcp2", "func": "NTCP2Conn.sendTCPRST"}).Debug("Sending TCP RST (abnormal close) per NTCP2 spec")
 	if tcpConn, ok := conn.(*net.TCPConn); ok {
 		tcpConn.SetLinger(0) //nolint:errcheck
 		tcpConn.Close()      //nolint:errcheck

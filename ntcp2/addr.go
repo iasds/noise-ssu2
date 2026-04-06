@@ -9,6 +9,7 @@ import (
 
 	i2pbase64 "github.com/go-i2p/common/base64"
 	"github.com/go-i2p/common/data"
+	"github.com/go-i2p/logger"
 	"github.com/samber/oops"
 )
 
@@ -30,7 +31,7 @@ type NTCP2Addr struct {
 // routerHash is the I2P router identity hash.
 // role should be either "initiator" or "responder".
 func NewNTCP2Addr(underlying net.Addr, routerHash data.Hash, role string) (*NTCP2Addr, error) {
-	log.WithField("role", role).Debug("Creating new NTCP2Addr")
+	log.WithFields(logger.Fields{"pkg": "ntcp2", "func": "NewNTCP2Addr", "role": role}).Debug("Creating new NTCP2Addr")
 	if underlying == nil {
 		return nil, oops.
 			Code("INVALID_UNDERLYING_ADDR").
@@ -92,7 +93,7 @@ func (na *NTCP2Addr) IdentHash() [32]byte {
 // This is used to update a placeholder zero hash after the Noise handshake
 // reveals the remote peer's static key.
 func (na *NTCP2Addr) SetRouterHash(routerHash data.Hash) {
-	log.Debug("SetRouterHash: updating router identity hash")
+	log.WithFields(logger.Fields{"pkg": "ntcp2", "func": "NTCP2Addr.SetRouterHash"}).Debug("Updating router identity hash")
 	na.mu.Lock()
 	na.routerHash = routerHash
 	na.mu.Unlock()

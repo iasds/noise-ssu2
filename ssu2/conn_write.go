@@ -6,6 +6,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/go-i2p/logger"
 	"github.com/samber/oops"
 )
 
@@ -23,7 +24,7 @@ import (
 // ShortExpiry for the FirstFragment/FollowOnFragment blocks, treating b[0] as
 // the I2NP type byte and the rest as body data.
 func (h *SSU2Conn) Write(b []byte) (int, error) {
-	log.WithField("dataLen", len(b)).Debug("Write: sending data")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "Write", "dataLen": len(b)}).Debug("sending data")
 	if err := h.validateReadyForIO(); err != nil {
 		return 0, err
 	}
@@ -62,7 +63,7 @@ func (h *SSU2Conn) Write(b []byte) (int, error) {
 // FirstFragment (type 4): I2NPType(1) + MessageID(4) + ShortExpiry(4) + data
 // FollowOnFragment (type 5): FragInfo(1) + MessageID(4) + data
 func (h *SSU2Conn) buildI2NPFragmentBlocks(data []byte, maxBlockData int) ([]*SSU2Block, error) {
-	log.WithFields(map[string]interface{}{"dataLen": len(data), "maxBlockData": maxBlockData}).Debug("buildI2NPFragmentBlocks: fragmenting I2NP message")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "buildI2NPFragmentBlocks", "dataLen": len(data), "maxBlockData": maxBlockData}).Debug("fragmenting I2NP message")
 	const (
 		firstFragHeaderSize    = 9 // type(1) + msgID(4) + shortExpiry(4)
 		followOnFragHeaderSize = 5 // fragInfo(1) + msgID(4)
@@ -135,7 +136,7 @@ func (h *SSU2Conn) buildI2NPFragmentBlocks(data []byte, maxBlockData int) ([]*SS
 // blocks (BlockTypeFirstFragment / BlockTypeFollowOnFragment) for large I2NP
 // messages.
 func (h *SSU2Conn) WriteBlocks(blocks []*SSU2Block) error {
-	log.WithField("blockCount", len(blocks)).Debug("WriteBlocks: sending blocks")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "WriteBlocks", "blockCount": len(blocks)}).Debug("sending blocks")
 	if err := h.validateReadyForIO(); err != nil {
 		return err
 	}
@@ -150,7 +151,7 @@ func (h *SSU2Conn) WriteBlocks(blocks []*SSU2Block) error {
 // newDataPacket allocates a fresh SSU2 Data packet with the next sequence
 // number and a populated short header (connID + pktNum).
 func (h *SSU2Conn) newDataPacket() *SSU2Packet {
-	log.Debug("newDataPacket: allocating data packet")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "newDataPacket"}).Debug("allocating data packet")
 	pktNum := h.nextSendSequence()
 	hdr := make([]byte, ShortHeaderSize)
 	binary.BigEndian.PutUint64(hdr[0:8], h.remoteConnectionID)
@@ -165,7 +166,7 @@ func (h *SSU2Conn) newDataPacket() *SSU2Packet {
 
 // writeBlock sends a single SSU2Block as a Data packet.
 func (h *SSU2Conn) writeBlock(block *SSU2Block) error {
-	log.WithField("blockType", block.Type).Debug("writeBlock: sending block")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "writeBlock", "blockType": block.Type}).Debug("sending block")
 	packet := h.newDataPacket()
 
 	// Serialize block into payload
@@ -188,7 +189,7 @@ func (h *SSU2Conn) writeBlock(block *SSU2Block) error {
 
 // sendLoop handles outbound packet transmission.
 func (h *SSU2Conn) sendLoop() {
-	log.Debug("sendLoop: starting outbound packet transmission loop")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "sendLoop"}).Debug("starting outbound packet transmission loop")
 	defer h.wg.Done()
 
 	for {
@@ -207,7 +208,7 @@ func (h *SSU2Conn) sendLoop() {
 // retransmitLoop periodically scans pendingPackets for RTO expiry and
 // re-enqueues expired packets. Packets exceeding maxPacketRetries are dropped.
 func (h *SSU2Conn) retransmitLoop() {
-	log.Debug("retransmitLoop: starting retransmit loop")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "retransmitLoop"}).Debug("starting retransmit loop")
 	defer h.wg.Done()
 
 	ticker := time.NewTicker(retransmitInterval)
@@ -226,7 +227,7 @@ func (h *SSU2Conn) retransmitLoop() {
 // retransmitExpired checks all pending packets and retransmits those that
 // have exceeded their NextRetry deadline.
 func (h *SSU2Conn) retransmitExpired() {
-	log.Debug("retransmitExpired: checking pending packets for retransmission")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "retransmitExpired"}).Debug("checking pending packets for retransmission")
 	now := time.Now()
 	rto := h.rttEstimator.GetRTO()
 
@@ -267,7 +268,7 @@ func (h *SSU2Conn) retransmitExpired() {
 // sendPacketDirect sends a packet directly to the peer.
 // For data packets in the established state, the payload is encrypted with AEAD.
 func (h *SSU2Conn) sendPacketDirect(packet *SSU2Packet) error {
-	log.WithFields(map[string]interface{}{"pktNum": packet.PacketNumber, "msgType": packet.MessageType}).Debug("sendPacketDirect: sending packet")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "sendPacketDirect", "pktNum": packet.PacketNumber, "msgType": packet.MessageType}).Debug("sending packet")
 	plaintextPayload, err := h.encryptDataPayload(packet)
 	if err != nil {
 		return err
@@ -300,7 +301,7 @@ func (h *SSU2Conn) sendPacketDirect(packet *SSU2Packet) error {
 // encryptDataPayload encrypts the payload for data packets using AEAD.
 // Returns a copy of the plaintext payload for potential retransmit.
 func (h *SSU2Conn) encryptDataPayload(packet *SSU2Packet) ([]byte, error) {
-	log.WithFields(map[string]interface{}{"pktNum": packet.PacketNumber, "payloadLen": len(packet.Payload)}).Debug("encryptDataPayload: encrypting payload")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "encryptDataPayload", "pktNum": packet.PacketNumber, "payloadLen": len(packet.Payload)}).Debug("encrypting payload")
 	var plaintextPayload []byte
 
 	h.cipherMutex.Lock()
@@ -326,7 +327,7 @@ func (h *SSU2Conn) encryptDataPayload(packet *SSU2Packet) ([]byte, error) {
 
 // applySipHashObfuscation applies SipHash length obfuscation to header bytes 14-15.
 func (h *SSU2Conn) applySipHashObfuscation(packet *SSU2Packet) {
-	log.WithField("msgType", packet.MessageType).Debug("applySipHashObfuscation: applying length obfuscation")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "applySipHashObfuscation", "msgType": packet.MessageType}).Debug("applying length obfuscation")
 	if mod := h.sipHashModifier.Load(); mod != nil && packet.MessageType == MessageTypeData {
 		dataLen := uint16(len(packet.Payload))
 		mask := mod.NextOutboundMask()
@@ -336,7 +337,7 @@ func (h *SSU2Conn) applySipHashObfuscation(packet *SSU2Packet) {
 
 // applyOutboundHeaderProtection encrypts the outbound header if protection is enabled.
 func (h *SSU2Conn) applyOutboundHeaderProtection(data []byte, messageType uint8) error {
-	log.WithField("msgType", messageType).Debug("applyOutboundHeaderProtection: encrypting header")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "applyOutboundHeaderProtection", "msgType": messageType}).Debug("encrypting header")
 	if h.headerProtector == nil {
 		return nil
 	}
@@ -349,7 +350,7 @@ func (h *SSU2Conn) applyOutboundHeaderProtection(data []byte, messageType uint8)
 
 // trackPendingPacket records a sent data packet for potential retransmission.
 func (h *SSU2Conn) trackPendingPacket(packet *SSU2Packet, plaintext []byte) {
-	log.WithField("pktNum", packet.PacketNumber).Debug("trackPendingPacket: recording packet for retransmission")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "trackPendingPacket", "pktNum": packet.PacketNumber}).Debug("recording packet for retransmission")
 	if packet.MessageType != MessageTypeData || packet.PacketNumber == 0 {
 		return
 	}
@@ -367,7 +368,7 @@ func (h *SSU2Conn) trackPendingPacket(packet *SSU2Packet, plaintext []byte) {
 // sendImmediateACK generates and sends an ACK packet without delay, honoring
 // the immediate-ack flag (header byte 13 bit 0) from the peer.
 func (h *SSU2Conn) sendImmediateACK() {
-	log.Debug("sendImmediateACK: generating and sending immediate ACK")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "sendImmediateACK"}).Debug("generating and sending immediate ACK")
 	ack, err := h.ackHandler.GenerateACK()
 	if err != nil || ack == nil {
 		return
@@ -391,7 +392,7 @@ func (h *SSU2Conn) sendImmediateACK() {
 // If the RequestACK flag (bit 0) is set, triggers an immediate ACK per spec.
 // If the ECN flag (bit 1) is set, signals the congestion controller.
 func (h *SSU2Conn) handleCongestionBlock(flags uint8) error {
-	log.WithField("flags", flags).Debug("handleCongestionBlock: processing congestion block")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "handleCongestionBlock", "flags": flags}).Debug("processing congestion block")
 	if flags&CongestionFlagRequestACK != 0 {
 		h.sendImmediateACK()
 	}
@@ -403,14 +404,14 @@ func (h *SSU2Conn) handleCongestionBlock(flags uint8) error {
 
 // handlePathChallengeData wraps PathValidator.HandlePathChallenge for the DataHandler callback (G-7).
 func (h *SSU2Conn) handlePathChallengeData(data []byte) error {
-	log.WithField("dataLen", len(data)).Debug("handlePathChallengeData: processing path challenge")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "handlePathChallengeData", "dataLen": len(data)}).Debug("processing path challenge")
 	block := &SSU2Block{Type: BlockTypePathChallenge, Data: data}
 	return h.pathValidator.HandlePathChallenge(block, h.remoteAddr)
 }
 
 // handlePathResponseData wraps PathValidator.HandlePathResponse for the DataHandler callback (G-7).
 func (h *SSU2Conn) handlePathResponseData(data []byte) error {
-	log.WithField("dataLen", len(data)).Debug("handlePathResponseData: processing path response")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "handlePathResponseData", "dataLen": len(data)}).Debug("processing path response")
 	block := &SSU2Block{Type: BlockTypePathResponse, Data: data}
 	return h.pathValidator.HandlePathResponse(block, h.remoteAddr)
 }
@@ -429,7 +430,9 @@ func (h *SSU2Conn) handleAddressBlock(data []byte) error {
 	localAddr := h.LocalAddr()
 	if udp, ok := localAddr.(*net.UDPAddr); ok {
 		if !udp.IP.Equal(ip) || udp.Port != int(port) {
-			log.WithFields(map[string]interface{}{
+			log.WithFields(logger.Fields{
+				"pkg":          "ssu2",
+				"func":         "handleAddressBlock",
 				"reportedIP":   ip.String(),
 				"reportedPort": port,
 				"localIP":      udp.IP.String(),
@@ -456,7 +459,7 @@ func (h *SSU2Conn) nextSendSequence() uint32 {
 
 	// Hard reject: do not wrap past 0xFFFFFFFF (G-1).
 	if h.sendSequence == 0xFFFFFFFF {
-		log.Error("packet number exhausted (0xFFFFFFFF): closing connection per SSU2 spec")
+		log.WithFields(logger.Fields{"pkg": "ssu2", "func": "nextSendSequence"}).Error("packet number exhausted (0xFFFFFFFF): closing connection per SSU2 spec")
 		go h.Close()
 		return 0xFFFFFFFF
 	}
@@ -492,19 +495,19 @@ func (h *SSU2Conn) initiateRekey() {
 		return
 	}
 
-	log.Warn("initiating NextNonce rekey (unfinalized spec area — interoperability not guaranteed)")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "initiateRekey"}).Warn("initiating NextNonce rekey (unfinalized spec area — interoperability not guaranteed)")
 
 	// Derive new send cipher key per SSU2 spec §NextNonce:
 	// newKey = HKDF(currentKey, ZEROLEN, "WrapCipherKey", 32).
 	newKey, err := deriveRekeyKey(h.sendCipher)
 	if err != nil {
-		log.WithField("error", err).Error("failed to derive rekey for send cipher")
+		log.WithFields(logger.Fields{"pkg": "ssu2", "func": "initiateRekey", "error": err}).Error("failed to derive rekey for send cipher")
 		return
 	}
 
 	// Send NextNonce block encrypted with the OLD key before rekeying.
 	if err := h.sendNextNonceInline(); err != nil {
-		log.WithField("error", err).Error("failed to send NextNonce block")
+		log.WithFields(logger.Fields{"pkg": "ssu2", "func": "initiateRekey", "error": err}).Error("failed to send NextNonce block")
 		return
 	}
 
@@ -522,7 +525,7 @@ func (h *SSU2Conn) initiateRekey() {
 // bypassing the sendQueue. Must be called while holding cipherMutex so the
 // packet is encrypted with the current (old) key atomically.
 func (h *SSU2Conn) sendNextNonceInline() error {
-	log.Debug("sendNextNonceInline: building and sending NextNonce block")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "sendNextNonceInline"}).Debug("building and sending NextNonce block")
 	// Allocate packet number from the current sequence counter.
 	h.sendSeqMutex.Lock()
 	pktNum := h.sendSequence

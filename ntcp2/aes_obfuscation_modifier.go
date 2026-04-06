@@ -6,6 +6,7 @@ import (
 
 	"github.com/go-i2p/crypto/aes"
 	"github.com/go-i2p/go-noise/handshake"
+	"github.com/go-i2p/logger"
 	"github.com/samber/oops"
 )
 
@@ -30,7 +31,7 @@ type AESObfuscationModifier struct {
 // NewAESObfuscationModifier creates a new AES obfuscation modifier for NTCP2.
 // routerHash must be 32 bytes (RH_B), iv must be 16 bytes from network database.
 func NewAESObfuscationModifier(name string, routerHash, iv []byte) (*AESObfuscationModifier, error) {
-	log.WithField("name", name).Debug("Creating AES obfuscation modifier")
+	log.WithFields(logger.Fields{"pkg": "ntcp2", "func": "NewAESObfuscationModifier", "name": name}).Debug("Creating AES obfuscation modifier")
 	if len(routerHash) != RouterHashSize {
 		return nil, oops.
 			Code("INVALID_ROUTER_HASH").
@@ -87,7 +88,7 @@ func (aom *AESObfuscationModifier) ModifyOutbound(phase handshake.HandshakePhase
 		return data, nil
 	}
 
-	log.WithField("modifier", aom.name).WithField("phase", phase.String()).Debug("AES obfuscation outbound")
+	log.WithFields(logger.Fields{"pkg": "ntcp2", "func": "AESObfuscationModifier.ModifyOutbound", "modifier": aom.name, "phase": phase.String()}).Debug("AES obfuscation outbound")
 
 	var mode cipher.BlockMode
 	switch phase {
@@ -138,7 +139,7 @@ func (aom *AESObfuscationModifier) ModifyInbound(phase handshake.HandshakePhase,
 		return data, nil
 	}
 
-	log.WithField("modifier", aom.name).WithField("phase", phase.String()).Debug("AES obfuscation inbound")
+	log.WithFields(logger.Fields{"pkg": "ntcp2", "func": "AESObfuscationModifier.ModifyInbound", "modifier": aom.name, "phase": phase.String()}).Debug("AES obfuscation inbound")
 
 	// Per NTCP2 spec: for inbound (decryption), save the last ciphertext block
 	// BEFORE decryption as the AES state for message 2.
@@ -196,7 +197,7 @@ func (aom *AESObfuscationModifier) Name() string {
 // sensitive data from lingering in memory after the connection is closed.
 // This method is safe for concurrent use.
 func (aom *AESObfuscationModifier) Close() error {
-	log.WithField("modifier", aom.name).Debug("Closing AES obfuscation modifier")
+	log.WithFields(logger.Fields{"pkg": "ntcp2", "func": "AESObfuscationModifier.Close", "modifier": aom.name}).Debug("Closing AES obfuscation modifier")
 	aom.mu.Lock()
 	defer aom.mu.Unlock()
 	for i := range aom.routerHash {

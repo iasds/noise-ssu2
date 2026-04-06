@@ -6,12 +6,13 @@ import (
 	"runtime"
 
 	"github.com/go-i2p/crypto/rand"
+	"github.com/go-i2p/logger"
 )
 
 // SecureZero zeroes out the given byte slice. Uses runtime.KeepAlive to
 // prevent the compiler from eliding the zeroing as a dead store.
 func SecureZero(b []byte) {
-	log.WithField("len", len(b)).Debug("SecureZero: zeroing key material")
+	log.WithFields(logger.Fields{"pkg": "internal", "func": "SecureZero", "len": len(b)}).Debug("Zeroing key material")
 	clear(b)
 	runtime.KeepAlive(b)
 }
@@ -19,9 +20,9 @@ func SecureZero(b []byte) {
 // RandomBytes generates cryptographically secure random bytes.
 // Returns an error if n is negative. If n is zero, returns an empty slice.
 func RandomBytes(n int) ([]byte, error) {
-	log.WithField("n", n).Debug("RandomBytes: generating random bytes")
+	log.WithFields(logger.Fields{"pkg": "internal", "func": "RandomBytes", "n": n}).Debug("Generating random bytes")
 	if n < 0 {
-		log.WithField("n", n).Error("RandomBytes: negative byte count")
+		log.WithFields(logger.Fields{"pkg": "internal", "func": "RandomBytes", "n": n}).Error("Negative byte count")
 		return nil, errors.New("internal: negative byte count")
 	}
 	if n == 0 {
@@ -29,7 +30,7 @@ func RandomBytes(n int) ([]byte, error) {
 	}
 	b := make([]byte, n)
 	if _, err := io.ReadFull(rand.Reader, b); err != nil {
-		log.WithError(err).Error("RandomBytes: failed to read from crypto/rand")
+		log.WithFields(logger.Fields{"pkg": "internal", "func": "RandomBytes"}).WithError(err).Error("Failed to read from crypto/rand")
 		return nil, err
 	}
 	return b, nil
@@ -39,7 +40,7 @@ func RandomBytes(n int) ([]byte, error) {
 func ValidateKeySize(key []byte, expectedSize int) bool {
 	valid := len(key) == expectedSize
 	if !valid {
-		log.WithField("expected", expectedSize).WithField("actual", len(key)).Warn("ValidateKeySize: key size mismatch")
+		log.WithFields(logger.Fields{"pkg": "internal", "func": "ValidateKeySize", "expected": expectedSize, "actual": len(key)}).Warn("Key size mismatch")
 	}
 	return valid
 }

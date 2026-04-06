@@ -19,13 +19,13 @@ const (
 
 // EncodeCongestionBlock creates a Congestion block (type 21) with the given flags.
 func EncodeCongestionBlock(flags uint8) *SSU2Block {
-	log.WithField("flags", flags).Debug("EncodeCongestionBlock: encoding congestion block")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "EncodeCongestionBlock", "flags": flags}).Debug("Encoding congestion block")
 	return NewSSU2Block(BlockTypeCongestion, []byte{flags})
 }
 
 // DecodeCongestionBlock parses a Congestion block and returns the flag byte.
 func DecodeCongestionBlock(block *SSU2Block) (uint8, error) {
-	log.Debug("DecodeCongestionBlock: decoding congestion block")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "DecodeCongestionBlock"}).Debug("Decoding congestion block")
 	if block == nil {
 		return 0, oops.Errorf("block is nil")
 	}
@@ -157,7 +157,7 @@ type CongestionController struct {
 // Uses the default IPv4 MTU for initial CWND; prefer NewCongestionControllerWithMTU
 // to derive CWND from the session's actual MTU (M-5).
 func NewCongestionController(rttEstimator *RTTEstimator) *CongestionController {
-	log.Debug("NewCongestionController: creating with default IPv4 MTU")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "NewCongestionController"}).Debug("Creating with default IPv4 MTU")
 	return NewCongestionControllerWithMTU(rttEstimator, MaxPacketSizeIPv4)
 }
 
@@ -166,7 +166,7 @@ func NewCongestionController(rttEstimator *RTTEstimator) *CongestionController {
 // This correctly handles IPv6 sessions where the MTU (1452) differs from
 // the IPv4 default (1472) (M-5).
 func NewCongestionControllerWithMTU(rttEstimator *RTTEstimator, mtu int) *CongestionController {
-	log.WithField("mtu", mtu).Debug("Creating new CongestionController")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "NewCongestionControllerWithMTU", "mtu": mtu}).Debug("Creating new CongestionController")
 	if mtu <= 0 {
 		mtu = MaxPacketSizeIPv4
 	}
@@ -246,7 +246,7 @@ func (cc *CongestionController) OnPacketSent(packetSize int) {
 // This implements CWND growth based on the current state and updates the
 // Westwood+ bandwidth estimate from ACK inter-arrival times.
 func (cc *CongestionController) OnAck(ackedBytes int) {
-	log.WithField("ackedBytes", ackedBytes).Debug("OnAck: processing acknowledgment")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "OnAck", "ackedBytes": ackedBytes}).Debug("Processing acknowledgment")
 	if ackedBytes <= 0 {
 		return
 	}
@@ -289,7 +289,7 @@ func (cc *CongestionController) OnAck(ackedBytes int) {
 // handleSlowStartAck processes ACK during slow start phase.
 // CWND increases by ackedBytes for each ACK (exponential growth).
 func (cc *CongestionController) handleSlowStartAck(ackedBytes int) {
-	log.WithFields(logger.Fields{"ackedBytes": ackedBytes, "cwnd": cc.cwnd}).Debug("handleSlowStartAck: exponential growth")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "handleSlowStartAck", "ackedBytes": ackedBytes, "cwnd": cc.cwnd}).Debug("Exponential growth")
 	// Increase CWND by the number of bytes acknowledged
 	cc.cwnd += ackedBytes
 
@@ -308,7 +308,7 @@ func (cc *CongestionController) handleSlowStartAck(ackedBytes int) {
 // CWND increases by approximately MSS per RTT (linear growth).
 // We track bytes acked and increase CWND when we've acked CWND bytes.
 func (cc *CongestionController) handleCongestionAvoidanceAck(ackedBytes int) {
-	log.WithFields(logger.Fields{"ackedBytes": ackedBytes, "cwnd": cc.cwnd}).Debug("handleCongestionAvoidanceAck: linear growth")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "handleCongestionAvoidanceAck", "ackedBytes": ackedBytes, "cwnd": cc.cwnd}).Debug("Linear growth")
 	// Accumulate acknowledged bytes
 	cc.bytesAcked += ackedBytes
 
@@ -344,7 +344,7 @@ func (cc *CongestionController) handleCongestionAvoidanceAck(ackedBytes int) {
 // loss triggers a cwnd reduction. Subsequent losses within one RTT of the
 // epoch start are absorbed without further reduction (G-1).
 func (cc *CongestionController) OnPacketLoss() {
-	log.Debug("Congestion controller: packet loss detected")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "OnPacketLoss"}).Debug("Packet loss detected")
 	cc.mutex.Lock()
 	defer cc.mutex.Unlock()
 
@@ -377,7 +377,7 @@ func (cc *CongestionController) OnPacketLoss() {
 // OnRetransmissionTimeout handles an RTO event (more severe than packet loss).
 // Uses Westwood+ BWE for ssthresh, then resets to slow start with MinCWND.
 func (cc *CongestionController) OnRetransmissionTimeout() {
-	log.Debug("Congestion controller: retransmission timeout")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "OnRetransmissionTimeout"}).Debug("Retransmission timeout")
 	cc.mutex.Lock()
 	defer cc.mutex.Unlock()
 
@@ -399,7 +399,7 @@ func (cc *CongestionController) OnRetransmissionTimeout() {
 // ssthresh = max(BWE * minRTT, MinCWND). Falls back to cwnd/2 when BWE or
 // minRTT is unavailable. Caller must hold cc.mutex.
 func (cc *CongestionController) westwoodSSThresh() int {
-	log.WithField("bwe", cc.bandwidthEstimate).Debug("westwoodSSThresh: computing ssthresh")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "westwoodSSThresh", "bwe": cc.bandwidthEstimate}).Debug("Computing ssthresh")
 	if cc.bandwidthEstimate > 0 && cc.rttEstimator != nil {
 		minRTT := cc.rttEstimator.GetMinRTT()
 		if minRTT > 0 {
@@ -425,7 +425,7 @@ func (cc *CongestionController) westwoodSSThresh() int {
 // ExitRecovery transitions from recovery state to congestion avoidance.
 // This should be called when all lost packets have been acknowledged.
 func (cc *CongestionController) ExitRecovery() {
-	log.Debug("ExitRecovery: transitioning from recovery to congestion avoidance")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "ExitRecovery"}).Debug("Transitioning from recovery to congestion avoidance")
 	cc.mutex.Lock()
 	defer cc.mutex.Unlock()
 
@@ -453,7 +453,7 @@ func (cc *CongestionController) PersistentCongestionThreshold() time.Duration {
 // All outstanding data is assumed lost. The congestion window is collapsed to
 // the minimum (2 * MinCongestionWindow per RFC 9002) and slow start is re-entered.
 func (cc *CongestionController) OnPersistentCongestion() {
-	log.Warn("Congestion controller: persistent congestion detected")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "OnPersistentCongestion"}).Warn("Persistent congestion detected")
 	cc.mutex.Lock()
 	defer cc.mutex.Unlock()
 
@@ -500,7 +500,7 @@ func (cc *CongestionController) DetectPersistentCongestion(
 // Reset returns the controller to initial state.
 // This is useful after connection migration or significant path changes.
 func (cc *CongestionController) Reset() {
-	log.Debug("Congestion controller: resetting to initial state")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "Reset"}).Debug("Resetting to initial state")
 	cc.mutex.Lock()
 	defer cc.mutex.Unlock()
 

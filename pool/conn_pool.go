@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-i2p/logger"
 	"github.com/samber/oops"
 )
 
@@ -31,7 +32,7 @@ type ConnPool struct {
 
 // NewConnPool creates a new connection pool with the given configuration
 func NewConnPool(config *PoolConfig) *ConnPool {
-	log.Debug("Creating new connection pool")
+	log.WithFields(logger.Fields{"pkg": "pool", "func": "NewConnPool"}).Debug("Creating new connection pool")
 	if config == nil {
 		config = &PoolConfig{
 			MaxSize: 10,
@@ -64,7 +65,7 @@ func (p *ConnPool) Get(remoteAddr string) net.Conn {
 	defer p.mu.Unlock()
 
 	if p.closed {
-		log.Debug("Get called on closed pool")
+		log.WithFields(logger.Fields{"pkg": "pool", "func": "ConnPool.Get"}).Debug("Get called on closed pool")
 		return nil
 	}
 
@@ -151,7 +152,7 @@ func (p *ConnPool) GetOrDial(ctx context.Context, remoteAddr string, dial func(c
 	}
 
 	// Dial outside the pool lock.
-	log.WithField("remote_addr", remoteAddr).Debug("Dialing new connection for pool")
+	log.WithFields(logger.Fields{"pkg": "pool", "func": "ConnPool.dialNew", "remote_addr": remoteAddr}).Debug("Dialing new connection for pool")
 	conn, err := dial(ctx)
 	if err != nil {
 		return nil, oops.
@@ -167,7 +168,7 @@ func (p *ConnPool) GetOrDial(ctx context.Context, remoteAddr string, dial func(c
 // putAndGet adds a newly-dialed connection to the pool and returns it
 // as a checked-out PoolConnWrapper in a single atomic step.
 func (p *ConnPool) putAndGet(remoteAddr string, conn net.Conn) (net.Conn, error) {
-	log.WithField("remote_addr", remoteAddr).Debug("putAndGet: adding and checking out connection")
+	log.WithFields(logger.Fields{"pkg": "pool", "func": "ConnPool.putAndGet", "remote_addr": remoteAddr}).Debug("Adding and checking out connection")
 	conn = unwrapPoolConn(conn)
 
 	if p.readyCheck != nil && !p.readyCheck(conn) {
@@ -218,7 +219,7 @@ func (p *ConnPool) putAndGet(remoteAddr string, conn net.Conn) (net.Conn, error)
 // to ensure the connection is in a usable state.
 func (p *ConnPool) Put(conn net.Conn) error {
 	if conn == nil {
-		log.Warn("Attempted to put nil connection in pool")
+		log.WithFields(logger.Fields{"pkg": "pool", "func": "ConnPool.Put"}).Warn("Attempted to put nil connection in pool")
 		return oops.
 			Code("INVALID_CONNECTION").
 			In("pool").
@@ -376,7 +377,7 @@ func (p *ConnPool) removeConnLocked(remoteAddr string, conn net.Conn) {
 // for the given address (the connection is still closed in this case
 // to avoid resource leaks). Returns nil on success.
 func (p *ConnPool) Remove(remoteAddr string, conn net.Conn) error {
-	log.WithField("remote_addr", remoteAddr).Debug("Remove: removing connection from pool")
+	log.WithFields(logger.Fields{"pkg": "pool", "func": "ConnPool.Remove", "remote_addr": remoteAddr}).Debug("Removing connection from pool")
 	if wrapper, ok := conn.(*PoolConnWrapper); ok {
 		conn = wrapper.Conn
 	}
@@ -483,7 +484,7 @@ func (p *ConnPool) Close() error {
 		return nil
 	}
 
-	log.Debug("Closing connection pool")
+	log.WithFields(logger.Fields{"pkg": "pool", "func": "ConnPool.Close"}).Debug("Closing connection pool")
 	p.closed = true
 	close(p.done)
 

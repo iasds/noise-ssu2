@@ -14,7 +14,7 @@ import (
 // startDataLoops starts background goroutines for data transport.
 // Called after handshake completes to avoid wasting resources on failed connections.
 func (h *SSU2Conn) startDataLoops() {
-	log.Debug("startDataLoops: starting send, keepalive, and retransmit loops")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "startDataLoops"}).Debug("Starting send, keepalive, and retransmit loops")
 	h.wg.Add(3)
 	go h.sendLoop()
 	go h.keepaliveLoop()
@@ -23,7 +23,7 @@ func (h *SSU2Conn) startDataLoops() {
 
 // installCipherStates transfers transport cipher states from the handshake handler.
 func (h *SSU2Conn) installCipherStates() error {
-	log.Debug("installCipherStates: transferring cipher states from handshake")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "installCipherStates"}).Debug("Transferring cipher states from handshake")
 	send, recv, err := h.handshakeHandler.GetCipherStates()
 	if err != nil {
 		return err
@@ -44,7 +44,7 @@ func (h *SSU2Conn) installCipherStates() error {
 
 // wireDataCallbacks wires internal handler callbacks for data-phase processing.
 func (h *SSU2Conn) wireDataCallbacks() {
-	log.WithField("next_nonce_enabled", h.config.EnableNextNonce).Debug("wireDataCallbacks: wiring data-phase callbacks")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "wireDataCallbacks", "next_nonce_enabled": h.config.EnableNextNonce}).Debug("Wiring data-phase callbacks")
 	cbs := h.dataHandler.getCallbacks()
 
 	// G-2: Warn if signature verification callbacks are not configured.
@@ -69,16 +69,16 @@ func (h *SSU2Conn) wireDataCallbacks() {
 // warnMissingSignatureVerifiers logs warnings for unset signature verifiers (G-2).
 func (h *SSU2Conn) warnMissingSignatureVerifiers(cbs *DataHandlerCallbacks) {
 	if cbs.VerifyPeerTestSignature == nil {
-		log.Warn("PeerTest signature verifier not configured; peer test messages will be rejected (G-2)")
+		log.WithFields(logger.Fields{"pkg": "ssu2", "func": "warnMissingSignatureVerifiers"}).Warn("PeerTest signature verifier not configured; peer test messages will be rejected (G-2)")
 	}
 	if cbs.VerifyRelayRequestSignature == nil {
-		log.Warn("RelayRequest signature verifier not configured; relay requests will be rejected (G-2)")
+		log.WithFields(logger.Fields{"pkg": "ssu2", "func": "warnMissingSignatureVerifiers"}).Warn("RelayRequest signature verifier not configured; relay requests will be rejected (G-2)")
 	}
 	if cbs.VerifyRelayResponseSignature == nil {
-		log.Warn("RelayResponse signature verifier not configured; signed relay responses will be rejected (G-2)")
+		log.WithFields(logger.Fields{"pkg": "ssu2", "func": "warnMissingSignatureVerifiers"}).Warn("RelayResponse signature verifier not configured; signed relay responses will be rejected (G-2)")
 	}
 	if cbs.VerifyRelayIntroSignature == nil {
-		log.Warn("RelayIntro signature verifier not configured; relay intros will be rejected (G-2)")
+		log.WithFields(logger.Fields{"pkg": "ssu2", "func": "warnMissingSignatureVerifiers"}).Warn("RelayIntro signature verifier not configured; relay intros will be rejected (G-2)")
 	}
 }
 
@@ -89,7 +89,9 @@ func (h *SSU2Conn) wrapTerminationCallback(cbs *DataHandlerCallbacks) {
 		sent := h.validDataPacketsSent.Load()
 		if sent > 0 {
 			lost := int64(sent) - int64(peerReceived)
-			log.WithFields(map[string]interface{}{
+			log.WithFields(logger.Fields{
+				"pkg":          "ssu2",
+				"func":         "wrapTerminationCallback",
 				"sent":         sent,
 				"peerReceived": peerReceived,
 				"lost":         lost,
@@ -134,7 +136,7 @@ func (h *SSU2Conn) validatePeerRouterInfo() error {
 //	sipk_ba = HKDF(k_header_2_ba, ZEROLEN, "SipHashKey", 16)
 //	sipiv_ba = HKDF(k_header_2_ba, ZEROLEN, "SipHashIV", 8)
 func deriveSipHashModifier(sendKHeader2, recvKHeader2 []byte) (*SipHashLengthModifier, error) {
-	log.WithFields(logger.Fields{"send_key_len": len(sendKHeader2), "recv_key_len": len(recvKHeader2)}).Debug("deriveSipHashModifier: deriving SipHash keys for length obfuscation")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "deriveSipHashModifier", "send_key_len": len(sendKHeader2), "recv_key_len": len(recvKHeader2)}).Debug("Deriving SipHash keys for length obfuscation")
 	deriver := i2phkdf.NewHKDF()
 	infoKey := []byte("SipHashKey")
 	infoIV := []byte("SipHashIV")

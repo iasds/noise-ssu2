@@ -38,10 +38,10 @@ func (nc *NoiseConn) GetConnectionState() ConnState {
 // HandshakeState.PeerStatic() is mutex-protected.
 func (nc *NoiseConn) PeerStatic() []byte {
 	if nc.handshakeState == nil {
-		log.Debug("PeerStatic: handshake state is nil")
+		log.WithFields(i2plogger.Fields{"pkg": "noise", "func": "NoiseConn.PeerStatic"}).Debug("handshake state is nil")
 		return nil
 	}
-	log.Debug("PeerStatic: returning peer static key")
+	log.WithFields(i2plogger.Fields{"pkg": "noise", "func": "NoiseConn.PeerStatic"}).Debug("returning peer static key")
 	return nc.handshakeState.PeerStatic()
 }
 
@@ -56,10 +56,10 @@ func (nc *NoiseConn) PeerStatic() []byte {
 // HandshakeState.ChannelBinding() is mutex-protected.
 func (nc *NoiseConn) ChannelBinding() []byte {
 	if nc.handshakeState == nil {
-		log.Debug("ChannelBinding: handshake state is nil")
+		log.WithFields(i2plogger.Fields{"pkg": "noise", "func": "NoiseConn.ChannelBinding"}).Debug("handshake state is nil")
 		return nil
 	}
-	log.Debug("ChannelBinding: returning handshake hash")
+	log.WithFields(i2plogger.Fields{"pkg": "noise", "func": "NoiseConn.ChannelBinding"}).Debug("returning handshake hash")
 	return nc.handshakeState.ChannelBinding()
 }
 
@@ -84,7 +84,7 @@ func (nc *NoiseConn) RecvCipherState() *noise.CipherState {
 // After calling ZeroKeys, the connection can no longer encrypt or decrypt data.
 // Any subsequent Read/Write calls will fail.
 func (nc *NoiseConn) ZeroKeys() {
-	log.Debug("ZeroKeys: zeroing cipher state key material")
+	log.WithFields(i2plogger.Fields{"pkg": "noise", "func": "NoiseConn.ZeroKeys"}).Debug("zeroing cipher state key material")
 	if nc.sendCipherState != nil {
 		nc.sendCipherState.ZeroKey()
 	}
@@ -99,11 +99,11 @@ func (nc *NoiseConn) ZeroKeys() {
 // The returned keys correspond 1:1 to the configured AdditionalSymmetricKeyLabels.
 func (nc *NoiseConn) AdditionalSymmetricKeys() [][]byte {
 	if nc.handshakeState == nil {
-		log.Debug("AdditionalSymmetricKeys: handshake state is nil")
+		log.WithFields(i2plogger.Fields{"pkg": "noise", "func": "NoiseConn.AdditionalSymmetricKeys"}).Debug("handshake state is nil")
 		return nil
 	}
 	keys := nc.handshakeState.AdditionalSymmetricKeys()
-	log.WithField("key_count", len(keys)).Debug("AdditionalSymmetricKeys: returning ASK values")
+	log.WithFields(i2plogger.Fields{"pkg": "noise", "func": "NoiseConn.AdditionalSymmetricKeys", "key_count": len(keys)}).Debug("returning ASK values")
 	return keys
 }
 
@@ -130,6 +130,8 @@ func (nc *NoiseConn) Rekey() error {
 	nc.sendCipherState.Rekey()
 	nc.recvCipherState.Rekey()
 	nc.logger.WithFields(i2plogger.Fields{
+		"pkg":         "noise",
+		"func":        "NoiseConn.Rekey",
 		"pattern":     nc.config.Pattern,
 		"local_addr":  nc.localAddr.String(),
 		"remote_addr": nc.remoteAddr.String(),

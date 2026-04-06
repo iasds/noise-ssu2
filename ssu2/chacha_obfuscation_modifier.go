@@ -3,6 +3,7 @@ package ssu2
 import (
 	"github.com/go-i2p/go-noise/handshake"
 	"github.com/go-i2p/go-noise/internal"
+	"github.com/go-i2p/logger"
 	"github.com/samber/oops"
 	"golang.org/x/crypto/chacha20"
 )
@@ -32,7 +33,7 @@ var chachaNonce = make([]byte, 12)
 // introKey must be 32 bytes (Bob's intro key per the SSU2 spec).
 // Returns error if parameters are invalid.
 func NewChaChaObfuscationModifier(name string, introKey []byte) (*ChaChaObfuscationModifier, error) {
-	log.WithField("name", name).Debug("Creating new ChaChaObfuscationModifier")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "NewChaChaObfuscationModifier", "name": name}).Debug("Creating new ChaChaObfuscationModifier")
 	if len(introKey) != 32 {
 		return nil, oops.
 			Code("INVALID_INTRO_KEY").
@@ -56,7 +57,7 @@ func NewChaChaObfuscationModifier(name string, introKey []byte) (*ChaChaObfuscat
 // 32 bytes (ephemeral key only) for backward compatibility.
 // Message 3+: No obfuscation
 func (com *ChaChaObfuscationModifier) ModifyOutbound(phase handshake.HandshakePhase, data []byte) ([]byte, error) {
-	log.WithField("phase", phase).WithField("dataLen", len(data)).Debug("ChaCha obfuscation ModifyOutbound")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "ModifyOutbound", "phase": phase, "dataLen": len(data)}).Debug("ChaCha obfuscation ModifyOutbound")
 	if len(data) != 48 && len(data) != 32 {
 		return data, nil
 	}
@@ -73,7 +74,7 @@ func (com *ChaChaObfuscationModifier) ModifyOutbound(phase handshake.HandshakePh
 // ChaCha20 is symmetric (XOR-based), so encryption and decryption are identical.
 // Accepts 48 bytes (spec-compliant) or 32 bytes (backward compatibility).
 func (com *ChaChaObfuscationModifier) ModifyInbound(phase handshake.HandshakePhase, data []byte) ([]byte, error) {
-	log.WithField("phase", phase).WithField("dataLen", len(data)).Debug("ChaCha obfuscation ModifyInbound")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "ModifyInbound", "phase": phase, "dataLen": len(data)}).Debug("ChaCha obfuscation ModifyInbound")
 	if len(data) != 48 && len(data) != 32 {
 		return data, nil
 	}
@@ -95,7 +96,7 @@ func (com *ChaChaObfuscationModifier) Name() string {
 // spec and XORs the data. Supports 48-byte (spec-compliant) and 32-byte
 // (ephemeral-only) inputs.
 func (com *ChaChaObfuscationModifier) applyChacha(data []byte) ([]byte, error) {
-	log.WithField("dataLen", len(data)).Debug("applyChacha: applying ChaCha20 XOR")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "applyChacha", "dataLen": len(data)}).Debug("applyChacha: applying ChaCha20 XOR")
 	cipher, err := chacha20.NewUnauthenticatedCipher(com.introKey, chachaNonce)
 	if err != nil {
 		return nil, oops.
@@ -115,7 +116,7 @@ func (com *ChaChaObfuscationModifier) applyChacha(data []byte) ([]byte, error) {
 
 // Close releases resources and zeroes sensitive key material.
 func (com *ChaChaObfuscationModifier) Close() error {
-	log.WithField("name", com.name).Debug("Close: releasing ChaChaObfuscationModifier resources")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "Close", "name": com.name}).Debug("Close: releasing ChaChaObfuscationModifier resources")
 	internal.SecureZero(com.introKey)
 	return nil
 }

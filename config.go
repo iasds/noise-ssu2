@@ -6,6 +6,7 @@ import (
 
 	"github.com/go-i2p/go-noise/handshake"
 	"github.com/go-i2p/go-noise/internal"
+	"github.com/go-i2p/logger"
 	"github.com/go-i2p/noise"
 	"github.com/samber/oops"
 )
@@ -103,7 +104,7 @@ type ConnConfig struct {
 
 // NewConnConfig creates a new ConnConfig with sensible defaults.
 func NewConnConfig(pattern string, initiator bool) *ConnConfig {
-	log.WithField("pattern", pattern).WithField("initiator", initiator).Debug("Creating new ConnConfig")
+	log.WithFields(logger.Fields{"pkg": "noise", "func": "NewConnConfig", "pattern": pattern, "initiator": initiator}).Debug("Creating new ConnConfig")
 	return &ConnConfig{
 		Pattern:          pattern,
 		Initiator:        initiator,
@@ -220,7 +221,7 @@ func (c *ConnConfig) invalidateModifierCache() {
 // Validate checks if the configuration is valid and complete.
 // Returns an error with context if validation fails.
 func (c *ConnConfig) Validate() error {
-	log.WithField("pattern", c.Pattern).Debug("Validating ConnConfig")
+	log.WithFields(logger.Fields{"pkg": "noise", "func": "ConnConfig.Validate", "pattern": c.Pattern}).Debug("Validating ConnConfig")
 	return internal.RunValidators(
 		c.validatePattern,
 		c.validateHandshakeTimeout,

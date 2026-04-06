@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-i2p/logger"
 	"github.com/samber/oops"
 )
 
@@ -41,7 +42,7 @@ type Token struct {
 // NewTokenCache creates a new token cache with the specified TTL.
 // If ttl is zero or negative, defaults to 60 seconds.
 func NewTokenCache(ttl time.Duration) *TokenCache {
-	log.WithField("ttl", ttl).Debug("Creating new TokenCache")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "NewTokenCache", "ttl": ttl}).Debug("Creating new TokenCache")
 	if ttl <= 0 {
 		ttl = 60 * time.Second
 	}
@@ -55,7 +56,7 @@ func NewTokenCache(ttl time.Duration) *TokenCache {
 
 // newTokenCacheFromConfig creates a TokenCache using SSU2Config values.
 func newTokenCacheFromConfig(config *SSU2Config) *TokenCache {
-	log.Debug("newTokenCacheFromConfig: creating token cache from config")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "newTokenCacheFromConfig"}).Debug("Creating token cache from config")
 	tc := NewTokenCache(60 * time.Second)
 	if config != nil && config.TokenCacheMaxSize > 0 {
 		tc.maxSize = config.TokenCacheMaxSize
@@ -67,7 +68,7 @@ func newTokenCacheFromConfig(config *SSU2Config) *TokenCache {
 // The token is cryptographically random and stored in the cache.
 // Returns the token value.
 func (tc *TokenCache) GenerateToken(addr *net.UDPAddr) ([]byte, error) {
-	log.Debug("Generating new token")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "GenerateToken"}).Debug("Generating new token")
 	if addr == nil {
 		return nil, oops.
 			Code("NIL_ADDRESS").
@@ -108,7 +109,7 @@ func (tc *TokenCache) GenerateToken(addr *net.UDPAddr) ([]byte, error) {
 // ValidateToken checks if a token is valid for the specified address.
 // Returns true if the token exists, matches the address, and hasn't expired.
 func (tc *TokenCache) ValidateToken(tokenValue []byte, addr *net.UDPAddr) bool {
-	log.WithField("addr", addr).Debug("ValidateToken: validating token for address")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "ValidateToken", "addr": addr}).Debug("Validating token for address")
 	if addr == nil || len(tokenValue) != TokenSize {
 		return false
 	}
@@ -134,7 +135,7 @@ func (tc *TokenCache) ValidateToken(tokenValue []byte, addr *net.UDPAddr) bool {
 // This should be called when a valid SessionRequest with token is received.
 // Returns true if the token was valid and consumed.
 func (tc *TokenCache) ConsumeToken(tokenValue []byte, addr *net.UDPAddr) bool {
-	log.WithField("addr", addr).Debug("ConsumeToken: validating and consuming token")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "ConsumeToken", "addr": addr}).Debug("Validating and consuming token")
 	if addr == nil || len(tokenValue) != TokenSize {
 		return false
 	}
@@ -167,7 +168,7 @@ func (tc *TokenCache) ConsumeToken(tokenValue []byte, addr *net.UDPAddr) bool {
 // Cleanup removes expired tokens from the cache.
 // This should be called periodically to prevent memory leaks.
 func (tc *TokenCache) Cleanup() int {
-	log.Debug("Cleanup: removing expired tokens")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "Cleanup"}).Debug("Removing expired tokens")
 	tc.mutex.Lock()
 	defer tc.mutex.Unlock()
 

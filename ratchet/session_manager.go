@@ -55,7 +55,7 @@ func WithNSMaxFutureAge(d time.Duration) SessionManagerOption {
 //
 // Spec ref: ratchet.md §"Parameters" — max clock skew: −5 minutes to +2 minutes.
 func (sm *SessionManager) validateNSDateTimeFreshness(payload []byte) error {
-	log.WithFields(logger.Fields{"payload_len": len(payload)}).Debug("Validating NS DateTime freshness")
+	log.WithFields(logger.Fields{"pkg": "ratchet", "func": "validateNSDateTimeFreshness", "payload_len": len(payload)}).Debug("Validating NS DateTime freshness")
 	blocks, err := ParsePayload(payload)
 	if err != nil {
 		return oops.Wrapf(err, "NS payload parse failed during freshness check")
@@ -134,7 +134,7 @@ type SessionManager struct {
 
 // NewSessionManager creates a new session manager with the given private key.
 func NewSessionManager(privateKey [32]byte, opts ...SessionManagerOption) (*SessionManager, error) {
-	log.Debug("Creating new garlic session manager")
+	log.WithFields(logger.Fields{"pkg": "ratchet", "func": "NewSessionManager"}).Debug("Creating new garlic session manager")
 
 	var publicKey [32]byte
 	privKey, err := i2pcurve25519.NewCurve25519PrivateKey(privateKey[:])
@@ -179,7 +179,7 @@ func NewSessionManager(privateKey [32]byte, opts ...SessionManagerOption) (*Sess
 
 // GenerateSessionManager creates a session manager with a freshly generated key pair.
 func GenerateSessionManager() (*SessionManager, error) {
-	log.Debug("Generating new session manager with fresh key pair")
+	log.WithFields(logger.Fields{"pkg": "ratchet", "func": "GenerateSessionManager"}).Debug("Generating new session manager with fresh key pair")
 	_, privBytes, err := ecies.GenerateKeyPair()
 	if err != nil {
 		return nil, oops.Wrapf(err, "failed to generate session manager key pair")
@@ -233,8 +233,9 @@ func (sm *SessionManager) removeSessionByPointer(session *Session) {
 	}
 	delete(sm.sessions, foundHash)
 
-	log.WithFields(map[string]interface{}{
-		"at":              "removeSessionByPointer",
+	log.WithFields(logger.Fields{
+		"pkg":             "ratchet",
+		"func":            "removeSessionByPointer",
 		"remaining_count": len(sm.sessions),
 	}).Debug("Session removed after termination")
 }
@@ -258,8 +259,9 @@ func (sm *SessionManager) ProcessIncomingDHRatchet(sessionTag [8]byte, newRemote
 
 	session.RemotePublicKey = newRemotePubKey
 
-	log.WithFields(map[string]interface{}{
-		"at":              "ProcessIncomingDHRatchet",
+	log.WithFields(logger.Fields{
+		"pkg":             "ratchet",
+		"func":            "ProcessIncomingDHRatchet",
 		"message_counter": session.MessageCounter,
 	}).Debug("Processed incoming DH ratchet from peer")
 
@@ -274,7 +276,7 @@ func (sm *SessionManager) ProcessIncomingDHRatchet(sessionTag [8]byte, newRemote
 // (session.mu) are performed in separate, non-overlapping critical sections.
 // Tag replenishment (HKDF) is performed outside both locks.
 func (sm *SessionManager) FindSessionByTag(tag [8]byte) bool {
-	log.Debug("Finding session by tag")
+	log.WithFields(logger.Fields{"pkg": "ratchet", "func": "FindSessionByTag"}).Debug("Finding session by tag")
 	sm.mu.Lock()
 	session, _ := sm.lookupSessionByTag(tag)
 	sm.mu.Unlock()
@@ -313,7 +315,7 @@ func (sm *SessionManager) FindSessionByTag(tag [8]byte) bool {
 // other goroutine can claim the same tag between the lookup and the per-session
 // validation step.
 func (sm *SessionManager) lookupSessionByTag(tag [8]byte) (*Session, *uint32) {
-	log.Debug("Looking up session by tag in index")
+	log.WithFields(logger.Fields{"pkg": "ratchet", "func": "lookupSessionByTag"}).Debug("Looking up session by tag in index")
 	session, exists := sm.tagIndex[tag]
 	if !exists {
 		return nil, nil
@@ -340,7 +342,7 @@ func (sm *SessionManager) lookupSessionByTag(tag [8]byte) (*Session, *uint32) {
 //	valid          — false if the session has expired; callers should discard it.
 //	needsReplenish — true when pendingTags falls below tagReplenishThreshold.
 func (sm *SessionManager) validateAndConsumeTagFromSession(session *Session, tag [8]byte) (valid, needsReplenish bool) {
-	log.Debug("Validating and consuming tag from session")
+	log.WithFields(logger.Fields{"pkg": "ratchet", "func": "validateAndConsumeTagFromSession"}).Debug("Validating and consuming tag from session")
 	session.mu.Lock()
 	defer session.mu.Unlock()
 
@@ -356,7 +358,7 @@ func (sm *SessionManager) isSessionValid(session *Session) bool {
 }
 
 func (sm *SessionManager) removeTagFromPendingList(tag [8]byte, session *Session) {
-	log.WithFields(logger.Fields{"pending_count": len(session.pendingTags)}).Debug("Removing tag from session pending list")
+	log.WithFields(logger.Fields{"pkg": "ratchet", "func": "removeTagFromPendingList", "pending_count": len(session.pendingTags)}).Debug("Removing tag from session pending list")
 	for i, pendingTag := range session.pendingTags {
 		if pendingTag == tag {
 			session.pendingTags[i] = session.pendingTags[len(session.pendingTags)-1]
@@ -400,8 +402,9 @@ func (sm *SessionManager) replenishTagWindowOutsideLock(session *Session) {
 		session.mu.Unlock()
 
 		if err != nil {
-			log.WithFields(map[string]interface{}{
-				"at":            "replenishTagWindowOutsideLock",
+			log.WithFields(logger.Fields{
+				"pkg":           "ratchet",
+				"func":          "replenishTagWindowOutsideLock",
 				"remote_pubkey": fmt.Sprintf("%x", session.RemotePublicKey[:8]),
 				"attempt":       attempt + 1,
 				"error":         err.Error(),
@@ -432,8 +435,9 @@ func (sm *SessionManager) replenishTagWindowOutsideLock(session *Session) {
 	session.mu.Unlock()
 
 	if finalRemaining > 0 {
-		log.WithFields(map[string]interface{}{
-			"at":            "replenishTagWindowOutsideLock",
+		log.WithFields(logger.Fields{
+			"pkg":           "ratchet",
+			"func":          "replenishTagWindowOutsideLock",
 			"remote_pubkey": fmt.Sprintf("%x", session.RemotePublicKey[:8]),
 			"missing_tags":  finalRemaining,
 			"max_attempts":  maxReplenishAttempts,
@@ -455,7 +459,7 @@ type tagWithCounter struct {
 // Returns the new tags with their associated counters, which are not yet
 // registered in sm.tagIndex or sm.tagCounterIndex.
 func generateTagsOutsideLock(session *Session) ([]tagWithCounter, error) {
-	log.WithFields(logger.Fields{"pending_count": len(session.pendingTags), "window_size": tagWindowSize}).Debug("Generating tags outside lock")
+	log.WithFields(logger.Fields{"pkg": "ratchet", "func": "generateTagsOutsideLock", "pending_count": len(session.pendingTags), "window_size": tagWindowSize}).Debug("Generating tags outside lock")
 	if session.RecvTagRatchet == nil {
 		return nil, oops.Errorf("RecvTagRatchet is nil for session — cannot replenish incoming tag window")
 	}
@@ -487,9 +491,10 @@ func (sm *SessionManager) installGeneratedTagsLocked(session *Session, newTags [
 			break
 		}
 		if existing, ok := sm.tagIndex[tc.tag]; ok && existing != session {
-			log.WithFields(map[string]interface{}{
-				"at":  "installGeneratedTagsLocked",
-				"tag": fmt.Sprintf("%x", tc.tag),
+			log.WithFields(logger.Fields{
+				"pkg":  "ratchet",
+				"func": "installGeneratedTagsLocked",
+				"tag":  fmt.Sprintf("%x", tc.tag),
 			}).Warn("Tag collision detected, skipping duplicate tag")
 			continue
 		}
@@ -520,9 +525,10 @@ func (sm *SessionManager) generateTagWindow(session *Session) error {
 		counter := session.nextRecvTagCounter
 		session.nextRecvTagCounter++
 		if existing, ok := sm.tagIndex[tag]; ok && existing != session {
-			log.WithFields(map[string]interface{}{
-				"at":  "generateTagWindow",
-				"tag": fmt.Sprintf("%x", tag),
+			log.WithFields(logger.Fields{
+				"pkg":  "ratchet",
+				"func": "generateTagWindow",
+				"tag":  fmt.Sprintf("%x", tag),
 			}).Warn("Tag collision detected, skipping duplicate tag")
 			continue
 		}
@@ -558,8 +564,9 @@ func (sm *SessionManager) evictLRUSessionLocked() {
 				delete(sm.nsrTagIndex, *evicted.nsrTag)
 			}
 			delete(sm.sessions, oldestHash)
-			log.WithFields(map[string]interface{}{
-				"at":              "evictLRUSessionLocked",
+			log.WithFields(logger.Fields{
+				"pkg":             "ratchet",
+				"func":            "evictLRUSessionLocked",
 				"last_used":       oldestTime,
 				"remaining_count": len(sm.sessions),
 			}).Warn("Evicted least-recently-used garlic session")
@@ -601,8 +608,9 @@ func (sm *SessionManager) CleanupExpiredSessions() int {
 	}
 
 	if removed > 0 {
-		log.WithFields(map[string]interface{}{
-			"at":                     "CleanupExpiredSessions",
+		log.WithFields(logger.Fields{
+			"pkg":                    "ratchet",
+			"func":                   "CleanupExpiredSessions",
 			"removed_sessions":       removed,
 			"remaining_sessions":     len(sm.sessions),
 			"remaining_indexed_tags": len(sm.tagIndex),
@@ -655,7 +663,7 @@ func (sm *SessionManager) Close() error {
 		sm.ourPrivateKey[i] = 0
 	}
 
-	log.Debug("SessionManager closed")
+	log.WithFields(logger.Fields{"pkg": "ratchet", "func": "Close"}).Debug("SessionManager closed")
 	return nil
 }
 
@@ -689,8 +697,9 @@ func (sm *SessionManager) StartCleanupLoop(ctx context.Context) {
 		}
 	}()
 
-	log.WithFields(map[string]interface{}{
-		"at":       "SessionManager.StartCleanupLoop",
+	log.WithFields(logger.Fields{
+		"pkg":      "ratchet",
+		"func":     "StartCleanupLoop",
 		"interval": "2m",
 	}).Debug("Started garlic session cleanup loop")
 }

@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"time"
 
+	"github.com/go-i2p/logger"
 	"github.com/samber/oops"
 )
 
@@ -23,7 +24,7 @@ type FragmentSet struct {
 
 // cleanupStaleFragments removes fragment sets that have exceeded the timeout.
 func (h *DataHandler) cleanupStaleFragments() {
-	log.WithField("timeout", h.fragmentTimeout).Debug("cleanupStaleFragments: scanning for stale fragments")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "cleanupStaleFragments", "timeout": h.fragmentTimeout}).Debug("scanning for stale fragments")
 	h.mutex.Lock()
 	defer h.mutex.Unlock()
 
@@ -49,12 +50,14 @@ func (h *DataHandler) handleFirstFragment(data []byte) error {
 	shortExpiration := binary.BigEndian.Uint32(data[5:9])
 	fragmentData := data[9:]
 
-	log.WithFields(map[string]interface{}{
+	log.WithFields(logger.Fields{
+		"pkg":        "ssu2",
+		"func":       "handleFirstFragment",
 		"i2np_type":  i2npType,
 		"message_id": messageID,
 		"short_exp":  shortExpiration,
 		"frag_len":   len(fragmentData),
-	}).Debug("handleFirstFragment: parsed header")
+	}).Debug("parsed header")
 
 	h.mutex.Lock()
 	defer h.mutex.Unlock()
@@ -110,7 +113,7 @@ func (h *DataHandler) handleFirstFragment(data []byte) error {
 // SSU2 spec format: FragmentInfo(1) + MessageID(4) + Data
 // FragmentInfo: (fragNum << 1) | isLast
 func (h *DataHandler) handleFollowOnFragment(data []byte) error {
-	log.WithField("dataLen", len(data)).Debug("handleFollowOnFragment: processing follow-on fragment")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "handleFollowOnFragment", "dataLen": len(data)}).Debug("processing follow-on fragment")
 	if len(data) < 5 {
 		h.incrementStat(&h.stats.MessagesDropped)
 		return oops.Errorf("follow-on fragment too short: %d bytes, need at least 5", len(data))
@@ -199,11 +202,13 @@ func (h *DataHandler) reassembleMessage(messageID uint32) error {
 		message = append(message, fragmentSet.Fragments[i]...)
 	}
 
-	log.WithFields(map[string]interface{}{
+	log.WithFields(logger.Fields{
+		"pkg":        "ssu2",
+		"func":       "reassembleMessage",
 		"message_id": messageID,
 		"total_len":  len(message),
 		"num_frags":  fragmentSet.LastFragNum + 1,
-	}).Debug("reassembleMessage: reassembled")
+	}).Debug("reassembled")
 
 	// Queue complete message
 	select {

@@ -4,6 +4,7 @@ import (
 	"net"
 	"sync"
 
+	"github.com/go-i2p/logger"
 	"github.com/samber/oops"
 )
 
@@ -23,11 +24,11 @@ func (w *PoolConnWrapper) Close() error {
 	defer w.mu.Unlock()
 
 	if w.closed {
-		log.Debug("Close called on already-closed pool connection wrapper")
+		log.WithFields(logger.Fields{"pkg": "pool", "func": "PoolConnWrapper.Close"}).Debug("Close called on already-closed pool connection wrapper")
 		return oops.Code("ALREADY_CLOSED").In("pool").
 			Errorf("connection wrapper already closed")
 	}
-	log.Debug("Returning pooled connection")
+	log.WithFields(logger.Fields{"pkg": "pool", "func": "PoolConnWrapper.Close"}).Debug("Returning pooled connection")
 	w.closed = true
 	return w.pool.Release(w.addr, w.Conn)
 }
@@ -42,7 +43,7 @@ func (w *PoolConnWrapper) Discard() error {
 		return oops.Code("ALREADY_CLOSED").In("pool").
 			Errorf("connection wrapper already closed")
 	}
-	log.Debug("Discarding broken pooled connection")
+	log.WithFields(logger.Fields{"pkg": "pool", "func": "PoolConnWrapper.Discard"}).Debug("Discarding broken pooled connection")
 	w.closed = true
 	return w.pool.Remove(w.addr, w.Conn)
 }

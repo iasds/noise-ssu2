@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/go-i2p/go-noise/handshake"
+	"github.com/go-i2p/logger"
 )
 
 // LengthFieldSize is the 2-byte length field used in both NTCP2 and SSU2.
@@ -25,7 +26,7 @@ type SipHashLengthModifier struct {
 // NewSipHashLengthModifier creates a new SipHash length modifier with shared
 // keys for both directions.
 func NewSipHashLengthModifier(name string, sipKeys [2]uint64, initialIV uint64) *SipHashLengthModifier {
-	log.WithField("name", name).Debug("Creating SipHash length modifier")
+	log.WithFields(logger.Fields{"pkg": "internal", "func": "NewSipHashLengthModifier", "name": name}).Debug("Creating SipHash length modifier")
 	return &SipHashLengthModifier{
 		name:         name,
 		outboundKeys: sipKeys,
@@ -38,7 +39,7 @@ func NewSipHashLengthModifier(name string, sipKeys [2]uint64, initialIV uint64) 
 // NewSipHashLengthModifierDirectional creates a SipHash length modifier with
 // per-direction keys as required by the NTCP2 and SSU2 specifications.
 func NewSipHashLengthModifierDirectional(name string, outKeys, inKeys [2]uint64, outIV, inIV uint64) *SipHashLengthModifier {
-	log.WithField("name", name).Debug("Creating directional SipHash length modifier")
+	log.WithFields(logger.Fields{"pkg": "internal", "func": "NewSipHashLengthModifierDirectional", "name": name}).Debug("Creating directional SipHash length modifier")
 	return &SipHashLengthModifier{
 		name:         name,
 		outboundKeys: outKeys,
@@ -50,13 +51,13 @@ func NewSipHashLengthModifierDirectional(name string, outKeys, inKeys [2]uint64,
 
 // ModifyOutbound obfuscates a 2-byte length field using SipHash.
 func (slm *SipHashLengthModifier) ModifyOutbound(phase handshake.HandshakePhase, data []byte) ([]byte, error) {
-	log.WithField("name", slm.name).WithField("phase", phase).WithField("data_len", len(data)).Debug("SipHash ModifyOutbound")
+	log.WithFields(logger.Fields{"pkg": "internal", "func": "SipHashLengthModifier.ModifyOutbound", "name": slm.name, "phase": phase, "data_len": len(data)}).Debug("SipHash ModifyOutbound")
 	return slm.applyMask(phase, data, slm.getNextOutboundMask)
 }
 
 // ModifyInbound deobfuscates a 2-byte length field using SipHash.
 func (slm *SipHashLengthModifier) ModifyInbound(phase handshake.HandshakePhase, data []byte) ([]byte, error) {
-	log.WithField("name", slm.name).WithField("phase", phase).WithField("data_len", len(data)).Debug("SipHash ModifyInbound")
+	log.WithFields(logger.Fields{"pkg": "internal", "func": "SipHashLengthModifier.ModifyInbound", "name": slm.name, "phase": phase, "data_len": len(data)}).Debug("SipHash ModifyInbound")
 	return slm.applyMask(phase, data, slm.getNextInboundMask)
 }
 

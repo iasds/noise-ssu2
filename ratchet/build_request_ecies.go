@@ -3,6 +3,7 @@ package ratchet
 import (
 	"github.com/go-i2p/crypto/ecies"
 	"github.com/go-i2p/crypto/types"
+	"github.com/go-i2p/logger"
 	"github.com/samber/oops"
 )
 
@@ -70,9 +71,7 @@ func (c *BuildRequestCrypto) EncryptBuildRequest(
 	// Copy ciphertext to bytes 16-527 (remaining bytes are zero-padded)
 	copy(encrypted[16:], ciphertext)
 
-	log.WithField("record_size", 528).
-		WithField("cleartext_size", 222).
-		WithField("ciphertext_size", len(ciphertext)).
+	log.WithFields(logger.Fields{"pkg": "ratchet", "func": "EncryptBuildRequest", "record_size": 528, "cleartext_size": 222, "ciphertext_size": len(ciphertext)}).
 		Debug("BuildRequest encrypted successfully")
 
 	return encrypted, nil
@@ -107,8 +106,7 @@ func (c *BuildRequestCrypto) DecryptBuildRequest(encrypted [528]byte, privateKey
 		return nil, oops.Errorf("invalid decrypted size: expected 222 bytes, got %d", len(cleartext))
 	}
 
-	log.WithField("record_size", 528).
-		WithField("cleartext_size", len(cleartext)).
+	log.WithFields(logger.Fields{"pkg": "ratchet", "func": "DecryptBuildRequest", "record_size": 528, "cleartext_size": len(cleartext)}).
 		Debug("BuildRequest decrypted successfully")
 
 	return cleartext, nil
@@ -123,7 +121,7 @@ func (c *BuildRequestCrypto) DecryptBuildRequest(encrypted [528]byte, privateKey
 //   - encrypted: 528-byte encrypted build request record
 //   - ourIdentityHash: our 32-byte identity hash
 func (c *BuildRequestCrypto) VerifyIdentityHash(encrypted [528]byte, ourIdentityHash [32]byte) bool {
-	log.Debug("Verifying identity hash prefix match")
+	log.WithFields(logger.Fields{"pkg": "ratchet", "func": "VerifyIdentityHash"}).Debug("Verifying identity hash prefix match")
 	for i := 0; i < 16; i++ {
 		if encrypted[i] != ourIdentityHash[i] {
 			return false

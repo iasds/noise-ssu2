@@ -15,7 +15,7 @@ func (h *SSU2Conn) validateReadyForIO() error {
 	h.stateMutex.RLock()
 	state := h.state
 	h.stateMutex.RUnlock()
-	log.WithField("state", state).Debug("validateReadyForIO: checking connection state")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "validateReadyForIO", "state": state}).Debug("checking connection state")
 
 	if state != StateEstablished {
 		return oops.Errorf("connection not established: %s", state)
@@ -27,7 +27,7 @@ func (h *SSU2Conn) validateReadyForIO() error {
 // Reads data from the connection, reassembling I2NP messages from Data packets.
 // Blocks until data is available, the read deadline expires, or the connection closes.
 func (h *SSU2Conn) Read(b []byte) (int, error) {
-	log.WithField("buf_len", len(b)).Debug("Read: waiting for inbound data")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "Read", "buf_len": len(b)}).Debug("waiting for inbound data")
 	if err := h.validateReadyForIO(); err != nil {
 		return 0, err
 	}
@@ -75,12 +75,12 @@ func (h *SSU2Conn) recvLoop() {
 				continue
 			}
 
-			log.WithField("bytes", n).WithField("from", addr).Debug("Received UDP packet")
+			log.WithFields(logger.Fields{"pkg": "ssu2", "func": "recvLoop", "bytes": n, "from": addr}).Debug("Received UDP packet")
 			if packet := h.parseInboundPacket(buf[:n], addr); packet != nil {
-				log.WithField("type", packet.MessageType).WithField("pktnum", packet.PacketNumber).Debug("Parsed inbound packet")
+				log.WithFields(logger.Fields{"pkg": "ssu2", "func": "recvLoop", "type": packet.MessageType, "pktnum": packet.PacketNumber}).Debug("Parsed inbound packet")
 				h.processInboundPacket(packet)
 			} else {
-				log.Debug("Inbound packet dropped (parse returned nil)")
+				log.WithFields(logger.Fields{"pkg": "ssu2", "func": "recvLoop"}).Debug("Inbound packet dropped (parse returned nil)")
 			}
 		}
 	}
@@ -91,7 +91,7 @@ func (h *SSU2Conn) recvLoop() {
 // Supports connection migration: if a packet from a new address passes AEAD
 // verification, the remote address is updated (per spec §Connection Migration).
 func (h *SSU2Conn) parseInboundPacket(data []byte, addr net.Addr) *SSU2Packet {
-	log.WithFields(logger.Fields{"data_len": len(data), "from": addr}).Debug("parseInboundPacket: parsing inbound UDP datagram")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "parseInboundPacket", "data_len": len(data), "from": addr}).Debug("parsing inbound UDP datagram")
 	udpAddr, ok := addr.(*net.UDPAddr)
 	if !ok {
 		return nil
@@ -244,16 +244,18 @@ func (h *SSU2Conn) processInboundPacket(packet *SSU2Packet) {
 
 // processDataPacket handles a data-phase packet: parses blocks and retires ACKed packets.
 func (h *SSU2Conn) processDataPacket(packet *SSU2Packet) {
-	log.WithFields(map[string]interface{}{
+	log.WithFields(logger.Fields{
+		"pkg":         "ssu2",
+		"func":        "processDataPacket",
 		"pkt_num":     packet.PacketNumber,
 		"payload_len": len(packet.Payload),
-	}).Debug("processDataPacket: processing")
+	}).Debug("processing")
 	blocks, err := h.dataHandler.ProcessDataPacket(packet)
 	if err != nil {
-		log.WithField("error", err.Error()).Debug("processDataPacket: ProcessDataPacket error")
+		log.WithFields(logger.Fields{"pkg": "ssu2", "func": "processDataPacket", "error": err.Error()}).Debug("ProcessDataPacket error")
 		return
 	}
-	log.WithField("num_blocks", len(blocks)).Debug("processDataPacket: processed blocks")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "processDataPacket", "num_blocks": len(blocks)}).Debug("processed blocks")
 
 	// Process ACK blocks
 	for _, block := range blocks {
@@ -288,7 +290,7 @@ func (h *SSU2Conn) handlePeerNextNonce(newNonce uint64) error {
 	h.recvCipher.UnsafeSetKey(newKey)
 	h.recvCipher.SetNonce(newNonce)
 
-	log.WithField("newNonce", newNonce).Info("Applied peer NextNonce rekey on receive cipher")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "handlePeerNextNonce", "newNonce": newNonce}).Info("Applied peer NextNonce rekey on receive cipher")
 	return nil
 }
 

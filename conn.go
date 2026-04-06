@@ -126,6 +126,8 @@ func NewNoiseConn(underlying net.Conn, config *ConnConfig) (*NoiseConn, error) {
 	}
 
 	nc.logger.WithFields(i2plogger.Fields{
+		"pkg":         "noise",
+		"func":        "NewNoiseConn",
 		"pattern":     nc.config.Pattern,
 		"role":        map[bool]string{true: "initiator", false: "responder"}[nc.config.Initiator],
 		"local_addr":  nc.localAddr.String(),
@@ -273,11 +275,13 @@ func (nc *NoiseConn) Close() error {
 	nc.stateMutex.Unlock()
 
 	nc.logger.WithFields(i2plogger.Fields{
+		"pkg":       "noise",
+		"func":      "NoiseConn.Close",
 		"old_state": oldState.String(),
 		"new_state": internal.StateClosed.String(),
 	}).Debug("Connection state changed")
 
-	nc.logger.Debug("Closing NoiseConn")
+	nc.logger.WithFields(i2plogger.Fields{"pkg": "noise", "func": "NoiseConn.Close"}).Debug("Closing NoiseConn")
 
 	// Zero cipher state key material before closing
 	nc.ZeroKeys()

@@ -40,7 +40,7 @@ func BuildRelayRequestSignedData(
 	alicePort uint16,
 	aliceIP net.IP,
 ) ([]byte, error) {
-	log.WithFields(logger.Fields{"nonce": nonce, "relayTag": relayTag}).Debug("BuildRelayRequestSignedData: building relay request signed data")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "BuildRelayRequestSignedData", "nonce": nonce, "relayTag": relayTag}).Debug("Building relay request signed data")
 	addrSuffix, err := buildAddrSuffix(aliceIP, alicePort)
 	if err != nil {
 		return nil, oops.Wrapf(err, "invalid aliceIP")
@@ -66,7 +66,7 @@ func SignRelayRequest(
 	alicePort uint16,
 	aliceIP net.IP,
 ) ([]byte, error) {
-	log.WithFields(logger.Fields{"nonce": nonce, "relayTag": relayTag}).Debug("SignRelayRequest: signing relay request")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "SignRelayRequest", "nonce": nonce, "relayTag": relayTag}).Debug("Signing relay request")
 	data, err := BuildRelayRequestSignedData(bobHash, charlieHash, nonce, relayTag, timestamp, version, alicePort, aliceIP)
 	if err != nil {
 		return nil, oops.Wrapf(err, "failed to build relay request signed data")
@@ -84,7 +84,7 @@ func VerifyRelayRequestSignature(
 	alicePort uint16,
 	aliceIP net.IP,
 ) (bool, error) {
-	log.WithFields(logger.Fields{"nonce": nonce, "signatureLen": len(signature)}).Debug("VerifyRelayRequestSignature: verifying relay request signature")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "VerifyRelayRequestSignature", "nonce": nonce, "signatureLen": len(signature)}).Debug("Verifying relay request signature")
 	data, err := BuildRelayRequestSignedData(bobHash, charlieHash, nonce, relayTag, timestamp, version, alicePort, aliceIP)
 	if err != nil {
 		return false, oops.Wrapf(err, "failed to build relay request signed data for verification")
@@ -110,7 +110,7 @@ func BuildRelayResponseSignedData(
 	charliePort uint16,
 	charlieIP net.IP,
 ) ([]byte, error) {
-	log.WithField("nonce", nonce).Debug("BuildRelayResponseSignedData: building relay response signed data")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "BuildRelayResponseSignedData", "nonce": nonce}).Debug("Building relay response signed data")
 	ipBytes, csz, err := normalizeIP(charlieIP)
 	if err != nil {
 		return nil, oops.Wrapf(err, "invalid charlieIP")
@@ -140,7 +140,7 @@ func SignRelayResponse(
 	charliePort uint16,
 	charlieIP net.IP,
 ) ([]byte, error) {
-	log.WithField("nonce", nonce).Debug("SignRelayResponse: signing relay response")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "SignRelayResponse", "nonce": nonce}).Debug("Signing relay response")
 	data, err := BuildRelayResponseSignedData(bobHash, nonce, timestamp, version, charliePort, charlieIP)
 	if err != nil {
 		return nil, oops.Wrapf(err, "failed to build relay response signed data")
@@ -160,7 +160,7 @@ func VerifyRelayResponseSignature(
 	charliePort uint16,
 	charlieIP net.IP,
 ) (bool, error) {
-	log.WithFields(logger.Fields{"nonce": nonce, "signatureLen": len(signature)}).Debug("VerifyRelayResponseSignature: verifying relay response signature")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "VerifyRelayResponseSignature", "nonce": nonce, "signatureLen": len(signature)}).Debug("Verifying relay response signature")
 	data, err := BuildRelayResponseSignedData(bobHash, nonce, timestamp, version, charliePort, charlieIP)
 	if err != nil {
 		return false, oops.Wrapf(err, "failed to build relay response signed data for verification")

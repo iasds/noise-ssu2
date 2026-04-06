@@ -163,7 +163,7 @@ func EncodeRelayRequest(req *RelayRequestBlock) (*SSU2Block, error) {
 	if req == nil {
 		return nil, oops.Errorf("RelayRequestBlock is nil")
 	}
-	log.WithFields(logger.Fields{"nonce": req.Nonce, "relayTag": req.RelayTag}).Debug("EncodeRelayRequest: encoding relay request block")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "EncodeRelayRequest", "nonce": req.Nonce, "relayTag": req.RelayTag}).Debug("Encoding relay request block")
 
 	ip4 := req.AliceIP.To4()
 	var ipBytes []byte
@@ -208,7 +208,7 @@ func DecodeRelayRequest(block *SSU2Block) (*RelayRequestBlock, error) {
 	if block.Type != BlockTypeRelayRequest {
 		return nil, oops.Errorf("invalid block type: expected %d, got %d", BlockTypeRelayRequest, block.Type)
 	}
-	log.WithField("dataLen", len(block.Data)).Debug("DecodeRelayRequest: decoding relay request block")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "DecodeRelayRequest", "dataLen": len(block.Data)}).Debug("Decoding relay request block")
 
 	data := block.Data
 	// Minimum: flag(1)+nonce(4)+relay_tag(4)+timestamp(4)+ver(1)+asz(1)+port(2)+ip(4) = 21
@@ -267,7 +267,7 @@ func EncodeRelayResponse(resp *RelayResponseBlock) (*SSU2Block, error) {
 	if resp == nil {
 		return nil, oops.Errorf("RelayResponseBlock is nil")
 	}
-	log.WithFields(logger.Fields{"code": resp.Code, "nonce": resp.Nonce}).Debug("EncodeRelayResponse: encoding relay response block")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "EncodeRelayResponse", "code": resp.Code, "nonce": resp.Nonce}).Debug("Encoding relay response block")
 
 	if resp.Code == 0 {
 		return encodeRelayResponseAccepted(resp)
@@ -283,7 +283,7 @@ func EncodeRelayResponse(resp *RelayResponseBlock) (*SSU2Block, error) {
 }
 
 func encodeRelayResponseAccepted(resp *RelayResponseBlock) (*SSU2Block, error) {
-	log.WithField("nonce", resp.Nonce).Debug("encodeRelayResponseAccepted: encoding accepted relay response")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "encodeRelayResponseAccepted", "nonce": resp.Nonce}).Debug("Encoding accepted relay response")
 	ipBytes, csz, err := normalizeIP(resp.CharlieIP)
 	if err != nil || csz == 0 {
 		return nil, oops.Errorf("invalid CharlieIP for accepted response")
@@ -310,7 +310,7 @@ func encodeRelayResponseAccepted(resp *RelayResponseBlock) (*SSU2Block, error) {
 }
 
 func encodeRelayResponseCharlieRejection(resp *RelayResponseBlock) (*SSU2Block, error) {
-	log.WithFields(logger.Fields{"code": resp.Code, "nonce": resp.Nonce}).Debug("encodeRelayResponseCharlieRejection: encoding Charlie rejection response")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "encodeRelayResponseCharlieRejection", "code": resp.Code, "nonce": resp.Nonce}).Debug("Encoding Charlie rejection response")
 	ipBytes, csz, _ := normalizeIP(resp.CharlieIP)
 	// flag(1)+code(1)+nonce(4)+ts(4)+ver(1)+csz(1)+[port(2)+ip]+sig
 	dataSize := 1 + 1 + 4 + 4 + 1 + 1 + len(resp.Signature)
@@ -345,7 +345,7 @@ func DecodeRelayResponse(block *SSU2Block) (*RelayResponseBlock, error) {
 	if block.Type != BlockTypeRelayResponse {
 		return nil, oops.Errorf("invalid block type: expected %d, got %d", BlockTypeRelayResponse, block.Type)
 	}
-	log.WithField("dataLen", len(block.Data)).Debug("DecodeRelayResponse: decoding relay response block")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "DecodeRelayResponse", "dataLen": len(block.Data)}).Debug("Decoding relay response block")
 
 	data := block.Data
 	if len(data) < 6 {
@@ -367,7 +367,7 @@ func DecodeRelayResponse(block *SSU2Block) (*RelayResponseBlock, error) {
 }
 
 func decodeRelayResponseAccepted(resp *RelayResponseBlock, data []byte) (*RelayResponseBlock, error) {
-	log.WithFields(logger.Fields{"nonce": resp.Nonce, "dataLen": len(data)}).Debug("decodeRelayResponseAccepted: decoding accepted relay response")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "decodeRelayResponseAccepted", "nonce": resp.Nonce, "dataLen": len(data)}).Debug("Decoding accepted relay response")
 	// Need at least: 6 + timestamp(4) + ver(1) + csz(1) = 12
 	if len(data) < 12 {
 		return nil, oops.Errorf("accepted RelayResponse too short: %d bytes", len(data))
@@ -407,7 +407,7 @@ func decodeRelayResponseAccepted(resp *RelayResponseBlock, data []byte) (*RelayR
 }
 
 func decodeRelayResponseCharlieRejection(resp *RelayResponseBlock, data []byte) (*RelayResponseBlock, error) {
-	log.WithFields(logger.Fields{"nonce": resp.Nonce, "dataLen": len(data)}).Debug("decodeRelayResponseCharlieRejection: decoding Charlie rejection response")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "decodeRelayResponseCharlieRejection", "nonce": resp.Nonce, "dataLen": len(data)}).Debug("Decoding Charlie rejection response")
 	if len(data) < 12 {
 		return nil, oops.Errorf("Charlie rejection RelayResponse too short: %d bytes", len(data))
 	}
@@ -450,7 +450,7 @@ func EncodeRelayIntro(intro *RelayIntroBlock) (*SSU2Block, error) {
 	if len(intro.AliceRouterHash) != 32 {
 		return nil, oops.Errorf("AliceRouterHash must be 32 bytes, got %d", len(intro.AliceRouterHash))
 	}
-	log.WithFields(logger.Fields{"nonce": intro.Nonce, "relayTag": intro.AliceRelayTag}).Debug("EncodeRelayIntro: encoding relay intro block")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "EncodeRelayIntro", "nonce": intro.Nonce, "relayTag": intro.AliceRelayTag}).Debug("Encoding relay intro block")
 
 	ip4 := intro.AliceIP.To4()
 	var ipBytes []byte
@@ -501,7 +501,7 @@ func DecodeRelayIntro(block *SSU2Block) (*RelayIntroBlock, error) {
 	if block.Type != BlockTypeRelayIntro {
 		return nil, oops.Errorf("invalid block type: expected %d, got %d", BlockTypeRelayIntro, block.Type)
 	}
-	log.WithField("dataLen", len(block.Data)).Debug("DecodeRelayIntro: decoding relay intro block")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "DecodeRelayIntro", "dataLen": len(block.Data)}).Debug("Decoding relay intro block")
 
 	data := block.Data
 	// Minimum: flag(1)+hash(32)+nonce(4)+tag(4)+timestamp(4)+ver(1)+asz(1)+port(2)+ip(4) = 53
@@ -571,7 +571,7 @@ func DecodeRelayTagRequest(block *SSU2Block) (*RelayTagRequestBlock, error) {
 	if block.Type != BlockTypeRelayTagRequest {
 		return nil, oops.Errorf("invalid block type: expected %d, got %d", BlockTypeRelayTagRequest, block.Type)
 	}
-	log.Debug("DecodeRelayTagRequest: decoding relay tag request block")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "DecodeRelayTagRequest"}).Debug("Decoding relay tag request block")
 
 	return &RelayTagRequestBlock{}, nil
 }
@@ -589,7 +589,7 @@ func EncodeRelayTag(tag *RelayTagBlock) (*SSU2Block, error) {
 	if tag == nil {
 		return nil, oops.Errorf("RelayTagBlock is nil")
 	}
-	log.WithField("relayTag", tag.RelayTag).Debug("EncodeRelayTag: encoding relay tag block")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "EncodeRelayTag", "relayTag": tag.RelayTag}).Debug("Encoding relay tag block")
 
 	data := make([]byte, 4)
 	binary.BigEndian.PutUint32(data[0:4], tag.RelayTag)
@@ -614,7 +614,7 @@ func DecodeRelayTag(block *SSU2Block) (*RelayTagBlock, error) {
 	if block.Type != BlockTypeRelayTag {
 		return nil, oops.Errorf("invalid block type: expected %d, got %d", BlockTypeRelayTag, block.Type)
 	}
-	log.WithField("dataLen", len(block.Data)).Debug("DecodeRelayTag: decoding relay tag block")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "DecodeRelayTag", "dataLen": len(block.Data)}).Debug("Decoding relay tag block")
 
 	data := block.Data
 	if len(data) < 4 {

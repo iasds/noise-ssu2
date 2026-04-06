@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/go-i2p/common/data"
+	"github.com/go-i2p/logger"
 	"github.com/samber/oops"
 )
 
@@ -99,7 +100,7 @@ type PendingSession struct {
 //
 // Returns a new RelayManager with empty state.
 func NewRelayManager(listener *SSU2Listener) *RelayManager {
-	log.Debug("Creating new RelayManager")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "NewRelayManager"}).Debug("Creating new RelayManager")
 	rm := &RelayManager{
 		listener:        listener,
 		introducers:     make([]*IntroducerInfo, 0, 3), // I2P spec allows up to 3
@@ -115,7 +116,7 @@ func NewRelayManager(listener *SSU2Listener) *RelayManager {
 
 // Stop stops the relay manager and cleans up resources.
 func (rm *RelayManager) Stop() {
-	log.Debug("Stopping RelayManager")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "Stop"}).Debug("Stopping RelayManager")
 	rm.mutex.Lock()
 	defer rm.mutex.Unlock()
 
@@ -145,7 +146,7 @@ func (rm *RelayManager) Stop() {
 //
 // Returns error if parameters are invalid.
 func (rm *RelayManager) RegisterIntroducer(addr *net.UDPAddr, routerHash data.Hash, relayTag uint32) error {
-	log.WithField("relayTag", relayTag).Debug("Registering introducer")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "RegisterIntroducer", "relayTag": relayTag}).Debug("Registering introducer")
 	if addr == nil {
 		return oops.
 			Code("INVALID_ADDRESS").
@@ -202,7 +203,7 @@ func (rm *RelayManager) RegisterIntroducer(addr *net.UDPAddr, routerHash data.Ha
 //
 // Returns a slice of IntroducerInfo pointers (defensive copies).
 func (rm *RelayManager) GetIntroducers() []*IntroducerInfo {
-	log.Debug("GetIntroducers: retrieving active introducers")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "GetIntroducers"}).Debug("Retrieving active introducers")
 	rm.mutex.RLock()
 	defer rm.mutex.RUnlock()
 
@@ -230,7 +231,7 @@ func (rm *RelayManager) GetIntroducers() []*IntroducerInfo {
 // Parameters:
 //   - addr: UDP address of the introducer to remove
 func (rm *RelayManager) RemoveIntroducer(addr *net.UDPAddr) {
-	log.WithField("addr", addr).Debug("RemoveIntroducer: removing introducer")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "RemoveIntroducer", "addr": addr}).Debug("Removing introducer")
 	if addr == nil {
 		return
 	}
@@ -261,7 +262,7 @@ func (rm *RelayManager) RemoveIntroducer(addr *net.UDPAddr) {
 //
 // Returns the allocated tag, or error if allocation fails.
 func (rm *RelayManager) AllocateRelayTag(addr *net.UDPAddr) (uint32, error) {
-	log.Debug("Allocating relay tag")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "AllocateRelayTag"}).Debug("Allocating relay tag")
 	if addr == nil {
 		return 0, oops.
 			Code("INVALID_ADDRESS").
@@ -313,7 +314,7 @@ func (rm *RelayManager) AllocateRelayTag(addr *net.UDPAddr) (uint32, error) {
 //
 // Returns true if tag is valid and matches address.
 func (rm *RelayManager) ValidateRelayTag(tag uint32, addr *net.UDPAddr) bool {
-	log.WithField("tag", tag).Debug("ValidateRelayTag: validating relay tag")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "ValidateRelayTag", "tag": tag}).Debug("Validating relay tag")
 	if tag == 0 || addr == nil {
 		return false
 	}
@@ -342,7 +343,7 @@ func (rm *RelayManager) ValidateRelayTag(tag uint32, addr *net.UDPAddr) bool {
 //
 // Returns RelayTag info, or nil if not found.
 func (rm *RelayManager) GetRelayTag(tag uint32) *RelayTag {
-	log.WithField("tag", tag).Debug("GetRelayTag: retrieving relay tag info")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "GetRelayTag", "tag": tag}).Debug("Retrieving relay tag info")
 	if tag == 0 {
 		return nil
 	}
@@ -374,7 +375,7 @@ func (rm *RelayManager) GetRelayTag(tag uint32) *RelayTag {
 //
 // Returns error if parameters are invalid.
 func (rm *RelayManager) AddPendingSession(sessionID uint64, remoteAddr, introducerAddr *net.UDPAddr, relayTag uint32) error {
-	log.WithField("sessionID", sessionID).Debug("Adding pending session")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "AddPendingSession", "sessionID": sessionID}).Debug("Adding pending session")
 	if sessionID == 0 {
 		return oops.
 			Code("INVALID_SESSION_ID").
@@ -463,7 +464,7 @@ func (rm *RelayManager) IncrementRetries(sessionID uint64) int {
 // cleanupExpired removes expired relay tags, introducers, and pending sessions.
 // This is called periodically by the cleanup timer.
 func (rm *RelayManager) cleanupExpired() {
-	log.Debug("cleanupExpired: removing expired relay tags and introducers")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "cleanupExpired"}).Debug("Removing expired relay tags and introducers")
 	rm.mutex.Lock()
 	defer rm.mutex.Unlock()
 

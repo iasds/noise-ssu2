@@ -18,7 +18,7 @@ import (
 //   - sessionHash: SHA-256(initiatorStaticPub) for New Session messages; nil otherwise.
 //     Callers that need to send a New Session Reply must pass this value to EncryptNewSessionReply.
 func (sm *SessionManager) DecryptGarlicMessage(encryptedGarlic []byte) ([]byte, [8]byte, *[32]byte, error) {
-	log.WithFields(logger.Fields{"message_len": len(encryptedGarlic)}).Debug("Decrypting garlic message")
+	log.WithFields(logger.Fields{"pkg": "ratchet", "func": "DecryptGarlicMessage", "message_len": len(encryptedGarlic)}).Debug("Decrypting garlic message")
 	if len(encryptedGarlic) < 8 {
 		return nil, [8]byte{}, nil, oops.Errorf("encrypted garlic message too short: %d bytes", len(encryptedGarlic))
 	}
@@ -47,7 +47,7 @@ func (sm *SessionManager) DecryptGarlicMessage(encryptedGarlic []byte) ([]byte, 
 // tryDecryptExisting attempts to decrypt as an Existing Session message.
 // Returns ok=true if a matching session was found (even if decryption failed).
 func (sm *SessionManager) tryDecryptExisting(msgTag [8]byte, encryptedGarlic []byte) ([]byte, [8]byte, error, bool) {
-	log.WithFields(logger.Fields{"message_len": len(encryptedGarlic)}).Debug("Trying to decrypt as Existing Session message")
+	log.WithFields(logger.Fields{"pkg": "ratchet", "func": "tryDecryptExisting", "message_len": len(encryptedGarlic)}).Debug("Trying to decrypt as Existing Session message")
 	sm.mu.Lock()
 	session, counterHint := sm.lookupSessionByTag(msgTag)
 	sm.mu.Unlock()
@@ -77,7 +77,7 @@ func (sm *SessionManager) tryDecryptExisting(msgTag [8]byte, encryptedGarlic []b
 // tryDecryptNSR attempts to decrypt as a New Session Reply message.
 // Returns ok=true if a matching NSR tag was found (even if decryption failed).
 func (sm *SessionManager) tryDecryptNSR(msgTag [8]byte, encryptedGarlic []byte) ([]byte, error, bool) {
-	log.WithFields(logger.Fields{"message_len": len(encryptedGarlic)}).Debug("Trying to decrypt as New Session Reply")
+	log.WithFields(logger.Fields{"pkg": "ratchet", "func": "tryDecryptNSR", "message_len": len(encryptedGarlic)}).Debug("Trying to decrypt as New Session Reply")
 	sm.mu.Lock()
 	nsrSession, isNSR := sm.nsrTagIndex[msgTag]
 	if isNSR {
@@ -116,7 +116,7 @@ func (sm *SessionManager) decryptNewSession(msg []byte) ([]byte, *[32]byte, erro
 	// Spec §1c: "Bob ratchets once when creating an unbound inbound session,
 	// and does not create a corresponding outbound session."
 	if isUnbound {
-		log.Debug("Received unbound (N-pattern) New Session message — no session state stored")
+		log.WithFields(logger.Fields{"pkg": "ratchet", "func": "decryptNewSession"}).Debug("Received unbound (N-pattern) New Session message — no session state stored")
 		return plaintext, nil, nil
 	}
 
@@ -176,8 +176,9 @@ func (sm *SessionManager) initializeInboundRatchetState(remotePubKey [32]byte, k
 		return oops.Wrapf(err, "failed to generate inbound tag window")
 	}
 
-	log.WithFields(map[string]interface{}{
-		"at":            "initializeInboundRatchetState",
+	log.WithFields(logger.Fields{
+		"pkg":           "ratchet",
+		"func":          "initializeInboundRatchetState",
 		"session_count": len(sm.sessions),
 		"tag_count":     len(sm.tagIndex),
 	}).Debug("Inbound ratchet session stored")
@@ -190,7 +191,7 @@ func (sm *SessionManager) initializeInboundRatchetState(remotePubKey [32]byte, k
 // The tag is derived from the same chain key that the responder will use when
 // constructing its NSR, ensuring both sides agree on the routing tag.
 func (sm *SessionManager) registerNSRTagLocked(session *Session, hs *noiseHandshakeState) error {
-	log.Debug("Registering NSR tag for initiator session")
+	log.WithFields(logger.Fields{"pkg": "ratchet", "func": "registerNSRTagLocked"}).Debug("Registering NSR tag for initiator session")
 	nsrTagRatchet, err := deriveNSRTagRatchet(hs.ck)
 	if err != nil {
 		return oops.Wrapf(err, "failed to derive NSR tag ratchet for initiator registration")
@@ -236,8 +237,9 @@ func (sm *SessionManager) decryptIncomingNSR(session *Session, message []byte) (
 	session.mu.Unlock()
 	sm.mu.Unlock()
 
-	log.WithFields(map[string]interface{}{
-		"at": "decryptIncomingNSR",
+	log.WithFields(logger.Fields{
+		"pkg":  "ratchet",
+		"func": "decryptIncomingNSR",
 	}).Debug("New Session Reply received, ratchets updated with NSR keys")
 
 	return plaintext, nil
@@ -251,7 +253,7 @@ func (sm *SessionManager) decryptIncomingNSR(session *Session, message []byte) (
 // nsrSessionKeys.keyBA is the responder→initiator direction key.
 // If isInitiator is true, sendKey = keyAB and recvKey = keyBA; vice versa otherwise.
 func (sm *SessionManager) applyNSRKeysToSessionWhileLocked(session *Session, nsrKeys *nsrSessionKeys, isInitiator bool) error {
-	log.WithFields(logger.Fields{"is_initiator": isInitiator}).Debug("Applying NSR keys to session ratchets")
+	log.WithFields(logger.Fields{"pkg": "ratchet", "func": "applyNSRKeysToSessionWhileLocked", "is_initiator": isInitiator}).Debug("Applying NSR keys to session ratchets")
 	var sendKey, recvKey [32]byte
 	if isInitiator {
 		sendKey = nsrKeys.keyAB // A sends to B
@@ -352,8 +354,9 @@ func (sm *SessionManager) decryptExistingSession(
 	// decrypting the first inbound ES message from the initiator.
 	if !session.isInitiator && session.awaitingFirstES {
 		session.awaitingFirstES = false
-		log.WithFields(map[string]interface{}{
-			"at":      "decryptExistingSession",
+		log.WithFields(logger.Fields{
+			"pkg":     "ratchet",
+			"func":    "decryptExistingSession",
 			"counter": usedCounter,
 		}).Debug("First inbound ES received; responder may now send ES")
 	}
@@ -373,7 +376,7 @@ func tryCounterHintDecrypt(
 	sessionTag [8]byte,
 	windowEnd uint32,
 ) ([]byte, uint32, bool) {
-	log.WithFields(logger.Fields{"window_base": session.recvWindowBase, "window_end": windowEnd}).Debug("Attempting counter-hint AEAD decryption")
+	log.WithFields(logger.Fields{"pkg": "ratchet", "func": "tryCounterHintDecrypt", "window_base": session.recvWindowBase, "window_end": windowEnd}).Debug("Attempting counter-hint AEAD decryption")
 	if counterHint == nil {
 		return nil, 0, false
 	}
@@ -402,7 +405,7 @@ func scanWindowDecrypt(
 	sessionTag [8]byte,
 	windowEnd uint32,
 ) ([]byte, uint32, bool) {
-	log.WithFields(logger.Fields{"window_base": session.recvWindowBase, "window_end": windowEnd}).Debug("Scanning receive window for AEAD decryption")
+	log.WithFields(logger.Fields{"pkg": "ratchet", "func": "scanWindowDecrypt", "window_base": session.recvWindowBase, "window_end": windowEnd}).Debug("Scanning receive window for AEAD decryption")
 	for counter := session.recvWindowBase; counter < windowEnd; counter++ {
 		messageKey, inCache := session.recvKeyCache[counter]
 		if !inCache {
@@ -444,7 +447,7 @@ func (sm *SessionManager) processDecryptedESBlocks(session *Session, plaintext [
 	if err != nil {
 		// Non-fatal: the payload was already AEAD-authenticated, so a parse
 		// failure here is a local framing bug, not a security issue.
-		log.WithError(err).Warn("Failed to parse decrypted ES payload for control blocks")
+		log.WithFields(logger.Fields{"pkg": "ratchet", "func": "processDecryptedESBlocks"}).WithError(err).Warn("Failed to parse decrypted ES payload for control blocks")
 		return
 	}
 
@@ -453,8 +456,9 @@ func (sm *SessionManager) processDecryptedESBlocks(session *Session, plaintext [
 		case BlockTermination:
 			reason, _, _ := block.TerminationInfo()
 			sm.removeSessionByPointer(session)
-			log.WithFields(map[string]interface{}{
-				"at":     "processDecryptedESBlocks",
+			log.WithFields(logger.Fields{
+				"pkg":    "ratchet",
+				"func":   "processDecryptedESBlocks",
 				"reason": reason,
 			}).Info("Session terminated by peer via Termination block")
 			return // no further block processing after teardown
@@ -462,7 +466,7 @@ func (sm *SessionManager) processDecryptedESBlocks(session *Session, plaintext [
 		case BlockMessageNumber:
 			pn, pnErr := block.MessageNumber()
 			if pnErr != nil {
-				log.WithError(pnErr).Warn("Malformed MessageNumber block in ES payload")
+				log.WithFields(logger.Fields{"pkg": "ratchet", "func": "processDecryptedESBlocks"}).WithError(pnErr).Warn("Malformed MessageNumber block in ES payload")
 				continue
 			}
 			trimRecvWindowByPN(session, pn)
@@ -501,8 +505,9 @@ func (sm *SessionManager) processAckRequest(session *Session) {
 	}})
 	session.pendingAcks = append(session.pendingAcks, ackBlock)
 
-	log.WithFields(map[string]interface{}{
-		"at":        "processAckRequest",
+	log.WithFields(logger.Fields{
+		"pkg":       "ratchet",
+		"func":      "processAckRequest",
 		"recv_key":  session.recvKeyID,
 		"highest_n": highestConsumed,
 	}).Debug("Queued Ack block in response to AckRequest")
@@ -514,7 +519,7 @@ func (sm *SessionManager) processAckRequest(session *Session) {
 func (sm *SessionManager) processAck(session *Session, block PayloadBlock) {
 	acks, err := block.Acks()
 	if err != nil {
-		log.WithError(err).Warn("Malformed Ack block in ES payload")
+		log.WithFields(logger.Fields{"pkg": "ratchet", "func": "processAck"}).WithError(err).Warn("Malformed Ack block in ES payload")
 		return
 	}
 
@@ -522,8 +527,9 @@ func (sm *SessionManager) processAck(session *Session, block PayloadBlock) {
 	session.lastAckedEntries = acks
 	session.mu.Unlock()
 
-	log.WithFields(map[string]interface{}{
-		"at":    "processAck",
+	log.WithFields(logger.Fields{
+		"pkg":   "ratchet",
+		"func":  "processAck",
 		"count": len(acks),
 	}).Debug("Received Ack block from peer")
 }

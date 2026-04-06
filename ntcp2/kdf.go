@@ -5,6 +5,7 @@ import (
 
 	"github.com/go-i2p/crypto/hmac"
 	"github.com/go-i2p/go-noise/internal"
+	"github.com/go-i2p/logger"
 	"github.com/samber/oops"
 )
 
@@ -40,9 +41,9 @@ func DeriveSipHashKeys(askMaster, handshakeHash []byte) (
 	sipKeysBA [2]uint64, sipIVBA uint64,
 	err error,
 ) {
-	log.Debug("Deriving SipHash keys from handshake")
+	log.WithFields(logger.Fields{"pkg": "ntcp2", "func": "DeriveSipHashKeys"}).Debug("Deriving SipHash keys from handshake")
 	if len(askMaster) != StaticKeySize {
-		log.WithField("length", len(askMaster)).Error("Invalid ask_master length")
+		log.WithFields(logger.Fields{"pkg": "ntcp2", "func": "DeriveSipHashKeys", "length": len(askMaster)}).Error("Invalid ask_master length")
 		return sipKeysAB, 0, sipKeysBA, 0, oops.
 			Code("INVALID_ASK_MASTER").
 			In("ntcp2").
@@ -51,7 +52,7 @@ func DeriveSipHashKeys(askMaster, handshakeHash []byte) (
 	}
 
 	if len(handshakeHash) != StaticKeySize {
-		log.WithField("length", len(handshakeHash)).Error("Invalid handshake hash length")
+		log.WithFields(logger.Fields{"pkg": "ntcp2", "func": "DeriveSipHashKeys", "length": len(handshakeHash)}).Error("Invalid handshake hash length")
 		return sipKeysAB, 0, sipKeysBA, 0, oops.
 			Code("INVALID_HANDSHAKE_HASH").
 			In("ntcp2").
@@ -100,6 +101,6 @@ func DeriveSipHashKeys(askMaster, handshakeHash []byte) (
 	internal.SecureZero(step5Data)
 	internal.SecureZero(fullBA[:])
 
-	log.Debug("SipHash key derivation completed successfully")
+	log.WithFields(logger.Fields{"pkg": "ntcp2", "func": "DeriveSipHashKeys"}).Debug("SipHash key derivation completed successfully")
 	return sipKeysAB, sipIVAB, sipKeysBA, sipIVBA, nil
 }

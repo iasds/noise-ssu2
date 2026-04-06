@@ -1,11 +1,14 @@
 package handshake
 
-import "github.com/samber/oops"
+import (
+	"github.com/go-i2p/logger"
+	"github.com/samber/oops"
+)
 
 // ValidatePaddingRange checks that min and max padding sizes form a valid range.
 // It returns a contextual oops error scoped to the given subsystem name.
 func ValidatePaddingRange(subsystem string, minPadding, maxPadding int) error {
-	log.WithField("subsystem", subsystem).WithField("min", minPadding).WithField("max", maxPadding).Debug("Validating padding range")
+	log.WithFields(logger.Fields{"pkg": "handshake", "func": "ValidatePaddingRange", "subsystem": subsystem, "min": minPadding, "max": maxPadding}).Debug("Validating padding range")
 	if minPadding < 0 {
 		return oops.
 			Code("INVALID_MIN_PADDING").

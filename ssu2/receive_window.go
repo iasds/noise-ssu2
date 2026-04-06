@@ -3,6 +3,7 @@ package ssu2
 import (
 	"sync"
 
+	"github.com/go-i2p/logger"
 	"github.com/samber/oops"
 )
 
@@ -64,7 +65,7 @@ const (
 //
 // Returns a new ReceiveWindow ready to accept packets.
 func NewReceiveWindow(expected uint32, maxSize int) *ReceiveWindow {
-	log.WithField("expected", expected).WithField("maxSize", maxSize).Debug("Creating new ReceiveWindow")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "NewReceiveWindow", "expected": expected, "maxSize": maxSize}).Debug("Creating new ReceiveWindow")
 	if maxSize <= 0 {
 		maxSize = DefaultMaxWindowSize
 	}
@@ -99,7 +100,7 @@ func seqBefore(a, b uint32) bool {
 //   - ready: Slice of packets ready to process, in sequence order (may be empty)
 //   - error: Non-nil if packet is duplicate, old, or window is full
 func (rw *ReceiveWindow) Insert(packet *SSU2Packet) ([]*SSU2Packet, error) {
-	log.Debug("Insert: inserting packet into receive window")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "Insert"}).Debug("Inserting packet into receive window")
 	if packet == nil {
 		return nil, oops.Errorf("cannot insert nil packet")
 	}
@@ -186,7 +187,7 @@ func (rw *ReceiveWindow) GetWindowSize() int {
 //
 // Thread-safe: can be called concurrently.
 func (rw *ReceiveWindow) SetExpected(expected uint32) {
-	log.WithField("expected", expected).Debug("SetExpected: updating expected packet number")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "SetExpected", "expected": expected}).Debug("Updating expected packet number")
 	rw.mutex.Lock()
 	defer rw.mutex.Unlock()
 

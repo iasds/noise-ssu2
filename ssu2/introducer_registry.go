@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-i2p/logger"
 	"github.com/samber/oops"
 )
 
@@ -65,7 +66,7 @@ type RegisteredIntroducer struct {
 //
 // Returns a new IntroducerRegistry.
 func NewIntroducerRegistry(maxCount int) *IntroducerRegistry {
-	log.WithField("maxCount", maxCount).Debug("Creating new IntroducerRegistry")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "NewIntroducerRegistry", "maxCount": maxCount}).Debug("Creating new IntroducerRegistry")
 	if maxCount <= 0 {
 		maxCount = 3 // Default per I2P spec
 	}
@@ -88,7 +89,7 @@ func NewIntroducerRegistry(maxCount int) *IntroducerRegistry {
 //
 // Returns error if validation fails.
 func (ir *IntroducerRegistry) AddIntroducer(info *RegisteredIntroducer) error {
-	log.Debug("Adding introducer to registry")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "AddIntroducer"}).Debug("Adding introducer to registry")
 	if err := validateIntroducer(info); err != nil {
 		return err
 	}
@@ -116,7 +117,7 @@ func (ir *IntroducerRegistry) AddIntroducer(info *RegisteredIntroducer) error {
 
 // validateIntroducer checks that all required fields are present and valid.
 func validateIntroducer(info *RegisteredIntroducer) error {
-	log.Debug("validateIntroducer: validating introducer fields")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "validateIntroducer"}).Debug("Validating introducer fields")
 	if info == nil {
 		return oops.
 			Code("INVALID_INTRODUCER").
@@ -168,7 +169,7 @@ func validateIntroducer(info *RegisteredIntroducer) error {
 // findOldestIndex returns the index of the introducer with the oldest LastSeen time.
 // Must be called with ir.mutex held.
 func (ir *IntroducerRegistry) findOldestIndex() int {
-	log.WithField("count", len(ir.introducers)).Debug("findOldestIndex: locating oldest introducer")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "findOldestIndex", "count": len(ir.introducers)}).Debug("Locating oldest introducer")
 	oldestIdx := 0
 	oldestTime := ir.introducers[0].LastSeen
 	for i, intro := range ir.introducers[1:] {
@@ -185,7 +186,7 @@ func (ir *IntroducerRegistry) findOldestIndex() int {
 // Parameters:
 //   - addr: UDP address of the introducer to remove
 func (ir *IntroducerRegistry) RemoveIntroducer(addr *net.UDPAddr) {
-	log.Debug("RemoveIntroducer: removing introducer by address")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "RemoveIntroducer"}).Debug("Removing introducer by address")
 	if addr == nil {
 		return
 	}
@@ -250,7 +251,7 @@ func (ir *IntroducerRegistry) UpdateLastSeen(addr *net.UDPAddr) {
 //
 // Returns selected introducers (up to count).
 func (ir *IntroducerRegistry) SelectBestIntroducers(count int) []*RegisteredIntroducer {
-	log.WithField("count", count).Debug("SelectBestIntroducers: selecting best introducers by recency")
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "SelectBestIntroducers", "count": count}).Debug("Selecting best introducers by recency")
 	if count <= 0 {
 		return nil
 	}
