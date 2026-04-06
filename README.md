@@ -213,16 +213,22 @@ Each package has a dedicated `log.go` file that initializes a package-level logg
 var log = logger.GetGoI2PLogger()
 ```
 
-Log statements use structured fields for context:
+Every log call includes structured `pkg` and `func` fields for filtering and tracing:
 
 ```go
-log.WithField("pattern", config.Pattern).Debug("Creating new connection config")
-log.WithError(err).Error("Handshake failed")
 log.WithFields(logger.Fields{
-    "localAddr":  conn.LocalAddr(),
-    "remoteAddr": conn.RemoteAddr(),
-}).Debug("Connection established")
+    "pkg":     "noise",
+    "func":    "NewConnConfig",
+    "pattern": config.Pattern,
+}).Debug("Creating new connection config")
+
+log.WithFields(logger.Fields{
+    "pkg":  "ntcp2",
+    "func": "Handshake",
+}).WithError(err).Error("Handshake failed")
 ```
+
+Available `pkg` values: `noise`, `handshake`, `internal`, `replaycache`, `ntcp2`, `pool`, `ratchet`, `ssu2`.
 
 ### Running Tests with Logging
 
