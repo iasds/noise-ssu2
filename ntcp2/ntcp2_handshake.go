@@ -64,6 +64,32 @@ func (c *NTCP2Conn) Handshake(ctx context.Context) error {
 	nc := c.UnderlyingConn()
 	nc.StartHandshake()
 
+	// Apply a handshake deadline to the underlying TCP connection so that
+	// blocking Read/Write calls in performInitiatorHandshake / performResponderHandshake
+	// are bounded. Without this, a misbehaving peer can cause the handshake to block
+	// indefinitely (the ctx was previously accepted but never used).
+	raw := nc.Underlying()
+	hsCtx := ctx
+	if cfg.HandshakeTimeout > 0 {
+		var cancel context.CancelFunc
+		hsCtx, cancel = context.WithTimeout(ctx, cfg.HandshakeTimeout)
+		defer cancel()
+	}
+	if deadline, ok := hsCtx.Deadline(); ok {
+		if err := raw.SetDeadline(deadline); err != nil {
+			nc.FailHandshake()
+			return oops.
+				Code("SET_DEADLINE_FAILED").
+				In("ntcp2").
+				Wrapf(err, "failed to set handshake deadline on underlying connection")
+		}
+		// Clear the deadline once the handshake finishes (or fails) so
+		// subsequent data-phase I/O is not accidentally time-limited.
+		defer func() {
+			_ = raw.SetDeadline(time.Time{})
+		}()
+	}
+
 	var err error
 	if cfg.Initiator {
 		if len(cfg.LocalRouterInfo) == 0 {
