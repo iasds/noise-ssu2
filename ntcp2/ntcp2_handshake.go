@@ -266,13 +266,13 @@ func performResponderHandshake(cfg *NTCP2Config, nc *noise.NoiseConn) error {
 // buildMessage2Options constructs the 16-byte options block sent as the
 // AEAD payload in NTCP2 message 2 (Bob -> Alice).
 //
-// Wire layout (all fields big-endian):
+// Wire layout (all fields big-endian) — spec: https://spec.i2p.net/ntcp2#options:
 //
-//	byte 0     : id     = 0x02  (network ID)
-//	byte 1     : ver    = 0x02  (NTCP2 protocol version)
+//	bytes 0-1  : Reserved = 0   (NOT id/ver — those fields are message 1 only)
 //	bytes 2-3  : padLen = 0     (no cleartext padding for MVP)
-//	bytes 4-7  : tsB            (Bob's Unix timestamp, big-endian uint32)
-//	bytes 8-15 : Reserved = 0
+//	bytes 4-7  : Reserved = 0
+//	bytes 8-11 : tsB            (Bob's Unix timestamp, big-endian uint32)
+//	bytes 12-15: Reserved = 0
 func buildMessage2Options() []byte {
 	opts := make([]byte, ntcp2OptionsSize)
 	// opts[0:2] = Reserved = 0 (Message 2 has no id/ver)
