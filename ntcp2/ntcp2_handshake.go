@@ -275,11 +275,11 @@ func performResponderHandshake(cfg *NTCP2Config, nc *noise.NoiseConn) error {
 //	bytes 8-15 : Reserved = 0
 func buildMessage2Options() []byte {
 	opts := make([]byte, ntcp2OptionsSize)
-	opts[0] = ntcp2NetID
-	opts[1] = ntcp2Ver
-	// opts[2:4] = padLen  = 0 (zero by make)
-	binary.BigEndian.PutUint32(opts[4:8], uint32(time.Now().Unix()))
-	// opts[8:16] = Reserved = 0
+	// opts[0:2] = Reserved = 0 (Message 2 has no id/ver)
+	// opts[2:4] = padLen   = 0 (zero by make)
+	// opts[4:8] = Reserved = 0
+	binary.BigEndian.PutUint32(opts[8:12], uint32(time.Now().Unix()))
+	// opts[12:16] = Reserved = 0
 	return opts
 }
 
