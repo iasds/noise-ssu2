@@ -47,8 +47,8 @@ func (h *HandshakeHandler) ProcessSessionCreated(packet *SSU2Packet) error {
 	// the handshake hash before processing the Noise message.
 	h.handshakeState.MixHash(packet.Header)
 
-	// Reconstruct Noise message
-	noiseMessage := append(copyBytes(packet.EphemeralKey), packet.Payload...)
+	// Reconstruct Noise message: ephemeral key + encrypted payload + MAC
+	noiseMessage := append(append(copyBytes(packet.EphemeralKey), packet.Payload...), packet.MAC...)
 
 	// Process handshake message
 	payload, cs1, cs2, err := h.handshakeState.ReadMessage(nil, noiseMessage)

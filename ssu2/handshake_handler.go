@@ -587,23 +587,29 @@ func (h *HandshakeHandler) buildHandshakePacket(blocks []*SSU2Block, msgType uin
 	// For SessionRequest (msg 1, → e, es) and SessionCreated (msg 2, ← e, ee),
 	// the noise library's WriteMessage returns the complete Noise message:
 	//   ciphertext = [ephemeral_key:32 || AEAD_ciphertext]
-	// where AEAD_ciphertext already contains the 16-byte Poly1305 MAC at its end.
+	// where AEAD_ciphertext = encrypted_data || Poly1305_MAC(16).
 	//
-	// We split it as:
+	// We split it into the SSU2 wire format fields:
 	//   EphemeralKey = ciphertext[:32]  (the ephemeral public key)
-	//   Payload      = ciphertext[32:]  (AEAD ciphertext, MAC included in tail)
-	//   MAC          = make([]byte,16)  (all-zero placeholder)
+	//   Payload      = AEAD_ciphertext without the trailing MAC
+	//   MAC          = last 16 bytes of AEAD_ciphertext (real Poly1305 tag)
 	//
-	// The zeroed MAC field is transmitted on the wire as a placeholder to satisfy
-	// SSU2Packet's [Header||EphemeralKey||Payload||MAC] wire format. The receiver
-	// strips it (ParseFromBytes takes the last 16 bytes as MAC) but does not use
-	// it for verification — the noise library verifies the embedded AEAD MAC when
-	// ReadMessage is called. There is no double-encryption.
+	// This matches the SSU2 wire format: Header || EphemeralKey || Payload || MAC
+	// and ensures external implementations can verify the MAC correctly.
+	aead := ciphertext[32:]
+	var pktPayload, mac []byte
+	if len(aead) >= 16 {
+		pktPayload = aead[:len(aead)-16]
+		mac = aead[len(aead)-16:]
+	} else {
+		pktPayload = aead
+		mac = make([]byte, 16)
+	}
 	packet := &SSU2Packet{
 		Header:       header,
 		EphemeralKey: copyBytes(ciphertext[:32]),
-		Payload:      ciphertext[32:],
-		MAC:          make([]byte, 16),
+		Payload:      pktPayload,
+		MAC:          mac,
 		MessageType:  msgType,
 		PacketNumber: 0,
 	}

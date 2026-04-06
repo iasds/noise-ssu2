@@ -137,8 +137,8 @@ func (h *HandshakeHandler) ProcessSessionRequest(packet *SSU2Packet) ([]byte, er
 	// the handshake hash before processing the Noise message.
 	h.handshakeState.MixHash(packet.Header)
 
-	// Reconstruct Noise message: ephemeral key + encrypted payload
-	noiseMessage := append(copyBytes(packet.EphemeralKey), packet.Payload...)
+	// Reconstruct Noise message: ephemeral key + encrypted payload + MAC
+	noiseMessage := append(append(copyBytes(packet.EphemeralKey), packet.Payload...), packet.MAC...)
 
 	// Process handshake message using Noise protocol
 	// ReadMessage will: receive ephemeral key, perform DH, decrypt payload
