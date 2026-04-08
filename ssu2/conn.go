@@ -487,6 +487,11 @@ func (h *SSU2Conn) CloseWithReason(reason TerminationReason, additionalData []by
 			h.dataHandler.Close()
 		}
 
+		// Stop replay cache cleanup goroutine
+		if h.handshakeHandler != nil {
+			h.handshakeHandler.Close()
+		}
+
 		// Zero SipHash key material
 		if mod := h.sipHashModifier.Load(); mod != nil {
 			mod.ZeroKeys()

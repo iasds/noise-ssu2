@@ -45,10 +45,79 @@ func DialSSU2(localAddr, remoteAddr *net.UDPAddr, config *SSU2Config) (*SSU2Conn
 	return conn, nil
 }
 
+// DialSSU2WithConn creates an SSU2 connection using an existing net.PacketConn
+// (typically the listener socket) instead of creating a new UDP socket.
+//
+// This is the recommended approach for SSU2 session multiplexing: all outbound
+// connections share the listener's UDP socket so that handshake and data packets
+// originate from the published listening port. This avoids:
+//   - Firewall/netfilter EPERM errors from ephemeral source ports
+//   - NAT binding mismatches (source port != advertised port)
+//   - File descriptor exhaustion under sustained load
+//
+// The caller is responsible for demultiplexing responses by ConnectionID.
+// The provided PacketConn is NOT closed when the returned SSU2Conn is closed.
+//
+// Parameters:
+//   - packetConn: Existing UDP PacketConn to send/receive through
+//   - remoteAddr: Remote UDP address to connect to
+//   - config: SSU2 configuration for the connection
+//
+// Returns an SSU2Conn ready for handshake, or an error if creation fails.
+func DialSSU2WithConn(packetConn net.PacketConn, remoteAddr *net.UDPAddr, config *SSU2Config) (*SSU2Conn, error) {
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "DialSSU2WithConn", "remote_addr": remoteAddr}).Debug("Dialing SSU2 connection with existing PacketConn")
+	if packetConn == nil {
+		return nil, oops.
+			Code("INVALID_PACKET_CONN").
+			In("ssu2_transport").
+			Errorf("packet connection cannot be nil")
+	}
+	if err := validateDialParams(nil, remoteAddr, config); err != nil {
+		return nil, err
+	}
+
+	// Create SSU2 connection wrapper using the shared socket
+	conn, err := createSSU2Connection(packetConn, remoteAddr, config)
+	if err != nil {
+		return nil, err
+	}
+
+	return conn, nil
+}
+
 // DialSSU2WithHandshake creates an SSU2 connection and performs the handshake automatically.
 // This is the recommended function for most use cases.
 func DialSSU2WithHandshake(localAddr, remoteAddr *net.UDPAddr, config *SSU2Config) (*SSU2Conn, error) {
 	return DialSSU2WithHandshakeContext(context.Background(), localAddr, remoteAddr, config)
+}
+
+// DialSSU2WithConnAndHandshake creates an SSU2 connection over an existing
+// PacketConn and performs the handshake automatically.
+// This is the recommended function for multiplexed SSU2 transports.
+func DialSSU2WithConnAndHandshake(packetConn net.PacketConn, remoteAddr *net.UDPAddr, config *SSU2Config) (*SSU2Conn, error) {
+	return DialSSU2WithConnAndHandshakeContext(context.Background(), packetConn, remoteAddr, config)
+}
+
+// DialSSU2WithConnAndHandshakeContext creates an SSU2 connection over an existing
+// PacketConn and performs the handshake with context support.
+func DialSSU2WithConnAndHandshakeContext(ctx context.Context, packetConn net.PacketConn, remoteAddr *net.UDPAddr, config *SSU2Config) (*SSU2Conn, error) {
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "DialSSU2WithConnAndHandshakeContext", "remote_addr": remoteAddr}).Debug("Dialing with handshake on existing PacketConn")
+	conn, err := DialSSU2WithConn(packetConn, remoteAddr, config)
+	if err != nil {
+		return nil, err
+	}
+
+	// Perform handshake with context
+	if err := conn.Handshake(ctx); err != nil {
+		conn.Close()
+		return nil, oops.
+			Code("HANDSHAKE_FAILED").
+			In("ssu2_transport").
+			With("remote_address", remoteAddr).
+			Wrapf(err, "SSU2 handshake failed")
+	}
+
+	return conn, nil
 }
 
 // DialSSU2WithHandshakeContext creates an SSU2 connection and performs the handshake with context.
