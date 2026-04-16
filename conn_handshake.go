@@ -343,7 +343,8 @@ func (nc *NoiseConn) markHandshakeComplete() {
 func (nc *NoiseConn) resetHandshakeState() {
 	hs, err := createHandshakeState(nc.config)
 	if err != nil {
-		nc.logger.WithFields(i2plogger.Fields{"pkg": "noise",
+		nc.logger.WithFields(i2plogger.Fields{
+			"pkg":  "noise",
 			"func": "NoiseConn.resetHandshakeState", "error": err.Error(),
 		}).Error("failed to recreate handshake state for retry")
 		return

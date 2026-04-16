@@ -146,8 +146,8 @@ func RunDemo2(args *CommonArgs, label string, serverFunc, clientFunc func(*Commo
 func RunExample(appName, description, defaultAddr, banner string,
 	demoFunc func(*CommonArgs),
 	serverFunc func(*CommonArgs, []byte),
-	clientFunc func(*CommonArgs, []byte)) {
-
+	clientFunc func(*CommonArgs, []byte),
+) {
 	args, err := ParseCommonArgs(appName)
 	if err != nil {
 		log.Fatalf("❌ Failed to parse arguments: %v", err)
@@ -180,8 +180,8 @@ func RunExample(appName, description, defaultAddr, banner string,
 // dispatchMode runs the server or client function based on parsed arguments.
 func dispatchMode(args *CommonArgs, staticKey []byte,
 	serverFunc func(*CommonArgs, []byte),
-	clientFunc func(*CommonArgs, []byte)) {
-
+	clientFunc func(*CommonArgs, []byte),
+) {
 	if args.ServerAddr != "" {
 		serverFunc(args, staticKey)
 	} else if clientFunc != nil && args.ClientAddr != "" {

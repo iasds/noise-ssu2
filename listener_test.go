@@ -482,6 +482,7 @@ type testModifier struct {
 func (m *testModifier) ModifyOutbound(_ handshake.HandshakePhase, data []byte) ([]byte, error) {
 	return data, nil
 }
+
 func (m *testModifier) ModifyInbound(_ handshake.HandshakePhase, data []byte) ([]byte, error) {
 	return data, nil
 }

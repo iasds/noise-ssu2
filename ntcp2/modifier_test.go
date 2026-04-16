@@ -20,7 +20,7 @@ import (
 func assertSipHashRoundTrip(
 	t testing.TB,
 	sender, receiver handshake.HandshakeModifier,
-	count int, baseLen, step int,
+	count, baseLen, step int,
 	msgFmt string,
 ) {
 	t.Helper()

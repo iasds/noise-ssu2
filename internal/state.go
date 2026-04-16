@@ -112,5 +112,5 @@ func (m *ConnectionMetrics) GetStats() (bytesRead, bytesWritten int64, duration 
 	if !m.handshakeStarted.IsZero() && !m.handshakeEnded.IsZero() {
 		duration = m.handshakeEnded.Sub(m.handshakeStarted)
 	}
-	return
+	return bytesRead, bytesWritten, duration
 }

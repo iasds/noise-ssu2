@@ -30,7 +30,7 @@ const (
 // Per SSU2 spec §SessionConfirmed Notes, the responder must verify that
 // the static key authenticated by the Noise handshake corresponds to the
 // key published in the peer's RouterInfo.
-func DefaultRouterInfoValidator(routerInfo []byte, authenticatedStaticKey []byte) error {
+func DefaultRouterInfoValidator(routerInfo, authenticatedStaticKey []byte) error {
 	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "DefaultRouterInfoValidator", "router_info_len": len(routerInfo), "static_key_len": len(authenticatedStaticKey)}).Debug("Validating router info against authenticated static key")
 	if len(routerInfo) == 0 {
 		return oops.
@@ -295,7 +295,7 @@ type SSU2Config struct {
 	// to the static key authenticated by the Noise handshake (C-2).
 	// Required for responder configs (Initiator=false); use
 	// DefaultRouterInfoValidator or provide a custom implementation.
-	RouterInfoValidator func(routerInfo []byte, authenticatedStaticKey []byte) error
+	RouterInfoValidator func(routerInfo, authenticatedStaticKey []byte) error
 }
 
 // NewSSU2Config creates a new SSU2Config with sensible defaults.
@@ -571,7 +571,7 @@ func (sc *SSU2Config) WithModifiers(modifiers ...handshake.HandshakeModifier) *S
 // WithRouterInfoValidator sets the RouterInfo validation callback.
 // The validator is invoked on the responder after handshake completion to verify
 // that the peer's RouterInfo contains the Noise-authenticated static key.
-func (sc *SSU2Config) WithRouterInfoValidator(validator func(routerInfo []byte, authenticatedStaticKey []byte) error) *SSU2Config {
+func (sc *SSU2Config) WithRouterInfoValidator(validator func(routerInfo, authenticatedStaticKey []byte) error) *SSU2Config {
 	sc.RouterInfoValidator = validator
 	return sc
 }

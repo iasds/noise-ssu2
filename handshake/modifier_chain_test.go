@@ -632,6 +632,7 @@ type closeTestModifier struct {
 func (c *closeTestModifier) ModifyOutbound(_ HandshakePhase, data []byte) ([]byte, error) {
 	return data, nil
 }
+
 func (c *closeTestModifier) ModifyInbound(_ HandshakePhase, data []byte) ([]byte, error) {
 	return data, nil
 }

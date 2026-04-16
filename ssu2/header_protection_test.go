@@ -11,7 +11,7 @@ import (
 )
 
 // Helper to create a test packet with enough data for header protection
-func createTestPacket(headerSize int, totalSize int) []byte {
+func createTestPacket(headerSize, totalSize int) []byte {
 	if totalSize < headerSize+24 {
 		totalSize = headerSize + 24
 	}

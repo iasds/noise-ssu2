@@ -98,8 +98,8 @@ func HandleNTCP2DefaultAddress(args *NTCP2Args, defaultAddr string) {
 // boilerplate duplicated across ntcp2, ntcp2-config, and ntcp2-listener examples.
 func RunNTCP2Example(appName, description, defaultAddr string,
 	demoFunc func(*NTCP2Args),
-	runFunc func(*NTCP2Args, []byte, []byte, []byte, []byte)) {
-
+	runFunc func(*NTCP2Args, []byte, []byte, []byte, []byte),
+) {
 	args, err := ParseNTCP2Args(appName)
 	if err != nil {
 		log.Fatalf("❌ Failed to parse arguments: %v", err)

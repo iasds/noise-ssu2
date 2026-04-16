@@ -11,7 +11,7 @@ import (
 func twoTestKeys() (k1, k2 [32]byte) {
 	k1[0] = 0x01
 	k2[0] = 0x02
-	return
+	return k1, k2
 }
 
 // newTestReplayCache creates a ReplayCache and registers cleanup via t.Cleanup.

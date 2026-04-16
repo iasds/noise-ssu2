@@ -93,7 +93,8 @@ func TestGlobalShutdownFunctions(t *testing.T) {
 func shutdownRegistrationTest(t *testing.T, sm *ShutdownManager, resource interface {
 	SetShutdownManager(*ShutdownManager)
 	Close() error
-}) {
+},
+) {
 	t.Helper()
 	resource.SetShutdownManager(sm)
 	assertShutdownRegistered(t, sm, resource, true)

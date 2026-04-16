@@ -82,7 +82,7 @@ func assertNSRTagIndexLen(t testing.TB, sm *SessionManager, expected int, msgAnd
 // assertESRoundTrip encrypts payload from sender to receiver using destHash and
 // peerPub, decrypts on the receiver, and asserts that the round-tripped
 // plaintext matches. msgLabel is used in assertion messages for identification.
-func assertESRoundTrip(t testing.TB, sender, receiver *SessionManager, destHash [32]byte, peerPub [32]byte, payload []byte, msgLabel string) {
+func assertESRoundTrip(t testing.TB, sender, receiver *SessionManager, destHash, peerPub [32]byte, payload []byte, msgLabel string) {
 	t.Helper()
 	enc, err := sender.EncryptGarlicMessage(destHash, peerPub, payload)
 	require.NoError(t, err, "%s: encrypt", msgLabel)
@@ -139,7 +139,7 @@ func mustBootstrapSessionWithHash(t testing.TB, sender, receiver *SessionManager
 // mustSendNS creates two linked managers, sends a single NS from initiator to
 // responder, and returns the managers with destHash and sessionHash. The session
 // is NOT completed — no NSR has been exchanged.
-func mustSendNS(t testing.TB) (initiator, responder *SessionManager, destHash [32]byte, sessionHash [32]byte) {
+func mustSendNS(t testing.TB) (initiator, responder *SessionManager, destHash, sessionHash [32]byte) {
 	t.Helper()
 	initiator, responder = createLinkedManagers(t)
 	destHash = types.SHA256(responder.ourPublicKey[:])
@@ -153,7 +153,7 @@ func mustSendNS(t testing.TB) (initiator, responder *SessionManager, destHash [3
 
 // mustExchangeES encrypts an Existing Session message from sender to receiver
 // and verifies the round-trip: correct decryption and non-zero session tag.
-func mustExchangeES(t testing.TB, sender, receiver *SessionManager, destHash [32]byte, receiverPub [32]byte, payload []byte) {
+func mustExchangeES(t testing.TB, sender, receiver *SessionManager, destHash, receiverPub [32]byte, payload []byte) {
 	t.Helper()
 	msg, err := sender.EncryptGarlicMessage(destHash, receiverPub, payload)
 	require.NoError(t, err)
@@ -1230,7 +1230,7 @@ func benchEstablishedSession(b *testing.B) (sender, receiver *SessionManager, de
 	nsPayload, _ := BuildNSPayload(make([]byte, 32))
 	enc, _ := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, nsPayload)
 	_, _, _, _ = receiver.DecryptGarlicMessage(enc)
-	return
+	return sender, receiver, destHash, plaintext
 }
 
 func BenchmarkExistingSessionEncrypt(b *testing.B) {

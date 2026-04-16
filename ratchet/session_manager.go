@@ -14,8 +14,10 @@ import (
 )
 
 // Compile-time interface checks.
-var _ GarlicSessionManager = (*SessionManager)(nil)
-var _ TagResolver = (*SessionManager)(nil)
+var (
+	_ GarlicSessionManager = (*SessionManager)(nil)
+	_ TagResolver          = (*SessionManager)(nil)
+)
 
 const (
 	// MaxGarlicSessions is the upper bound on active garlic sessions.

@@ -17,7 +17,7 @@ func createTestKeys() (staticKey, introKey []byte) {
 		staticKey[i] = byte(i)
 		introKey[i] = byte(255 - i)
 	}
-	return
+	return staticKey, introKey
 }
 
 func TestNewKeyRotationManager_ValidKeys(t *testing.T) {

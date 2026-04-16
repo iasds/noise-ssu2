@@ -57,7 +57,8 @@ func (nc *NoiseConn) executeRetryLoop(ctx context.Context) error {
 // logSuccessAfterRetries logs successful handshake completion after retries.
 func (nc *NoiseConn) logSuccessAfterRetries(attempt int) {
 	if attempt > 0 {
-		nc.logger.WithFields(i2plogger.Fields{"pkg": "noise",
+		nc.logger.WithFields(i2plogger.Fields{
+			"pkg":  "noise",
 			"func": "NoiseConn.logSuccessAfterRetries", "attempts": attempt + 1,
 			"pattern":     nc.config.Pattern,
 			"remote_addr": nc.RemoteAddr().String(),

@@ -626,7 +626,7 @@ func (l *SSU2Listener) processTokenRequest(packet *SSU2Packet, remoteAddr *net.U
 //   - token: 8-byte token value for the NewToken block
 //   - originalHeader: Header from the SessionRequest (for connection ID extraction)
 //   - incomingSize: Size of the incoming message (for amplification limit)
-func (l *SSU2Listener) sendRetry(remoteAddr *net.UDPAddr, token []byte, originalHeader []byte, incomingSize int) error {
+func (l *SSU2Listener) sendRetry(remoteAddr *net.UDPAddr, token, originalHeader []byte, incomingSize int) error {
 	if len(token) != TokenSize {
 		return oops.Errorf("token must be exactly %d bytes, got %d", TokenSize, len(token))
 	}
@@ -684,7 +684,7 @@ func (l *SSU2Listener) buildRetryPayload(token []byte) ([]byte, error) {
 }
 
 // buildRetryHeader constructs the 32-byte long header for a Retry message.
-func buildRetryHeader(originalHeader []byte, token []byte) ([]byte, error) {
+func buildRetryHeader(originalHeader, token []byte) ([]byte, error) {
 	header := make([]byte, LongHeaderSize)
 
 	if len(originalHeader) >= 24 {

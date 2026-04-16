@@ -89,7 +89,6 @@ func TestReceiveWindow_InsertExpected(t *testing.T) {
 	}
 
 	ready, err := rw.Insert(packet)
-
 	if err != nil {
 		t.Fatalf("Insert() error = %v, want nil", err)
 	}
@@ -121,7 +120,6 @@ func TestReceiveWindow_InsertFuture(t *testing.T) {
 	}
 
 	ready, err := rw.Insert(packet)
-
 	if err != nil {
 		t.Fatalf("Insert() error = %v, want nil", err)
 	}
@@ -253,7 +251,6 @@ func TestReceiveWindow_SequentialPackets(t *testing.T) {
 		}
 
 		ready, err := rw.Insert(packet)
-
 		if err != nil {
 			t.Fatalf("Insert(%d) error = %v, want nil", i, err)
 		}
@@ -304,7 +301,6 @@ func TestReceiveWindow_OutOfOrderRelease(t *testing.T) {
 	// Insert missing packet 1000, should release all
 	packet := &SSU2Packet{PacketNumber: 1000}
 	ready, err := rw.Insert(packet)
-
 	if err != nil {
 		t.Fatalf("Insert(1000) error = %v, want nil", err)
 	}
@@ -343,7 +339,6 @@ func TestReceiveWindow_PartialGapFill(t *testing.T) {
 	// Insert 1000, should release 1000, 1001, 1002 (stop at gap before 1005)
 	packet := &SSU2Packet{PacketNumber: 1000}
 	ready, err := rw.Insert(packet)
-
 	if err != nil {
 		t.Fatalf("Insert(1000) error = %v", err)
 	}

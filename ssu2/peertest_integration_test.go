@@ -430,7 +430,7 @@ func (p *peerTestNode) Close() {
 	}
 }
 
-func setupPeerForTest(t *testing.T, name string, addrStr string) *peerTestNode {
+func setupPeerForTest(t *testing.T, name, addrStr string) *peerTestNode {
 	t.Helper()
 
 	addr, err := net.ResolveUDPAddr("udp", addrStr)

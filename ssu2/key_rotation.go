@@ -387,7 +387,7 @@ func (krm *KeyRotationManager) ForceRotateStaticKey() ([]byte, error) {
 
 // rotateKeyLocked generates a new key, retires the old one, and schedules
 // secure zeroing after the grace period. Caller must hold the write lock.
-func (krm *KeyRotationManager) rotateKeyLocked(keyName string, keySize int, current **ManagedKey, previous **ManagedKey) ([]byte, error) {
+func (krm *KeyRotationManager) rotateKeyLocked(keyName string, keySize int, current, previous **ManagedKey) ([]byte, error) {
 	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "rotateKeyLocked", "key": keyName}).Debug("performing key rotation")
 	newKey := make([]byte, keySize)
 	if _, err := rand.Read(newKey); err != nil {
