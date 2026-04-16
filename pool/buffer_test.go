@@ -74,6 +74,27 @@ func TestNewConnPool(t *testing.T) {
 	}
 }
 
+// TestNewConnPool_DefaultsOnEmptyConfig verifies that a caller who passes a
+// non-nil but zero-valued PoolConfig still gets the safe default MaxSize.
+// Regression guard for AUDIT L-1.
+func TestNewConnPool_DefaultsOnEmptyConfig(t *testing.T) {
+	pool := NewConnPool(&PoolConfig{MaxAge: time.Hour})
+	defer pool.Close()
+	if pool.maxSize != DefaultMaxSize {
+		t.Errorf("expected default MaxSize=%d on empty config, got %d", DefaultMaxSize, pool.maxSize)
+	}
+}
+
+// TestNewConnPool_UnboundedOptIn verifies that callers can explicitly opt in
+// to unbounded per-address pools via the Unbounded flag (AUDIT L-1).
+func TestNewConnPool_UnboundedOptIn(t *testing.T) {
+	pool := NewConnPool(&PoolConfig{Unbounded: true, MaxAge: time.Hour})
+	defer pool.Close()
+	if pool.maxSize != 0 {
+		t.Errorf("expected unbounded MaxSize=0 when Unbounded=true, got %d", pool.maxSize)
+	}
+}
+
 func TestConnPool_PutAndGet(t *testing.T) {
 	pool := NewConnPool(&PoolConfig{
 		MaxSize: 2,

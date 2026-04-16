@@ -35,10 +35,15 @@ func NewConnPool(config *PoolConfig) *ConnPool {
 	log.WithFields(logger.Fields{"pkg": "pool", "func": "NewConnPool"}).Debug("Creating new connection pool")
 	if config == nil {
 		config = &PoolConfig{
-			MaxSize: 10,
+			MaxSize: DefaultMaxSize,
 			MaxAge:  30 * time.Minute,
 			MaxIdle: 5 * time.Minute,
 		}
+	}
+	// Apply the default per-address limit unless the caller explicitly
+	// opted in to unbounded growth (AUDIT L-1).
+	if config.MaxSize <= 0 && !config.Unbounded {
+		config.MaxSize = DefaultMaxSize
 	}
 
 	pool := &ConnPool{

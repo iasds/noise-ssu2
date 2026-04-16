@@ -78,6 +78,10 @@ func (h *HandshakeHandler) CreateSessionRequestWithToken(sourceConnID, destConnI
 func (h *HandshakeHandler) ResetForRetry() error {
 	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "ResetForRetry"}).Debug("Resetting handshake state for retry")
 	cs := noise.NewCipherSuite(noise.DH25519, noise.CipherChaChaPoly, noise.HashSHA256)
+	pub, err := derivePublicKey(h.staticKey)
+	if err != nil {
+		return oops.Wrapf(err, "derive local static public key for retry")
+	}
 	config := noise.Config{
 		CipherSuite:  cs,
 		Random:       rand.Reader,
@@ -87,7 +91,7 @@ func (h *HandshakeHandler) ResetForRetry() error {
 		ProtocolName: []byte(SSU2ProtocolName),
 		StaticKeypair: noise.DHKey{
 			Private: copyBytes(h.staticKey),
-			Public:  derivePublicKey(h.staticKey),
+			Public:  pub,
 		},
 	}
 	if h.initiator && len(h.remoteStaticKey) == 32 {

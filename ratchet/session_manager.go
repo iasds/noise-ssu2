@@ -21,6 +21,14 @@ const (
 	// MaxGarlicSessions is the upper bound on active garlic sessions.
 	MaxGarlicSessions = 5000
 
+	// MaxSessionsPerPeer caps the number of concurrent garlic sessions that
+	// may exist for a single remote static public key. An attacker who can
+	// replay many NS messages from a forged or reused identity cannot use up
+	// more than this fraction of the global session table (AUDIT L-4).
+	// When exceeded, the oldest session for that peer is evicted first,
+	// protecting sessions from other honest peers from LRU churn.
+	MaxSessionsPerPeer = 32
+
 	// defaultNSMaxPastAge is the maximum acceptable age of the DateTime block
 	// in a New Session message. Default: 5 minutes per ratchet.md §"Parameters".
 	defaultNSMaxPastAge = 5 * time.Minute
@@ -571,6 +579,52 @@ func (sm *SessionManager) evictLRUSessionLocked() {
 				"remaining_count": len(sm.sessions),
 			}).Warn("Evicted least-recently-used garlic session")
 		}
+	}
+}
+
+// enforcePerPeerQuotaLocked enforces the MaxSessionsPerPeer cap for the given
+// remote public key. If a peer is already at or above the cap, the oldest
+// session belonging to that peer is evicted first. This protects sessions
+// from other honest peers from being evicted via LRU churn when a single
+// hostile identity floods the manager with NS messages (AUDIT L-4).
+// Must be called with sm.mu held for writing.
+func (sm *SessionManager) enforcePerPeerQuotaLocked(remotePubKey [32]byte) {
+	var oldestHash [32]byte
+	var oldestTime time.Time
+	count := 0
+	haveOldest := false
+
+	for hash, session := range sm.sessions {
+		if session.RemotePublicKey != remotePubKey {
+			continue
+		}
+		count++
+		if !haveOldest || session.LastUsed.Before(oldestTime) {
+			oldestHash = hash
+			oldestTime = session.LastUsed
+			haveOldest = true
+		}
+	}
+
+	if count < MaxSessionsPerPeer || !haveOldest {
+		return
+	}
+
+	if evicted, ok := sm.sessions[oldestHash]; ok {
+		for _, tag := range evicted.pendingTags {
+			delete(sm.tagIndex, tag)
+			delete(sm.tagCounterIndex, tag)
+		}
+		if evicted.nsrTag != nil {
+			delete(sm.nsrTagIndex, *evicted.nsrTag)
+		}
+		delete(sm.sessions, oldestHash)
+		log.WithFields(logger.Fields{
+			"pkg":                "ratchet",
+			"func":               "enforcePerPeerQuotaLocked",
+			"peer_session_count": count,
+			"last_used":          oldestTime,
+		}).Warn("Evicted oldest session for peer exceeding per-peer quota")
 	}
 }
 

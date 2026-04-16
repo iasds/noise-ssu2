@@ -801,6 +801,65 @@ func TestInboundSessionEnforcesMaxGarlicSessions(t *testing.T) {
 		"inbound path should enforce MaxGarlicSessions by evicting before storing")
 }
 
+// TestPerPeerQuotaProtectsHonestPeers verifies that MaxSessionsPerPeer caps
+// the number of sessions a single remote identity may hold, so that a
+// flooding attacker cannot evict honest peers' sessions via LRU churn
+// (AUDIT L-4).
+func TestPerPeerQuotaProtectsHonestPeers(t *testing.T) {
+	sm := createTestSessionManager(t)
+
+	// Preload the manager with sessions from honest peers that must survive.
+	honestSessions := make([][32]byte, 0, 8)
+	sm.mu.Lock()
+	for i := 0; i < 8; i++ {
+		var hash, honestPeer [32]byte
+		hash[0] = byte(i)
+		honestPeer[0] = 0xAA
+		honestPeer[31] = byte(i)
+		sm.sessions[hash] = &Session{
+			LastUsed:        time.Now(),
+			RemotePublicKey: honestPeer,
+		}
+		honestSessions = append(honestSessions, hash)
+	}
+	sm.mu.Unlock()
+
+	// Hostile peer reuses a single identity and creates MaxSessionsPerPeer+5
+	// sessions under it. Only MaxSessionsPerPeer should persist.
+	var hostilePeer [32]byte
+	hostilePeer[0] = 0xFF
+	sm.mu.Lock()
+	for i := 0; i < MaxSessionsPerPeer+5; i++ {
+		var hash [32]byte
+		hash[0] = 0x55
+		hash[1] = byte(i)
+		sm.sessions[hash] = &Session{
+			LastUsed:        time.Now().Add(time.Duration(i) * time.Millisecond),
+			RemotePublicKey: hostilePeer,
+		}
+		sm.enforcePerPeerQuotaLocked(hostilePeer)
+	}
+	sm.mu.Unlock()
+
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	// All honest sessions must still be present.
+	for _, hash := range honestSessions {
+		if _, ok := sm.sessions[hash]; !ok {
+			t.Fatalf("honest session %x evicted despite per-peer quota", hash[:2])
+		}
+	}
+	// Hostile peer count must not exceed the cap.
+	hostileCount := 0
+	for _, s := range sm.sessions {
+		if s.RemotePublicKey == hostilePeer {
+			hostileCount++
+		}
+	}
+	assert.LessOrEqual(t, hostileCount, MaxSessionsPerPeer,
+		"hostile peer must not exceed per-peer quota")
+}
+
 // ============================================================================
 // Concurrency
 // ============================================================================

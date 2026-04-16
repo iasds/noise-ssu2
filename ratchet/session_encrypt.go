@@ -93,6 +93,10 @@ func (sm *SessionManager) storeNewSessionState(
 	if len(sm.sessions) >= MaxGarlicSessions {
 		sm.evictLRUSessionLocked()
 	}
+	// Enforce per-peer quota on outbound sessions too, so a bug or caller
+	// loop that keeps re-initiating to the same destination cannot displace
+	// sessions for other peers (AUDIT L-4).
+	sm.enforcePerPeerQuotaLocked(destinationPubKey)
 
 	sm.sessions[destinationHash] = session
 

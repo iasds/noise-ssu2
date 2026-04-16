@@ -169,6 +169,9 @@ func (sm *SessionManager) initializeInboundRatchetState(remotePubKey [32]byte, k
 	if len(sm.sessions) >= MaxGarlicSessions {
 		sm.evictLRUSessionLocked()
 	}
+	// Enforce per-peer quota so one hostile identity cannot starve honest
+	// peers via LRU churn (AUDIT L-4).
+	sm.enforcePerPeerQuotaLocked(remotePubKey)
 
 	sm.sessions[sessionHash] = session
 

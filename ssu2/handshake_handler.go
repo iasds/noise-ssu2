@@ -129,6 +129,11 @@ func NewHandshakeHandler(initiator bool, staticKey, remoteStaticKey, prologue []
 	// Create Noise handshake state for XK pattern
 	cs := noise.NewCipherSuite(noise.DH25519, noise.CipherChaChaPoly, noise.HashSHA256)
 
+	pub, err := derivePublicKey(staticKey)
+	if err != nil {
+		return nil, oops.Wrapf(err, "derive local static public key")
+	}
+
 	config := noise.Config{
 		CipherSuite:  cs,
 		Random:       rand.Reader,
@@ -138,7 +143,7 @@ func NewHandshakeHandler(initiator bool, staticKey, remoteStaticKey, prologue []
 		ProtocolName: []byte(SSU2ProtocolName),
 		StaticKeypair: noise.DHKey{
 			Private: copyBytes(staticKey),
-			Public:  derivePublicKey(staticKey),
+			Public:  pub,
 		},
 	}
 
@@ -768,11 +773,12 @@ func copyBytes(b []byte) []byte {
 // given private key by performing a scalar multiplication with the base point.
 // This is required when constructing a noise.DHKey for use in handshake states
 // that need to send or hash the local static public key (e.g. XK message 3).
-func derivePublicKey(priv []byte) []byte {
+// Returns an error rather than panicking on invalid input, so that an internal
+// programmer error cannot crash the host process (AUDIT M-1, defense in depth).
+func derivePublicKey(priv []byte) ([]byte, error) {
 	pub, err := curve25519.X25519(priv, curve25519.Basepoint)
 	if err != nil {
-		// priv must be 32 bytes; callers always validate length before calling.
-		panic("ssu2: derivePublicKey: " + err.Error())
+		return nil, oops.Wrapf(err, "derive public key from private scalar")
 	}
-	return pub
+	return pub, nil
 }
