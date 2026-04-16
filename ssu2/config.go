@@ -212,6 +212,49 @@ type SSU2Config struct {
 	// Default: 10000.
 	TokenCacheMaxSize int
 
+	// GlobalTokenIssuanceRate caps the total number of retry tokens the
+	// listener will issue per second across ALL source addresses. This
+	// backstops the per-IP rate limiter so that a UDP-spoofing attacker
+	// who fans out across many source addresses still cannot amplify
+	// issuance beyond the configured rate.
+	// Default: 40 tokens/sec.
+	// Set to 0 to disable token issuance entirely (listener will refuse
+	// all Retry/TokenRequest flows). Set to a very large value to
+	// effectively disable the cap.
+	GlobalTokenIssuanceRate float64
+
+	// GlobalTokenIssuanceBurst is the burst capacity of the global token
+	// issuance bucket. Short spikes up to this many tokens can be issued
+	// instantaneously before rate limiting applies.
+	// Default: max(GlobalTokenIssuanceRate, 80). Ignored when
+	// GlobalTokenIssuanceRate == 0.
+	GlobalTokenIssuanceBurst float64
+
+	// FirstSightRequired, when true, causes the listener to decline the
+	// first TokenRequest from a previously-unseen source address and
+	// record the sighting in a cheap, bounded tracker. A token is only
+	// issued on the second (or subsequent) TokenRequest from the same
+	// address within FirstSightWindow. SSU2 clients already retry
+	// TokenRequests with backoff per spec, so legitimate peers recover
+	// transparently on the next retry.
+	// This defends against off-path spoofed-source token-cache
+	// exhaustion: an attacker pays two packets per spoofed address
+	// instead of one, and the first-sight tracker entries are smaller
+	// than full Token cache entries and live in a separate bounded map.
+	// Default: true.
+	FirstSightRequired bool
+
+	// FirstSightWindow is the time a first-sight record stays fresh. A
+	// peer that re-contacts within this window will be granted a token
+	// (subject to other limits). Older entries are treated as first evicted.
+	// Default: 30 seconds.
+	FirstSightWindow time.Duration
+
+	// FirstSightMaxEntries bounds the memory held by the first-sight
+	// tracker. When full, the oldest sighting is evicted.
+	// Default: 50000.
+	FirstSightMaxEntries int
+
 	// DestroyTimeout is the time to wait after sending a Termination block
 	// before releasing session resources. Per spec §Termination, this gives
 	// the remote peer time to receive and acknowledge the close.
@@ -261,32 +304,37 @@ type SSU2Config struct {
 func NewSSU2Config(routerHash data.Hash, initiator bool) (*SSU2Config, error) {
 	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "NewSSU2Config", "initiator": initiator}).Debug("Creating new SSU2Config")
 	return &SSU2Config{
-		Pattern:                 "XK",
-		Initiator:               initiator,
-		RouterHash:              routerHash,
-		HandshakeTimeout:        DefaultHandshakeTimeout,
-		ReadTimeout:             0, // No timeout by default
-		WriteTimeout:            0, // No timeout by default
-		HandshakeRetries:        3,
-		RetryBackoff:            1250 * time.Millisecond,
-		EnableChaChaObfuscation: true,
-		MTU:                     1280, // IPv6 minimum
-		MaxPacketSize:           1500, // Standard Ethernet
-		EnableFragmentation:     false,
-		PaddingEnabled:          true,
-		MinPaddingSize:          0,
-		MaxPaddingSize:          64,
-		PaddingRatio:            1.0, // 100%
-		ConnectionID:            0,   // Will be generated
-		KeepaliveInterval:       15 * time.Second,
-		IdleTimeout:             5 * time.Minute,
-		FragmentTimeout:         10 * time.Second,
-		TokenCacheMaxSize:       10000,
-		DestroyTimeout:          11 * time.Second,  // Per spec §Termination: 11s (max RTO)
-		MaxClockSkew:            120 * time.Second, // Per spec: ±120s skew tolerance (G-1)
-		ReplayCacheTTL:          4 * time.Minute,
-		ReceiveWindowSize:       256, // Configurable via WithReceiveWindowSize (M-3)
-		RouterInfoValidator:     nil, // C-1: no default; callers must explicitly set via WithRouterInfoValidator
+		Pattern:                  "XK",
+		Initiator:                initiator,
+		RouterHash:               routerHash,
+		HandshakeTimeout:         DefaultHandshakeTimeout,
+		ReadTimeout:              0, // No timeout by default
+		WriteTimeout:             0, // No timeout by default
+		HandshakeRetries:         3,
+		RetryBackoff:             1250 * time.Millisecond,
+		EnableChaChaObfuscation:  true,
+		MTU:                      1280, // IPv6 minimum
+		MaxPacketSize:            1500, // Standard Ethernet
+		EnableFragmentation:      false,
+		PaddingEnabled:           true,
+		MinPaddingSize:           0,
+		MaxPaddingSize:           64,
+		PaddingRatio:             1.0, // 100%
+		ConnectionID:             0,   // Will be generated
+		KeepaliveInterval:        15 * time.Second,
+		IdleTimeout:              5 * time.Minute,
+		FragmentTimeout:          10 * time.Second,
+		TokenCacheMaxSize:        10000,
+		GlobalTokenIssuanceRate:  40,
+		GlobalTokenIssuanceBurst: 80,
+		FirstSightRequired:       true,
+		FirstSightWindow:         30 * time.Second,
+		FirstSightMaxEntries:     50000,
+		DestroyTimeout:           11 * time.Second,  // Per spec §Termination: 11s (max RTO)
+		MaxClockSkew:             120 * time.Second, // Per spec: ±120s skew tolerance (G-1)
+		ReplayCacheTTL:           4 * time.Minute,
+		ReceiveWindowSize:        256, // Configurable via WithReceiveWindowSize (M-3)
+		RouterInfoValidator:      nil, // C-1: no default; callers must explicitly set via WithRouterInfoValidator
 	}, nil
 }
 
@@ -460,6 +508,53 @@ func (sc *SSU2Config) WithReceiveWindowSize(size int) *SSU2Config {
 func (sc *SSU2Config) WithTokenCacheMaxSize(maxSize int) *SSU2Config {
 	if maxSize > 0 {
 		sc.TokenCacheMaxSize = maxSize
+	}
+	return sc
+}
+
+// WithGlobalTokenIssuanceRate sets the global cap on retry-token issuance
+// across all source addresses (tokens/sec). Pass 0 to disable issuance
+// entirely. Negative values are clamped to 0.
+func (sc *SSU2Config) WithGlobalTokenIssuanceRate(rate float64) *SSU2Config {
+	if rate < 0 {
+		rate = 0
+	}
+	sc.GlobalTokenIssuanceRate = rate
+	return sc
+}
+
+// WithGlobalTokenIssuanceBurst sets the burst capacity of the global
+// token-issuance bucket. Values <= 0 are ignored (the default is preserved).
+func (sc *SSU2Config) WithGlobalTokenIssuanceBurst(burst float64) *SSU2Config {
+	if burst > 0 {
+		sc.GlobalTokenIssuanceBurst = burst
+	}
+	return sc
+}
+
+// WithFirstSightRequired controls whether the listener requires a previously
+// observed sighting before issuing a token. When true (the default), a
+// brand-new source address must re-request to receive a token. Setting this
+// to false disables the gate entirely.
+func (sc *SSU2Config) WithFirstSightRequired(required bool) *SSU2Config {
+	sc.FirstSightRequired = required
+	return sc
+}
+
+// WithFirstSightWindow sets how long a first-sight record stays fresh.
+// Values <= 0 are ignored.
+func (sc *SSU2Config) WithFirstSightWindow(window time.Duration) *SSU2Config {
+	if window > 0 {
+		sc.FirstSightWindow = window
+	}
+	return sc
+}
+
+// WithFirstSightMaxEntries bounds the memory held by the first-sight
+// tracker. Values <= 0 are ignored.
+func (sc *SSU2Config) WithFirstSightMaxEntries(maxEntries int) *SSU2Config {
+	if maxEntries > 0 {
+		sc.FirstSightMaxEntries = maxEntries
 	}
 	return sc
 }

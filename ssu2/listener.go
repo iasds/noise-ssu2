@@ -48,6 +48,19 @@ type SSU2Listener struct {
 	// tokenCache validates retry tokens
 	tokenCache *TokenCache
 
+	// tokenAdmission gates retry-token issuance against off-path
+	// spoofed-source flooding. Two layers are applied before a token
+	// cache entry is allocated:
+	//  - firstSight demands that the source address be observed in a
+	//    prior packet within FirstSightWindow before a token is issued
+	//    (forcing an attacker to spend ≥2 packets per spoofed IP, on
+	//    separate, cheaper tracker state).
+	//  - issuanceLimiter caps the total tokens/sec issued across all
+	//    peers so that even a bypassed first-sight cannot amplify
+	//    issuance rate.
+	firstSight      *firstSightTracker
+	issuanceLimiter *tokenIssuanceLimiter
+
 	// acceptQueue buffers established connections ready to be accepted
 	acceptQueue chan *SSU2Conn
 
@@ -128,6 +141,8 @@ func NewSSU2Listener(underlying net.PacketConn, config *SSU2Config) (*SSU2Listen
 		sessions:           make(map[uint64]*SSU2Conn),
 		tokenCache:         newTokenCacheFromConfig(config),
 		sessionRateLimiter: newIPRateLimiter(sessionRequestsPerSecond, sessionRateLimiterMaxIPs),
+		firstSight:         newFirstSightTracker(config.FirstSightWindow, config.FirstSightMaxEntries),
+		issuanceLimiter:    newTokenIssuanceLimiter(config.GlobalTokenIssuanceRate, config.GlobalTokenIssuanceBurst),
 		acceptQueue:        make(chan *SSU2Conn, 100), // Buffer 100 pending connections
 		packetQueue:        make(chan incomingPacket, packetQueueSize),
 		shutdownChan:       make(chan struct{}),
@@ -523,7 +538,67 @@ func (l *SSU2Listener) validateSessionRequestToken(packet *SSU2Packet, remoteAdd
 
 // processTokenRequest handles a TokenRequest message by generating and sending
 // a Retry message with a new token.
+//
+// Two admission gates run before a token cache entry is allocated, to blunt
+// off-path spoofed-source flooding attacks:
+//
+//  1. First-sight: unless FirstSightRequired is disabled, a brand-new
+//     source address is recorded but declined. The peer must re-request to
+//     obtain a token. SSU2 clients retry TokenRequests per spec, so
+//     legitimate peers recover transparently.
+//  2. Global issuance rate: a single bucket caps total tokens/sec issued
+//     across all peers, backstopping the first-sight gate against any
+//     bypass and preventing issuance-rate amplification.
+//
+// When either gate rejects a request, no packet is sent in reply and no
+// token cache state is allocated for the caller. The returned error is
+// informational (callers of this method currently ignore it) and uses the
+// NO_TOKEN_ISSUED code so operators can surface the counter.
 func (l *SSU2Listener) processTokenRequest(packet *SSU2Packet, remoteAddr *net.UDPAddr) error {
+	if remoteAddr == nil {
+		return oops.
+			Code("NIL_ADDRESS").
+			In("ssu2_listener").
+			Errorf("remote address cannot be nil")
+	}
+	addrKey := remoteAddr.String()
+
+	// Gate 1 (Strategy 3): first-sight tracker. A brand-new address is
+	// recorded and declined; the peer must re-request. This forces a
+	// spoofing attacker to spend ≥2 packets per spoofed IP, and the
+	// per-sighting state is smaller than a Token struct and lives in an
+	// independent bounded map so exhausting first-sight cannot evict
+	// real tokens.
+	if l.config.FirstSightRequired && !l.firstSight.ObserveAndAllow(addrKey) {
+		log.WithFields(logger.Fields{
+			"pkg":         "ssu2_listener",
+			"func":        "processTokenRequest",
+			"remote_addr": addrKey,
+		}).Debug("declining token issuance: first-sight only, peer must retry")
+		return oops.
+			Code("NO_TOKEN_ISSUED").
+			In("ssu2_listener").
+			With("reason", "first_sight").
+			With("address", addrKey).
+			Errorf("first-sight gate: deferring token issuance until retry")
+	}
+
+	// Gate 2 (Strategy 1): global issuance bucket. Even if the first-sight
+	// gate passes, never issue more than the configured rate in aggregate.
+	if !l.issuanceLimiter.Allow() {
+		log.WithFields(logger.Fields{
+			"pkg":         "ssu2_listener",
+			"func":        "processTokenRequest",
+			"remote_addr": addrKey,
+		}).Debug("declining token issuance: global issuance rate exceeded")
+		return oops.
+			Code("NO_TOKEN_ISSUED").
+			In("ssu2_listener").
+			With("reason", "global_rate_limit").
+			With("address", addrKey).
+			Errorf("global token issuance rate limit exceeded")
+	}
+
 	// Generate token for this address
 	token, err := l.tokenCache.GenerateToken(remoteAddr)
 	if err != nil {

@@ -386,9 +386,12 @@ func TestSSU2Listener_ProcessTokenRequest(t *testing.T) {
 		// Process token request (internally calls processTokenRequest)
 		err := listener.processTokenRequest(packet, remoteAddr)
 
-		// Should generate token (sendRetry may fail but token should be generated)
-		// The error might occur because we can't actually send on a mock listener
-		// but we can verify token was generated
+		// First sight is deferred by default to blunt spoofed-source flooding.
+		// The second request from the same address should allocate a token.
+		require.Error(t, err)
+		assert.Equal(t, 0, listener.tokenCache.Size())
+
+		err = listener.processTokenRequest(packet, remoteAddr)
 		assert.Equal(t, 1, listener.tokenCache.Size())
 		_ = err // Ignore send errors in unit test
 	})
@@ -403,6 +406,12 @@ func TestSSU2Listener_ProcessTokenRequest(t *testing.T) {
 		packet := NewSSU2Packet(MessageTypeTokenRequest, 0)
 		packet.Header = make([]byte, LongHeaderSize)
 
+		// First sight for each address should not allocate token cache entries.
+		_ = listener.processTokenRequest(packet, addr1)
+		_ = listener.processTokenRequest(packet, addr2)
+		assert.Equal(t, 0, listener.tokenCache.Size())
+
+		// Second request from each address should allocate one token each.
 		_ = listener.processTokenRequest(packet, addr1)
 		_ = listener.processTokenRequest(packet, addr2)
 
