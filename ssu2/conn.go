@@ -165,6 +165,12 @@ type SSU2Conn struct {
 	// for the current send cipher. Reset after rekey completes.
 	rekeyInFlight atomic.Bool
 
+	// ownsUnderlying indicates whether this connection created (and therefore
+	// owns) the underlying PacketConn. When true, CloseWithReason closes
+	// the PacketConn. When false (e.g. DialSSU2WithConn or listener-accepted
+	// connections), the PacketConn is shared and must not be closed here.
+	ownsUnderlying bool
+
 	// Background goroutines coordination
 	wg sync.WaitGroup
 
@@ -241,12 +247,14 @@ func NewSSU2Conn(
 
 	ssu2Addr, err := newSSU2AddrForConn(remoteAddr, config.RouterHash, connID, initiator)
 	if err != nil {
+		handshakeHandler.Close()
 		return nil, err
 	}
 
 	conn := assembleSSU2Conn(underlying, remoteAddr, ssu2Addr, config, initiator, handshakeHandler)
 
 	if err := conn.initHeaderProtection(config, initiator); err != nil {
+		handshakeHandler.Close()
 		return nil, err
 	}
 
@@ -472,9 +480,18 @@ func (h *SSU2Conn) CloseWithReason(reason TerminationReason, additionalData []by
 
 		// Per spec §Termination: wait briefly for the peer's Termination
 		// response before tearing down the session. This avoids lingering
-		// half-open state on the remote side.
+		// half-open state on the remote side. Use a timer instead of
+		// time.Sleep so future callers could cancel via a context or
+		// additional signal channel.
 		if h.config.DestroyTimeout > 0 {
-			time.Sleep(h.config.DestroyTimeout)
+			timeout := h.config.DestroyTimeout
+			const maxDestroyTimeout = 30 * time.Second
+			if timeout > maxDestroyTimeout {
+				timeout = maxDestroyTimeout
+			}
+			timer := time.NewTimer(timeout)
+			<-timer.C
+			timer.Stop()
 		}
 
 		// Stop keepalive timer
@@ -502,6 +519,13 @@ func (h *SSU2Conn) CloseWithReason(reason TerminationReason, additionalData []by
 
 		// Wait for background goroutines to complete
 		h.wg.Wait()
+
+		// Close the underlying PacketConn if this connection owns it
+		// (created via DialSSU2). Shared sockets (DialSSU2WithConn,
+		// listener-accepted) are not closed here.
+		if h.ownsUnderlying && h.underlying != nil {
+			h.closeErr = h.underlying.Close()
+		}
 
 		// Update final state
 		h.stateMutex.Lock()

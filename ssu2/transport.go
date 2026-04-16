@@ -42,6 +42,10 @@ func DialSSU2(localAddr, remoteAddr *net.UDPAddr, config *SSU2Config) (*SSU2Conn
 		return nil, err
 	}
 
+	// Mark that this connection owns the PacketConn (created here),
+	// so CloseWithReason will close it.
+	conn.ownsUnderlying = true
+
 	return conn, nil
 }
 

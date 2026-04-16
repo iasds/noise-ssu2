@@ -286,6 +286,11 @@ func (nc *NoiseConn) Close() error {
 	// Zero cipher state key material before closing
 	nc.ZeroKeys()
 
+	// Close modifier chain to release any resources held by modifiers
+	if chain := nc.config.GetModifierChain(); chain != nil {
+		chain.Close()
+	}
+
 	// Zero static key material from config to prevent lingering in memory
 	if nc.config != nil && len(nc.config.StaticKey) > 0 {
 		internal.SecureZero(nc.config.StaticKey)

@@ -386,9 +386,10 @@ func DialNoiseWithHandshakeContext(ctx context.Context, network, addr string, co
 			Wrapf(err, "failed to dial %s://%s", network, addr)
 	}
 
+	// createAndHandshakeConn takes ownership of conn on error (closes it
+	// and zeros key material), so we must not close conn here.
 	noiseConn, err := createAndHandshakeConn(ctx, conn, config, network, addr)
 	if err != nil {
-		conn.Close()
 		return nil, err
 	}
 
@@ -396,9 +397,12 @@ func DialNoiseWithHandshakeContext(ctx context.Context, network, addr string, co
 }
 
 // createAndHandshakeConn creates a NoiseConn and performs handshake with retry logic.
+// On error, the function closes conn (directly or via noiseConn.Close) so the
+// caller must NOT close conn when an error is returned.
 func createAndHandshakeConn(ctx context.Context, conn net.Conn, config *ConnConfig, network, addr string) (*NoiseConn, error) {
 	noiseConn, err := NewNoiseConn(conn, config)
 	if err != nil {
+		conn.Close()
 		return nil, oops.
 			Code("NOISE_CONN_FAILED").
 			In("transport").
@@ -414,6 +418,8 @@ func createAndHandshakeConn(ctx context.Context, conn net.Conn, config *ConnConf
 
 	// Perform handshake with retry logic
 	if err := noiseConn.HandshakeWithRetry(ctx); err != nil {
+		// Close noiseConn to zero key material and close underlying conn
+		noiseConn.Close()
 		return nil, oops.
 			Code("HANDSHAKE_FAILED").
 			In("transport").
@@ -452,7 +458,9 @@ func DialNoiseWithPoolAndHandshakeContext(ctx context.Context, network, addr str
 			if err == nil {
 				return noiseConn, nil
 			}
-			// Pooled conn failed handshake (e.g. peer reset); fall through to fresh dial.
+			// createAndHandshakeConn takes ownership of rawConn on error
+			// (closes it to release the PoolConnWrapper and zero keys).
+			// Fall through to fresh dial.
 		}
 	}
 
