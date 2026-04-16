@@ -335,6 +335,33 @@ func (cc *CongestionController) handleCongestionAvoidanceAck(ackedBytes int) {
 	}
 }
 
+// handleCongestionEvent processes a congestion signal (loss or ECN) by
+// coalescing events within the same RTT window, computing ssthresh via
+// Westwood+ BWE, and transitioning to the specified state. Caller must
+// NOT hold cc.mutex.
+func (cc *CongestionController) handleCongestionEvent(targetState CongestionState) {
+	cc.mutex.Lock()
+	defer cc.mutex.Unlock()
+
+	if cc.state == Recovery {
+		return
+	}
+
+	now := time.Now()
+	if !cc.congestionEpochStart.IsZero() && cc.rttEstimator != nil {
+		rtt := cc.rttEstimator.GetSmoothedRTT()
+		if rtt > 0 && now.Sub(cc.congestionEpochStart) < rtt {
+			return
+		}
+	}
+	cc.congestionEpochStart = now
+
+	cc.ssthresh = cc.westwoodSSThresh()
+	cc.cwnd = cc.ssthresh
+	cc.state = targetState
+	cc.bytesAcked = 0
+}
+
 // OnPacketLoss handles a detected packet loss event.
 // Westwood+ sets ssthresh = max(BWE * minRTT, MinCWND) instead of Reno's
 // cwnd/2, providing a more accurate window estimate based on measured
@@ -345,33 +372,7 @@ func (cc *CongestionController) handleCongestionAvoidanceAck(ackedBytes int) {
 // epoch start are absorbed without further reduction (G-1).
 func (cc *CongestionController) OnPacketLoss() {
 	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "OnPacketLoss"}).Debug("Packet loss detected")
-	cc.mutex.Lock()
-	defer cc.mutex.Unlock()
-
-	// Already in recovery, don't reduce further
-	if cc.state == Recovery {
-		return
-	}
-
-	// Coalesce loss events within the same RTT window (G-1).
-	now := time.Now()
-	if !cc.congestionEpochStart.IsZero() && cc.rttEstimator != nil {
-		rtt := cc.rttEstimator.GetSmoothedRTT()
-		if rtt > 0 && now.Sub(cc.congestionEpochStart) < rtt {
-			return // same epoch, absorb without further reduction
-		}
-	}
-	cc.congestionEpochStart = now
-
-	// Westwood+ ssthresh: BWE × minRTT
-	cc.ssthresh = cc.westwoodSSThresh()
-
-	// Set CWND to ssthresh
-	cc.cwnd = cc.ssthresh
-
-	// Enter recovery state
-	cc.state = Recovery
-	cc.bytesAcked = 0
+	cc.handleCongestionEvent(Recovery)
 }
 
 // OnRetransmissionTimeout handles an RTO event (more severe than packet loss).
@@ -560,26 +561,7 @@ func (cc *CongestionController) ShouldProbe() bool {
 // and CWND is reduced, but with the same epoch-coalescing as OnPacketLoss
 // to avoid over-reducing within a single RTT window.
 func (cc *CongestionController) OnECN() {
-	cc.mutex.Lock()
-	defer cc.mutex.Unlock()
-
-	if cc.state == Recovery {
-		return
-	}
-
-	now := time.Now()
-	if !cc.congestionEpochStart.IsZero() && cc.rttEstimator != nil {
-		rtt := cc.rttEstimator.GetSmoothedRTT()
-		if rtt > 0 && now.Sub(cc.congestionEpochStart) < rtt {
-			return
-		}
-	}
-	cc.congestionEpochStart = now
-
-	cc.ssthresh = cc.westwoodSSThresh()
-	cc.cwnd = cc.ssthresh
-	cc.state = CongestionAvoidance
-	cc.bytesAcked = 0
+	cc.handleCongestionEvent(CongestionAvoidance)
 }
 
 // SetCWND manually sets the congestion window (for testing or special cases).

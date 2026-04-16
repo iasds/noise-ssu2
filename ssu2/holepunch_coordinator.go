@@ -238,6 +238,29 @@ func (hpc *HolePunchCoordinator) SendHolePunch(sessionID uint64, targetAddr *net
 	return nil
 }
 
+// verifyHolePunchSignature validates the block signature using the
+// configured verifier. Returns nil if block is nil (legacy callers).
+func (hpc *HolePunchCoordinator) verifyHolePunchSignature(sessionID uint64, block *RelayIntroBlock, signerKey ed25519.PublicKey) error {
+	if block == nil {
+		return nil
+	}
+	if hpc.VerifyHolePunchSignature == nil {
+		return oops.
+			Code("VERIFICATION_NOT_CONFIGURED").
+			In("holepunch_coordinator").
+			With("session_id", sessionID).
+			Errorf("hole punch signature verifier not configured")
+	}
+	if err := hpc.VerifyHolePunchSignature(block, signerKey); err != nil {
+		return oops.
+			Code("SIGNATURE_VERIFICATION_FAILED").
+			In("holepunch_coordinator").
+			With("session_id", sessionID).
+			Wrapf(err, "hole punch signature verification failed")
+	}
+	return nil
+}
+
 // HandleHolePunch processes an incoming hole punch packet from a remote peer.
 // Per SSU2 spec §Hole Punch, the message's signature MUST be verified before
 // processing. If block is non-nil and VerifyHolePunchSignature is set, the
@@ -261,22 +284,8 @@ func (hpc *HolePunchCoordinator) HandleHolePunch(sessionID uint64, fromAddr *net
 		return err
 	}
 
-	// Verify signature per SSU2 spec §Hole Punch (G-2)
-	if block != nil {
-		if hpc.VerifyHolePunchSignature == nil {
-			return oops.
-				Code("VERIFICATION_NOT_CONFIGURED").
-				In("holepunch_coordinator").
-				With("session_id", sessionID).
-				Errorf("hole punch signature verifier not configured")
-		}
-		if err := hpc.VerifyHolePunchSignature(block, signerKey); err != nil {
-			return oops.
-				Code("SIGNATURE_VERIFICATION_FAILED").
-				In("holepunch_coordinator").
-				With("session_id", sessionID).
-				Wrapf(err, "hole punch signature verification failed")
-		}
+	if err := hpc.verifyHolePunchSignature(sessionID, block, signerKey); err != nil {
+		return err
 	}
 
 	attempt.State = HolePunchWaiting
@@ -303,22 +312,8 @@ func (hpc *HolePunchCoordinator) ProcessHolePunchResponse(sessionID uint64, addr
 		return err
 	}
 
-	// Verify signature per SSU2 spec §Hole Punch (G-2)
-	if block != nil {
-		if hpc.VerifyHolePunchSignature == nil {
-			return oops.
-				Code("VERIFICATION_NOT_CONFIGURED").
-				In("holepunch_coordinator").
-				With("session_id", sessionID).
-				Errorf("hole punch signature verifier not configured")
-		}
-		if err := hpc.VerifyHolePunchSignature(block, signerKey); err != nil {
-			return oops.
-				Code("SIGNATURE_VERIFICATION_FAILED").
-				In("holepunch_coordinator").
-				With("session_id", sessionID).
-				Wrapf(err, "hole punch response signature verification failed")
-		}
+	if err := hpc.verifyHolePunchSignature(sessionID, block, signerKey); err != nil {
+		return err
 	}
 
 	// Verify address matches expected remote
@@ -338,6 +333,26 @@ func (hpc *HolePunchCoordinator) ProcessHolePunchResponse(sessionID uint64, addr
 	return nil
 }
 
+// validateAndGetAttempt validates a session ID and returns the attempt.
+// Caller must hold hpc.mutex.
+func (hpc *HolePunchCoordinator) validateAndGetAttempt(sessionID uint64) (*HolePunchAttempt, error) {
+	if sessionID == 0 {
+		return nil, oops.
+			Code("INVALID_SESSION_ID").
+			In("holepunch_coordinator").
+			Errorf("session ID cannot be zero")
+	}
+	attempt, exists := hpc.attempts[sessionID]
+	if !exists {
+		return nil, oops.
+			Code("SESSION_NOT_FOUND").
+			In("holepunch_coordinator").
+			With("session_id", sessionID).
+			Errorf("hole punch session not found")
+	}
+	return attempt, nil
+}
+
 // RetryHolePunch retries a failed hole punch attempt.
 //
 // Parameters:
@@ -345,23 +360,12 @@ func (hpc *HolePunchCoordinator) ProcessHolePunchResponse(sessionID uint64, addr
 //
 // Returns error if session not found or max retries exceeded.
 func (hpc *HolePunchCoordinator) RetryHolePunch(sessionID uint64) error {
-	if sessionID == 0 {
-		return oops.
-			Code("INVALID_SESSION_ID").
-			In("holepunch_coordinator").
-			Errorf("session ID cannot be zero")
-	}
-
 	hpc.mutex.Lock()
 	defer hpc.mutex.Unlock()
 
-	attempt, exists := hpc.attempts[sessionID]
-	if !exists {
-		return oops.
-			Code("SESSION_NOT_FOUND").
-			In("holepunch_coordinator").
-			With("session_id", sessionID).
-			Errorf("hole punch session not found")
+	attempt, err := hpc.validateAndGetAttempt(sessionID)
+	if err != nil {
+		return err
 	}
 
 	// Check max retries (3 per I2P convention)
@@ -395,28 +399,15 @@ func (hpc *HolePunchCoordinator) RetryHolePunch(sessionID uint64) error {
 // Returns error if session not found.
 func (hpc *HolePunchCoordinator) CompleteHolePunch(sessionID uint64) error {
 	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "CompleteHolePunch", "sessionID": sessionID}).Debug("Completing hole punch")
-	if sessionID == 0 {
-		return oops.
-			Code("INVALID_SESSION_ID").
-			In("holepunch_coordinator").
-			Errorf("session ID cannot be zero")
-	}
-
 	hpc.mutex.Lock()
 	defer hpc.mutex.Unlock()
 
-	attempt, exists := hpc.attempts[sessionID]
-	if !exists {
-		return oops.
-			Code("SESSION_NOT_FOUND").
-			In("holepunch_coordinator").
-			With("session_id", sessionID).
-			Errorf("hole punch session not found")
+	attempt, err := hpc.validateAndGetAttempt(sessionID)
+	if err != nil {
+		return err
 	}
 
-	// Mark as successful
 	attempt.State = HolePunchSuccess
-
 	return nil
 }
 
@@ -429,28 +420,15 @@ func (hpc *HolePunchCoordinator) CompleteHolePunch(sessionID uint64) error {
 // Returns error if session not found.
 func (hpc *HolePunchCoordinator) FailHolePunch(sessionID uint64, reason error) error {
 	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "FailHolePunch", "sessionID": sessionID}).Debug("Failing hole punch")
-	if sessionID == 0 {
-		return oops.
-			Code("INVALID_SESSION_ID").
-			In("holepunch_coordinator").
-			Errorf("session ID cannot be zero")
-	}
-
 	hpc.mutex.Lock()
 	defer hpc.mutex.Unlock()
 
-	attempt, exists := hpc.attempts[sessionID]
-	if !exists {
-		return oops.
-			Code("SESSION_NOT_FOUND").
-			In("holepunch_coordinator").
-			With("session_id", sessionID).
-			Errorf("hole punch session not found")
+	attempt, err := hpc.validateAndGetAttempt(sessionID)
+	if err != nil {
+		return err
 	}
 
-	// Mark as failed
 	attempt.State = HolePunchFailed
-
 	return nil
 }
 

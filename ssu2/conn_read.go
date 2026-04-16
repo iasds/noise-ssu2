@@ -170,22 +170,7 @@ func (h *SSU2Conn) keepaliveLoop() {
 			// Check if we need to send keepalive
 			if timeSinceActivity >= h.config.KeepaliveInterval {
 				// Send ACK-only packet as keepalive per spec §Keepalive (M-3)
-				ack, err := h.ackHandler.GenerateACK()
-				if err == nil && ack != nil {
-					pktNum := h.nextSendSequence()
-					hdr := make([]byte, ShortHeaderSize)
-					binary.BigEndian.PutUint64(hdr[0:8], h.remoteConnectionID)
-					binary.BigEndian.PutUint32(hdr[8:12], pktNum)
-					packet := &SSU2Packet{
-						MessageType:  MessageTypeData,
-						PacketNumber: pktNum,
-						Header:       hdr,
-						MAC:          make([]byte, MACSize),
-					}
-					payload, _ := SerializeBlocks([]*SSU2Block{ack})
-					packet.Payload = payload
-					_ = h.sendPacketDirect(packet)
-				}
+				h.sendImmediateACK()
 			}
 
 			// Check for timeout (M-2: configurable idle timeout)

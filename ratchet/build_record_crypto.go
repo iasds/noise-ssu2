@@ -172,6 +172,17 @@ func CreateBuildResponseRecordRaw(reply byte, randomData [495]byte) [32]byte {
 	return types.SHA256(data)
 }
 
+// newChaCha20Poly1305 creates a ChaCha20-Poly1305 AEAD cipher and derives the
+// 12-byte nonce from the first 12 bytes of the 16-byte IV per the I2P ECIES
+// build-record spec (Proposal 152, §"ChaCha20/Poly1305").
+func newChaCha20Poly1305(key [32]byte, iv [16]byte) (*chacha20poly1305.AEAD, []byte, error) {
+	aead, err := chacha20poly1305.NewAEAD(key)
+	if err != nil {
+		return nil, nil, oops.Errorf("failed to create ChaCha20-Poly1305 cipher: %w", err)
+	}
+	return aead, iv[:12], nil
+}
+
 // encryptChaCha20Poly1305 encrypts data using ChaCha20-Poly1305 AEAD.
 func (c *BuildReplyCrypto) encryptChaCha20Poly1305(
 	plaintext []byte,
@@ -183,18 +194,10 @@ func (c *BuildReplyCrypto) encryptChaCha20Poly1305(
 		return nil, oops.Errorf("plaintext must be 528 bytes, got %d", len(plaintext))
 	}
 
-	aead, err := chacha20poly1305.NewAEAD(key)
+	aead, nonce, err := newChaCha20Poly1305(key, iv)
 	if err != nil {
-		return nil, oops.Errorf("failed to create ChaCha20-Poly1305 cipher: %w", err)
+		return nil, err
 	}
-
-	// Use the first 12 bytes of the 16-byte IV as the ChaCha20-Poly1305 nonce.
-	// The I2P ECIES build-record spec (Proposal 152, §"ChaCha20/Poly1305")
-	// explicitly defines the nonce as "the first 12 bytes of the reply IV";
-	// the remaining 4 bytes are unused padding introduced by the AES-CBC
-	// legacy field size and are not part of the nonce uniqueness domain.
-	// This matches the reference Java implementation (RouterContext.elGamalAESEngine).
-	nonce := iv[:12]
 
 	ct, tag, err := aead.Encrypt(plaintext, nil, nonce)
 	if err != nil {
@@ -224,13 +227,10 @@ func (c *BuildReplyCrypto) decryptChaCha20Poly1305(
 		return nil, oops.Errorf("ciphertext must be 544 bytes (528 + 16 tag), got %d", len(ciphertext))
 	}
 
-	aead, err := chacha20poly1305.NewAEAD(key)
+	aead, nonce, err := newChaCha20Poly1305(key, iv)
 	if err != nil {
-		return nil, oops.Errorf("failed to create ChaCha20-Poly1305 cipher: %w", err)
+		return nil, err
 	}
-
-	// See encryptChaCha20Poly1305 for nonce derivation rationale.
-	nonce := iv[:12]
 
 	// Split into ciphertext (first 528 bytes) and tag (last 16 bytes)
 	ct := ciphertext[:528]

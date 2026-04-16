@@ -157,27 +157,28 @@ type RelayTagBlock struct {
 // EncodeRelayRequest encodes a RelayRequest block to wire format.
 //
 // Wire format per SSU2 spec:
-//
-//	[Flag:1][Nonce:4][RelayTag:4][Timestamp:4][Ver:1][Asz:1][AlicePort:2][AliceIP:asz-2][Signature:varies]
+// resolveIPBytes returns the wire-format IP bytes and address-size field
+// for the given IP address. Returns an error for invalid addresses.
+func resolveIPBytes(ip net.IP) ([]byte, uint8, error) {
+	if ip4 := ip.To4(); ip4 != nil {
+		return ip4, 6, nil // port(2) + IPv4(4)
+	}
+	if ip6 := ip.To16(); ip6 != nil {
+		return ip6, 18, nil // port(2) + IPv6(16)
+	}
+	return nil, 0, oops.Errorf("invalid IP address")
+}
+
+// [Flag:1][Nonce:4][RelayTag:4][Timestamp:4][Ver:1][Asz:1][AlicePort:2][AliceIP:asz-2][Signature:varies]
 func EncodeRelayRequest(req *RelayRequestBlock) (*SSU2Block, error) {
 	if req == nil {
 		return nil, oops.Errorf("RelayRequestBlock is nil")
 	}
 	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "EncodeRelayRequest", "nonce": req.Nonce, "relayTag": req.RelayTag}).Debug("Encoding relay request block")
 
-	ip4 := req.AliceIP.To4()
-	var ipBytes []byte
-	var asz uint8
-	if ip4 != nil {
-		ipBytes = ip4
-		asz = 6 // port(2) + IPv4(4)
-	} else {
-		ip6 := req.AliceIP.To16()
-		if ip6 == nil {
-			return nil, oops.Errorf("invalid AliceIP")
-		}
-		ipBytes = ip6
-		asz = 18 // port(2) + IPv6(16)
+	ipBytes, asz, err := resolveIPBytes(req.AliceIP)
+	if err != nil {
+		return nil, err
 	}
 
 	// flag(1) + nonce(4) + relay_tag(4) + timestamp(4) + ver(1) + asz(1) + port(2) + ip + signature
@@ -282,6 +283,17 @@ func EncodeRelayResponse(resp *RelayResponseBlock) (*SSU2Block, error) {
 	return NewSSU2Block(BlockTypeRelayResponse, data), nil
 }
 
+// encodeRelayResponseHeader writes the common 12-byte header shared by accepted
+// and Charlie-rejection relay response encodings.
+func encodeRelayResponseHeader(data []byte, resp *RelayResponseBlock, csz byte) {
+	data[0] = resp.Flag
+	data[1] = resp.Code
+	binary.BigEndian.PutUint32(data[2:6], resp.Nonce)
+	binary.BigEndian.PutUint32(data[6:10], resp.Timestamp)
+	data[10] = resp.Version
+	data[11] = csz
+}
+
 func encodeRelayResponseAccepted(resp *RelayResponseBlock) (*SSU2Block, error) {
 	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "encodeRelayResponseAccepted", "nonce": resp.Nonce}).Debug("Encoding accepted relay response")
 	ipBytes, csz, err := normalizeIP(resp.CharlieIP)
@@ -294,12 +306,7 @@ func encodeRelayResponseAccepted(resp *RelayResponseBlock) (*SSU2Block, error) {
 	// flag(1)+code(1)+nonce(4)+ts(4)+ver(1)+csz(1)+port(2)+ip+sig+token(8)
 	dataSize := 1 + 1 + 4 + 4 + 1 + 1 + 2 + len(ipBytes) + len(resp.Signature) + 8
 	data := make([]byte, dataSize)
-	data[0] = resp.Flag
-	data[1] = resp.Code
-	binary.BigEndian.PutUint32(data[2:6], resp.Nonce)
-	binary.BigEndian.PutUint32(data[6:10], resp.Timestamp)
-	data[10] = resp.Version
-	data[11] = csz
+	encodeRelayResponseHeader(data, resp, csz)
 	binary.BigEndian.PutUint16(data[12:14], resp.CharliePort)
 	copy(data[14:14+len(ipBytes)], ipBytes)
 	off := 14 + len(ipBytes)
@@ -318,12 +325,7 @@ func encodeRelayResponseCharlieRejection(resp *RelayResponseBlock) (*SSU2Block, 
 		dataSize += 2 + len(ipBytes)
 	}
 	data := make([]byte, dataSize)
-	data[0] = resp.Flag
-	data[1] = resp.Code
-	binary.BigEndian.PutUint32(data[2:6], resp.Nonce)
-	binary.BigEndian.PutUint32(data[6:10], resp.Timestamp)
-	data[10] = resp.Version
-	data[11] = csz
+	encodeRelayResponseHeader(data, resp, csz)
 	off := 12
 	if csz > 0 {
 		binary.BigEndian.PutUint16(data[off:off+2], resp.CharliePort)
@@ -366,22 +368,23 @@ func DecodeRelayResponse(block *SSU2Block) (*RelayResponseBlock, error) {
 	return resp, nil
 }
 
-func decodeRelayResponseAccepted(resp *RelayResponseBlock, data []byte) (*RelayResponseBlock, error) {
-	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "decodeRelayResponseAccepted", "nonce": resp.Nonce, "dataLen": len(data)}).Debug("Decoding accepted relay response")
-	// Need at least: 6 + timestamp(4) + ver(1) + csz(1) = 12
+// decodeRelayResponseHeader parses the common header fields (timestamp,
+// version, Charlie endpoint) shared by accepted and rejection responses.
+// Returns the byte offset past the endpoint, or an error.
+func decodeRelayResponseHeader(resp *RelayResponseBlock, data []byte, label string) (int, error) {
 	if len(data) < 12 {
-		return nil, oops.Errorf("accepted RelayResponse too short: %d bytes", len(data))
+		return 0, oops.Errorf("%s RelayResponse too short: %d bytes", label, len(data))
 	}
 	resp.Timestamp = binary.BigEndian.Uint32(data[6:10])
 	resp.Version = data[10]
 	csz := data[11]
 	if csz != 0 && csz != 6 && csz != 18 {
-		return nil, oops.Errorf("invalid csz: %d (expected 0, 6, or 18)", csz)
+		return 0, oops.Errorf("invalid csz: %d (expected 0, 6, or 18)", csz)
 	}
 	off := 12
 	if csz > 0 {
 		if len(data) < off+int(csz) {
-			return nil, oops.Errorf("accepted RelayResponse too short for endpoint: need %d, have %d", off+int(csz), len(data))
+			return 0, oops.Errorf("%s too short for endpoint: need %d, have %d", label, off+int(csz), len(data))
 		}
 		resp.CharliePort = binary.BigEndian.Uint16(data[off : off+2])
 		ipLen := int(csz) - 2
@@ -389,6 +392,15 @@ func decodeRelayResponseAccepted(resp *RelayResponseBlock, data []byte) (*RelayR
 		copy(ip, data[off+2:off+2+ipLen])
 		resp.CharlieIP = net.IP(ip)
 		off += int(csz)
+	}
+	return off, nil
+}
+
+func decodeRelayResponseAccepted(resp *RelayResponseBlock, data []byte) (*RelayResponseBlock, error) {
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "decodeRelayResponseAccepted", "nonce": resp.Nonce, "dataLen": len(data)}).Debug("Decoding accepted relay response")
+	off, err := decodeRelayResponseHeader(resp, data, "accepted")
+	if err != nil {
+		return nil, err
 	}
 	// Remaining: signature + token(8)
 	remaining := len(data) - off
@@ -408,26 +420,9 @@ func decodeRelayResponseAccepted(resp *RelayResponseBlock, data []byte) (*RelayR
 
 func decodeRelayResponseCharlieRejection(resp *RelayResponseBlock, data []byte) (*RelayResponseBlock, error) {
 	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "decodeRelayResponseCharlieRejection", "nonce": resp.Nonce, "dataLen": len(data)}).Debug("Decoding Charlie rejection response")
-	if len(data) < 12 {
-		return nil, oops.Errorf("Charlie rejection RelayResponse too short: %d bytes", len(data))
-	}
-	resp.Timestamp = binary.BigEndian.Uint32(data[6:10])
-	resp.Version = data[10]
-	csz := data[11]
-	if csz != 0 && csz != 6 && csz != 18 {
-		return nil, oops.Errorf("invalid csz: %d (expected 0, 6, or 18)", csz)
-	}
-	off := 12
-	if csz > 0 {
-		if len(data) < off+int(csz) {
-			return nil, oops.Errorf("Charlie rejection too short for endpoint: need %d, have %d", off+int(csz), len(data))
-		}
-		resp.CharliePort = binary.BigEndian.Uint16(data[off : off+2])
-		ipLen := int(csz) - 2
-		ip := make([]byte, ipLen)
-		copy(ip, data[off+2:off+2+ipLen])
-		resp.CharlieIP = net.IP(ip)
-		off += int(csz)
+	off, err := decodeRelayResponseHeader(resp, data, "Charlie rejection")
+	if err != nil {
+		return nil, err
 	}
 	if len(data) > off {
 		resp.Signature = make([]byte, len(data)-off)
@@ -452,19 +447,9 @@ func EncodeRelayIntro(intro *RelayIntroBlock) (*SSU2Block, error) {
 	}
 	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "EncodeRelayIntro", "nonce": intro.Nonce, "relayTag": intro.AliceRelayTag}).Debug("Encoding relay intro block")
 
-	ip4 := intro.AliceIP.To4()
-	var ipBytes []byte
-	var asz uint8
-	if ip4 != nil {
-		ipBytes = ip4
-		asz = 6 // port(2) + IPv4(4)
-	} else {
-		ip6 := intro.AliceIP.To16()
-		if ip6 == nil {
-			return nil, oops.Errorf("invalid AliceIP")
-		}
-		ipBytes = ip6
-		asz = 18 // port(2) + IPv6(16)
+	ipBytes, asz, err := resolveIPBytes(intro.AliceIP)
+	if err != nil {
+		return nil, err
 	}
 
 	// flag(1) + hash(32) + nonce(4) + relay_tag(4) + timestamp(4) + ver(1) + asz(1) + port(2) + ip + signature

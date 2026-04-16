@@ -147,26 +147,24 @@ func (h *HandshakeHandler) ProcessSessionConfirmed(packet *SSU2Packet) error {
 	// Reconstruct Noise handshake message from payload + MAC
 	noiseMessage := append(copyBytes(packet.Payload), packet.MAC...)
 
-	// Process 3rd XK handshake message (→ s, se).
-	// This completes the handshake and returns transport cipher states.
+	return h.finalizeSessionConfirmed(noiseMessage)
+}
+
+// finalizeSessionConfirmed reads the handshake message, updates cipher states,
+// captures the peer's static key, and extracts the RouterInfo payload.
+func (h *HandshakeHandler) finalizeSessionConfirmed(noiseMessage []byte) error {
 	payload, cs1, cs2, err := h.handshakeState.ReadMessage(nil, noiseMessage)
 	if err != nil {
 		return oops.Wrapf(err, "failed to process SessionConfirmed handshake message")
 	}
 
-	// Store cipher states (handshake now complete)
 	h.updateCipherStates(cs1, cs2)
 
-	// Now that message 3 (→ s, se) is processed, the initiator's static key
-	// is available via PeerStatic(). Store it for identity lookup.
 	if ps := h.handshakeState.PeerStatic(); len(ps) > 0 {
 		h.remoteStaticKey = copyBytes(ps)
 	}
 
-	// Extract the RouterInfo block from the decrypted payload so it can
-	// be validated against the Noise-authenticated static key (C-2).
 	h.extractPeerRouterInfo(payload)
-
 	return nil
 }
 
@@ -312,19 +310,7 @@ func (h *HandshakeHandler) ProcessSessionConfirmedFragments(packets []*SSU2Packe
 
 	noiseMessage := reassembleFragments(packets)
 
-	payload, cs1, cs2, err := h.handshakeState.ReadMessage(nil, noiseMessage)
-	if err != nil {
-		return oops.Wrapf(err, "failed to process SessionConfirmed handshake message")
-	}
-	h.updateCipherStates(cs1, cs2)
-
-	if ps := h.handshakeState.PeerStatic(); len(ps) > 0 {
-		h.remoteStaticKey = copyBytes(ps)
-	}
-
-	h.extractPeerRouterInfo(payload)
-
-	return nil
+	return h.finalizeSessionConfirmed(noiseMessage)
 }
 
 // validateFragmentOrdering checks that the fragment ordering and completeness

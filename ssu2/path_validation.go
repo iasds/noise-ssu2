@@ -505,21 +505,7 @@ func EncodePathChallenge(challengeID uint64) *SSU2Block {
 //   - uint64: The challenge ID
 //   - error: If decoding fails
 func DecodePathChallenge(block *SSU2Block) (uint64, error) {
-	if block == nil {
-		return 0, oops.Errorf("block is nil")
-	}
-
-	if block.Type != BlockTypePathChallenge {
-		return 0, oops.Errorf("invalid block type: expected %d, got %d",
-			BlockTypePathChallenge, block.Type)
-	}
-
-	if len(block.Data) < 8 {
-		return 0, oops.Errorf("PathChallenge block too short: %d bytes (minimum 8)",
-			len(block.Data))
-	}
-
-	return binary.BigEndian.Uint64(block.Data[:8]), nil
+	return decodePathUint64Block(block, BlockTypePathChallenge, "PathChallenge")
 }
 
 // EncodePathResponse encodes a Path Response block (Type 19).
@@ -545,20 +531,23 @@ func EncodePathResponse(challengeID uint64) *SSU2Block {
 //   - uint64: The challenge ID
 //   - error: If decoding fails
 func DecodePathResponse(block *SSU2Block) (uint64, error) {
+	return decodePathUint64Block(block, BlockTypePathResponse, "PathResponse")
+}
+
+// decodePathUint64Block is the shared decoder for PathChallenge and PathResponse blocks,
+// which both carry a single uint64 challenge ID.
+func decodePathUint64Block(block *SSU2Block, expectedType uint8, label string) (uint64, error) {
 	if block == nil {
 		return 0, oops.Errorf("block is nil")
 	}
-
-	if block.Type != BlockTypePathResponse {
+	if block.Type != expectedType {
 		return 0, oops.Errorf("invalid block type: expected %d, got %d",
-			BlockTypePathResponse, block.Type)
+			expectedType, block.Type)
 	}
-
 	if len(block.Data) < 8 {
-		return 0, oops.Errorf("PathResponse block too short: %d bytes (minimum 8)",
-			len(block.Data))
+		return 0, oops.Errorf("%s block too short: %d bytes (minimum 8)",
+			label, len(block.Data))
 	}
-
 	return binary.BigEndian.Uint64(block.Data[:8]), nil
 }
 

@@ -189,29 +189,8 @@ func WrapNTCP2Listener(listener net.Listener, config *NTCP2Config) (*NTCP2Listen
 	return NewNTCP2Listener(listener, config)
 }
 
-// validateDialParams validates the parameters for dial operations
-func validateDialParams(network, addr string, config *NTCP2Config) error {
-	if err := validateBasicDialParams(network, addr, config); err != nil {
-		return err
-	}
-
-	if err := validateDialConfiguration(config); err != nil {
-		return err
-	}
-
-	// Validate the configuration
-	if err := config.Validate(); err != nil {
-		return oops.
-			Code("CONFIG_VALIDATION_FAILED").
-			In("ntcp2").
-			Wrapf(err, "NTCP2 config validation failed")
-	}
-
-	return nil
-}
-
-// validateBasicDialParams validates the basic parameters for dial operations.
-func validateBasicDialParams(network, addr string, config *NTCP2Config) error {
+// validateBasicParams validates common parameters for dial and listen operations.
+func validateBasicParams(network, addr string, config *NTCP2Config) error {
 	if network == "" {
 		return oops.
 			Code("INVALID_NETWORK").
@@ -231,6 +210,27 @@ func validateBasicDialParams(network, addr string, config *NTCP2Config) error {
 			Code("INVALID_CONFIG").
 			In("ntcp2").
 			Errorf("config cannot be nil")
+	}
+
+	return nil
+}
+
+// validateDialParams validates the parameters for dial operations
+func validateDialParams(network, addr string, config *NTCP2Config) error {
+	if err := validateBasicParams(network, addr, config); err != nil {
+		return err
+	}
+
+	if err := validateDialConfiguration(config); err != nil {
+		return err
+	}
+
+	// Validate the configuration
+	if err := config.Validate(); err != nil {
+		return oops.
+			Code("CONFIG_VALIDATION_FAILED").
+			In("ntcp2").
+			Wrapf(err, "NTCP2 config validation failed")
 	}
 
 	return nil
@@ -250,7 +250,7 @@ func validateDialConfiguration(config *NTCP2Config) error {
 
 // validateListenParams validates the parameters for listen operations
 func validateListenParams(network, addr string, config *NTCP2Config) error {
-	if err := validateBasicListenParams(network, addr, config); err != nil {
+	if err := validateBasicParams(network, addr, config); err != nil {
 		return err
 	}
 
@@ -264,32 +264,6 @@ func validateListenParams(network, addr string, config *NTCP2Config) error {
 			Code("CONFIG_VALIDATION_FAILED").
 			In("ntcp2").
 			Wrapf(err, "NTCP2 config validation failed")
-	}
-
-	return nil
-}
-
-// validateBasicListenParams validates the basic parameters for listen operations.
-func validateBasicListenParams(network, addr string, config *NTCP2Config) error {
-	if network == "" {
-		return oops.
-			Code("INVALID_NETWORK").
-			In("ntcp2").
-			Errorf("network cannot be empty")
-	}
-
-	if addr == "" {
-		return oops.
-			Code("INVALID_ADDRESS").
-			In("ntcp2").
-			Errorf("address cannot be empty")
-	}
-
-	if config == nil {
-		return oops.
-			Code("INVALID_CONFIG").
-			In("ntcp2").
-			Errorf("config cannot be nil")
 	}
 
 	return nil

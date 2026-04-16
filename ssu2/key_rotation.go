@@ -346,6 +346,21 @@ func (krm *KeyRotationManager) SetPublished(isPublished bool) {
 	krm.introKey.IsPublished = isPublished
 }
 
+// checkRotationAllowed verifies that the managed key is eligible for rotation.
+// Returns an error with diagnostic context if the minimum age has not elapsed.
+func checkRotationAllowed(key *ManagedKey, keyName string) error {
+	if key.CanRotate() {
+		return nil
+	}
+	remaining := key.TimeUntilRotation()
+	return oops.
+		In("ssu2").
+		With("key_age", key.Age()).
+		With("min_age", key.MinAge()).
+		With("remaining", remaining).
+		Errorf("%s key cannot be rotated yet, %v remaining", keyName, remaining)
+}
+
 // RotateStaticKey generates a new static key if rotation is allowed.
 // Returns the new key bytes or an error if rotation is not permitted.
 func (krm *KeyRotationManager) RotateStaticKey() ([]byte, error) {
@@ -353,14 +368,8 @@ func (krm *KeyRotationManager) RotateStaticKey() ([]byte, error) {
 	krm.mu.Lock()
 	defer krm.mu.Unlock()
 
-	if !krm.staticKey.CanRotate() {
-		remaining := krm.staticKey.TimeUntilRotation()
-		return nil, oops.
-			In("ssu2").
-			With("key_age", krm.staticKey.Age()).
-			With("min_age", krm.staticKey.MinAge()).
-			With("remaining", remaining).
-			Errorf("static key cannot be rotated yet, %v remaining", remaining)
+	if err := checkRotationAllowed(krm.staticKey, "static"); err != nil {
+		return nil, err
 	}
 
 	return krm.rotateStaticKeyLocked()
@@ -376,54 +385,52 @@ func (krm *KeyRotationManager) ForceRotateStaticKey() ([]byte, error) {
 	return krm.rotateStaticKeyLocked()
 }
 
-// rotateStaticKeyLocked performs the actual key rotation.
-// Caller must hold the write lock.
-func (krm *KeyRotationManager) rotateStaticKeyLocked() ([]byte, error) {
-	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "rotateStaticKeyLocked"}).Debug("rotateStaticKeyLocked: performing static key rotation")
-	// Generate new key
-	newKey := make([]byte, StaticKeySize)
+// rotateKeyLocked generates a new key, retires the old one, and schedules
+// secure zeroing after the grace period. Caller must hold the write lock.
+func (krm *KeyRotationManager) rotateKeyLocked(keyName string, keySize int, current **ManagedKey, previous **ManagedKey) ([]byte, error) {
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "rotateKeyLocked", "key": keyName}).Debug("performing key rotation")
+	newKey := make([]byte, keySize)
 	if _, err := rand.Read(newKey); err != nil {
-		return nil, oops.Wrapf(err, "failed to generate new static key")
+		return nil, oops.Wrapf(err, "failed to generate new %s key", keyName)
 	}
 
 	now := krm.clock()
 
-	// Retire old key
-	oldKey := krm.staticKey
+	oldKey := *current
 	oldKey.State = KeyStateRetired
 	oldKey.RotatedAt = now
 
-	// Create new managed key
-	krm.staticKey = &ManagedKey{
+	*current = &ManagedKey{
 		Key:         newKey,
 		CreatedAt:   now,
 		State:       KeyStateActive,
 		IsPublished: oldKey.IsPublished,
 	}
-	oldKey.Successor = krm.staticKey
+	oldKey.Successor = *current
 
-	// Keep old key for grace period so in-flight packets can be decrypted.
-	// Zero any previously retained key first.
-	if krm.previousStaticKey != nil {
-		internal.SecureZero(krm.previousStaticKey.Key)
+	if *previous != nil {
+		internal.SecureZero((*previous).Key)
 	}
-	krm.previousStaticKey = oldKey
+	*previous = oldKey
 
-	// Schedule deferred zeroing of old key after grace period
 	go func(key *ManagedKey) {
 		time.Sleep(KeyGracePeriod)
 		internal.SecureZero(key.Key)
 	}(oldKey)
 
-	// Notify callback
 	if krm.onRotation != nil {
-		go krm.onRotation("static", oldKey, krm.staticKey)
+		go krm.onRotation(keyName, oldKey, *current)
 	}
 
-	// Return copy
-	result := make([]byte, StaticKeySize)
+	result := make([]byte, keySize)
 	copy(result, newKey)
 	return result, nil
+}
+
+// rotateStaticKeyLocked performs the actual static key rotation.
+// Caller must hold the write lock.
+func (krm *KeyRotationManager) rotateStaticKeyLocked() ([]byte, error) {
+	return krm.rotateKeyLocked("static", StaticKeySize, &krm.staticKey, &krm.previousStaticKey)
 }
 
 // RotateIntroKey generates a new introduction key if rotation is allowed.
@@ -433,14 +440,8 @@ func (krm *KeyRotationManager) RotateIntroKey() ([]byte, error) {
 	krm.mu.Lock()
 	defer krm.mu.Unlock()
 
-	if !krm.introKey.CanRotate() {
-		remaining := krm.introKey.TimeUntilRotation()
-		return nil, oops.
-			In("ssu2").
-			With("key_age", krm.introKey.Age()).
-			With("min_age", krm.introKey.MinAge()).
-			With("remaining", remaining).
-			Errorf("intro key cannot be rotated yet, %v remaining", remaining)
+	if err := checkRotationAllowed(krm.introKey, "intro"); err != nil {
+		return nil, err
 	}
 
 	return krm.rotateIntroKeyLocked()
@@ -456,52 +457,10 @@ func (krm *KeyRotationManager) ForceRotateIntroKey() ([]byte, error) {
 	return krm.rotateIntroKeyLocked()
 }
 
-// rotateIntroKeyLocked performs the actual key rotation.
+// rotateIntroKeyLocked performs the actual intro key rotation.
 // Caller must hold the write lock.
 func (krm *KeyRotationManager) rotateIntroKeyLocked() ([]byte, error) {
-	// Generate new key
-	newKey := make([]byte, IntroKeySize)
-	if _, err := rand.Read(newKey); err != nil {
-		return nil, oops.Wrapf(err, "failed to generate new intro key")
-	}
-
-	now := krm.clock()
-
-	// Retire old key
-	oldKey := krm.introKey
-	oldKey.State = KeyStateRetired
-	oldKey.RotatedAt = now
-
-	// Create new managed key
-	krm.introKey = &ManagedKey{
-		Key:         newKey,
-		CreatedAt:   now,
-		State:       KeyStateActive,
-		IsPublished: oldKey.IsPublished,
-	}
-	oldKey.Successor = krm.introKey
-
-	// Keep old key for grace period so in-flight packets can be decrypted.
-	if krm.previousIntroKey != nil {
-		internal.SecureZero(krm.previousIntroKey.Key)
-	}
-	krm.previousIntroKey = oldKey
-
-	// Schedule deferred zeroing after grace period
-	go func(key *ManagedKey) {
-		time.Sleep(KeyGracePeriod)
-		internal.SecureZero(key.Key)
-	}(oldKey)
-
-	// Notify callback
-	if krm.onRotation != nil {
-		go krm.onRotation("intro", oldKey, krm.introKey)
-	}
-
-	// Return copy
-	result := make([]byte, IntroKeySize)
-	copy(result, newKey)
-	return result, nil
+	return krm.rotateKeyLocked("intro", IntroKeySize, &krm.introKey, &krm.previousIntroKey)
 }
 
 // RotateAllKeys rotates both static and introduction keys if allowed.
