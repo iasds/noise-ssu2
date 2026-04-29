@@ -91,6 +91,7 @@ func (c *NTCP2Conn) Handshake(ctx context.Context) error {
 	}
 
 	var err error
+	var msg3Payload []byte
 	if cfg.Initiator {
 		if len(cfg.LocalRouterInfo) == 0 {
 			nc.FailHandshake()
@@ -101,11 +102,22 @@ func (c *NTCP2Conn) Handshake(ctx context.Context) error {
 		}
 		err = performInitiatorHandshake(cfg, nc)
 	} else {
-		err = performResponderHandshake(cfg, nc)
+		msg3Payload, err = performResponderHandshake(cfg, nc)
 	}
 	if err != nil {
 		nc.FailHandshake()
 		return err
+	}
+
+	// On the responder side, store Alice's decrypted message-3 part-2 payload
+	// (the I2NP block frame containing her RouterInfo) so the router transport
+	// layer can parse it via PeerMessage3Payload() / PeerRouterInfoBytes().
+	// Without this, the OBEP/responder has no way to learn Alice's NTCP2
+	// address for direct delivery of replies (e.g. ShortTunnelBuildReply).
+	if msg3Payload != nil {
+		buf := make([]byte, len(msg3Payload))
+		copy(buf, msg3Payload)
+		c.peerMsg3Payload.Store(&buf)
 	}
 
 	// Run the PostHandshakeHook to derive SipHash keys from the ASK master and h.
@@ -195,24 +207,28 @@ func performInitiatorHandshake(cfg *NTCP2Config, nc *noise.NoiseConn) error {
 }
 
 // performResponderHandshake executes the three-message NTCP2 XK exchange
-// from the responder's (Bob's) perspective.
-func performResponderHandshake(cfg *NTCP2Config, nc *noise.NoiseConn) error {
+// from the responder's (Bob's) perspective. On success it returns the
+// decrypted message-3 part-2 plaintext, which is the I2NP block frame
+// containing Alice's RouterInfo (and any optional padding/options blocks
+// per the NTCP2 spec). The caller is responsible for parsing and storing
+// it for the router transport layer.
+func performResponderHandshake(cfg *NTCP2Config, nc *noise.NoiseConn) ([]byte, error) {
 	raw := nc.Underlying()
 
 	// === Message 1 (Alice -> Bob) ============================================
 	buf1 := make([]byte, msg1Size)
 	if _, err := io.ReadFull(raw, buf1); err != nil {
-		return oops.Code("MSG1_READ_FAILED").In("ntcp2").
+		return nil, oops.Code("MSG1_READ_FAILED").In("ntcp2").
 			Wrapf(err, "failed to read NTCP2 message 1")
 	}
 	aliceOpts, err := nc.ReadHandshakeMsgFromBytes(handshake.PhaseInitial, buf1)
 	if err != nil {
-		return oops.Code("MSG1_PROCESS_FAILED").In("ntcp2").
+		return nil, oops.Code("MSG1_PROCESS_FAILED").In("ntcp2").
 			Wrapf(err, "failed to process NTCP2 message 1")
 	}
 	// Parse Alice's options to extract padLen (bytes 2-3) and m3p2Len (bytes 4-5).
 	if len(aliceOpts) < ntcp2OptionsSize {
-		return oops.Code("MSG1_OPTIONS_TOO_SHORT").In("ntcp2").
+		return nil, oops.Code("MSG1_OPTIONS_TOO_SHORT").In("ntcp2").
 			Errorf("message 1 options too short: got %d, need %d", len(aliceOpts), ntcp2OptionsSize)
 	}
 	alicePadLen := int(binary.BigEndian.Uint16(aliceOpts[2:4]))
@@ -224,7 +240,7 @@ func performResponderHandshake(cfg *NTCP2Config, nc *noise.NoiseConn) error {
 	if alicePadLen > 0 {
 		pad := make([]byte, alicePadLen)
 		if _, err := io.ReadFull(raw, pad); err != nil {
-			return oops.Code("MSG1_PAD_READ_FAILED").In("ntcp2").
+			return nil, oops.Code("MSG1_PAD_READ_FAILED").In("ntcp2").
 				Wrapf(err, "failed to read %d cleartext padding bytes after message 1", alicePadLen)
 		}
 		nc.MixHashData(pad)
@@ -234,15 +250,15 @@ func performResponderHandshake(cfg *NTCP2Config, nc *noise.NoiseConn) error {
 	opts2 := buildMessage2Options()
 	msg2, err := nc.WriteHandshakeMsgToBytes(handshake.PhaseExchange, opts2)
 	if err != nil {
-		return oops.Code("MSG2_WRITE_FAILED").In("ntcp2").
+		return nil, oops.Code("MSG2_WRITE_FAILED").In("ntcp2").
 			Wrapf(err, "failed to build NTCP2 message 2")
 	}
 	if len(msg2) != msg2Size {
-		return oops.Code("MSG2_SIZE_MISMATCH").In("ntcp2").
+		return nil, oops.Code("MSG2_SIZE_MISMATCH").In("ntcp2").
 			Errorf("expected message 2 to be %d bytes, got %d", msg2Size, len(msg2))
 	}
 	if _, err := raw.Write(msg2); err != nil {
-		return oops.Code("MSG2_SEND_FAILED").In("ntcp2").
+		return nil, oops.Code("MSG2_SEND_FAILED").In("ntcp2").
 			Wrapf(err, "failed to send NTCP2 message 2")
 	}
 	// padLen = 0: no cleartext padding appended after message 2 for now.
@@ -251,16 +267,21 @@ func performResponderHandshake(cfg *NTCP2Config, nc *noise.NoiseConn) error {
 	msg3Len := msg3Part1Size + int(m3p2Len)
 	buf3 := make([]byte, msg3Len)
 	if _, err := io.ReadFull(raw, buf3); err != nil {
-		return oops.Code("MSG3_READ_FAILED").In("ntcp2").
+		return nil, oops.Code("MSG3_READ_FAILED").In("ntcp2").
 			Wrapf(err, "failed to read NTCP2 message 3 (%d bytes)", msg3Len)
 	}
-	_, err = nc.ReadHandshakeMsgFromBytes(handshake.PhaseFinal, buf3)
+	payload, err := nc.ReadHandshakeMsgFromBytes(handshake.PhaseFinal, buf3)
 	if err != nil {
-		return oops.Code("MSG3_PROCESS_FAILED").In("ntcp2").
+		return nil, oops.Code("MSG3_PROCESS_FAILED").In("ntcp2").
 			Wrapf(err, "failed to process NTCP2 message 3")
 	}
 
-	return nil
+	// Return the decrypted message-3 part-2 plaintext to the caller. This is
+	// the I2NP block frame containing Alice's RouterInfo (block type 2) and
+	// any optional padding/options blocks. The router transport layer needs
+	// this to learn Alice's NTCP2 address for direct reply delivery (e.g.
+	// ShortTunnelBuildReply for 1-hop outbound tunnels).
+	return payload, nil
 }
 
 // buildMessage2Options constructs the 16-byte options block sent as the

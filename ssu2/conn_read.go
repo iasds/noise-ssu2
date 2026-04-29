@@ -64,7 +64,7 @@ func (h *SSU2Conn) recvLoop() {
 		case <-h.closeChan:
 			return
 		default:
-			_ = h.underlying.SetReadDeadline(time.Now().Add(1 * time.Second))
+			_ = h.underlying.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 
 			n, addr, err := h.underlying.ReadFrom(buf)
 			if err != nil {

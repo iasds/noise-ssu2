@@ -64,6 +64,14 @@ type NTCP2Conn struct {
 	// Access is via atomic.Pointer for thread safety.
 	ntcp2Config atomic.Pointer[NTCP2Config]
 
+	// peerMsg3Payload stores the decrypted plaintext from the responder's
+	// view of NTCP2 message 3 part 2. This is the I2NP block frame
+	// containing Alice's RouterInfo (block type 2) plus any optional
+	// padding/options blocks. nil for initiator connections (Alice already
+	// has her own RouterInfo) and prior to a successful inbound handshake.
+	// Access is via atomic.Pointer for thread safety.
+	peerMsg3Payload atomic.Pointer[[]byte]
+
 	// closeOnce ensures Close is idempotent and key material is zeroed exactly once.
 	closeOnce sync.Once
 
@@ -396,4 +404,70 @@ func (nc *NTCP2Conn) NonceExhaustionImminent() bool {
 	nc.readMu.Unlock()
 
 	return wn >= NonceRekeyThreshold || rn >= NonceRekeyThreshold
+}
+
+// PeerMessage3Payload returns the decrypted plaintext of NTCP2 message 3
+// part 2 received from the remote peer. This is meaningful only on the
+// responder side of a completed inbound handshake; it returns nil for
+// initiator connections and before Handshake() succeeds.
+//
+// The payload is the I2NP block frame as transmitted by Alice. Per the
+// NTCP2 spec it contains a RouterInfo block (type 2) and may contain
+// optional padding (type 254) and options (type 1) blocks. The router
+// transport layer is responsible for parsing this and storing Alice's
+// RouterInfo in the local NetDB / peer cache so that direct replies
+// (e.g. ShortTunnelBuildReply for 1-hop outbound tunnels) can be routed
+// back to her NTCP2 address.
+//
+// The returned slice is a defensive copy and may be modified freely.
+func (nc *NTCP2Conn) PeerMessage3Payload() []byte {
+	p := nc.peerMsg3Payload.Load()
+	if p == nil {
+		return nil
+	}
+	out := make([]byte, len(*p))
+	copy(out, *p)
+	return out
+}
+
+// PeerRouterInfoBytes is a convenience wrapper around PeerMessage3Payload
+// that locates the RouterInfo block (type 2) inside the message-3 part-2
+// frame and returns just the inner RouterInfo bytes (with the 1-byte
+// flag field stripped). Returns nil if no payload was captured, the
+// payload is malformed, or no RouterInfo block is present.
+//
+// Block frame layout (per NTCP2 spec §5):
+//
+//	byte 0    : block type
+//	bytes 1-2 : block size (uint16, big-endian) — number of bytes that follow
+//	bytes 3+  : block data (size bytes)
+//
+// For the RouterInfo block (type 2) the first data byte is a flag field;
+// the remaining bytes are the serialized RouterInfo.
+func (nc *NTCP2Conn) PeerRouterInfoBytes() []byte {
+	payload := nc.PeerMessage3Payload()
+	if payload == nil {
+		return nil
+	}
+	const blockHeader = 3 // type (1) + size (2)
+	const riFlag = 1
+	for off := 0; off+blockHeader <= len(payload); {
+		blockType := payload[off]
+		blockSize := int(payload[off+1])<<8 | int(payload[off+2])
+		dataStart := off + blockHeader
+		dataEnd := dataStart + blockSize
+		if dataEnd > len(payload) {
+			return nil // malformed: declared size overruns payload
+		}
+		if blockType == routerInfoBlockType {
+			if blockSize < riFlag {
+				return nil
+			}
+			out := make([]byte, blockSize-riFlag)
+			copy(out, payload[dataStart+riFlag:dataEnd])
+			return out
+		}
+		off = dataEnd
+	}
+	return nil
 }
