@@ -124,6 +124,11 @@ type SessionManager struct {
 	// unique 8-byte NSR tag that the responder will prefix on its NSR message.
 	nsrTagIndex     map[[8]byte]*Session
 	tagCounterIndex map[[8]byte]uint32
+	// oneTimeKeys holds one-time symmetric garlic keys derived from STBM Noise
+	// transcript hashes via HKDF("AttachLayerEncryption"). Each key is used
+	// exactly once to decrypt the OBEP's garlic-wrapped ShortTunnelBuildReply,
+	// then deleted. Keyed by the last 8 bytes of the 32-byte HKDF output.
+	oneTimeKeys map[[8]byte][32]byte
 	ourPrivateKey   [32]byte
 	ourPublicKey    [32]byte
 	sessionTimeout  time.Duration
@@ -164,6 +169,7 @@ func NewSessionManager(privateKey [32]byte, opts ...SessionManagerOption) (*Sess
 		tagIndex:        make(map[[8]byte]*Session),
 		nsrTagIndex:     make(map[[8]byte]*Session),
 		tagCounterIndex: make(map[[8]byte]uint32),
+		oneTimeKeys:     make(map[[8]byte][32]byte),
 		ourPrivateKey:   privateKey,
 		ourPublicKey:    publicKey,
 		sessionTimeout:  10 * time.Minute,
@@ -209,6 +215,24 @@ func GenerateSessionManager() (*SessionManager, error) {
 // decryptExistingSession, tryCounterHintDecrypt, scanWindowDecrypt,
 // processDecryptedESBlocks, processAckRequest, and processAck
 // are defined in session_decrypt.go.
+
+// RegisterOneTimeKey registers a one-time symmetric garlic key derived from a
+// STBM Noise transcript hash via HKDF("AttachLayerEncryption"). The OBEP will
+// use the corresponding key to wrap its ShortTunnelBuildReply in a garlic
+// message; this key is looked up by tag and deleted after a single use.
+//
+// tag is garlicKeyMaterial[24:32] (last 8 bytes of the 32-byte HKDF output).
+// key is garlicKeyMaterial[0:32] (the full 32-byte output used as the ChaCha20 key).
+func (sm *SessionManager) RegisterOneTimeKey(tag [8]byte, key [32]byte) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	sm.oneTimeKeys[tag] = key
+	log.WithFields(logger.Fields{
+		"pkg":  "ratchet",
+		"func": "RegisterOneTimeKey",
+		"tag":  fmt.Sprintf("%x", tag),
+	}).Debug("Registered one-time garlic reply key")
+}
 
 // removeSessionByPointer locates a session in sm.sessions by pointer equality
 // and removes it along with all its tags from sm.tagIndex and sm.nsrTagIndex.

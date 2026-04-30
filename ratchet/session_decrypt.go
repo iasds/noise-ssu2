@@ -3,6 +3,7 @@ package ratchet
 import (
 	"time"
 
+	"github.com/go-i2p/crypto/chacha20poly1305"
 	"github.com/go-i2p/crypto/ratchet"
 	"github.com/go-i2p/crypto/types"
 	"github.com/go-i2p/logger"
@@ -33,6 +34,11 @@ func (sm *SessionManager) DecryptGarlicMessage(encryptedGarlic []byte) ([]byte, 
 
 	// Check NSR tag index: initiator receiving a reply to its New Session.
 	if plaintext, err, ok := sm.tryDecryptNSR(msgTag, encryptedGarlic); ok {
+		return plaintext, [8]byte{}, nil, err
+	}
+
+	// Check one-time symmetric keys: STBM ShortTunnelBuildReply garlic.
+	if plaintext, err, ok := sm.tryDecryptOneTimeKey(msgTag, encryptedGarlic); ok {
 		return plaintext, [8]byte{}, nil, err
 	}
 
@@ -93,6 +99,58 @@ func (sm *SessionManager) tryDecryptNSR(msgTag [8]byte, encryptedGarlic []byte) 
 	}
 	plaintext, err := sm.decryptIncomingNSR(nsrSession, encryptedGarlic)
 	return plaintext, err, true
+}
+
+// tryDecryptOneTimeKey attempts to decrypt a one-time symmetric garlic message.
+// These are used for STBM ShortTunnelBuildReply delivery: the OBEP wraps its
+// reply in a garlic message encrypted with a one-time key derived from the Noise
+// transcript hash via HKDF("AttachLayerEncryption").
+//
+// Wire format: [8-byte tag] || [ciphertext] || [16-byte poly1305 tag]
+// Key:         one-time key registered via RegisterOneTimeKey
+// Nonce:       12 bytes of zeros
+// AD:          nil
+//
+// Returns ok=true if a matching one-time key was found (even if decryption failed).
+// The key is deleted before decryption is attempted (single-use regardless of outcome).
+func (sm *SessionManager) tryDecryptOneTimeKey(msgTag [8]byte, msg []byte) ([]byte, error, bool) {
+	log.WithFields(logger.Fields{"pkg": "ratchet", "func": "tryDecryptOneTimeKey", "message_len": len(msg)}).Debug("Trying to decrypt as one-time symmetric garlic message")
+	sm.mu.Lock()
+	key, found := sm.oneTimeKeys[msgTag]
+	if found {
+		delete(sm.oneTimeKeys, msgTag)
+	}
+	sm.mu.Unlock()
+
+	if !found {
+		return nil, nil, false
+	}
+
+	// body = msg[8:] = ciphertext || 16-byte poly1305 tag
+	body := msg[8:]
+	if len(body) < 16 {
+		return nil, oops.Errorf("one-time garlic message body too short: %d bytes", len(body)), true
+	}
+	ciphertext := body[:len(body)-16]
+	authTag := body[len(body)-16:]
+
+	aead, err := chacha20poly1305.NewAEAD(key)
+	if err != nil {
+		return nil, oops.Wrapf(err, "failed to create one-time key AEAD"), true
+	}
+
+	var nonce [12]byte // all zeros per spec
+	plaintext, err := aead.Decrypt(ciphertext, authTag, nil, nonce[:])
+	if err != nil {
+		return nil, oops.Wrapf(err, "one-time garlic decryption failed"), true
+	}
+
+	log.WithFields(logger.Fields{
+		"pkg":           "ratchet",
+		"func":          "tryDecryptOneTimeKey",
+		"plaintext_len": len(plaintext),
+	}).Debug("One-time garlic key decryption succeeded")
+	return plaintext, nil, true
 }
 
 // decryptNewSession decrypts a New Session message using the Noise IK handshake.
