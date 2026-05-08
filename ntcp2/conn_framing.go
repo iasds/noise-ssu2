@@ -375,7 +375,8 @@ func (nc *NTCP2Conn) writeSingleFrame(b []byte) (int, error) {
 	// Bounded log volume: only fires while writeNonce < 3.
 	if nc.writeNonce < 3 && slm != nil {
 		ivAfter := slm.PeekOutboundIV()
-		nc.logger.Warn("NTCP2 outbound frame diagnostic",
+		nc.logger.Warn(
+			"NTCP2 outbound frame diagnostic",
 			"frame_index", nc.writeNonce,
 			"plaintext_len", len(b),
 			"padded_plaintext_len", len(toEncrypt),
@@ -406,7 +407,8 @@ func (nc *NTCP2Conn) writeSingleFrame(b []byte) (int, error) {
 			if padCap > 96 {
 				padCap = 96
 			}
-			nc.logger.Warn("NTCP2 outbound frame#0 plaintext dump",
+			nc.logger.Warn(
+				"NTCP2 outbound frame#0 plaintext dump",
 				"raw_plaintext_len", len(b),
 				"padded_plaintext_len", len(toEncrypt),
 				"raw_plaintext_head_hex", hex.EncodeToString(b[:rawCap]),

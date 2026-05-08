@@ -128,12 +128,12 @@ type SessionManager struct {
 	// transcript hashes via HKDF("AttachLayerEncryption"). Each key is used
 	// exactly once to decrypt the OBEP's garlic-wrapped ShortTunnelBuildReply,
 	// then deleted. Keyed by the last 8 bytes of the 32-byte HKDF output.
-	oneTimeKeys map[[8]byte][32]byte
-	ourPrivateKey   [32]byte
-	ourPublicKey    [32]byte
-	sessionTimeout  time.Duration
-	ctx             context.Context
-	cancel          context.CancelFunc
+	oneTimeKeys    map[[8]byte][32]byte
+	ourPrivateKey  [32]byte
+	ourPublicKey   [32]byte
+	sessionTimeout time.Duration
+	ctx            context.Context
+	cancel         context.CancelFunc
 
 	// nsMaxPastAge is the maximum acceptable age for NS DateTime freshness.
 	nsMaxPastAge time.Duration

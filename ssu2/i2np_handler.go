@@ -172,7 +172,8 @@ func (h *DataHandler) handleSignedRelayBlock(
 func (h *DataHandler) handleRelayRequest(block *SSU2Block) error {
 	cbs := h.getCallbacks()
 	decoded, decErr := DecodeRelayRequest(block)
-	return h.handleSignedRelayBlock(block, "RelayRequest",
+	return h.handleSignedRelayBlock(
+		block, "RelayRequest",
 		func(b *SSU2Block) ([]byte, error) {
 			if decErr != nil {
 				return nil, decErr
@@ -231,7 +232,8 @@ func (h *DataHandler) handleRelayResponse(block *SSU2Block) error {
 func (h *DataHandler) handleRelayIntro(block *SSU2Block) error {
 	cbs := h.getCallbacks()
 	decoded, decErr := DecodeRelayIntro(block)
-	return h.handleSignedRelayBlock(block, "RelayIntro",
+	return h.handleSignedRelayBlock(
+		block, "RelayIntro",
 		func(b *SSU2Block) ([]byte, error) {
 			if decErr != nil {
 				return nil, decErr

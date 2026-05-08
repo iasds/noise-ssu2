@@ -59,7 +59,8 @@ func (h *HandshakeHandler) ProcessSessionCreated(packet *SSU2Packet) error {
 	// After processing message 2 (← e, ee), derive "SessionConfirmed" from
 	// the intermediate chainKey per SSU2 spec §KDF for Session Created.
 	h.sessionConfirmedHeaderKey = deriveIntermediateHeaderKey(
-		h.handshakeState.ChainingKey(), "SessionConfirmed")
+		h.handshakeState.ChainingKey(), "SessionConfirmed",
+	)
 
 	// Store cipher states (handshake now complete)
 	h.updateCipherStates(cs1, cs2)

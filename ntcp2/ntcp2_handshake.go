@@ -30,8 +30,10 @@ import (
 // AEAD-encrypted into bytes 32-63. This is intended for one-shot
 // interop debugging against i2pd / Java I2P; it is a no-op when the
 // env var is unset or its budget is exhausted.
-var msg1WireDumpRemaining atomic.Int32
-var msg3WireDumpRemaining atomic.Int32
+var (
+	msg1WireDumpRemaining atomic.Int32
+	msg3WireDumpRemaining atomic.Int32
+)
 
 func init() {
 	if v := os.Getenv("NTCP2_DUMP_MSG1"); v != "" {
@@ -497,7 +499,7 @@ type rawConn interface {
 // the peer's published router hash and IV (both already public via netDb)
 // and the encrypted msg1 bytes (visible on the wire). It does NOT expose any
 // private key material.
-func dumpMsg1IfEnabled(cfg *NTCP2Config, raw interface{}, opts1 []byte, msg1 []byte) {
+func dumpMsg1IfEnabled(cfg *NTCP2Config, raw interface{}, opts1, msg1 []byte) {
 	if msg1WireDumpRemaining.Load() <= 0 {
 		return
 	}
@@ -634,7 +636,7 @@ func classifyMsg2ReadFailure(cfg *NTCP2Config, raw interface{}, bytesRead int, e
 //
 // riBytes == nil or len == 0 also returns nil: caller checks for that
 // (msg3 will fail later with a clearer error).
-func verifyLocalRouterInfoMatchesStaticKey(staticPriv []byte, riBytes []byte) error {
+func verifyLocalRouterInfoMatchesStaticKey(staticPriv, riBytes []byte) error {
 	if len(staticPriv) != StaticKeySize {
 		return nil
 	}
@@ -663,7 +665,7 @@ func verifyLocalRouterInfoMatchesStaticKey(staticPriv []byte, riBytes []byte) er
 // only data already on the wire (after AEAD encryption) and the local
 // RouterInfo bytes (which we publish to the netDb anyway). It does NOT
 // expose any private key material or the data-phase keys.
-func dumpMsg3IfEnabled(cfg *NTCP2Config, raw interface{}, msg3 []byte, riBytes []byte, m3p2Len uint16) {
+func dumpMsg3IfEnabled(cfg *NTCP2Config, raw interface{}, msg3, riBytes []byte, m3p2Len uint16) {
 	if msg3WireDumpRemaining.Load() <= 0 {
 		return
 	}

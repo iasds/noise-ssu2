@@ -583,10 +583,12 @@ func (h *HandshakeHandler) buildHandshakePacket(blocks []*SSU2Block, msgType uin
 	switch msgType {
 	case MessageTypeSessionRequest:
 		h.sessCreateHeaderKey = deriveIntermediateHeaderKey(
-			h.handshakeState.ChainingKey(), "SessCreateHeader")
+			h.handshakeState.ChainingKey(), "SessCreateHeader",
+		)
 	case MessageTypeSessionCreated:
 		h.sessionConfirmedHeaderKey = deriveIntermediateHeaderKey(
-			h.handshakeState.ChainingKey(), "SessionConfirmed")
+			h.handshakeState.ChainingKey(), "SessionConfirmed",
+		)
 	}
 
 	// For SessionRequest (msg 1, → e, es) and SessionCreated (msg 2, ← e, ee),

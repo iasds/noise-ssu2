@@ -270,7 +270,8 @@ func readNoiseIKMessage1(
 	log.WithFields(logger.Fields{"pkg": "ratchet", "func": "readNoiseIKMessage1"}).Debug("Processing received Noise IK New Session message")
 	if len(message) < noiseIKMinMessageSize {
 		return nil, [32]byte{}, nil, nil, false, oops.Errorf(
-			"new session message too short: %d bytes (minimum %d)", len(message), noiseIKMinMessageSize)
+			"new session message too short: %d bytes (minimum %d)", len(message), noiseIKMinMessageSize,
+		)
 	}
 
 	ns := initNoiseIK(ourStaticPub)

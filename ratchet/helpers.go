@@ -159,7 +159,8 @@ func advanceRatchets(session *Session) (messageKey [32]byte, sessionTag [8]byte,
 	if session.MessageCounter > MaxMessageNumber {
 		return [32]byte{}, [8]byte{}, oops.Errorf(
 			"message number %d exceeds maximum %d, session must be ratcheted",
-			session.MessageCounter, MaxMessageNumber)
+			session.MessageCounter, MaxMessageNumber,
+		)
 	}
 
 	if err := attemptDHRatchetRotation(session); err != nil {
@@ -259,7 +260,8 @@ func performDHRatchetStep(session *Session) error {
 	if session.sendKeyID >= MaxKeyID {
 		return oops.Errorf(
 			"send key ID %d has reached maximum %d, session must be replaced",
-			session.sendKeyID, MaxKeyID)
+			session.sendKeyID, MaxKeyID,
+		)
 	}
 
 	newPubKey, err := session.DHRatchet.GenerateNewKeyPair()

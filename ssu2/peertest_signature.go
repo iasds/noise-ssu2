@@ -48,7 +48,8 @@ func BuildPeerTestSignedData(
 	if aliceHash != nil {
 		fields = append(fields, aliceHash[:])
 	}
-	fields = append(fields,
+	fields = append(
+		fields,
 		[]byte{version},
 		uint32Bytes(nonce),
 		uint32Bytes(timestamp),
