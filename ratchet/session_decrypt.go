@@ -139,8 +139,10 @@ func (sm *SessionManager) tryDecryptOneTimeKey(msgTag [8]byte, msg []byte) ([]by
 		return nil, oops.Wrapf(err, "failed to create one-time key AEAD"), true
 	}
 
+	// AD = first 8 bytes of the garlic message (the session tag), matching
+	// i2pd SymmetricKeyTagSet::HandleNextMessage which uses buf[0:8] as AD.
 	var nonce [12]byte // all zeros per spec
-	plaintext, err := aead.Decrypt(ciphertext, authTag, nil, nonce[:])
+	plaintext, err := aead.Decrypt(ciphertext, authTag, msg[:8], nonce[:])
 	if err != nil {
 		return nil, oops.Wrapf(err, "one-time garlic decryption failed"), true
 	}

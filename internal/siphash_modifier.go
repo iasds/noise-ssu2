@@ -106,6 +106,41 @@ func (slm *SipHashLengthModifier) NextOutboundMask() uint16 {
 	return mask
 }
 
+// PeekOutboundIV returns the current outbound SipHash IV without advancing
+// the mask chain. Intended for diagnostic logging only — do NOT use as a
+// substitute for NextOutboundMask in production code paths.
+func (slm *SipHashLengthModifier) PeekOutboundIV() uint64 {
+	slm.mu.Lock()
+	iv := slm.outboundIV
+	slm.mu.Unlock()
+	return iv
+}
+
+// PeekInboundIV returns the current inbound SipHash IV without advancing
+// the mask chain. Intended for diagnostic logging only.
+func (slm *SipHashLengthModifier) PeekInboundIV() uint64 {
+	slm.mu.Lock()
+	iv := slm.inboundIV
+	slm.mu.Unlock()
+	return iv
+}
+
+// PeekOutboundKeys returns a copy of the outbound SipHash keys. Diagnostic only.
+func (slm *SipHashLengthModifier) PeekOutboundKeys() [2]uint64 {
+	slm.mu.Lock()
+	k := slm.outboundKeys
+	slm.mu.Unlock()
+	return k
+}
+
+// PeekInboundKeys returns a copy of the inbound SipHash keys. Diagnostic only.
+func (slm *SipHashLengthModifier) PeekInboundKeys() [2]uint64 {
+	slm.mu.Lock()
+	k := slm.inboundKeys
+	slm.mu.Unlock()
+	return k
+}
+
 // ZeroKeys zeroes all SipHash key material and IVs.
 func (slm *SipHashLengthModifier) ZeroKeys() {
 	log.WithField("name", slm.name).Debug("Zeroing SipHash key material")

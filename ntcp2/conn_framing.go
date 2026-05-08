@@ -2,6 +2,7 @@ package ntcp2
 
 import (
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net"
@@ -352,10 +353,67 @@ func (nc *NTCP2Conn) writeSingleFrame(b []byte) (int, error) {
 	}
 
 	slm := nc.lengthObfuscator.Load()
-	frame := nc.buildWireFrame(encrypted, slm)
 
-	if err := nc.writeWireFrame(frame); err != nil {
+	// Diagnostic snapshot of the SipHash outbound state BEFORE the mask is
+	// consumed by buildWireFrame. Cheap (uint64 read under mutex); only
+	// logged at Warn for the first 3 frames per session below.
+	var ivBefore uint64
+	if slm != nil {
+		ivBefore = slm.PeekOutboundIV()
+	}
+
+	frame, mask := nc.buildWireFrameWithMask(encrypted, slm)
+
+	bytesWritten, err := nc.writeWireFrame(frame)
+	if err != nil {
 		return 0, err
+	}
+
+	// Warn-level diagnostic breadcrumb for the first 3 outbound frames per
+	// session. Captures the full pipeline state needed to diagnose silent
+	// peer EOFs after handshake — see PROMPT.md "Suspect 1" for context.
+	// Bounded log volume: only fires while writeNonce < 3.
+	if nc.writeNonce < 3 && slm != nil {
+		ivAfter := slm.PeekOutboundIV()
+		nc.logger.Warn("NTCP2 outbound frame diagnostic",
+			"frame_index", nc.writeNonce,
+			"plaintext_len", len(b),
+			"padded_plaintext_len", len(toEncrypt),
+			"ciphertext_len", len(encrypted),
+			"wire_frame_len", len(frame),
+			"wire_bytes_written", bytesWritten,
+			"obfuscated_length_be_hex", fmt.Sprintf("%02x%02x", frame[0], frame[1]),
+			"siphash_mask_hex", fmt.Sprintf("%04x", mask),
+			"siphash_iv_before_hex", fmt.Sprintf("%016x", ivBefore),
+			"siphash_iv_after_hex", fmt.Sprintf("%016x", ivAfter),
+			"local_addr", nc.localAddr.String(),
+			"remote_addr", nc.remoteAddr.String(),
+		)
+
+		// One-shot plaintext block layout dump for frame 0 only. The first
+		// outbound frame is what i2pd's ProcessNextFrame walks immediately
+		// after Established(); a malformed [type:1][size:BE16][payload]
+		// block layout here triggers the silent-Terminate paths we cannot
+		// observe from our side. Cap the dump to 64 bytes (128 hex chars)
+		// — enough to see the I2NP block header, payload prefix, and the
+		// start of any padding block.
+		if nc.writeNonce == 0 {
+			rawCap := len(b)
+			if rawCap > 64 {
+				rawCap = 64
+			}
+			padCap := len(toEncrypt)
+			if padCap > 96 {
+				padCap = 96
+			}
+			nc.logger.Warn("NTCP2 outbound frame#0 plaintext dump",
+				"raw_plaintext_len", len(b),
+				"padded_plaintext_len", len(toEncrypt),
+				"raw_plaintext_head_hex", hex.EncodeToString(b[:rawCap]),
+				"padded_plaintext_head_hex", hex.EncodeToString(toEncrypt[:padCap]),
+				"remote_addr", nc.remoteAddr.String(),
+			)
+		}
 	}
 
 	nc.writeNonce++
@@ -398,6 +456,13 @@ func (nc *NTCP2Conn) encryptFrame(b []byte) ([]byte, error) {
 // buildWireFrame constructs the NTCP2 wire frame by prepending a 2-byte SipHash-obfuscated
 // length to the ciphertext. After this call the SipHash outbound state has advanced.
 func (nc *NTCP2Conn) buildWireFrame(encrypted []byte, slm *SipHashLengthModifier) []byte {
+	frame, _ := nc.buildWireFrameWithMask(encrypted, slm)
+	return frame
+}
+
+// buildWireFrameWithMask is identical to buildWireFrame but also returns the
+// SipHash mask used for the obfuscated length field, for diagnostic logging.
+func (nc *NTCP2Conn) buildWireFrameWithMask(encrypted []byte, slm *SipHashLengthModifier) ([]byte, uint16) {
 	frameLen := uint16(len(encrypted))
 	mask := slm.NextOutboundMask()
 	obfuscatedLen := frameLen ^ mask
@@ -405,17 +470,18 @@ func (nc *NTCP2Conn) buildWireFrame(encrypted []byte, slm *SipHashLengthModifier
 	frame := make([]byte, FrameLengthFieldSize+len(encrypted))
 	binary.BigEndian.PutUint16(frame[:FrameLengthFieldSize], obfuscatedLen)
 	copy(frame[FrameLengthFieldSize:], encrypted)
-	return frame
+	return frame, mask
 }
 
 // writeWireFrame writes the complete wire frame atomically to the underlying TCP connection.
-// Marks the connection as broken on any write error or partial write.
-func (nc *NTCP2Conn) writeWireFrame(frame []byte) error {
+// Marks the connection as broken on any write error or partial write. Returns the
+// number of bytes actually accepted by the underlying socket (for diagnostics).
+func (nc *NTCP2Conn) writeWireFrame(frame []byte) (int, error) {
 	underlying := nc.noiseConn.Underlying()
 	n, err := underlying.Write(frame)
 	if err != nil {
 		nc.broken.Store(true)
-		return oops.
+		return n, oops.
 			Code("WRITE_FRAME_FAILED").
 			In("ntcp2").
 			With("frame_length", len(frame)).
@@ -426,14 +492,14 @@ func (nc *NTCP2Conn) writeWireFrame(frame []byte) error {
 
 	if n != len(frame) {
 		nc.broken.Store(true)
-		return oops.
+		return n, oops.
 			Code("PARTIAL_WRITE").
 			In("ntcp2").
 			With("expected", len(frame)).
 			With("written", n).
 			Errorf("partial frame write: wrote %d of %d bytes", n, len(frame))
 	}
-	return nil
+	return n, nil
 }
 
 // getMaxFrameSize returns the configured maximum frame size for frame splitting.
