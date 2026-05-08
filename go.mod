@@ -3,7 +3,7 @@ module github.com/go-i2p/go-noise
 go 1.26.1
 
 require (
-	github.com/go-i2p/common v0.1.52
+	github.com/go-i2p/common v0.1.53-0.20260427034825-62591a96a681
 	github.com/go-i2p/crypto v0.1.52
 	github.com/go-i2p/logger v0.1.52
 	github.com/go-i2p/noise v1.1.1-0.20260327201800-8e41bb3d9f1e
