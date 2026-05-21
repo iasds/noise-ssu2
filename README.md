@@ -2,24 +2,24 @@
 
 A wrapper library around the flynn/noise package that provides `net.Conn`, `net.Listener`, and `net.Addr` interfaces for the Noise Protocol Framework. Designed for implementing I2P's NTCP2 and SSU2 transport protocols with extensible handshake modification capabilities.
 
-## Notes on scope:
+## Notes on scope
 
 go-i2p theoretically has strictly scoped packages for low-level operations.
 This package is intended to be the package where specific modifications are applied to Noise protocol handshakes.
 It is currently slightly jumbled with `go-i2p/crypto` on the lower levels, and `go-i2p/go-i2p` on the upper levels.
 
- - [go-i2p/go-noise](https://github.com/go-i2p/go-noise): Noise handshake modifications and router interface
+- [go-i2p/go-noise](https://github.com/go-i2p/go-noise): Noise handshake modifications and router interface
 
 This package MAY use any of the following libraries, and SHOULD use them where possible.
 
- - [go-i2p/noise](https://github.com/go-i2p/noise): Noise handshake implementations
- - [go-i2p/crypto](https://github.com/go-i2p/crypto): Cryptographic primitives only
- - [go-i2p/common](https://github.com/go-i2p/common): I2P Common datastructures
+- [go-i2p/noise](https://github.com/go-i2p/noise): Noise handshake implementations
+- [go-i2p/crypto](https://github.com/go-i2p/crypto): Cryptographic primitives only
+- [go-i2p/common](https://github.com/go-i2p/common): I2P Common datastructures
 
 This package MUST NOT use any of the following libraries.
 
- - [go-i2p/go-i2p](https://github.com/go-i2p/go-i2p): I2P router implementation
- - I2P Common datastructures are not allowed in the root, unmodified noise directory.
+- [go-i2p/go-i2p](https://github.com/go-i2p/go-i2p): I2P router implementation
+- I2P Common datastructures are not allowed in the root, unmodified noise directory.
 
 ## Features
 
@@ -142,6 +142,7 @@ fmt.Printf("Handshake completed in %v\n", handshakeDuration)
 ### State Transitions
 
 Connections follow this lifecycle:
+
 1. **Init** → Created with `NewNoiseConn()`
 2. **Handshaking** → `Handshake()` called
 3. **Established** → Handshake completed successfully
@@ -150,6 +151,7 @@ Connections follow this lifecycle:
 ### Monitoring
 
 The library tracks:
+
 - **Handshake Duration**: Time taken to complete the Noise handshake
 - **Bytes Read/Written**: Total data transferred (plaintext, not encrypted)
 - **Connection Lifecycle**: Creation time and state transitions
@@ -250,6 +252,7 @@ go test -v ./...
 ```
 
 Current test coverage includes unit and integration tests for core functionality across all components:
+
 - Handshake pattern parsing and validation
 - Configuration validation  
 - NoiseAddr interface compliance
