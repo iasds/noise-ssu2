@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/go-i2p/crypto/rand"
+	"github.com/go-i2p/go-noise/conn"
 	"github.com/go-i2p/go-noise/handshake"
 
 	"github.com/stretchr/testify/assert"
@@ -59,13 +60,13 @@ func pipedMockListener(t *testing.T, addr net.Addr) (net.Conn, *mockListener) {
 }
 
 // acceptAsNoiseConn calls Accept on the listener, asserts success, registers
-// cleanup, and returns the underlying *NoiseConn.
-func acceptAsNoiseConn(t *testing.T, nl *NoiseListener) *NoiseConn {
+// cleanup, and returns the underlying *conn.NoiseConn.
+func acceptAsNoiseConn(t *testing.T, nl *NoiseListener) *conn.NoiseConn {
 	t.Helper()
-	conn, err := nl.Accept()
+	c, err := nl.Accept()
 	require.NoError(t, err)
-	require.NotNil(t, conn)
-	noiseConn, ok := conn.(*NoiseConn)
+	require.NotNil(t, c)
+	noiseConn, ok := c.(*conn.NoiseConn)
 	require.True(t, ok)
 	t.Cleanup(func() { noiseConn.Close() })
 	return noiseConn
@@ -259,7 +260,7 @@ func TestNewNoiseListener(t *testing.T) {
 			} else {
 				assert.NoError(t, err)
 				assert.NotNil(t, listener)
-				assert.Equal(t, underlying.Addr().Network(), listener.Addr().(*NoiseAddr).underlying.Network())
+				assert.Equal(t, underlying.Addr().Network(), listener.Addr().(*conn.NoiseAddr).Underlying().Network())
 				listener.Close()
 			}
 		})
@@ -271,7 +272,7 @@ func TestNoiseListenerAddr(t *testing.T) {
 	defer noiseListener.Close()
 
 	addr := noiseListener.Addr()
-	noiseAddr, ok := addr.(*NoiseAddr)
+	noiseAddr, ok := addr.(*conn.NoiseAddr)
 	require.True(t, ok)
 
 	assert.Equal(t, "noise+tcp", noiseAddr.Network())
@@ -514,7 +515,7 @@ func TestListenerConfigWithModifiers_DefensiveCopy(t *testing.T) {
 
 func TestListenerConfigWithPostHandshakeHook(t *testing.T) {
 	hookCalled := false
-	hook := func(nc *NoiseConn) error {
+	hook := func(nc *conn.NoiseConn) error {
 		hookCalled = true
 		return nil
 	}
@@ -548,7 +549,7 @@ func TestListenerConfigBuilderChain_AllFields(t *testing.T) {
 
 	mod := &testModifier{name: "test-mod"}
 	hookCalled := false
-	hook := func(nc *NoiseConn) error {
+	hook := func(nc *conn.NoiseConn) error {
 		hookCalled = true
 		return nil
 	}
@@ -589,7 +590,7 @@ func TestNoiseListenerAcceptPropagatesModifiers(t *testing.T) {
 
 	mod := &testModifier{name: "propagated-mod"}
 	hookCalled := false
-	hook := func(nc *NoiseConn) error {
+	hook := func(nc *conn.NoiseConn) error {
 		hookCalled = true
 		return nil
 	}
@@ -608,18 +609,18 @@ func TestNoiseListenerAcceptPropagatesModifiers(t *testing.T) {
 	noiseConn := acceptAsNoiseConn(t, noiseListener)
 
 	// Verify modifiers were propagated
-	require.Len(t, noiseConn.config.Modifiers, 1)
-	assert.Equal(t, "propagated-mod", noiseConn.config.Modifiers[0].Name())
+	require.Len(t, noiseConn.Config().Modifiers, 1)
+	assert.Equal(t, "propagated-mod", noiseConn.Config().Modifiers[0].Name())
 
 	// Verify PostHandshakeHook was propagated
-	require.NotNil(t, noiseConn.config.PostHandshakeHook)
+	require.NotNil(t, noiseConn.Config().PostHandshakeHook)
 
 	// Verify ASK labels were propagated
-	require.Len(t, noiseConn.config.AdditionalSymmetricKeyLabels, 1)
-	assert.Equal(t, []byte("ask"), noiseConn.config.AdditionalSymmetricKeyLabels[0])
+	require.Len(t, noiseConn.Config().AdditionalSymmetricKeyLabels, 1)
+	assert.Equal(t, []byte("ask"), noiseConn.Config().AdditionalSymmetricKeyLabels[0])
 
 	// Verify hook is functional
-	_ = noiseConn.config.PostHandshakeHook(nil)
+	_ = noiseConn.Config().PostHandshakeHook(nil)
 	assert.True(t, hookCalled)
 }
 
@@ -639,9 +640,9 @@ func TestNoiseListenerAcceptNoModifiers(t *testing.T) {
 
 	noiseConn := acceptAsNoiseConn(t, noiseListener)
 
-	assert.Empty(t, noiseConn.config.Modifiers)
-	assert.Nil(t, noiseConn.config.PostHandshakeHook)
-	assert.Empty(t, noiseConn.config.AdditionalSymmetricKeyLabels)
+	assert.Empty(t, noiseConn.Config().Modifiers)
+	assert.Nil(t, noiseConn.Config().PostHandshakeHook)
+	assert.Empty(t, noiseConn.Config().AdditionalSymmetricKeyLabels)
 }
 
 // --- Test isClosed() is thread-safe ---
@@ -714,7 +715,7 @@ func TestNoiseListenerConcurrentAccepts(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// Connect clients
-	listenAddr := noiseListener.Addr().(*NoiseAddr).Underlying().String()
+	listenAddr := noiseListener.Addr().(*conn.NoiseAddr).Underlying().String()
 	for i := 0; i < numConnections; i++ {
 		go func() {
 			conn, err := net.Dial("tcp", listenAddr)

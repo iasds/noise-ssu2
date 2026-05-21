@@ -247,6 +247,11 @@ func (nc *NoiseConn) Underlying() net.Conn {
 	return nc.underlying
 }
 
+// Config returns the connection configuration.
+func (nc *NoiseConn) Config() *ConnConfig {
+	return nc.config
+}
+
 // GetModifierChain returns the HandshakeModifier chain from the config.
 // Returns nil if no modifiers are configured. NTCP2 framed I/O uses this
 // to apply PhaseData transforms (padding, obfuscation) around Encrypt/Decrypt.

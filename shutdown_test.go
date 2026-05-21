@@ -9,6 +9,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// mockShutdownListener is a minimal net.Listener for shutdown_test.go.
+type mockShutdownListener struct {
+	addr net.Addr
+}
+
+func (m *mockShutdownListener) Accept() (net.Conn, error) {
+	// Block until closed; unused in shutdown tests.
+	select {}
+}
+func (m *mockShutdownListener) Close() error   { return nil }
+func (m *mockShutdownListener) Addr() net.Addr { return m.addr }
+
 func TestNewShutdownManager(t *testing.T) {
 	tests := []struct {
 		name            string
@@ -32,12 +44,8 @@ func TestNewShutdownManager(t *testing.T) {
 			sm := NewShutdownManager(tt.timeout)
 
 			assert.NotNil(t, sm)
-			assert.Equal(t, tt.expectedTimeout, sm.shutdownTimeout)
-			assert.NotNil(t, sm.ctx)
-			assert.NotNil(t, sm.done)
-			assert.NotNil(t, sm.connections)
-			assert.NotNil(t, sm.listeners)
-			assert.NotNil(t, sm.logger)
+			assert.Equal(t, tt.expectedTimeout, sm.Timeout())
+			assert.NotNil(t, sm.Context())
 		})
 	}
 }
@@ -107,7 +115,8 @@ func shutdownRegistrationTest(t *testing.T, sm *ShutdownManager, resource interf
 func TestNoiseConnShutdownManagerIntegration(t *testing.T) {
 	sm := NewShutdownManager(5 * time.Second)
 
-	mockConn := &mockNetConn{}
+	mockConn, peerConn := net.Pipe()
+	defer peerConn.Close()
 	config := NewConnConfig("NN", true)
 	noiseConn, err := NewNoiseConn(mockConn, config)
 	require.NoError(t, err)
@@ -118,7 +127,7 @@ func TestNoiseConnShutdownManagerIntegration(t *testing.T) {
 func TestNoiseListenerShutdownManagerIntegration(t *testing.T) {
 	sm := NewShutdownManager(5 * time.Second)
 
-	ml := &mockListener{
+	ml := &mockShutdownListener{
 		addr: &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 8080},
 	}
 	config := NewListenerConfig("NN")
@@ -135,18 +144,16 @@ func TestNoiseListenerShutdownManagerIntegration(t *testing.T) {
 // unpredictably when the element is a concrete pointer type.
 func assertShutdownRegistered(t *testing.T, sm *ShutdownManager, resource interface{}, expected bool) {
 	t.Helper()
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
 	switch v := resource.(type) {
 	case *NoiseConn:
-		_, found := sm.connections[v]
+		found := sm.ConnectionRegistered(v)
 		if expected {
 			assert.True(t, found, "expected connection to be registered in ShutdownManager")
 		} else {
 			assert.False(t, found, "expected connection to not be registered in ShutdownManager")
 		}
 	case *NoiseListener:
-		_, found := sm.listeners[v]
+		found := sm.ListenerRegistered(v)
 		if expected {
 			assert.True(t, found, "expected listener to be registered in ShutdownManager")
 		} else {

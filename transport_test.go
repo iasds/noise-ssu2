@@ -157,13 +157,14 @@ func TestListenNoise(t *testing.T) {
 }
 
 func TestWrapConn(t *testing.T) {
-	// Create a mock connection using the existing mock
-	localAddr := &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 8080}
-	remoteAddr := &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 8081}
-	mockConn := newMockNetConn(localAddr, remoteAddr)
+	// Create a pipe connection for testing
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
 	config := NewConnConfig("XX", true).WithStaticKey(generateTestKey())
 
-	noiseConn, err := WrapConn(mockConn, config)
+	noiseConn, err := WrapConn(client, config)
 
 	assert.NoError(t, err)
 	assert.NotNil(t, noiseConn)

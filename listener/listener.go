@@ -5,7 +5,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-i2p/go-noise/conn"
 	"github.com/go-i2p/go-noise/handshake"
+	shutdown "github.com/go-i2p/go-noise/shutdown"
 	"github.com/go-i2p/logger"
 	i2plogger "github.com/go-i2p/logger"
 	"github.com/samber/oops"
@@ -22,13 +24,13 @@ type NoiseListener struct {
 	config *ListenerConfig
 
 	// addr is the Noise address for this listener
-	addr *NoiseAddr
+	addr *conn.NoiseAddr
 
 	// logger for listener events
 	logger *logger.Logger
 
 	// shutdownManager for coordinated shutdown (optional)
-	shutdownManager *ShutdownManager
+	shutdownManager *shutdown.ShutdownManager
 
 	// closed indicates if the listener has been closed
 	closed bool
@@ -73,7 +75,7 @@ type ListenerConfig struct {
 	//
 	// If the hook returns an error, the handshake is considered failed and
 	// the connection reverts to the Init state.
-	PostHandshakeHook func(*NoiseConn) error
+	PostHandshakeHook func(*conn.NoiseConn) error
 
 	// AdditionalSymmetricKeyLabels specifies labels for Additional Symmetric
 	// Key (ASK) derivation at Split() time, per Noise spec §10.3. Each label
@@ -142,7 +144,7 @@ func (lc *ListenerConfig) WithModifiers(modifiers ...handshake.HandshakeModifier
 
 // WithPostHandshakeHook sets a callback invoked after the Noise handshake completes
 // but before the connection transitions to the Established state.
-func (lc *ListenerConfig) WithPostHandshakeHook(hook func(*NoiseConn) error) *ListenerConfig {
+func (lc *ListenerConfig) WithPostHandshakeHook(hook func(*conn.NoiseConn) error) *ListenerConfig {
 	lc.PostHandshakeHook = hook
 	return lc
 }
@@ -177,7 +179,7 @@ func (lc *ListenerConfig) Validate() error {
 			Errorf("noise pattern is required")
 	}
 
-	if _, err := parseHandshakePattern(lc.Pattern); err != nil {
+	if err := conn.ValidateHandshakePattern(lc.Pattern); err != nil {
 		return oops.
 			Code("INVALID_PATTERN").
 			In("noise").
@@ -233,7 +235,7 @@ func NewNoiseListener(underlying net.Listener, config *ListenerConfig) (*NoiseLi
 	}
 
 	// Create Noise address for this listener
-	addr := NewNoiseAddr(underlying.Addr(), config.Pattern, "responder")
+	addr := conn.NewNoiseAddr(underlying.Addr(), config.Pattern, "responder")
 
 	nl := &NoiseListener{
 		underlying: underlying,
@@ -283,7 +285,7 @@ func (nl *NoiseListener) Accept() (net.Conn, error) {
 	connConfig := nl.createAcceptConnConfig()
 
 	// Wrap in NoiseConn
-	noiseConn, err := NewNoiseConn(underlying, connConfig)
+	noiseConn, err := conn.NewNoiseConn(underlying, connConfig)
 	if err != nil {
 		underlying.Close() // Clean up the underlying connection
 		return nil, oops.
@@ -307,12 +309,12 @@ func (nl *NoiseListener) Accept() (net.Conn, error) {
 // createAcceptConnConfig builds a ConnConfig for an accepted (responder)
 // connection, propagating all relevant fields from the ListenerConfig
 // including modifiers, post-handshake hook, and ASK labels.
-func (nl *NoiseListener) createAcceptConnConfig() *ConnConfig {
-	connConfig := NewConnConfig(nl.config.Pattern, false). // false = responder
-								WithStaticKey(nl.config.StaticKey).
-								WithHandshakeTimeout(nl.config.HandshakeTimeout).
-								WithReadTimeout(nl.config.ReadTimeout).
-								WithWriteTimeout(nl.config.WriteTimeout)
+func (nl *NoiseListener) createAcceptConnConfig() *conn.ConnConfig {
+	connConfig := conn.NewConnConfig(nl.config.Pattern, false). // false = responder
+									WithStaticKey(nl.config.StaticKey).
+									WithHandshakeTimeout(nl.config.HandshakeTimeout).
+									WithReadTimeout(nl.config.ReadTimeout).
+									WithWriteTimeout(nl.config.WriteTimeout)
 
 	if len(nl.config.Modifiers) > 0 {
 		connConfig = connConfig.WithModifiers(nl.config.Modifiers...)
@@ -378,7 +380,7 @@ func (nl *NoiseListener) Close() error {
 // SetShutdownManager sets the shutdown manager for this listener.
 // If a shutdown manager is set, the listener will be automatically
 // registered for graceful shutdown coordination.
-func (nl *NoiseListener) SetShutdownManager(sm *ShutdownManager) {
+func (nl *NoiseListener) SetShutdownManager(sm *shutdown.ShutdownManager) {
 	nl.shutdownManager = sm
 	if sm != nil {
 		sm.RegisterListener(nl)

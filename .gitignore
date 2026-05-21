@@ -14,17 +14,8 @@ examples/state/state
 examples/transport/transport
 
 /basic
-/conn
 /echoclient
 /echoserver
-/listener
-/modifiers
-/ntcp2-config
-/ntcp2-listener
-/retry
-/shutdown
-/state
-/transport
 
 *coverage*.out
 *coverage*.html
