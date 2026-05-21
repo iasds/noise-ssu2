@@ -10,9 +10,9 @@ import (
 	"github.com/go-i2p/logger"
 )
 
-// NoiseAddr implements net.Addr for Noise Protocol connections.
+// Addr implements net.Addr for Noise Protocol connections.
 // It wraps an underlying net.Addr and adds Noise-specific addressing information.
-type NoiseAddr struct {
+type Addr struct {
 	// underlying is the wrapped network address (TCP, UDP, etc.)
 	underlying net.Addr
 	// pattern is the Noise protocol pattern being used (e.g., "Noise_XX_25519_AESGCM_SHA256")
@@ -24,9 +24,9 @@ type NoiseAddr struct {
 // NewNoiseAddr creates a new NoiseAddr wrapping an underlying network address.
 // pattern should be a valid Noise protocol pattern (e.g., "Noise_XX_25519_AESGCM_SHA256").
 // role should be either "initiator" or "responder".
-func NewNoiseAddr(underlying net.Addr, pattern, role string) *NoiseAddr {
+func NewNoiseAddr(underlying net.Addr, pattern, role string) *Addr {
 	log.WithFields(logger.Fields{"pkg": "noise", "func": "NewNoiseAddr", "pattern": pattern, "role": role}).Debug("Creating new NoiseAddr")
-	return &NoiseAddr{
+	return &Addr{
 		underlying: underlying,
 		pattern:    pattern,
 		role:       role,
@@ -35,7 +35,7 @@ func NewNoiseAddr(underlying net.Addr, pattern, role string) *NoiseAddr {
 
 // Network returns the network type, prefixed with "noise+" to indicate Noise wrapping.
 // For example, "noise+tcp" for Noise over TCP or "noise+udp" for Noise over UDP.
-func (na *NoiseAddr) Network() string {
+func (na *Addr) Network() string {
 	if na.underlying == nil {
 		return "noise"
 	}
@@ -45,7 +45,7 @@ func (na *NoiseAddr) Network() string {
 // String returns a string representation of the Noise address.
 // Format: "noise://[pattern]/[role]/[underlying_address]"
 // Example: "noise://Noise_XX_25519_AESGCM_SHA256/initiator/192.168.1.1:8080"
-func (na *NoiseAddr) String() string {
+func (na *Addr) String() string {
 	if na.underlying == nil {
 		return fmt.Sprintf("noise://%s/%s", na.pattern, na.role)
 	}
@@ -54,16 +54,16 @@ func (na *NoiseAddr) String() string {
 
 // Underlying returns the wrapped network address.
 // This allows access to the original address when needed.
-func (na *NoiseAddr) Underlying() net.Addr {
+func (na *Addr) Underlying() net.Addr {
 	return na.underlying
 }
 
 // Pattern returns the Noise protocol pattern.
-func (na *NoiseAddr) Pattern() string {
+func (na *Addr) Pattern() string {
 	return na.pattern
 }
 
 // Role returns the role (initiator or responder).
-func (na *NoiseAddr) Role() string {
+func (na *Addr) Role() string {
 	return na.role
 }

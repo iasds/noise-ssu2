@@ -32,7 +32,7 @@ func generateRandomHash() data.Hash {
 func TestDialNTCP2(t *testing.T) {
 	tests := []struct {
 		name        string
-		setupConfig func() *NTCP2Config
+		setupConfig func() *Config
 		network     string
 		addr        string
 		expectError bool
@@ -40,7 +40,7 @@ func TestDialNTCP2(t *testing.T) {
 	}{
 		{
 			name: "successful dial with valid config",
-			setupConfig: func() *NTCP2Config {
+			setupConfig: func() *Config {
 				routerHash := generateRandomHash()
 				remoteHash := generateRandomHash()
 				staticKey := generateRandomBytes(32)
@@ -61,7 +61,7 @@ func TestDialNTCP2(t *testing.T) {
 		},
 		{
 			name: "invalid network parameter",
-			setupConfig: func() *NTCP2Config {
+			setupConfig: func() *Config {
 				routerHash := generateRandomHash()
 				config, _ := NewNTCP2Config(routerHash, true)
 				return config
@@ -73,7 +73,7 @@ func TestDialNTCP2(t *testing.T) {
 		},
 		{
 			name: "invalid address parameter",
-			setupConfig: func() *NTCP2Config {
+			setupConfig: func() *Config {
 				routerHash := generateRandomHash()
 				config, _ := NewNTCP2Config(routerHash, true)
 				return config
@@ -85,7 +85,7 @@ func TestDialNTCP2(t *testing.T) {
 		},
 		{
 			name:        "nil config",
-			setupConfig: func() *NTCP2Config { return nil },
+			setupConfig: func() *Config { return nil },
 			network:     "tcp",
 			addr:        "127.0.0.1:8080",
 			expectError: true,
@@ -93,7 +93,7 @@ func TestDialNTCP2(t *testing.T) {
 		},
 		{
 			name: "responder config for dial operation",
-			setupConfig: func() *NTCP2Config {
+			setupConfig: func() *Config {
 				routerHash := generateRandomHash()
 				config, _ := NewNTCP2Config(routerHash, false) // responder
 				return config
@@ -131,7 +131,7 @@ func TestDialNTCP2(t *testing.T) {
 func TestListenNTCP2(t *testing.T) {
 	tests := []struct {
 		name        string
-		setupConfig func() *NTCP2Config
+		setupConfig func() *Config
 		network     string
 		addr        string
 		expectError bool
@@ -139,7 +139,7 @@ func TestListenNTCP2(t *testing.T) {
 	}{
 		{
 			name: "successful listen with valid config",
-			setupConfig: func() *NTCP2Config {
+			setupConfig: func() *Config {
 				routerHash := generateRandomHash()
 				staticKey := generateRandomBytes(32)
 
@@ -156,7 +156,7 @@ func TestListenNTCP2(t *testing.T) {
 		},
 		{
 			name: "invalid network parameter",
-			setupConfig: func() *NTCP2Config {
+			setupConfig: func() *Config {
 				routerHash := generateRandomHash()
 				config, _ := NewNTCP2Config(routerHash, false)
 				return config
@@ -168,7 +168,7 @@ func TestListenNTCP2(t *testing.T) {
 		},
 		{
 			name: "invalid address parameter",
-			setupConfig: func() *NTCP2Config {
+			setupConfig: func() *Config {
 				routerHash := generateRandomHash()
 				config, _ := NewNTCP2Config(routerHash, false)
 				return config
@@ -180,7 +180,7 @@ func TestListenNTCP2(t *testing.T) {
 		},
 		{
 			name:        "nil config",
-			setupConfig: func() *NTCP2Config { return nil },
+			setupConfig: func() *Config { return nil },
 			network:     "tcp",
 			addr:        "127.0.0.1:0",
 			expectError: true,
@@ -188,7 +188,7 @@ func TestListenNTCP2(t *testing.T) {
 		},
 		{
 			name: "initiator config for listen operation",
-			setupConfig: func() *NTCP2Config {
+			setupConfig: func() *Config {
 				routerHash := generateRandomHash()
 				config, _ := NewNTCP2Config(routerHash, true) // initiator
 				return config
@@ -227,7 +227,7 @@ func TestWrapNTCP2Conn(t *testing.T) {
 	tests := []struct {
 		name        string
 		setupConn   func() net.Conn
-		setupConfig func() *NTCP2Config
+		setupConfig func() *Config
 		expectError bool
 		errorCode   string
 	}{
@@ -250,7 +250,7 @@ func TestWrapNTCP2Conn(t *testing.T) {
 				}()
 				return client
 			},
-			setupConfig: func() *NTCP2Config {
+			setupConfig: func() *Config {
 				routerHash := generateRandomHash()
 				remoteHash := generateRandomHash()
 				staticKey := generateRandomBytes(32)
@@ -270,7 +270,7 @@ func TestWrapNTCP2Conn(t *testing.T) {
 		{
 			name:      "nil connection",
 			setupConn: func() net.Conn { return nil },
-			setupConfig: func() *NTCP2Config {
+			setupConfig: func() *Config {
 				routerHash := generateRandomHash()
 				config, _ := NewNTCP2Config(routerHash, true)
 				return config
@@ -285,7 +285,7 @@ func TestWrapNTCP2Conn(t *testing.T) {
 				go func() { defer server.Close() }()
 				return client
 			},
-			setupConfig: func() *NTCP2Config { return nil },
+			setupConfig: func() *Config { return nil },
 			expectError: true,
 			errorCode:   "config cannot be nil",
 		},
@@ -381,7 +381,7 @@ func TestDialNTCP2WithHandshake(t *testing.T) {
 				return
 			}
 			// Perform the responder handshake
-			ntcp2Conn := conn.(*NTCP2Conn)
+			ntcp2Conn := conn.(*Conn)
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			if err := ntcp2Conn.Handshake(ctx); err != nil {
@@ -406,7 +406,7 @@ func TestDialNTCP2WithHandshake(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		ntcp2Addr := listener.Addr().(*NTCP2Addr)
+		ntcp2Addr := listener.Addr().(*Addr)
 		underlyingAddr := ntcp2Addr.UnderlyingAddr().String()
 
 		conn, err := DialNTCP2WithHandshakeContext(ctx, "tcp", underlyingAddr, dialConfig)
@@ -426,7 +426,7 @@ func TestValidateDialParams(t *testing.T) {
 		name        string
 		network     string
 		addr        string
-		setupConfig func() *NTCP2Config
+		setupConfig func() *Config
 		expectError bool
 		errorCode   string
 	}{
@@ -434,7 +434,7 @@ func TestValidateDialParams(t *testing.T) {
 			name:    "valid parameters",
 			network: "tcp",
 			addr:    "127.0.0.1:8080",
-			setupConfig: func() *NTCP2Config {
+			setupConfig: func() *Config {
 				routerHash := generateRandomHash()
 				remoteHash := generateRandomHash()
 				staticKey := generateRandomBytes(32)
@@ -450,7 +450,7 @@ func TestValidateDialParams(t *testing.T) {
 			name:    "empty network",
 			network: "",
 			addr:    "127.0.0.1:8080",
-			setupConfig: func() *NTCP2Config {
+			setupConfig: func() *Config {
 				routerHash := generateRandomHash()
 				config, _ := NewNTCP2Config(routerHash, true)
 				return config
@@ -462,7 +462,7 @@ func TestValidateDialParams(t *testing.T) {
 			name:    "empty address",
 			network: "tcp",
 			addr:    "",
-			setupConfig: func() *NTCP2Config {
+			setupConfig: func() *Config {
 				routerHash := generateRandomHash()
 				config, _ := NewNTCP2Config(routerHash, true)
 				return config
@@ -474,7 +474,7 @@ func TestValidateDialParams(t *testing.T) {
 			name:        "nil config",
 			network:     "tcp",
 			addr:        "127.0.0.1:8080",
-			setupConfig: func() *NTCP2Config { return nil },
+			setupConfig: func() *Config { return nil },
 			expectError: true,
 			errorCode:   "config cannot be nil",
 		},
@@ -482,7 +482,7 @@ func TestValidateDialParams(t *testing.T) {
 			name:    "responder config",
 			network: "tcp",
 			addr:    "127.0.0.1:8080",
-			setupConfig: func() *NTCP2Config {
+			setupConfig: func() *Config {
 				routerHash := generateRandomHash()
 				config, _ := NewNTCP2Config(routerHash, false) // responder
 				return config
@@ -514,7 +514,7 @@ func TestValidateListenParams(t *testing.T) {
 		name        string
 		network     string
 		addr        string
-		setupConfig func() *NTCP2Config
+		setupConfig func() *Config
 		expectError bool
 		errorCode   string
 	}{
@@ -522,7 +522,7 @@ func TestValidateListenParams(t *testing.T) {
 			name:    "valid parameters",
 			network: "tcp",
 			addr:    "127.0.0.1:0",
-			setupConfig: func() *NTCP2Config {
+			setupConfig: func() *Config {
 				routerHash := generateRandomHash()
 				staticKey := generateRandomBytes(32)
 				config, _ := NewNTCP2Config(routerHash, false) // responder
@@ -535,7 +535,7 @@ func TestValidateListenParams(t *testing.T) {
 			name:    "empty network",
 			network: "",
 			addr:    "127.0.0.1:0",
-			setupConfig: func() *NTCP2Config {
+			setupConfig: func() *Config {
 				routerHash := generateRandomHash()
 				config, _ := NewNTCP2Config(routerHash, false)
 				return config
@@ -547,7 +547,7 @@ func TestValidateListenParams(t *testing.T) {
 			name:    "empty address",
 			network: "tcp",
 			addr:    "",
-			setupConfig: func() *NTCP2Config {
+			setupConfig: func() *Config {
 				routerHash := generateRandomHash()
 				config, _ := NewNTCP2Config(routerHash, false)
 				return config
@@ -559,7 +559,7 @@ func TestValidateListenParams(t *testing.T) {
 			name:        "nil config",
 			network:     "tcp",
 			addr:        "127.0.0.1:0",
-			setupConfig: func() *NTCP2Config { return nil },
+			setupConfig: func() *Config { return nil },
 			expectError: true,
 			errorCode:   "config cannot be nil",
 		},
@@ -567,7 +567,7 @@ func TestValidateListenParams(t *testing.T) {
 			name:    "initiator config",
 			network: "tcp",
 			addr:    "127.0.0.1:0",
-			setupConfig: func() *NTCP2Config {
+			setupConfig: func() *Config {
 				routerHash := generateRandomHash()
 				config, _ := NewNTCP2Config(routerHash, true) // initiator
 				return config
@@ -661,7 +661,7 @@ func TestDialNTCP2WithHandshake_Wrapper(t *testing.T) {
 			if acceptErr != nil {
 				return
 			}
-			ntcp2Conn := conn.(*NTCP2Conn)
+			ntcp2Conn := conn.(*Conn)
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			if hsErr := ntcp2Conn.Handshake(ctx); hsErr != nil {
@@ -682,7 +682,7 @@ func TestDialNTCP2WithHandshake_Wrapper(t *testing.T) {
 			WithHandshakeTimeout(5 * time.Second).
 			WithLocalRouterInfo([]byte("fake-router-info-for-test"))
 
-		ntcp2Addr := listener.Addr().(*NTCP2Addr)
+		ntcp2Addr := listener.Addr().(*Addr)
 		underlyingAddr := ntcp2Addr.UnderlyingAddr().String()
 
 		// Call the wrapper (not the Context variant) — this is the path under test

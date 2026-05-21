@@ -107,7 +107,7 @@ const (
 // MixHash'd, and discarded per the NTCP2 spec §4.4.
 //
 // Handshake must not be called concurrently on the same connection.
-func (c *NTCP2Conn) Handshake(ctx context.Context) error {
+func (c *Conn) Handshake(ctx context.Context) error {
 	cfg := c.ntcp2Config.Load()
 	if cfg == nil {
 		return oops.
@@ -193,7 +193,7 @@ func (c *NTCP2Conn) Handshake(ctx context.Context) error {
 }
 
 // performInitiatorHandshake executes the three-message NTCP2 XK exchange.
-func performInitiatorHandshake(cfg *NTCP2Config, nc *noise.NoiseConn) error {
+func performInitiatorHandshake(cfg *Config, nc *noise.NoiseConn) error {
 	riBytes := cfg.LocalRouterInfo
 	// m3p2Len includes the block header (3B), flag byte (1B), RouterInfo bytes, and the AEAD tag (16B).
 	// Per the NTCP2 spec, the RouterInfo block (type 2) data starts with a 1-byte flag field.
@@ -341,7 +341,7 @@ func performInitiatorHandshake(cfg *NTCP2Config, nc *noise.NoiseConn) error {
 // containing Alice's RouterInfo (and any optional padding/options blocks
 // per the NTCP2 spec). The caller is responsible for parsing and storing
 // it for the router transport layer.
-func performResponderHandshake(cfg *NTCP2Config, nc *noise.NoiseConn) ([]byte, error) {
+func performResponderHandshake(cfg *Config, nc *noise.NoiseConn) ([]byte, error) {
 	raw := nc.Underlying()
 
 	// === Message 1 (Alice -> Bob) ============================================
@@ -499,7 +499,7 @@ type rawConn interface {
 // the peer's published router hash and IV (both already public via netDb)
 // and the encrypted msg1 bytes (visible on the wire). It does NOT expose any
 // private key material.
-func dumpMsg1IfEnabled(cfg *NTCP2Config, raw interface{}, opts1, msg1 []byte) {
+func dumpMsg1IfEnabled(cfg *Config, raw interface{}, opts1, msg1 []byte) {
 	if msg1WireDumpRemaining.Load() <= 0 {
 		return
 	}
@@ -535,7 +535,7 @@ func dumpMsg1IfEnabled(cfg *NTCP2Config, raw interface{}, opts1, msg1 []byte) {
 // peer connections (where decryptedOpts is nil and decryptErr is set) or
 // confirming what i2pd actually sends. Shares the NTCP2_DUMP_MSG1 budget
 // with the initiator-side dumper.
-func dumpInboundMsg1IfEnabled(cfg *NTCP2Config, raw interface{}, buf1, decryptedOpts []byte, decryptErr error) {
+func dumpInboundMsg1IfEnabled(cfg *Config, raw interface{}, buf1, decryptedOpts []byte, decryptErr error) {
 	if msg1WireDumpRemaining.Load() <= 0 {
 		return
 	}
@@ -582,7 +582,7 @@ func dumpInboundMsg1IfEnabled(cfg *NTCP2Config, raw interface{}, buf1, decrypted
 //
 // Always logged (not gated by NTCP2_DUMP_MSG1) because it is cheap and the
 // most actionable signal for live interop debugging.
-func classifyMsg2ReadFailure(cfg *NTCP2Config, raw interface{}, bytesRead int, err error) {
+func classifyMsg2ReadFailure(cfg *Config, raw interface{}, bytesRead int, err error) {
 	var category string
 	switch {
 	case bytesRead == 0 && errors.Is(err, io.EOF):
@@ -665,7 +665,7 @@ func verifyLocalRouterInfoMatchesStaticKey(staticPriv, riBytes []byte) error {
 // only data already on the wire (after AEAD encryption) and the local
 // RouterInfo bytes (which we publish to the netDb anyway). It does NOT
 // expose any private key material or the data-phase keys.
-func dumpMsg3IfEnabled(cfg *NTCP2Config, raw interface{}, msg3, riBytes []byte, m3p2Len uint16) {
+func dumpMsg3IfEnabled(cfg *Config, raw interface{}, msg3, riBytes []byte, m3p2Len uint16) {
 	if msg3WireDumpRemaining.Load() <= 0 {
 		return
 	}

@@ -32,12 +32,12 @@ const (
 // ConnState represents the state of a NoiseConn
 type ConnState = internal.ConnState
 
-// NoiseConn implements net.Conn with Noise Protocol encryption.
+// Conn implements net.Conn with Noise Protocol encryption.
 // It wraps an underlying net.Conn and provides encrypted communication
 // following the Noise Protocol Framework specification.
 //
 // Thread Safety:
-// NoiseConn is safe for concurrent use by multiple goroutines with the following guarantees:
+// Conn is safe for concurrent use by multiple goroutines with the following guarantees:
 //   - Read() and Write() can be called concurrently from different goroutines
 //   - Close() can be called concurrently with other operations and will be idempotent
 //   - GetConnectionState() and GetConnectionMetrics() are safe for concurrent access
@@ -49,7 +49,7 @@ type ConnState = internal.ConnState
 //   - handshakeMutex: Serializes handshake operations
 //   - closeMutex: Protects close operations from concurrent execution
 //   - Internal metrics mutex: Protects connection metrics updates
-type NoiseConn struct {
+type Conn struct {
 	// underlying is the wrapped network connection
 	underlying net.Conn
 
@@ -68,10 +68,10 @@ type NoiseConn struct {
 	handshakeState *noise.HandshakeState
 
 	// localAddr is the local Noise address
-	localAddr *NoiseAddr
+	localAddr *Addr
 
 	// remoteAddr is the remote Noise address
-	remoteAddr *NoiseAddr
+	remoteAddr *Addr
 
 	// state tracks the connection lifecycle and metrics
 	state internal.ConnState
@@ -103,7 +103,7 @@ type NoiseConn struct {
 
 // NewNoiseConn creates a new NoiseConn wrapping the underlying connection.
 // The handshake must be completed before using Read/Write operations.
-func NewNoiseConn(underlying net.Conn, config *ConnConfig) (*NoiseConn, error) {
+func NewNoiseConn(underlying net.Conn, config *ConnConfig) (*Conn, error) {
 	if err := validateNewConnParams(underlying, config); err != nil {
 		return nil, err
 	}
@@ -115,7 +115,7 @@ func NewNoiseConn(underlying net.Conn, config *ConnConfig) (*NoiseConn, error) {
 
 	localAddr, remoteAddr := createNoiseAddresses(underlying, config)
 
-	nc := &NoiseConn{
+	nc := &Conn{
 		underlying:     underlying,
 		config:         config,
 		handshakeState: hs,
@@ -143,7 +143,7 @@ func NewNoiseConn(underlying net.Conn, config *ConnConfig) (*NoiseConn, error) {
 // Thread Safety: This method is safe for concurrent use. Multiple goroutines
 // can call Read simultaneously; calls are serialized via readMutex to protect
 // the receive cipher state nonce counter.
-func (nc *NoiseConn) Read(b []byte) (int, error) {
+func (nc *Conn) Read(b []byte) (int, error) {
 	if err := nc.validateReadState(); err != nil {
 		return 0, err
 	}
@@ -180,7 +180,7 @@ func (nc *NoiseConn) Read(b []byte) (int, error) {
 // Thread Safety: This method is safe for concurrent use. Multiple goroutines
 // can call Write simultaneously; calls are serialized via writeMutex to protect
 // the send cipher state nonce counter.
-func (nc *NoiseConn) Write(b []byte) (int, error) {
+func (nc *Conn) Write(b []byte) (int, error) {
 	if err := nc.validateWriteState(); err != nil {
 		return 0, err
 	}
@@ -215,7 +215,7 @@ func (nc *NoiseConn) Write(b []byte) (int, error) {
 //
 // The connection must have completed the Noise handshake.
 // Thread Safety: Same guarantees as Write().
-func (nc *NoiseConn) Encrypt(data []byte) ([]byte, error) {
+func (nc *Conn) Encrypt(data []byte) ([]byte, error) {
 	if err := nc.validateWriteState(); err != nil {
 		return nil, err
 	}
@@ -229,7 +229,7 @@ func (nc *NoiseConn) Encrypt(data []byte) ([]byte, error) {
 //
 // The connection must have completed the Noise handshake.
 // Thread Safety: Same guarantees as Read().
-func (nc *NoiseConn) Decrypt(encrypted []byte) ([]byte, error) {
+func (nc *Conn) Decrypt(encrypted []byte) ([]byte, error) {
 	if err := nc.validateReadState(); err != nil {
 		return nil, err
 	}
@@ -243,19 +243,19 @@ func (nc *NoiseConn) Decrypt(encrypted []byte) ([]byte, error) {
 //
 // Callers should use Encrypt/Decrypt for crypto and write/read the
 // resulting bytes to/from this connection with their own framing.
-func (nc *NoiseConn) Underlying() net.Conn {
+func (nc *Conn) Underlying() net.Conn {
 	return nc.underlying
 }
 
 // Config returns the connection configuration.
-func (nc *NoiseConn) Config() *ConnConfig {
+func (nc *Conn) Config() *ConnConfig {
 	return nc.config
 }
 
 // GetModifierChain returns the HandshakeModifier chain from the config.
 // Returns nil if no modifiers are configured. NTCP2 framed I/O uses this
 // to apply PhaseData transforms (padding, obfuscation) around Encrypt/Decrypt.
-func (nc *NoiseConn) GetModifierChain() *handshake.ModifierChain {
+func (nc *Conn) GetModifierChain() *handshake.ModifierChain {
 	return nc.config.GetModifierChain()
 }
 
@@ -265,7 +265,7 @@ func (nc *NoiseConn) GetModifierChain() *handshake.ModifierChain {
 // Multiple goroutines can call Close simultaneously - only the first call
 // will perform the actual close operation, subsequent calls will return nil.
 // The close mutex ensures atomic close operations.
-func (nc *NoiseConn) Close() error {
+func (nc *Conn) Close() error {
 	nc.closeMutex.Lock()
 	defer nc.closeMutex.Unlock()
 
@@ -320,17 +320,17 @@ func (nc *NoiseConn) Close() error {
 }
 
 // LocalAddr returns the local network address.
-func (nc *NoiseConn) LocalAddr() net.Addr {
+func (nc *Conn) LocalAddr() net.Addr {
 	return nc.localAddr
 }
 
 // RemoteAddr returns the remote network address.
-func (nc *NoiseConn) RemoteAddr() net.Addr {
+func (nc *Conn) RemoteAddr() net.Addr {
 	return nc.remoteAddr
 }
 
 // SetDeadline sets the read and write deadlines.
-func (nc *NoiseConn) SetDeadline(t time.Time) error {
+func (nc *Conn) SetDeadline(t time.Time) error {
 	if err := nc.underlying.SetDeadline(t); err != nil {
 		return oops.
 			Code("SET_DEADLINE_FAILED").
@@ -342,7 +342,7 @@ func (nc *NoiseConn) SetDeadline(t time.Time) error {
 }
 
 // SetReadDeadline sets the read deadline.
-func (nc *NoiseConn) SetReadDeadline(t time.Time) error {
+func (nc *Conn) SetReadDeadline(t time.Time) error {
 	if err := nc.underlying.SetReadDeadline(t); err != nil {
 		return oops.
 			Code("SET_READ_DEADLINE_FAILED").
@@ -354,7 +354,7 @@ func (nc *NoiseConn) SetReadDeadline(t time.Time) error {
 }
 
 // SetWriteDeadline sets the write deadline.
-func (nc *NoiseConn) SetWriteDeadline(t time.Time) error {
+func (nc *Conn) SetWriteDeadline(t time.Time) error {
 	if err := nc.underlying.SetWriteDeadline(t); err != nil {
 		return oops.
 			Code("SET_WRITE_DEADLINE_FAILED").

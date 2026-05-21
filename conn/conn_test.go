@@ -110,7 +110,7 @@ func newDefaultMockConn() *mockNetConn {
 // and the given pattern/initiator settings. It uses the default 30s
 // handshake timeout. The underlying mockNetConn is returned for
 // additional test setup (e.g. injecting read data or errors).
-func newTestNoiseConn(t *testing.T, pattern string, initiator bool) (*NoiseConn, *mockNetConn) {
+func newTestNoiseConn(t *testing.T, pattern string, initiator bool) (*Conn, *mockNetConn) {
 	t.Helper()
 	mock := newDefaultMockConn()
 	config := &ConnConfig{
@@ -316,11 +316,11 @@ func TestNoiseConnAddresses(t *testing.T) {
 	}
 
 	// Verify address types
-	if _, ok := local.(*NoiseAddr); !ok {
+	if _, ok := local.(*Addr); !ok {
 		t.Errorf("LocalAddr should be a NoiseAddr")
 	}
 
-	if _, ok := remote.(*NoiseAddr); !ok {
+	if _, ok := remote.(*Addr); !ok {
 		t.Errorf("RemoteAddr should be a NoiseAddr")
 	}
 }
@@ -432,7 +432,7 @@ func TestNoiseConnHandshakeTimeout(t *testing.T) {
 
 // TestNoiseConnInterface verifies that NoiseConn implements net.Conn
 func TestNoiseConnInterface(t *testing.T) {
-	var _ net.Conn = (*NoiseConn)(nil)
+	var _ net.Conn = (*Conn)(nil)
 }
 
 // Test error cases and edge conditions for better coverage
@@ -1127,7 +1127,7 @@ func TestDeadlineErrorPaths(t *testing.T) {
 }
 
 // Helper function to create a test connection
-func createTestConnection() (*NoiseConn, error) {
+func createTestConnection() (*Conn, error) {
 	localAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8001"}
 	remoteAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8002"}
 
@@ -1197,10 +1197,10 @@ func TestGetModifierChain_WithModifier(t *testing.T) {
 func TestApplyModifier_NoChain(t *testing.T) {
 	tests := []struct {
 		name string
-		fn   func(nc *NoiseConn, data []byte) ([]byte, error)
+		fn   func(nc *Conn, data []byte) ([]byte, error)
 	}{
-		{"outbound", (*NoiseConn).applyOutboundModifier},
-		{"inbound", (*NoiseConn).applyInboundModifier},
+		{"outbound", (*Conn).applyOutboundModifier},
+		{"inbound", (*Conn).applyInboundModifier},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1214,7 +1214,7 @@ func TestApplyModifier_NoChain(t *testing.T) {
 }
 
 // newTestNoiseConnWithModifier creates a NoiseConn with a tracking modifier for modifier tests.
-func newTestNoiseConnWithModifier(t *testing.T) (*NoiseConn, *trackingModifier) {
+func newTestNoiseConnWithModifier(t *testing.T) (*Conn, *trackingModifier) {
 	t.Helper()
 	localAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8001"}
 	remoteAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8002"}
@@ -1230,13 +1230,13 @@ func TestApplyModifier_InvokesPhaseData(t *testing.T) {
 	tests := []struct {
 		name     string
 		payload  string
-		apply    func(nc *NoiseConn, data []byte) ([]byte, error)
+		apply    func(nc *Conn, data []byte) ([]byte, error)
 		getCalls func(mod *trackingModifier) []callRecord
 	}{
 		{
 			name:    "outbound",
 			payload: "outbound payload",
-			apply:   (*NoiseConn).applyOutboundModifier,
+			apply:   (*Conn).applyOutboundModifier,
 			getCalls: func(mod *trackingModifier) []callRecord {
 				return mod.outboundCalls
 			},
@@ -1244,7 +1244,7 @@ func TestApplyModifier_InvokesPhaseData(t *testing.T) {
 		{
 			name:    "inbound",
 			payload: "inbound payload",
-			apply:   (*NoiseConn).applyInboundModifier,
+			apply:   (*Conn).applyInboundModifier,
 			getCalls: func(mod *trackingModifier) []callRecord {
 				return mod.inboundCalls
 			},

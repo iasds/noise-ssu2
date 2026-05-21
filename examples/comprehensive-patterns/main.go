@@ -5,7 +5,7 @@ import (
 	"log"
 
 	"github.com/go-i2p/go-noise"
-	"github.com/go-i2p/go-noise/examples/shared"
+	"github.com/go-i2p/go-noise/examples/cliutil"
 )
 
 // patternInfo describes a Noise protocol pattern for testing

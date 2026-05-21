@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/go-i2p/common/data"
-	ntcp2shared "github.com/go-i2p/go-noise/examples/ntcp2-shared"
+	ntcp2shared "github.com/go-i2p/go-noise/examples/cliutil"
 	"github.com/go-i2p/go-noise/handshake"
 	"github.com/go-i2p/go-noise/ntcp2"
 )
@@ -76,7 +76,7 @@ func runNTCP2ConfigurationDemo(routerHash, remoteRouterHash, destHash, staticKey
 // createAndDisplayBasicConfig creates an NTCP2Config for the given role and
 // prints its common properties (pattern and role name), consolidating the
 // repeated create-and-display pattern used for responder and initiator configs.
-func createAndDisplayBasicConfig(routerHash []byte, isInitiator bool, roleName string) *ntcp2.NTCP2Config {
+func createAndDisplayBasicConfig(routerHash []byte, isInitiator bool, roleName string) *ntcp2.Config {
 	var rh data.Hash
 	copy(rh[:], routerHash)
 	config, err := ntcp2.NewNTCP2Config(rh, isInitiator)
@@ -150,7 +150,7 @@ func demonstrateAdvancedConfigurations(routerHash []byte) {
 }
 
 // applyResponderFeatures applies NTCP2-specific features to the responder config
-func applyResponderFeatures(config *ntcp2.NTCP2Config, args *ntcp2shared.NTCP2Args) (*ntcp2.NTCP2Config, error) {
+func applyResponderFeatures(config *ntcp2.Config, args *ntcp2shared.NTCP2Args) (*ntcp2.Config, error) {
 	if args.EnableAESObfuscation {
 		config = config.WithAESObfuscation(args.EnableAESObfuscation, nil)
 	}
@@ -164,7 +164,7 @@ func applyResponderFeatures(config *ntcp2.NTCP2Config, args *ntcp2shared.NTCP2Ar
 }
 
 // displayResponderConfig prints the responder configuration details
-func displayResponderConfig(config *ntcp2.NTCP2Config) {
+func displayResponderConfig(config *ntcp2.Config) {
 	fmt.Printf("  Pattern: %s\n", config.Pattern)
 	fmt.Printf("  Role: Responder\n")
 	fmt.Printf("  Timeouts: handshake=%v, read=%v, write=%v\n",
@@ -220,7 +220,7 @@ func demonstrateInitiatorConfiguration(routerHash, remoteRouterHash, staticKey [
 }
 
 // createBaseInitiatorConfig creates the basic NTCP2 configuration with core settings
-func createBaseInitiatorConfig(routerHash, staticKey []byte, args *ntcp2shared.NTCP2Args) *ntcp2.NTCP2Config {
+func createBaseInitiatorConfig(routerHash, staticKey []byte, args *ntcp2shared.NTCP2Args) *ntcp2.Config {
 	var rh data.Hash
 	copy(rh[:], routerHash)
 	config, err := ntcp2.NewNTCP2Config(rh, true) // true = initiator
@@ -236,7 +236,7 @@ func createBaseInitiatorConfig(routerHash, staticKey []byte, args *ntcp2shared.N
 }
 
 // applyNTCP2Features applies NTCP2-specific features and remote router configuration
-func applyNTCP2Features(configBuilder *ntcp2.NTCP2Config, remoteRouterHash []byte, args *ntcp2shared.NTCP2Args) *ntcp2.NTCP2Config {
+func applyNTCP2Features(configBuilder *ntcp2.Config, remoteRouterHash []byte, args *ntcp2shared.NTCP2Args) *ntcp2.Config {
 	// Add remote router hash if available
 	if remoteRouterHash != nil {
 		var rrh data.Hash
@@ -260,7 +260,7 @@ func applyNTCP2Features(configBuilder *ntcp2.NTCP2Config, remoteRouterHash []byt
 }
 
 // addCustomModifiers creates and adds demonstration modifiers to the configuration
-func addCustomModifiers(configBuilder *ntcp2.NTCP2Config, args *ntcp2shared.NTCP2Args) *ntcp2.NTCP2Config {
+func addCustomModifiers(configBuilder *ntcp2.Config, args *ntcp2shared.NTCP2Args) *ntcp2.Config {
 	if args.Verbose {
 		xorMod := handshake.NewXORModifier("demo-xor", []byte{0xAA, 0xBB, 0xCC, 0xDD})
 		paddingMod, err := handshake.NewPaddingModifier("demo-padding", 8, 32)
@@ -272,7 +272,7 @@ func addCustomModifiers(configBuilder *ntcp2.NTCP2Config, args *ntcp2shared.NTCP
 }
 
 // validateAndDisplayConfig validates the configuration and displays its details
-func validateAndDisplayConfig(finalConfig *ntcp2.NTCP2Config, remoteRouterHash []byte) {
+func validateAndDisplayConfig(finalConfig *ntcp2.Config, remoteRouterHash []byte) {
 	if err := finalConfig.Validate(); err != nil {
 		fmt.Printf("❌ Invalid configuration: %v\n", err)
 		return

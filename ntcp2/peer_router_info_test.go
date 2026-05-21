@@ -63,7 +63,7 @@ func TestResponderCapturesPeerRouterInfo(t *testing.T) {
 
 	var wg sync.WaitGroup
 	var responderErr error
-	var responderNTCP2 *NTCP2Conn
+	var responderNTCP2 *Conn
 
 	wg.Add(1)
 	go func() {

@@ -26,7 +26,7 @@ import (
 // If multiple goroutines call Handshake concurrently, they will be queued and
 // execute sequentially. If the handshake is already complete, subsequent calls
 // will return immediately without error.
-func (nc *NoiseConn) Handshake(ctx context.Context) error {
+func (nc *Conn) Handshake(ctx context.Context) error {
 	nc.handshakeMutex.Lock()
 	defer nc.handshakeMutex.Unlock()
 
@@ -80,7 +80,7 @@ func (nc *NoiseConn) Handshake(ctx context.Context) error {
 // sendNoiseHandshakeMsg writes a Noise handshake message to the underlying connection
 // and updates cipher states. The phase parameter specifies the handshake phase for
 // modifier chain application. The label parameter identifies the message for error context.
-func (nc *NoiseConn) sendNoiseHandshakeMsg(phase handshake.HandshakePhase, label string) error {
+func (nc *Conn) sendNoiseHandshakeMsg(phase handshake.HandshakePhase, label string) error {
 	msg, cs1, cs2, err := nc.handshakeState.WriteMessage(nil, nil)
 	if err != nil {
 		return oops.
@@ -109,7 +109,7 @@ func (nc *NoiseConn) sendNoiseHandshakeMsg(phase handshake.HandshakePhase, label
 // the underlying connection, processes it via the handshake state, and updates
 // cipher states. The phase parameter specifies the handshake phase for modifier
 // chain application. The label parameter identifies the message for error context.
-func (nc *NoiseConn) receiveNoiseHandshakeMsg(phase handshake.HandshakePhase, label string) error {
+func (nc *Conn) receiveNoiseHandshakeMsg(phase handshake.HandshakePhase, label string) error {
 	buffer, err := nc.readFramedMessage()
 	if err != nil {
 		return oops.
@@ -142,7 +142,7 @@ func (nc *NoiseConn) receiveNoiseHandshakeMsg(phase handshake.HandshakePhase, la
 //
 // Both cipher states must be non-nil for the handshake to be considered complete.
 // During intermediate handshake messages, one or both may still be nil.
-func (nc *NoiseConn) updateCipherStates(cs1, cs2 *noise.CipherState) {
+func (nc *Conn) updateCipherStates(cs1, cs2 *noise.CipherState) {
 	if cs1 == nil && cs2 == nil {
 		return
 	}
@@ -260,7 +260,7 @@ func createHandshakeState(config *ConnConfig) (*noise.HandshakeState, error) {
 }
 
 // createNoiseAddresses creates local and remote Noise addresses.
-func createNoiseAddresses(underlying net.Conn, config *ConnConfig) (*NoiseAddr, *NoiseAddr) {
+func createNoiseAddresses(underlying net.Conn, config *ConnConfig) (*Addr, *Addr) {
 	role := "responder"
 	if config.Initiator {
 		role = "initiator"
@@ -284,7 +284,7 @@ type handshakeContext struct {
 }
 
 // createHandshakeContext creates a context with timeout for handshake operations.
-func (nc *NoiseConn) createHandshakeContext(ctx context.Context) *handshakeContext {
+func (nc *Conn) createHandshakeContext(ctx context.Context) *handshakeContext {
 	handshakeCtx, cancel := context.WithTimeout(ctx, nc.config.HandshakeTimeout)
 	return &handshakeContext{
 		ctx:    handshakeCtx,
@@ -295,7 +295,7 @@ func (nc *NoiseConn) createHandshakeContext(ctx context.Context) *handshakeConte
 // executeRoleBasedHandshake performs handshake based on initiator/responder role.
 // It translates the context deadline into a socket-level deadline so that
 // underlying Read/Write calls (which do not observe context) are bounded.
-func (nc *NoiseConn) executeRoleBasedHandshake(ctx context.Context) error {
+func (nc *Conn) executeRoleBasedHandshake(ctx context.Context) error {
 	// Enforce context deadline on the underlying socket so that blocking
 	// Read/Write calls respect the handshake timeout.
 	if deadline, ok := ctx.Deadline(); ok {
@@ -331,7 +331,7 @@ func (nc *NoiseConn) executeRoleBasedHandshake(ctx context.Context) error {
 }
 
 // markHandshakeComplete sets the handshake completion state and logs success.
-func (nc *NoiseConn) markHandshakeComplete() {
+func (nc *Conn) markHandshakeComplete() {
 	nc.setState(internal.StateEstablished)
 	nc.metrics.SetHandshakeEnd()
 	nc.logger.WithFields(i2plogger.Fields{"pkg": "noise", "func": "NoiseConn.markHandshakeComplete"}).Info("Noise handshake completed successfully")
@@ -340,7 +340,7 @@ func (nc *NoiseConn) markHandshakeComplete() {
 // resetHandshakeState recreates the HandshakeState from the original config
 // so that retry attempts begin with fresh nonce counters and chaining key.
 // Any partial cipher states from a failed handshake are also cleared.
-func (nc *NoiseConn) resetHandshakeState() {
+func (nc *Conn) resetHandshakeState() {
 	hs, err := createHandshakeState(nc.config)
 	if err != nil {
 		nc.logger.WithFields(i2plogger.Fields{
@@ -362,7 +362,7 @@ func (nc *NoiseConn) resetHandshakeState() {
 //
 // The caller is responsible for calling StartHandshake before the first call
 // and CompleteHandshake after the final message.
-func (nc *NoiseConn) WriteHandshakeMsgToBytes(phase handshake.HandshakePhase, payload []byte) ([]byte, error) {
+func (nc *Conn) WriteHandshakeMsgToBytes(phase handshake.HandshakePhase, payload []byte) ([]byte, error) {
 	msg, cs1, cs2, err := nc.handshakeState.WriteMessage(nil, payload)
 	if err != nil {
 		return nil, oops.
@@ -385,7 +385,7 @@ func (nc *NoiseConn) WriteHandshakeMsgToBytes(phase handshake.HandshakePhase, pa
 //
 // The caller is responsible for calling StartHandshake before the first call
 // and CompleteHandshake after the final message.
-func (nc *NoiseConn) ReadHandshakeMsgFromBytes(phase handshake.HandshakePhase, wireData []byte) ([]byte, error) {
+func (nc *Conn) ReadHandshakeMsgFromBytes(phase handshake.HandshakePhase, wireData []byte) ([]byte, error) {
 	data, err := nc.applyHandshakeInbound(phase, wireData)
 	if err != nil {
 		return nil, err
@@ -404,7 +404,7 @@ func (nc *NoiseConn) ReadHandshakeMsgFromBytes(phase handshake.HandshakePhase, w
 // StartHandshake transitions the connection to the handshaking state and
 // records the handshake start time. Call this once before the first
 // WriteHandshakeMsgToBytes or ReadHandshakeMsgFromBytes call.
-func (nc *NoiseConn) StartHandshake() {
+func (nc *Conn) StartHandshake() {
 	nc.setState(internal.StateHandshaking)
 	nc.metrics.SetHandshakeStart()
 }
@@ -412,7 +412,7 @@ func (nc *NoiseConn) StartHandshake() {
 // CompleteHandshake marks the connection as fully established after the
 // final handshake message has been processed. Call this once after the
 // last WriteHandshakeMsgToBytes / ReadHandshakeMsgFromBytes call.
-func (nc *NoiseConn) CompleteHandshake() {
+func (nc *Conn) CompleteHandshake() {
 	nc.markHandshakeComplete()
 }
 
@@ -422,7 +422,7 @@ func (nc *NoiseConn) CompleteHandshake() {
 // that post-handshake key derivation (e.g. SipHash keys) runs correctly.
 //
 // Returns nil if no hook is configured.
-func (nc *NoiseConn) RunPostHandshakeHook() error {
+func (nc *Conn) RunPostHandshakeHook() error {
 	if nc.config.PostHandshakeHook == nil {
 		return nil
 	}
@@ -431,7 +431,7 @@ func (nc *NoiseConn) RunPostHandshakeHook() error {
 
 // FailHandshake resets the handshake state machine so that a fresh attempt
 // can be made (or so that close/cleanup code sees a consistent state).
-func (nc *NoiseConn) FailHandshake() {
+func (nc *Conn) FailHandshake() {
 	nc.resetHandshakeState()
 	nc.setState(internal.StateInit)
 }
@@ -439,7 +439,7 @@ func (nc *NoiseConn) FailHandshake() {
 // GetHandshakeHash returns the hash of the handshake transcript from the
 // underlying noise.HandshakeState. This can be used by protocol layers to
 // derive post-handshake key material (e.g. SipHash keys for NTCP2 data phase).
-func (nc *NoiseConn) GetHandshakeHash() []byte {
+func (nc *Conn) GetHandshakeHash() []byte {
 	if nc.handshakeState == nil {
 		return nil
 	}
@@ -457,7 +457,7 @@ func (nc *NoiseConn) GetHandshakeHash() []byte {
 // that appear after AEAD frames in messages 1 and 2 (§4.4.1, §4.4.2).
 // Call this after reading and discarding cleartext padding, passing the raw
 // padding bytes so that the hash state stays in sync with the peer.
-func (nc *NoiseConn) MixHashData(data []byte) {
+func (nc *Conn) MixHashData(data []byte) {
 	if nc.handshakeState != nil && len(data) > 0 {
 		nc.handshakeState.MixHash(data)
 	}

@@ -181,7 +181,7 @@ func TestAcceptWithHandshake_FullE2E(t *testing.T) {
 
 	// Responder goroutine using AcceptWithHandshake
 	var wg sync.WaitGroup
-	var responderConn *NTCP2Conn
+	var responderConn *Conn
 	var responderErr error
 
 	wg.Add(1)

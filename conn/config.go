@@ -87,7 +87,7 @@ type ConnConfig struct {
 	//
 	// If the hook returns an error, the handshake is considered failed and
 	// the connection reverts to the Init state.
-	PostHandshakeHook func(*NoiseConn) error
+	PostHandshakeHook func(*Conn) error
 
 	// cachedChain holds the lazily-initialized ModifierChain built from Modifiers.
 	// It is invalidated when the modifier list is mutated via WithModifiers,

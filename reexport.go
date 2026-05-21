@@ -15,11 +15,11 @@ import (
 
 // ─── Type aliases (zero-cost: no wrapping, full method set preserved) ────────
 
-// NoiseConn is an alias for conn.NoiseConn.
-type NoiseConn = conn.NoiseConn
+// NoiseConn is an alias for conn.Conn.
+type NoiseConn = conn.Conn
 
-// NoiseAddr is an alias for conn.NoiseAddr.
-type NoiseAddr = conn.NoiseAddr
+// NoiseAddr is an alias for conn.Addr.
+type NoiseAddr = conn.Addr
 
 // ConnConfig is an alias for conn.ConnConfig.
 type ConnConfig = conn.ConnConfig
@@ -27,8 +27,8 @@ type ConnConfig = conn.ConnConfig
 // ConnState is an alias for conn.ConnState.
 type ConnState = conn.ConnState
 
-// NoiseListener is an alias for listener.NoiseListener.
-type NoiseListener = listener.NoiseListener
+// NoiseListener is an alias for listener.Listener.
+type NoiseListener = listener.Listener
 
 // ListenerConfig is an alias for listener.ListenerConfig.
 type ListenerConfig = listener.ListenerConfig

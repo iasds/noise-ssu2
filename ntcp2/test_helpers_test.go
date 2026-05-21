@@ -39,7 +39,7 @@ func deterministicBytes(size int, offset byte) []byte {
 // testNTCP2Listener holds a fully-wired NTCP2 listener backed by a real
 // TCP listener, with random router‐hash and config.
 type testNTCP2Listener struct {
-	listener   *NTCP2Listener
+	listener   *Listener
 	tcpAddr    net.Addr
 	routerHash data.Hash
 }
@@ -72,12 +72,12 @@ func newTestNTCP2Listener(t *testing.T) testNTCP2Listener {
 // pipedNTCP2Conn holds all the pieces created by newPipedNTCP2Conn, so
 // callers can access the raw pipe ends and the SipHash modifier, if set.
 type pipedNTCP2Conn struct {
-	conn    *NTCP2Conn
+	conn    *Conn
 	client  net.Conn // client end of net.Pipe (used by NoiseConn)
 	server  net.Conn // server end of net.Pipe (for test writes/reads)
 	noise   *noise.NoiseConn
-	localA  *NTCP2Addr
-	remoteA *NTCP2Addr
+	localA  *Addr
+	remoteA *Addr
 }
 
 // newPipedNTCP2Conn creates an *NTCP2Conn backed by a net.Pipe(), wired
@@ -131,7 +131,7 @@ func newTestAESModifier(t *testing.T) *AESObfuscationModifier {
 
 // createTestNTCP2ConnWithSLM creates an *NTCP2Conn backed by a mockNoiseConn
 // with a SipHashLengthModifier attached. Common setup for nonce exhaustion tests.
-func createTestNTCP2ConnWithSLM(t *testing.T) *NTCP2Conn {
+func createTestNTCP2ConnWithSLM(t *testing.T) *Conn {
 	t.Helper()
 	conn := createTestNTCP2Conn(&mockNoiseConn{})
 	slm := NewSipHashLengthModifier("test", [2]uint64{0x1234, 0x5678}, 0)
@@ -160,7 +160,7 @@ func newTestCryptoMaterial(t *testing.T) testCryptoMaterial {
 
 // newTestNTCP2ConfigSimple creates a basic NTCP2Config with a random router hash.
 // Use this for tests that only need a valid config without specific key material.
-func newTestNTCP2ConfigSimple(t *testing.T, initiator bool) *NTCP2Config {
+func newTestNTCP2ConfigSimple(t *testing.T, initiator bool) *Config {
 	t.Helper()
 	routerHash := generateRandomHash()
 	config, err := NewNTCP2Config(routerHash, initiator)
@@ -171,7 +171,7 @@ func newTestNTCP2ConfigSimple(t *testing.T, initiator bool) *NTCP2Config {
 // newTestInitiatorConfig creates a fully-configured NTCP2Config for an
 // initiator with random key material, a remote static key, and AES obfuscation.
 // Returns the config and the underlying crypto material for assertions.
-func newTestInitiatorConfig(t *testing.T) (*NTCP2Config, testCryptoMaterial) {
+func newTestInitiatorConfig(t *testing.T) (*Config, testCryptoMaterial) {
 	t.Helper()
 	m := newTestCryptoMaterial(t)
 	config := newTestInitiatorConfigFrom(t, m)
@@ -180,7 +180,7 @@ func newTestInitiatorConfig(t *testing.T) (*NTCP2Config, testCryptoMaterial) {
 
 // newTestInitiatorConfigFrom builds a fully-configured initiator NTCP2Config
 // from the given crypto material.
-func newTestInitiatorConfigFrom(t *testing.T, m testCryptoMaterial) *NTCP2Config {
+func newTestInitiatorConfigFrom(t *testing.T, m testCryptoMaterial) *Config {
 	t.Helper()
 	config, err := NewNTCP2Config(m.routerHash, true)
 	require.NoError(t, err)
@@ -194,7 +194,7 @@ func newTestInitiatorConfigFrom(t *testing.T, m testCryptoMaterial) *NTCP2Config
 
 // newTestResponderConfigWithKey creates a responder NTCP2Config with random
 // router hash and static key, suitable for clone/listener tests.
-func newTestResponderConfigWithKey(t *testing.T) *NTCP2Config {
+func newTestResponderConfigWithKey(t *testing.T) *Config {
 	t.Helper()
 	routerHash := generateRandomHash()
 	staticKey := generateRandomBytes(32)
@@ -205,7 +205,7 @@ func newTestResponderConfigWithKey(t *testing.T) *NTCP2Config {
 
 // newTestResponderConfigNoAES creates a responder NTCP2Config with a fixed
 // router hash and AES obfuscation disabled, suitable for listener tests.
-func newTestResponderConfigNoAES(t *testing.T) *NTCP2Config {
+func newTestResponderConfigNoAES(t *testing.T) *Config {
 	t.Helper()
 	var routerHash data.Hash
 	copy(routerHash[:], "responder-hash-32-bytes-long!!!!")
@@ -217,8 +217,8 @@ func newTestResponderConfigNoAES(t *testing.T) *NTCP2Config {
 
 // testXKConfigPair holds a matched initiator/responder config pair for XK tests.
 type testXKConfigPair struct {
-	initiatorConfig *NTCP2Config
-	responderConfig *NTCP2Config
+	initiatorConfig *Config
+	responderConfig *Config
 	initiatorHash   data.Hash
 	responderHash   data.Hash
 }
@@ -273,7 +273,7 @@ func newTestXKConfigPair(t *testing.T) testXKConfigPair {
 // startTestNTCP2Listener creates a real TCP listener, wraps it in an
 // NTCP2Listener with the given config, and registers cleanup. Returns
 // the NTCP2Listener and the TCP address for dialing.
-func startTestNTCP2Listener(t *testing.T, config *NTCP2Config) (*NTCP2Listener, net.Addr) {
+func startTestNTCP2Listener(t *testing.T, config *Config) (*Listener, net.Addr) {
 	t.Helper()
 	tcpLn, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)

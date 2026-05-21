@@ -107,13 +107,13 @@ func TestNTCP2Addr_String(t *testing.T) {
 
 	tests := []struct {
 		name        string
-		setupAddr   func(*NTCP2Addr) *NTCP2Addr
+		setupAddr   func(*Addr) *Addr
 		contains    []string
 		notContains []string
 	}{
 		{
 			name: "basic_address",
-			setupAddr: func(addr *NTCP2Addr) *NTCP2Addr {
+			setupAddr: func(addr *Addr) *Addr {
 				return addr
 			},
 			contains: []string{
@@ -190,7 +190,7 @@ func TestNTCP2Addr_DefensiveCopying(t *testing.T) {
 
 func TestNTCP2Addr_StringHandlesNilUnderlying(t *testing.T) {
 	// Test edge case - this shouldn't happen in normal usage but we handle it gracefully
-	addr := &NTCP2Addr{
+	addr := &Addr{
 		underlying: nil,
 		routerHash: data.Hash{},
 		role:       "initiator",

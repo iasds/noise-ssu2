@@ -12,19 +12,19 @@ import (
 	"github.com/samber/oops"
 )
 
-// NTCP2Listener implements net.Listener for accepting NTCP2 transport connections.
+// Listener implements net.Listener for accepting NTCP2 transport connections.
 // It accepts raw TCP connections from the underlying listener, wraps each in a
 // NoiseConn created via NTCP2Config.ToConnConfig() (which sets the correct
 // CipherSuite, ProtocolName, and Modifiers), and then wraps that in an NTCP2Conn.
-type NTCP2Listener struct {
+type Listener struct {
 	// underlying is the raw TCP listener
 	underlying net.Listener
 
 	// config contains the NTCP2-specific configuration
-	config *NTCP2Config
+	config *Config
 
 	// addr is the NTCP2 address for this listener
-	addr *NTCP2Addr
+	addr *Addr
 
 	// logger for listener events (pointer so runtime log-level changes are visible)
 	logger *logger.Logger
@@ -36,7 +36,7 @@ type NTCP2Listener struct {
 // NewNTCP2Listener creates a new NTCP2Listener that wraps the underlying TCP listener.
 // The listener will accept connections and wrap them in NTCP2Conn instances
 // configured as responders with NTCP2-specific addressing and protocol handling.
-func NewNTCP2Listener(underlying net.Listener, config *NTCP2Config) (*NTCP2Listener, error) {
+func NewNTCP2Listener(underlying net.Listener, config *Config) (*Listener, error) {
 	if err := validateListenerInput(underlying, config); err != nil {
 		return nil, err
 	}
@@ -50,7 +50,7 @@ func NewNTCP2Listener(underlying net.Listener, config *NTCP2Config) (*NTCP2Liste
 }
 
 // validateListenerInput checks if the underlying listener and config parameters are valid
-func validateListenerInput(underlying net.Listener, config *NTCP2Config) error {
+func validateListenerInput(underlying net.Listener, config *Config) error {
 	if underlying == nil {
 		return oops.
 			Code("INVALID_UNDERLYING_LISTENER").
@@ -77,7 +77,7 @@ func validateListenerInput(underlying net.Listener, config *NTCP2Config) error {
 }
 
 // createNTCP2Address creates the NTCP2 address for the listener from the underlying address and config
-func createNTCP2Address(underlying net.Listener, config *NTCP2Config) (*NTCP2Addr, error) {
+func createNTCP2Address(underlying net.Listener, config *Config) (*Addr, error) {
 	ntcp2Addr, err := NewNTCP2Addr(underlying.Addr(), config.BobRouterHash, "responder")
 	if err != nil {
 		return nil, oops.
@@ -91,8 +91,8 @@ func createNTCP2Address(underlying net.Listener, config *NTCP2Config) (*NTCP2Add
 }
 
 // initializeListener creates and configures the final NTCP2Listener with logging
-func initializeListener(underlying net.Listener, config *NTCP2Config, ntcp2Addr *NTCP2Addr) *NTCP2Listener {
-	nl := &NTCP2Listener{
+func initializeListener(underlying net.Listener, config *Config, ntcp2Addr *Addr) *Listener {
+	nl := &Listener{
 		underlying: underlying,
 		config:     config,
 		addr:       ntcp2Addr,
@@ -112,7 +112,7 @@ func initializeListener(underlying net.Listener, config *NTCP2Config, ntcp2Addr 
 // CipherSuite, ProtocolName, and Modifiers are all correctly set.
 // It also returns the per-connection NTCP2Config so the PostHandshakeHook's
 // SipHash keys can be propagated to the NTCP2Conn after handshake.
-func (nl *NTCP2Listener) createResponderConnConfig() (*noise.ConnConfig, *NTCP2Config, error) {
+func (nl *Listener) createResponderConnConfig() (*noise.ConnConfig, *Config, error) {
 	// Clone the listener's config to get an independent per-connection config.
 	// Clone() avoids copying the atomic.Pointer and is resilient to new fields.
 	responderCfg := nl.config.Clone()
@@ -137,7 +137,7 @@ func (nl *NTCP2Listener) createResponderConnConfig() (*noise.ConnConfig, *NTCP2C
 // HandshakeHash() from NTCP2Conn, parse the full RouterIdentity from message 3
 // part 2 via github.com/go-i2p/common/router_identity, and compute the proper
 // hash via github.com/go-i2p/common/data.HashData().
-func (nl *NTCP2Listener) createRemoteNTCP2Addr(noiseConn *noise.NoiseConn) (*NTCP2Addr, error) {
+func (nl *Listener) createRemoteNTCP2Addr(noiseConn *noise.NoiseConn) (*Addr, error) {
 	var remoteHash data.Hash
 	remoteRouterHash := noiseConn.PeerStatic()
 	if len(remoteRouterHash) >= 32 {
@@ -167,7 +167,7 @@ func (nl *NTCP2Listener) createRemoteNTCP2Addr(noiseConn *noise.NoiseConn) (*NTC
 // perConnConfig is the per-connection NTCP2Config whose PostHandshakeHook
 // will store derived SipHash keys; it is saved on the conn so that
 // PropagateSipHash() can copy them after the handshake completes.
-func (nl *NTCP2Listener) wrapInNTCP2Conn(noiseConn *noise.NoiseConn, remoteAddr *NTCP2Addr, perConnConfig *NTCP2Config) (*NTCP2Conn, error) {
+func (nl *Listener) wrapInNTCP2Conn(noiseConn *noise.NoiseConn, remoteAddr *Addr, perConnConfig *Config) (*Conn, error) {
 	ntcp2Conn, err := NewNTCP2Conn(noiseConn, nl.addr, remoteAddr)
 	if err != nil {
 		return nil, oops.
@@ -187,7 +187,7 @@ func (nl *NTCP2Listener) wrapInNTCP2Conn(noiseConn *noise.NoiseConn, remoteAddr 
 // Accept waits for and returns the next connection to the listener.
 // The returned connection is wrapped in an NTCP2Conn configured as a responder
 // with the full NTCP2 cipher suite, protocol name, and modifiers.
-func (nl *NTCP2Listener) Accept() (net.Conn, error) {
+func (nl *Listener) Accept() (net.Conn, error) {
 	if err := nl.validateAcceptState(); err != nil {
 		return nil, err
 	}
@@ -240,7 +240,7 @@ func (nl *NTCP2Listener) Accept() (net.Conn, error) {
 }
 
 // validateAcceptState checks if the listener is in a valid state for accepting connections.
-func (nl *NTCP2Listener) validateAcceptState() error {
+func (nl *Listener) validateAcceptState() error {
 	if nl.isClosed() {
 		return oops.
 			Code("LISTENER_CLOSED").
@@ -252,7 +252,7 @@ func (nl *NTCP2Listener) validateAcceptState() error {
 }
 
 // logAcceptedConnection logs details about the newly accepted connection.
-func (nl *NTCP2Listener) logAcceptedConnection(ntcp2Conn *NTCP2Conn) {
+func (nl *Listener) logAcceptedConnection(ntcp2Conn *Conn) {
 	nl.logger.Debug("accepted new NTCP2 connection",
 		"listener_addr", nl.addr.String(),
 		"remote_addr", ntcp2Conn.RemoteAddr().String())
@@ -260,7 +260,7 @@ func (nl *NTCP2Listener) logAcceptedConnection(ntcp2Conn *NTCP2Conn) {
 
 // Close closes the listener and prevents new connections from being accepted.
 // Any blocked Accept operations will be unblocked and return errors.
-func (nl *NTCP2Listener) Close() error {
+func (nl *Listener) Close() error {
 	if !nl.closed.CompareAndSwap(false, true) {
 		return nil // Already closed
 	}
@@ -286,13 +286,13 @@ func (nl *NTCP2Listener) Close() error {
 
 // Addr returns the listener's network address.
 // This is an NTCP2Addr that wraps the underlying listener's address.
-func (nl *NTCP2Listener) Addr() net.Addr {
+func (nl *Listener) Addr() net.Addr {
 	return nl.addr
 }
 
 // isClosed returns true if the listener has been closed.
 // Thread-safe: uses atomic.Bool.Load().
-func (nl *NTCP2Listener) isClosed() bool {
+func (nl *Listener) isClosed() bool {
 	return nl.closed.Load()
 }
 
@@ -304,12 +304,12 @@ func formatRouterHash(hash data.Hash) string {
 // AcceptWithHandshake waits for the next connection and automatically
 // performs the NTCP2 handshake. This mirrors DialNTCP2WithHandshakeContext
 // for the responder side.
-func (nl *NTCP2Listener) AcceptWithHandshake(ctx context.Context) (*NTCP2Conn, error) {
+func (nl *Listener) AcceptWithHandshake(ctx context.Context) (*Conn, error) {
 	conn, err := nl.Accept()
 	if err != nil {
 		return nil, err
 	}
-	ntcp2Conn := conn.(*NTCP2Conn)
+	ntcp2Conn := conn.(*Conn)
 	// Use the NTCP2-specific handshake which writes raw Noise messages without
 	// 2-byte length prefixes. The standard NoiseConn.Handshake() adds length
 	// framing that the NTCP2 spec explicitly forbids on messages 1, 2, and 3.

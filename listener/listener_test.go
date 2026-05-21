@@ -17,7 +17,7 @@ import (
 
 // newTestNoiseListenerFromTCP creates a NoiseListener backed by a real TCP listener
 // with a random static key and the given pattern. Caller must close the returned listener.
-func newTestNoiseListenerFromTCP(t *testing.T, pattern string) *NoiseListener {
+func newTestNoiseListenerFromTCP(t *testing.T, pattern string) *Listener {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -32,7 +32,7 @@ func newTestNoiseListenerFromTCP(t *testing.T, pattern string) *NoiseListener {
 
 // newTestNoiseListenerFromMock creates a NoiseListener backed by a mockListener
 // with a random static key and the given pattern.
-func newTestNoiseListenerFromMock(t *testing.T, pattern string, ml *mockListener) *NoiseListener {
+func newTestNoiseListenerFromMock(t *testing.T, pattern string, ml *mockListener) *Listener {
 	t.Helper()
 	staticKey := make([]byte, 32)
 	_, err := rand.Read(staticKey)
@@ -61,12 +61,12 @@ func pipedMockListener(t *testing.T, addr net.Addr) (net.Conn, *mockListener) {
 
 // acceptAsNoiseConn calls Accept on the listener, asserts success, registers
 // cleanup, and returns the underlying *conn.NoiseConn.
-func acceptAsNoiseConn(t *testing.T, nl *NoiseListener) *conn.NoiseConn {
+func acceptAsNoiseConn(t *testing.T, nl *Listener) *conn.Conn {
 	t.Helper()
 	c, err := nl.Accept()
 	require.NoError(t, err)
 	require.NotNil(t, c)
-	noiseConn, ok := c.(*conn.NoiseConn)
+	noiseConn, ok := c.(*conn.Conn)
 	require.True(t, ok)
 	t.Cleanup(func() { noiseConn.Close() })
 	return noiseConn
@@ -260,7 +260,7 @@ func TestNewNoiseListener(t *testing.T) {
 			} else {
 				assert.NoError(t, err)
 				assert.NotNil(t, listener)
-				assert.Equal(t, underlying.Addr().Network(), listener.Addr().(*conn.NoiseAddr).Underlying().Network())
+				assert.Equal(t, underlying.Addr().Network(), listener.Addr().(*conn.Addr).Underlying().Network())
 				listener.Close()
 			}
 		})
@@ -272,7 +272,7 @@ func TestNoiseListenerAddr(t *testing.T) {
 	defer noiseListener.Close()
 
 	addr := noiseListener.Addr()
-	noiseAddr, ok := addr.(*conn.NoiseAddr)
+	noiseAddr, ok := addr.(*conn.Addr)
 	require.True(t, ok)
 
 	assert.Equal(t, "noise+tcp", noiseAddr.Network())
@@ -515,7 +515,7 @@ func TestListenerConfigWithModifiers_DefensiveCopy(t *testing.T) {
 
 func TestListenerConfigWithPostHandshakeHook(t *testing.T) {
 	hookCalled := false
-	hook := func(nc *conn.NoiseConn) error {
+	hook := func(nc *conn.Conn) error {
 		hookCalled = true
 		return nil
 	}
@@ -549,7 +549,7 @@ func TestListenerConfigBuilderChain_AllFields(t *testing.T) {
 
 	mod := &testModifier{name: "test-mod"}
 	hookCalled := false
-	hook := func(nc *conn.NoiseConn) error {
+	hook := func(nc *conn.Conn) error {
 		hookCalled = true
 		return nil
 	}
@@ -590,7 +590,7 @@ func TestNoiseListenerAcceptPropagatesModifiers(t *testing.T) {
 
 	mod := &testModifier{name: "propagated-mod"}
 	hookCalled := false
-	hook := func(nc *conn.NoiseConn) error {
+	hook := func(nc *conn.Conn) error {
 		hookCalled = true
 		return nil
 	}
@@ -715,7 +715,7 @@ func TestNoiseListenerConcurrentAccepts(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// Connect clients
-	listenAddr := noiseListener.Addr().(*conn.NoiseAddr).Underlying().String()
+	listenAddr := noiseListener.Addr().(*conn.Addr).Underlying().String()
 	for i := 0; i < numConnections; i++ {
 		go func() {
 			conn, err := net.Dial("tcp", listenAddr)

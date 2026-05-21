@@ -11,14 +11,14 @@ import (
 )
 
 // GetConnectionMetrics returns the current connection statistics
-func (nc *NoiseConn) GetConnectionMetrics() (bytesRead, bytesWritten int64, handshakeDuration time.Duration) {
+func (nc *Conn) GetConnectionMetrics() (bytesRead, bytesWritten int64, handshakeDuration time.Duration) {
 	return nc.metrics.GetStats()
 }
 
 // metricsForTest returns the underlying ConnectionMetrics for test access.
 // This decouples tests from the internal field name, so only this accessor
 // needs updating if the field is renamed or restructured.
-func (nc *NoiseConn) metricsForTest() *internal.ConnectionMetrics {
+func (nc *Conn) metricsForTest() *internal.ConnectionMetrics {
 	return nc.metrics
 }
 
@@ -27,7 +27,7 @@ func (nc *NoiseConn) metricsForTest() *internal.ConnectionMetrics {
 // Thread Safety: This method is safe for concurrent use. It uses a read lock
 // on the state mutex, allowing multiple goroutines to read the state simultaneously
 // while preventing inconsistent reads during state transitions.
-func (nc *NoiseConn) GetConnectionState() ConnState {
+func (nc *Conn) GetConnectionState() ConnState {
 	return nc.getState()
 }
 
@@ -37,7 +37,7 @@ func (nc *NoiseConn) GetConnectionState() ConnState {
 //
 // Thread Safety: This method is safe for concurrent use. The underlying
 // HandshakeState.PeerStatic() is mutex-protected.
-func (nc *NoiseConn) PeerStatic() []byte {
+func (nc *Conn) PeerStatic() []byte {
 	if nc.handshakeState == nil {
 		log.WithFields(i2plogger.Fields{"pkg": "noise", "func": "NoiseConn.PeerStatic"}).Debug("handshake state is nil")
 		return nil
@@ -55,7 +55,7 @@ func (nc *NoiseConn) PeerStatic() []byte {
 //
 // Thread Safety: This method is safe for concurrent use. The underlying
 // HandshakeState.ChannelBinding() is mutex-protected.
-func (nc *NoiseConn) ChannelBinding() []byte {
+func (nc *Conn) ChannelBinding() []byte {
 	if nc.handshakeState == nil {
 		log.WithFields(i2plogger.Fields{"pkg": "noise", "func": "NoiseConn.ChannelBinding"}).Debug("handshake state is nil")
 		return nil
@@ -67,14 +67,14 @@ func (nc *NoiseConn) ChannelBinding() []byte {
 // SendCipherState returns the send-direction CipherState for direct access
 // by protocol layers (e.g., NTCP2 SipHash key derivation).
 // Returns nil before the handshake produces cipher states.
-func (nc *NoiseConn) SendCipherState() *noise.CipherState {
+func (nc *Conn) SendCipherState() *noise.CipherState {
 	return nc.sendCipherState
 }
 
 // RecvCipherState returns the receive-direction CipherState for direct access
 // by protocol layers.
 // Returns nil before the handshake produces cipher states.
-func (nc *NoiseConn) RecvCipherState() *noise.CipherState {
+func (nc *Conn) RecvCipherState() *noise.CipherState {
 	return nc.recvCipherState
 }
 
@@ -84,7 +84,7 @@ func (nc *NoiseConn) RecvCipherState() *noise.CipherState {
 //
 // After calling ZeroKeys, the connection can no longer encrypt or decrypt data.
 // Any subsequent Read/Write calls will fail.
-func (nc *NoiseConn) ZeroKeys() {
+func (nc *Conn) ZeroKeys() {
 	log.WithFields(i2plogger.Fields{"pkg": "noise", "func": "NoiseConn.ZeroKeys"}).Debug("zeroing cipher state key material")
 	if nc.sendCipherState != nil {
 		nc.sendCipherState.ZeroKey()
@@ -98,7 +98,7 @@ func (nc *NoiseConn) ZeroKeys() {
 // derived during the handshake Split(), per Noise spec §10.3.
 // Returns nil if no labels were configured or the handshake hasn't completed.
 // The returned keys correspond 1:1 to the configured AdditionalSymmetricKeyLabels.
-func (nc *NoiseConn) AdditionalSymmetricKeys() [][]byte {
+func (nc *Conn) AdditionalSymmetricKeys() [][]byte {
 	if nc.handshakeState == nil {
 		log.WithFields(i2plogger.Fields{"pkg": "noise", "func": "NoiseConn.AdditionalSymmetricKeys"}).Debug("handshake state is nil")
 		return nil
@@ -114,7 +114,7 @@ func (nc *NoiseConn) AdditionalSymmetricKeys() [][]byte {
 //
 // Rekey requires the handshake to be complete (connection in Established state).
 // It is safe for concurrent use; the underlying CipherState.Rekey() is mutex-protected.
-func (nc *NoiseConn) Rekey() error {
+func (nc *Conn) Rekey() error {
 	if nc.getState() != internal.StateEstablished {
 		return oops.
 			Code("REKEY_INVALID_STATE").
@@ -143,7 +143,7 @@ func (nc *NoiseConn) Rekey() error {
 // SetShutdownManager sets the shutdown manager for this connection.
 // If a shutdown manager is set, the connection will be automatically
 // registered for graceful shutdown coordination.
-func (nc *NoiseConn) SetShutdownManager(sm *shutdown.ShutdownManager) {
+func (nc *Conn) SetShutdownManager(sm *shutdown.ShutdownManager) {
 	nc.shutdownManager = sm
 	if sm != nil {
 		sm.RegisterConnection(nc)
@@ -151,26 +151,26 @@ func (nc *NoiseConn) SetShutdownManager(sm *shutdown.ShutdownManager) {
 }
 
 // isClosed returns true if the connection is closed
-func (nc *NoiseConn) isClosed() bool {
+func (nc *Conn) isClosed() bool {
 	return nc.getState() == internal.StateClosed
 }
 
 // isHandshakeDone returns true if the handshake is complete
 // Only established connections have completed handshakes - closed connections should not pass this check
-func (nc *NoiseConn) isHandshakeDone() bool {
+func (nc *Conn) isHandshakeDone() bool {
 	state := nc.getState()
 	return state == internal.StateEstablished
 }
 
 // getState returns the current connection state in a thread-safe manner
-func (nc *NoiseConn) getState() internal.ConnState {
+func (nc *Conn) getState() internal.ConnState {
 	nc.stateMutex.RLock()
 	defer nc.stateMutex.RUnlock()
 	return nc.state
 }
 
 // setState sets the connection state in a thread-safe manner
-func (nc *NoiseConn) setState(newState internal.ConnState) {
+func (nc *Conn) setState(newState internal.ConnState) {
 	nc.stateMutex.Lock()
 	defer nc.stateMutex.Unlock()
 

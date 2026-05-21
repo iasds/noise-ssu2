@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/go-i2p/go-noise"
-	"github.com/go-i2p/go-noise/examples/shared"
+	"github.com/go-i2p/go-noise/examples/cliutil"
 	"github.com/go-i2p/go-noise/pool"
 )
 

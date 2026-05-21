@@ -7,7 +7,7 @@ import (
 	"net"
 
 	"github.com/go-i2p/common/data"
-	shared "github.com/go-i2p/go-noise/examples/ntcp2-shared"
+	shared "github.com/go-i2p/go-noise/examples/cliutil"
 	"github.com/go-i2p/go-noise/ntcp2"
 )
 
@@ -68,7 +68,7 @@ func demonstrateNTCP2Addressing() {
 }
 
 // displayAddressInfo prints NTCP2 address details
-func displayAddressInfo(ntcpAddr *ntcp2.NTCP2Addr, routerHash []byte) {
+func displayAddressInfo(ntcpAddr *ntcp2.Addr, routerHash []byte) {
 	fmt.Printf("NTCP2 Address with User Router Hash:\n")
 	fmt.Printf("  Network: %s\n", ntcpAddr.Network())
 	fmt.Printf("  String:  %s\n", ntcpAddr.String())

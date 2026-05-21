@@ -306,7 +306,7 @@ func TestNoiseAddrUnderlying(t *testing.T) {
 
 // TestNoiseAddrNetAddrInterface verifies that NoiseAddr implements net.Addr
 func TestNoiseAddrNetAddrInterface(t *testing.T) {
-	var _ net.Addr = (*NoiseAddr)(nil)
+	var _ net.Addr = (*Addr)(nil)
 }
 
 // TestNoiseAddrConcurrency tests concurrent access to NoiseAddr methods

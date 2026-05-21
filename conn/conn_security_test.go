@@ -16,7 +16,7 @@ import (
 // setupNNHandshake creates an NN handshake pair over net.Pipe and completes
 // the handshake. Returns the established initiator and responder NoiseConns.
 // The caller must Close() both connections when done.
-func setupNNHandshake(t *testing.T) (initiator, responder *NoiseConn) {
+func setupNNHandshake(t *testing.T) (initiator, responder *Conn) {
 	t.Helper()
 
 	clientPipe, serverPipe := net.Pipe()
@@ -237,12 +237,12 @@ func TestDecrypt_TamperedCiphertext(t *testing.T) {
 func TestRekey_ErrorStates(t *testing.T) {
 	tests := []struct {
 		name      string
-		setup     func(t *testing.T) *NoiseConn
+		setup     func(t *testing.T) *Conn
 		errSubstr string
 	}{
 		{
 			name: "before handshake",
-			setup: func(t *testing.T) *NoiseConn {
+			setup: func(t *testing.T) *Conn {
 				t.Helper()
 				conn, err := createTestConnection()
 				require.NoError(t, err)
@@ -252,7 +252,7 @@ func TestRekey_ErrorStates(t *testing.T) {
 		},
 		{
 			name: "nil cipher state",
-			setup: func(t *testing.T) *NoiseConn {
+			setup: func(t *testing.T) *Conn {
 				t.Helper()
 				conn, err := createTestConnection()
 				require.NoError(t, err)
@@ -263,7 +263,7 @@ func TestRekey_ErrorStates(t *testing.T) {
 		},
 		{
 			name: "after close",
-			setup: func(t *testing.T) *NoiseConn {
+			setup: func(t *testing.T) *Conn {
 				t.Helper()
 				conn, err := createTestConnection()
 				require.NoError(t, err)
@@ -274,7 +274,7 @@ func TestRekey_ErrorStates(t *testing.T) {
 		},
 		{
 			name: "handshaking state",
-			setup: func(t *testing.T) *NoiseConn {
+			setup: func(t *testing.T) *Conn {
 				t.Helper()
 				conn, err := createTestConnection()
 				require.NoError(t, err)
@@ -386,7 +386,7 @@ func TestChannelBinding_NilHandshakeState(t *testing.T) {
 
 	// handshakeState is set by NewNoiseConn, but test the nil path
 	// by creating a minimal NoiseConn manually.
-	nc := &NoiseConn{
+	nc := &Conn{
 		underlying: newMockNetConn(
 			&mockNetAddr{"tcp", "127.0.0.1:1"},
 			&mockNetAddr{"tcp", "127.0.0.1:2"},
@@ -460,7 +460,7 @@ func TestCipherStateAccessors_AfterHandshake(t *testing.T) {
 // TestAdditionalSymmetricKeys_NilHandshakeState verifies ASK returns nil
 // when the handshake state is nil.
 func TestAdditionalSymmetricKeys_NilHandshakeState(t *testing.T) {
-	nc := &NoiseConn{
+	nc := &Conn{
 		underlying: newMockNetConn(
 			&mockNetAddr{"tcp", "127.0.0.1:1"},
 			&mockNetAddr{"tcp", "127.0.0.1:2"},
@@ -494,7 +494,7 @@ func TestAdditionalSymmetricKeys_NoLabels(t *testing.T) {
 // TestPeerStatic_NilHandshakeState verifies PeerStatic returns nil
 // when the handshake state is nil.
 func TestPeerStatic_NilHandshakeState(t *testing.T) {
-	nc := &NoiseConn{
+	nc := &Conn{
 		underlying: newMockNetConn(
 			&mockNetAddr{"tcp", "127.0.0.1:1"},
 			&mockNetAddr{"tcp", "127.0.0.1:2"},

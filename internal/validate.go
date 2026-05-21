@@ -32,6 +32,15 @@ func ValidateHandshakeTimeout(timeout time.Duration, pkg string) error {
 	return nil
 }
 
+// ValidateKeySize validates that a key has the expected size.
+func ValidateKeySize(key []byte, expectedSize int) bool {
+	valid := len(key) == expectedSize
+	if !valid {
+		log.WithFields(logger.Fields{"pkg": "internal", "func": "ValidateKeySize", "expected": expectedSize, "actual": len(key)}).Warn("Key size mismatch")
+	}
+	return valid
+}
+
 // ValidateKeyLength checks that a key is either empty or exactly 32 bytes.
 func ValidateKeyLength(key []byte, name, pkg string) error {
 	log.WithFields(logger.Fields{"pkg": "internal", "func": "ValidateKeyLength", "key_name": name, "key_len": len(key), "calling_pkg": pkg}).Debug("Validating key length")

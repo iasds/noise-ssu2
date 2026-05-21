@@ -13,10 +13,10 @@ import (
 	"github.com/samber/oops"
 )
 
-// NoiseListener implements net.Listener for accepting Noise Protocol connections.
+// Listener implements net.Listener for accepting Noise Protocol connections.
 // It wraps an underlying net.Listener and provides encrypted connections
 // following the Noise Protocol Framework specification.
-type NoiseListener struct {
+type Listener struct {
 	// underlying is the wrapped network listener
 	underlying net.Listener
 
@@ -24,7 +24,7 @@ type NoiseListener struct {
 	config *ListenerConfig
 
 	// addr is the Noise address for this listener
-	addr *conn.NoiseAddr
+	addr *conn.Addr
 
 	// logger for listener events
 	logger *logger.Logger
@@ -75,7 +75,7 @@ type ListenerConfig struct {
 	//
 	// If the hook returns an error, the handshake is considered failed and
 	// the connection reverts to the Init state.
-	PostHandshakeHook func(*conn.NoiseConn) error
+	PostHandshakeHook func(*conn.Conn) error
 
 	// AdditionalSymmetricKeyLabels specifies labels for Additional Symmetric
 	// Key (ASK) derivation at Split() time, per Noise spec §10.3. Each label
@@ -144,7 +144,7 @@ func (lc *ListenerConfig) WithModifiers(modifiers ...handshake.HandshakeModifier
 
 // WithPostHandshakeHook sets a callback invoked after the Noise handshake completes
 // but before the connection transitions to the Established state.
-func (lc *ListenerConfig) WithPostHandshakeHook(hook func(*conn.NoiseConn) error) *ListenerConfig {
+func (lc *ListenerConfig) WithPostHandshakeHook(hook func(*conn.Conn) error) *ListenerConfig {
 	lc.PostHandshakeHook = hook
 	return lc
 }
@@ -211,7 +211,7 @@ func (lc *ListenerConfig) Validate() error {
 // NewNoiseListener creates a new NoiseListener that wraps the underlying listener.
 // The listener will accept connections and wrap them in NoiseConn instances
 // configured as responders (non-initiators) using the provided configuration.
-func NewNoiseListener(underlying net.Listener, config *ListenerConfig) (*NoiseListener, error) {
+func NewNoiseListener(underlying net.Listener, config *ListenerConfig) (*Listener, error) {
 	if underlying == nil {
 		return nil, oops.
 			Code("INVALID_LISTENER").
@@ -237,7 +237,7 @@ func NewNoiseListener(underlying net.Listener, config *ListenerConfig) (*NoiseLi
 	// Create Noise address for this listener
 	addr := conn.NewNoiseAddr(underlying.Addr(), config.Pattern, "responder")
 
-	nl := &NoiseListener{
+	nl := &Listener{
 		underlying: underlying,
 		config:     config,
 		addr:       addr,
@@ -259,7 +259,7 @@ func NewNoiseListener(underlying net.Listener, config *ListenerConfig) (*NoiseLi
 // Accept waits for and returns the next connection to the listener.
 // The returned connection is wrapped in a NoiseConn configured as a responder.
 // This method is safe for concurrent use by multiple goroutines.
-func (nl *NoiseListener) Accept() (net.Conn, error) {
+func (nl *Listener) Accept() (net.Conn, error) {
 	if nl.isClosed() {
 		return nil, oops.
 			Code("LISTENER_CLOSED").
@@ -309,7 +309,7 @@ func (nl *NoiseListener) Accept() (net.Conn, error) {
 // createAcceptConnConfig builds a ConnConfig for an accepted (responder)
 // connection, propagating all relevant fields from the ListenerConfig
 // including modifiers, post-handshake hook, and ASK labels.
-func (nl *NoiseListener) createAcceptConnConfig() *conn.ConnConfig {
+func (nl *Listener) createAcceptConnConfig() *conn.ConnConfig {
 	connConfig := conn.NewConnConfig(nl.config.Pattern, false). // false = responder
 									WithStaticKey(nl.config.StaticKey).
 									WithHandshakeTimeout(nl.config.HandshakeTimeout).
@@ -337,7 +337,7 @@ func (nl *NoiseListener) createAcceptConnConfig() *conn.ConnConfig {
 
 // Close closes the listener and prevents new connections from being accepted.
 // Any blocked Accept operations will be unblocked and return errors.
-func (nl *NoiseListener) Close() error {
+func (nl *Listener) Close() error {
 	nl.closeMutex.Lock()
 	defer nl.closeMutex.Unlock()
 
@@ -380,7 +380,7 @@ func (nl *NoiseListener) Close() error {
 // SetShutdownManager sets the shutdown manager for this listener.
 // If a shutdown manager is set, the listener will be automatically
 // registered for graceful shutdown coordination.
-func (nl *NoiseListener) SetShutdownManager(sm *shutdown.ShutdownManager) {
+func (nl *Listener) SetShutdownManager(sm *shutdown.ShutdownManager) {
 	nl.shutdownManager = sm
 	if sm != nil {
 		sm.RegisterListener(nl)
@@ -389,14 +389,14 @@ func (nl *NoiseListener) SetShutdownManager(sm *shutdown.ShutdownManager) {
 
 // Addr returns the listener's network address.
 // This is a NoiseAddr that wraps the underlying listener's address.
-func (nl *NoiseListener) Addr() net.Addr {
+func (nl *Listener) Addr() net.Addr {
 	return nl.addr
 }
 
 // isClosed returns true if the listener has been closed.
 // This method is thread-safe and acquires closeMutex internally;
 // do not call it while holding closeMutex.
-func (nl *NoiseListener) isClosed() bool {
+func (nl *Listener) isClosed() bool {
 	nl.closeMutex.Lock()
 	defer nl.closeMutex.Unlock()
 	return nl.closed

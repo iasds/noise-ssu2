@@ -13,10 +13,10 @@ import (
 	"github.com/samber/oops"
 )
 
-// NTCP2Config contains configuration for creating NTCP2 connections and listeners.
+// Config contains configuration for creating NTCP2 connections and listeners.
 // It follows the builder pattern for optional configuration and validation,
 // similar to the main ConnConfig but with NTCP2-specific parameters.
-type NTCP2Config struct {
+type Config struct {
 	// Pattern is the Noise protocol pattern for NTCP2
 	// Default: "XK" (standard NTCP2 pattern)
 	Pattern string
@@ -122,9 +122,9 @@ type NTCP2Config struct {
 // For a responder, pass your own router hash; for an initiator, pass the remote
 // peer's router hash.
 // initiator indicates whether this connection will initiate the handshake.
-func NewNTCP2Config(bobRouterHash data.Hash, initiator bool) (*NTCP2Config, error) {
+func NewNTCP2Config(bobRouterHash data.Hash, initiator bool) (*Config, error) {
 	log.WithFields(logger.Fields{"pkg": "ntcp2", "func": "NewNTCP2Config", "initiator": initiator}).Debug("Creating new NTCP2Config")
-	return &NTCP2Config{
+	return &Config{
 		Pattern:              NTCP2Pattern,
 		Initiator:            initiator,
 		BobRouterHash:        bobRouterHash,
@@ -144,7 +144,7 @@ func NewNTCP2Config(bobRouterHash data.Hash, initiator bool) (*NTCP2Config, erro
 
 // WithPattern sets the Noise protocol pattern.
 // For NTCP2, this should typically remain "XK".
-func (nc *NTCP2Config) WithPattern(pattern string) *NTCP2Config {
+func (nc *Config) WithPattern(pattern string) *Config {
 	nc.Pattern = pattern
 	return nc
 }
@@ -152,7 +152,7 @@ func (nc *NTCP2Config) WithPattern(pattern string) *NTCP2Config {
 // WithStaticKey sets the static key for this connection.
 // key must be 32 bytes for Curve25519. Invalid lengths are ignored;
 // call Validate() to check all fields before use.
-func (nc *NTCP2Config) WithStaticKey(key []byte) *NTCP2Config {
+func (nc *Config) WithStaticKey(key []byte) *Config {
 	if len(key) == StaticKeySize {
 		nc.StaticKey = make([]byte, StaticKeySize)
 		copy(nc.StaticKey, key)
@@ -163,7 +163,7 @@ func (nc *NTCP2Config) WithStaticKey(key []byte) *NTCP2Config {
 // WithRemoteRouterHash sets the remote peer's router identity.
 // hash must be 32 bytes. Required for outbound connections.
 // Invalid lengths are ignored; call Validate() to check all fields before use.
-func (nc *NTCP2Config) WithRemoteRouterHash(hash data.Hash) *NTCP2Config {
+func (nc *Config) WithRemoteRouterHash(hash data.Hash) *Config {
 	nc.RemoteRouterHash = &hash
 	return nc
 }
@@ -174,7 +174,7 @@ func (nc *NTCP2Config) WithRemoteRouterHash(hash data.Hash) *NTCP2Config {
 // pre-message (← s). This is distinct from RemoteRouterHash (which is
 // SHA-256 of the RouterIdentity).
 // Invalid lengths are ignored; call Validate() to check all fields before use.
-func (nc *NTCP2Config) WithRemoteStaticKey(key []byte) *NTCP2Config {
+func (nc *Config) WithRemoteStaticKey(key []byte) *Config {
 	if len(key) == StaticKeySize {
 		nc.RemoteStaticKey = make([]byte, StaticKeySize)
 		copy(nc.RemoteStaticKey, key)
@@ -183,32 +183,32 @@ func (nc *NTCP2Config) WithRemoteStaticKey(key []byte) *NTCP2Config {
 }
 
 // WithHandshakeTimeout sets the handshake timeout.
-func (nc *NTCP2Config) WithHandshakeTimeout(timeout time.Duration) *NTCP2Config {
+func (nc *Config) WithHandshakeTimeout(timeout time.Duration) *Config {
 	nc.HandshakeTimeout = timeout
 	return nc
 }
 
 // WithReadTimeout sets the read timeout for post-handshake operations.
-func (nc *NTCP2Config) WithReadTimeout(timeout time.Duration) *NTCP2Config {
+func (nc *Config) WithReadTimeout(timeout time.Duration) *Config {
 	nc.ReadTimeout = timeout
 	return nc
 }
 
 // WithWriteTimeout sets the write timeout for post-handshake operations.
-func (nc *NTCP2Config) WithWriteTimeout(timeout time.Duration) *NTCP2Config {
+func (nc *Config) WithWriteTimeout(timeout time.Duration) *Config {
 	nc.WriteTimeout = timeout
 	return nc
 }
 
 // WithHandshakeRetries sets the number of handshake retry attempts.
 // Use 0 for no retries, -1 for infinite retries.
-func (nc *NTCP2Config) WithHandshakeRetries(retries int) *NTCP2Config {
+func (nc *Config) WithHandshakeRetries(retries int) *Config {
 	nc.HandshakeRetries = retries
 	return nc
 }
 
 // WithRetryBackoff sets the base delay between retry attempts.
-func (nc *NTCP2Config) WithRetryBackoff(backoff time.Duration) *NTCP2Config {
+func (nc *Config) WithRetryBackoff(backoff time.Duration) *Config {
 	nc.RetryBackoff = backoff
 	return nc
 }
@@ -218,7 +218,7 @@ func (nc *NTCP2Config) WithRetryBackoff(backoff time.Duration) *NTCP2Config {
 // IV lengths are ignored. Call Validate() to check all fields before use.
 // Note: Options negotiation (padding limits as 4.4 fixed-point, dummy traffic,
 // delay parameters) is the responsibility of the higher-level router transport.
-func (nc *NTCP2Config) WithAESObfuscation(enabled bool, customIV []byte) *NTCP2Config {
+func (nc *Config) WithAESObfuscation(enabled bool, customIV []byte) *Config {
 	nc.EnableAESObfuscation = enabled
 	if len(customIV) == IVSize {
 		nc.ObfuscationIV = make([]byte, IVSize)
@@ -229,7 +229,7 @@ func (nc *NTCP2Config) WithAESObfuscation(enabled bool, customIV []byte) *NTCP2C
 
 // WithSipHashLength enables or disables SipHash-based frame length obfuscation.
 // When enabled with custom keys, both k1 and k2 must be provided.
-func (nc *NTCP2Config) WithSipHashLength(enabled bool, k1, k2 uint64) *NTCP2Config {
+func (nc *Config) WithSipHashLength(enabled bool, k1, k2 uint64) *Config {
 	nc.EnableSipHashLength = enabled
 	if enabled && (k1 != 0 || k2 != 0) {
 		nc.SipHashKeys[0] = k1
@@ -240,7 +240,7 @@ func (nc *NTCP2Config) WithSipHashLength(enabled bool, k1, k2 uint64) *NTCP2Conf
 
 // WithModifiers sets additional handshake modifiers for custom obfuscation.
 // These are applied in addition to NTCP2's standard modifiers.
-func (nc *NTCP2Config) WithModifiers(modifiers ...handshake.HandshakeModifier) *NTCP2Config {
+func (nc *Config) WithModifiers(modifiers ...handshake.HandshakeModifier) *Config {
 	// Make defensive copy
 	nc.Modifiers = make([]handshake.HandshakeModifier, len(modifiers))
 	copy(nc.Modifiers, modifiers)
@@ -250,7 +250,7 @@ func (nc *NTCP2Config) WithModifiers(modifiers ...handshake.HandshakeModifier) *
 // WithLocalRouterInfo sets Alice's serialized RouterInfo bytes for outbound
 // NTCP2 connections. The length is used to populate m3p2Len in the message 1
 // options block; the bytes are encrypted and sent as message 3 part 2.
-func (nc *NTCP2Config) WithLocalRouterInfo(ri []byte) *NTCP2Config {
+func (nc *Config) WithLocalRouterInfo(ri []byte) *Config {
 	if len(ri) > 0 {
 		nc.LocalRouterInfo = make([]byte, len(ri))
 		copy(nc.LocalRouterInfo, ri)
@@ -262,7 +262,7 @@ func (nc *NTCP2Config) WithLocalRouterInfo(ri []byte) *NTCP2Config {
 // maxSize sets the maximum frame size (default: 16384 bytes).
 // paddingEnabled enables random padding (default: true).
 // minPadding and maxPadding set the padding size range (default: 0-64 bytes).
-func (nc *NTCP2Config) WithFrameSettings(maxSize int, paddingEnabled bool, minPadding, maxPadding int) *NTCP2Config {
+func (nc *Config) WithFrameSettings(maxSize int, paddingEnabled bool, minPadding, maxPadding int) *Config {
 	if maxSize > 0 {
 		nc.MaxFrameSize = maxSize
 	}
@@ -277,7 +277,7 @@ func (nc *NTCP2Config) WithFrameSettings(maxSize int, paddingEnabled bool, minPa
 }
 
 // Validate checks if the configuration is valid for NTCP2.
-func (nc *NTCP2Config) Validate() error {
+func (nc *Config) Validate() error {
 	return internal.RunValidators(
 		nc.validateBasicConfiguration,
 		nc.validateCryptographicParameters,
@@ -288,7 +288,7 @@ func (nc *NTCP2Config) Validate() error {
 }
 
 // validateBasicConfiguration checks pattern and router hash requirements.
-func (nc *NTCP2Config) validateBasicConfiguration() error {
+func (nc *Config) validateBasicConfiguration() error {
 	log.WithFields(logger.Fields{"pkg": "ntcp2", "func": "NTCP2Config.validateBasicConfiguration"}).Debug("Validating NTCP2 basic configuration")
 	if err := internal.ValidatePattern(nc.Pattern, "ntcp2"); err != nil {
 		return err
@@ -300,7 +300,7 @@ func (nc *NTCP2Config) validateBasicConfiguration() error {
 }
 
 // validateCryptographicParameters checks static keys, remote hashes, and obfuscation settings.
-func (nc *NTCP2Config) validateCryptographicParameters() error {
+func (nc *Config) validateCryptographicParameters() error {
 	log.WithFields(logger.Fields{"pkg": "ntcp2", "func": "NTCP2Config.validateCryptographicParameters"}).Debug("Validating NTCP2 cryptographic parameters")
 	if err := internal.ValidateKeyLength(nc.StaticKey, "static key", "ntcp2"); err != nil {
 		return err
@@ -339,7 +339,7 @@ func (nc *NTCP2Config) validateCryptographicParameters() error {
 }
 
 // validateTimeoutConfiguration checks handshake timeouts and retry settings.
-func (nc *NTCP2Config) validateTimeoutConfiguration() error {
+func (nc *Config) validateTimeoutConfiguration() error {
 	log.WithFields(logger.Fields{"pkg": "ntcp2", "func": "NTCP2Config.validateTimeoutConfiguration"}).Debug("Validating NTCP2 timeout configuration")
 	if err := internal.ValidateHandshakeTimeout(nc.HandshakeTimeout, "ntcp2"); err != nil {
 		return err
@@ -348,7 +348,7 @@ func (nc *NTCP2Config) validateTimeoutConfiguration() error {
 }
 
 // validateFrameConfiguration checks frame size and padding settings.
-func (nc *NTCP2Config) validateFrameConfiguration() error {
+func (nc *Config) validateFrameConfiguration() error {
 	log.WithFields(logger.Fields{"pkg": "ntcp2", "func": "NTCP2Config.validateFrameConfiguration"}).Debug("Validating NTCP2 frame configuration")
 	// Validate frame settings
 	if nc.MaxFrameSize <= 0 {
@@ -376,7 +376,7 @@ func (nc *NTCP2Config) validateFrameConfiguration() error {
 }
 
 // validateModifiers rejects incompatible modifiers in the NTCP2 modifier chain.
-func (nc *NTCP2Config) validateModifiers() error {
+func (nc *Config) validateModifiers() error {
 	log.WithFields(logger.Fields{"pkg": "ntcp2", "func": "NTCP2Config.validateModifiers", "modifier_count": len(nc.Modifiers)}).Debug("Validating NTCP2 modifiers")
 	for _, mod := range nc.Modifiers {
 		if _, ok := mod.(*handshake.PaddingModifier); ok {
@@ -394,7 +394,7 @@ func (nc *NTCP2Config) validateModifiers() error {
 // This includes setting up NTCP2-specific modifiers based on the configuration.
 // A PostHandshakeHook is automatically registered when SipHash length obfuscation
 // is enabled — the hook captures the handshake hash for future SipHash key derivation.
-func (nc *NTCP2Config) ToConnConfig() (*noise.ConnConfig, error) {
+func (nc *Config) ToConnConfig() (*noise.ConnConfig, error) {
 	log.WithFields(logger.Fields{"pkg": "ntcp2", "func": "NTCP2Config.ToConnConfig"}).Debug("Converting NTCP2Config to ConnConfig")
 	if err := nc.Validate(); err != nil {
 		return nil, oops.
@@ -432,7 +432,7 @@ func (nc *NTCP2Config) ToConnConfig() (*noise.ConnConfig, error) {
 // This hook retrieves it via AdditionalSymmetricKeys()[0], then calls
 // DeriveSipHashKeys(askMaster, h) to produce directional SipHash keys
 // and stores them in the NTCP2Config for later use by NTCP2Conn.
-func (nc *NTCP2Config) createPostHandshakeHook() func(*noise.NoiseConn) error {
+func (nc *Config) createPostHandshakeHook() func(*noise.NoiseConn) error {
 	return func(conn *noise.NoiseConn) error {
 		h := conn.ChannelBinding()
 		if h == nil {
@@ -497,7 +497,7 @@ func (nc *NTCP2Config) createPostHandshakeHook() func(*noise.NoiseConn) error {
 }
 
 // createBaseConnConfig creates a base ConnConfig with core NTCP2 settings.
-func (nc *NTCP2Config) createBaseConnConfig() *noise.ConnConfig {
+func (nc *Config) createBaseConnConfig() *noise.ConnConfig {
 	// When no static key is provided, use nil (not a zero-length slice)
 	// so the upstream library can distinguish "no key" from "empty key".
 	var staticKey []byte
@@ -536,7 +536,7 @@ func (nc *NTCP2Config) createBaseConnConfig() *noise.ConnConfig {
 }
 
 // setupNTCP2Modifiers creates and configures all NTCP2-specific handshake modifiers.
-func (nc *NTCP2Config) setupNTCP2Modifiers() ([]handshake.HandshakeModifier, error) {
+func (nc *Config) setupNTCP2Modifiers() ([]handshake.HandshakeModifier, error) {
 	log.WithFields(logger.Fields{"pkg": "ntcp2", "func": "NTCP2Config.setupNTCP2Modifiers"}).Debug("Setting up NTCP2-specific modifiers")
 	var modifiers []handshake.HandshakeModifier
 
@@ -571,7 +571,7 @@ func (nc *NTCP2Config) setupNTCP2Modifiers() ([]handshake.HandshakeModifier, err
 }
 
 // createAESModifierIfEnabled creates an AES obfuscation modifier if enabled.
-func (nc *NTCP2Config) createAESModifierIfEnabled() (handshake.HandshakeModifier, error) {
+func (nc *Config) createAESModifierIfEnabled() (handshake.HandshakeModifier, error) {
 	if !nc.EnableAESObfuscation {
 		return nil, nil
 	}
@@ -604,7 +604,7 @@ func (nc *NTCP2Config) createAESModifierIfEnabled() (handshake.HandshakeModifier
 // and then create a directional modifier via NewSipHashLengthModifierDirectional().
 // The placeholder modifier returned here uses shared zero keys and is only
 // suitable as a handshake-phase pass-through (SipHash is a no-op before PhaseFinal).
-func (nc *NTCP2Config) createSipHashModifierIfEnabled() *SipHashLengthModifier {
+func (nc *Config) createSipHashModifierIfEnabled() *SipHashLengthModifier {
 	if !nc.EnableSipHashLength {
 		return nil
 	}
@@ -620,7 +620,7 @@ func (nc *NTCP2Config) createSipHashModifierIfEnabled() *SipHashLengthModifier {
 // Uses AEAD padding (block format with type 254) for the data phase.
 // Cleartext padding for handshake messages 1-2 is handled at the transport
 // layer (appended after the fixed-size Noise message; receiver ignores it).
-func (nc *NTCP2Config) createPaddingModifierIfEnabled() (handshake.HandshakeModifier, error) {
+func (nc *Config) createPaddingModifierIfEnabled() (handshake.HandshakeModifier, error) {
 	if !nc.FramePaddingEnabled {
 		return nil, nil
 	}
@@ -643,7 +643,7 @@ func (nc *NTCP2Config) createPaddingModifierIfEnabled() (handshake.HandshakeModi
 // Returns nil if SipHash length obfuscation is disabled or ToConnConfig() hasn't been called.
 // Each call to ToConnConfig() creates a fresh modifier instance, so configs can be safely
 // reused for multiple connections without sharing IV state.
-func (nc *NTCP2Config) SipHashModifier() *SipHashLengthModifier {
+func (nc *Config) SipHashModifier() *SipHashLengthModifier {
 	return nc.sipHashModifier.Load()
 }
 
@@ -662,8 +662,8 @@ func (nc *NTCP2Config) SipHashModifier() *SipHashLengthModifier {
 // instances with independent state. The listener path does this correctly.
 // Direct use of Clone() without ToConnConfig() will cause data races
 // and corrupt handshake state if both configs are active concurrently.
-func (nc *NTCP2Config) Clone() *NTCP2Config {
-	clone := &NTCP2Config{
+func (nc *Config) Clone() *Config {
+	clone := &Config{
 		Pattern:              nc.Pattern,
 		Initiator:            nc.Initiator,
 		HandshakeTimeout:     nc.HandshakeTimeout,

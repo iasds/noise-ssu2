@@ -123,13 +123,13 @@ func TestNTCP2ConfigComprehensiveValidation(t *testing.T) {
 
 	tests := []struct {
 		name        string
-		setupConfig func() *NTCP2Config
+		setupConfig func() *Config
 		expectError bool
 		errorCode   string
 	}{
 		{
 			name: "valid config",
-			setupConfig: func() *NTCP2Config {
+			setupConfig: func() *Config {
 				config, _ := NewNTCP2Config(routerHash, false)
 				return config
 			},
@@ -137,7 +137,7 @@ func TestNTCP2ConfigComprehensiveValidation(t *testing.T) {
 		},
 		{
 			name: "invalid static key",
-			setupConfig: func() *NTCP2Config {
+			setupConfig: func() *Config {
 				config, _ := NewNTCP2Config(routerHash, false)
 				config.StaticKey = make([]byte, 16) // Invalid length
 				return config
@@ -147,7 +147,7 @@ func TestNTCP2ConfigComprehensiveValidation(t *testing.T) {
 		},
 		{
 			name: "missing remote hash for initiator",
-			setupConfig: func() *NTCP2Config {
+			setupConfig: func() *Config {
 				config, _ := NewNTCP2Config(routerHash, true) // Initiator = true
 				config.RemoteRouterHash = nil
 				return config
@@ -157,7 +157,7 @@ func TestNTCP2ConfigComprehensiveValidation(t *testing.T) {
 		},
 		{
 			name: "invalid handshake timeout",
-			setupConfig: func() *NTCP2Config {
+			setupConfig: func() *Config {
 				config, _ := NewNTCP2Config(routerHash, false)
 				config.HandshakeTimeout = -1 * time.Second
 				return config
@@ -167,7 +167,7 @@ func TestNTCP2ConfigComprehensiveValidation(t *testing.T) {
 		},
 		{
 			name: "invalid retry count",
-			setupConfig: func() *NTCP2Config {
+			setupConfig: func() *Config {
 				config, _ := NewNTCP2Config(routerHash, false)
 				config.HandshakeRetries = -2 // Less than -1
 				return config
@@ -177,7 +177,7 @@ func TestNTCP2ConfigComprehensiveValidation(t *testing.T) {
 		},
 		{
 			name: "invalid retry backoff",
-			setupConfig: func() *NTCP2Config {
+			setupConfig: func() *Config {
 				config, _ := NewNTCP2Config(routerHash, false)
 				config.RetryBackoff = -1 * time.Second
 				return config
@@ -187,7 +187,7 @@ func TestNTCP2ConfigComprehensiveValidation(t *testing.T) {
 		},
 		{
 			name: "invalid obfuscation IV",
-			setupConfig: func() *NTCP2Config {
+			setupConfig: func() *Config {
 				config, _ := NewNTCP2Config(routerHash, false)
 				config.ObfuscationIV = make([]byte, 8) // Invalid length
 				return config
@@ -197,7 +197,7 @@ func TestNTCP2ConfigComprehensiveValidation(t *testing.T) {
 		},
 		{
 			name: "invalid max frame size",
-			setupConfig: func() *NTCP2Config {
+			setupConfig: func() *Config {
 				config, _ := NewNTCP2Config(routerHash, false)
 				config.MaxFrameSize = 0
 				return config
@@ -207,7 +207,7 @@ func TestNTCP2ConfigComprehensiveValidation(t *testing.T) {
 		},
 		{
 			name: "invalid min padding",
-			setupConfig: func() *NTCP2Config {
+			setupConfig: func() *Config {
 				config, _ := NewNTCP2Config(routerHash, false)
 				config.MinPaddingSize = -1
 				return config
@@ -217,7 +217,7 @@ func TestNTCP2ConfigComprehensiveValidation(t *testing.T) {
 		},
 		{
 			name: "invalid padding range",
-			setupConfig: func() *NTCP2Config {
+			setupConfig: func() *Config {
 				config, _ := NewNTCP2Config(routerHash, false)
 				config.MinPaddingSize = 100
 				config.MaxPaddingSize = 50
@@ -467,7 +467,7 @@ func TestWithAESObfuscation_WrongIVLengthReturnsError(t *testing.T) {
 
 // newResponderConfigWithAES creates a responder NTCP2Config with random
 // router hash and AES obfuscation enabled, suitable for SipHash/KDF tests.
-func newResponderConfigWithAES(t *testing.T) *NTCP2Config {
+func newResponderConfigWithAES(t *testing.T) *Config {
 	t.Helper()
 	config := newTestNTCP2ConfigSimple(t, false)
 
@@ -510,7 +510,7 @@ func TestAuditFix_Clone_IndependentConfig(t *testing.T) {
 	var originalHash data.Hash
 	copy(originalHash[:], "original-hash-32-bytes-long!!!!!")
 
-	original := &NTCP2Config{
+	original := &Config{
 		Pattern:       "XK",
 		MaxFrameSize:  16384,
 		BobRouterHash: originalHash,
@@ -619,7 +619,7 @@ func TestAuditFix_Clone_DocCommentsPresent(t *testing.T) {
 func TestClone_AllNilOptionalFields(t *testing.T) {
 	// Create a config with only required fields set (BobRouterHash) and
 	// explicitly nil optional fields
-	original := &NTCP2Config{
+	original := &Config{
 		Pattern:              "XK",
 		Initiator:            true,
 		BobRouterHash:        data.Hash{},
@@ -667,7 +667,7 @@ func TestClone_AllOptionalFieldsPopulated(t *testing.T) {
 	mod1 := &testModifier{name: "mod1"}
 	mod2 := &testModifier{name: "mod2"}
 
-	original := &NTCP2Config{
+	original := &Config{
 		Pattern:          "XK",
 		Initiator:        true,
 		BobRouterHash:    data.Hash{},
@@ -724,7 +724,7 @@ func TestClone_AllOptionalFieldsPopulated(t *testing.T) {
 // are nil and some are populated. Each nil-check branch is tested independently.
 func TestClone_PartialNilFields(t *testing.T) {
 	t.Run("StaticKey_nil_others_set", func(t *testing.T) {
-		original := &NTCP2Config{
+		original := &Config{
 			BobRouterHash:    data.Hash{},
 			StaticKey:        nil,
 			RemoteRouterHash: hashPtr(data.Hash{}),
@@ -739,7 +739,7 @@ func TestClone_PartialNilFields(t *testing.T) {
 	})
 
 	t.Run("RemoteRouterHash_nil_others_set", func(t *testing.T) {
-		original := &NTCP2Config{
+		original := &Config{
 			BobRouterHash:    data.Hash{},
 			StaticKey:        make([]byte, 32),
 			RemoteRouterHash: nil,
@@ -754,7 +754,7 @@ func TestClone_PartialNilFields(t *testing.T) {
 	})
 
 	t.Run("RemoteStaticKey_nil_others_set", func(t *testing.T) {
-		original := &NTCP2Config{
+		original := &Config{
 			BobRouterHash:    data.Hash{},
 			StaticKey:        make([]byte, 32),
 			RemoteRouterHash: hashPtr(data.Hash{}),
@@ -769,7 +769,7 @@ func TestClone_PartialNilFields(t *testing.T) {
 	})
 
 	t.Run("ObfuscationIV_nil_others_set", func(t *testing.T) {
-		original := &NTCP2Config{
+		original := &Config{
 			BobRouterHash:    data.Hash{},
 			StaticKey:        make([]byte, 32),
 			RemoteRouterHash: hashPtr(data.Hash{}),
@@ -784,7 +784,7 @@ func TestClone_PartialNilFields(t *testing.T) {
 	})
 
 	t.Run("Modifiers_nil_others_set", func(t *testing.T) {
-		original := &NTCP2Config{
+		original := &Config{
 			BobRouterHash: data.Hash{},
 			StaticKey:     make([]byte, 32),
 			Modifiers:     nil,
@@ -795,7 +795,7 @@ func TestClone_PartialNilFields(t *testing.T) {
 	})
 
 	t.Run("Modifiers_empty_slice", func(t *testing.T) {
-		original := &NTCP2Config{
+		original := &Config{
 			BobRouterHash: data.Hash{},
 			Modifiers:     []handshake.HandshakeModifier{},
 		}
@@ -806,7 +806,7 @@ func TestClone_PartialNilFields(t *testing.T) {
 	})
 
 	t.Run("BobRouterHash_zero", func(t *testing.T) {
-		original := &NTCP2Config{
+		original := &Config{
 			BobRouterHash: data.Hash{},
 			StaticKey:     make([]byte, 32),
 		}
@@ -819,7 +819,7 @@ func TestClone_PartialNilFields(t *testing.T) {
 // TestClone_ValueFieldIndependence verifies that all value-type fields in the
 // clone are independent of the original (no shared pointer state).
 func TestClone_ValueFieldIndependence(t *testing.T) {
-	original := &NTCP2Config{
+	original := &Config{
 		Pattern:              "XK",
 		Initiator:            true,
 		BobRouterHash:        data.Hash{},
@@ -875,7 +875,7 @@ func TestClone_ValueFieldIndependence(t *testing.T) {
 // newSipHashTestConfig creates an initiator NTCP2Config with the keys
 // required for SipHash modifier tests (router hash, remote hash, static key,
 // remote static key, and AES obfuscation).
-func newSipHashTestConfig(t *testing.T) *NTCP2Config {
+func newSipHashTestConfig(t *testing.T) *Config {
 	t.Helper()
 	var routerHash data.Hash
 	copy(routerHash[:], "test-router-hash-32-bytes-long!")

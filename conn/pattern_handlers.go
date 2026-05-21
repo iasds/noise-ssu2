@@ -10,44 +10,44 @@ import (
 )
 
 // patternHandlerFunc is the signature for a Noise handshake pattern handler.
-type patternHandlerFunc func(nc *NoiseConn, ctx context.Context) error
+type patternHandlerFunc func(nc *Conn, ctx context.Context) error
 
 // initiatorHandlers maps pattern names to their initiator handshake implementations.
 var initiatorHandlers = map[string]patternHandlerFunc{
-	"N":  (*NoiseConn).performNInitiator,
-	"K":  (*NoiseConn).performKInitiator,
-	"X":  (*NoiseConn).performXInitiator,
-	"NN": (*NoiseConn).performNNInitiator,
-	"NK": (*NoiseConn).performNKInitiator,
-	"NX": (*NoiseConn).performNXInitiator,
-	"XN": (*NoiseConn).performXNInitiator,
-	"XK": (*NoiseConn).performXKInitiator,
-	"XX": (*NoiseConn).performXXInitiator,
-	"KN": (*NoiseConn).performKNInitiator,
-	"KK": (*NoiseConn).performKKInitiator,
-	"KX": (*NoiseConn).performKXInitiator,
-	"IN": (*NoiseConn).performINInitiator,
-	"IK": (*NoiseConn).performIKInitiator,
-	"IX": (*NoiseConn).performIXInitiator,
+	"N":  (*Conn).performNInitiator,
+	"K":  (*Conn).performKInitiator,
+	"X":  (*Conn).performXInitiator,
+	"NN": (*Conn).performNNInitiator,
+	"NK": (*Conn).performNKInitiator,
+	"NX": (*Conn).performNXInitiator,
+	"XN": (*Conn).performXNInitiator,
+	"XK": (*Conn).performXKInitiator,
+	"XX": (*Conn).performXXInitiator,
+	"KN": (*Conn).performKNInitiator,
+	"KK": (*Conn).performKKInitiator,
+	"KX": (*Conn).performKXInitiator,
+	"IN": (*Conn).performINInitiator,
+	"IK": (*Conn).performIKInitiator,
+	"IX": (*Conn).performIXInitiator,
 }
 
 // responderHandlers maps pattern names to their responder handshake implementations.
 var responderHandlers = map[string]patternHandlerFunc{
-	"N":  (*NoiseConn).performNResponder,
-	"K":  (*NoiseConn).performKResponder,
-	"X":  (*NoiseConn).performXResponder,
-	"NN": (*NoiseConn).performNNResponder,
-	"NK": (*NoiseConn).performNKResponder,
-	"NX": (*NoiseConn).performNXResponder,
-	"XN": (*NoiseConn).performXNResponder,
-	"XK": (*NoiseConn).performXKResponder,
-	"XX": (*NoiseConn).performXXResponder,
-	"KN": (*NoiseConn).performKNResponder,
-	"KK": (*NoiseConn).performKKResponder,
-	"KX": (*NoiseConn).performKXResponder,
-	"IN": (*NoiseConn).performINResponder,
-	"IK": (*NoiseConn).performIKResponder,
-	"IX": (*NoiseConn).performIXResponder,
+	"N":  (*Conn).performNResponder,
+	"K":  (*Conn).performKResponder,
+	"X":  (*Conn).performXResponder,
+	"NN": (*Conn).performNNResponder,
+	"NK": (*Conn).performNKResponder,
+	"NX": (*Conn).performNXResponder,
+	"XN": (*Conn).performXNResponder,
+	"XK": (*Conn).performXKResponder,
+	"XX": (*Conn).performXXResponder,
+	"KN": (*Conn).performKNResponder,
+	"KK": (*Conn).performKKResponder,
+	"KX": (*Conn).performKXResponder,
+	"IN": (*Conn).performINResponder,
+	"IK": (*Conn).performIKResponder,
+	"IX": (*Conn).performIXResponder,
 }
 
 // normalizePattern extracts the short pattern name from a full Noise protocol
@@ -60,7 +60,7 @@ func normalizePattern(pattern string) string {
 }
 
 // performInitiatorHandshake handles the initiator side of the handshake.
-func (nc *NoiseConn) performInitiatorHandshake(ctx context.Context) error {
+func (nc *Conn) performInitiatorHandshake(ctx context.Context) error {
 	pattern := nc.config.Pattern
 	nc.logger.WithFields(i2plogger.Fields{
 		"pkg":         "noise",
@@ -82,7 +82,7 @@ func (nc *NoiseConn) performInitiatorHandshake(ctx context.Context) error {
 }
 
 // performResponderHandshake handles the responder side of the handshake.
-func (nc *NoiseConn) performResponderHandshake(ctx context.Context) error {
+func (nc *Conn) performResponderHandshake(ctx context.Context) error {
 	pattern := nc.config.Pattern
 	nc.logger.WithFields(i2plogger.Fields{
 		"pkg":         "noise",
@@ -108,37 +108,37 @@ func (nc *NoiseConn) performResponderHandshake(ctx context.Context) error {
 // ============================================================================
 
 // performNInitiator handles N pattern as initiator: → e, es
-func (nc *NoiseConn) performNInitiator(ctx context.Context) error {
+func (nc *Conn) performNInitiator(ctx context.Context) error {
 	log.WithFields(i2plogger.Fields{"pkg": "noise", "func": "NoiseConn.performNInitiator"}).Debug("starting N pattern initiator")
 	return nc.sendNoiseHandshakeMsg(handshake.PhaseInitial, "N")
 }
 
 // performKInitiator handles K pattern as initiator: → e, es, ss
-func (nc *NoiseConn) performKInitiator(ctx context.Context) error {
+func (nc *Conn) performKInitiator(ctx context.Context) error {
 	log.WithFields(i2plogger.Fields{"pkg": "noise", "func": "NoiseConn.performKInitiator"}).Debug("starting K pattern initiator")
 	return nc.sendNoiseHandshakeMsg(handshake.PhaseInitial, "K")
 }
 
 // performXInitiator handles X pattern as initiator: → e, es, s, ss
-func (nc *NoiseConn) performXInitiator(ctx context.Context) error {
+func (nc *Conn) performXInitiator(ctx context.Context) error {
 	log.WithFields(i2plogger.Fields{"pkg": "noise", "func": "NoiseConn.performXInitiator"}).Debug("starting X pattern initiator")
 	return nc.sendNoiseHandshakeMsg(handshake.PhaseInitial, "X")
 }
 
 // performNResponder handles N pattern as responder: → e, es
-func (nc *NoiseConn) performNResponder(ctx context.Context) error {
+func (nc *Conn) performNResponder(ctx context.Context) error {
 	log.WithFields(i2plogger.Fields{"pkg": "noise", "func": "NoiseConn.performNResponder"}).Debug("starting N pattern responder")
 	return nc.receiveNoiseHandshakeMsg(handshake.PhaseInitial, "N")
 }
 
 // performKResponder handles K pattern as responder: → e, es, ss
-func (nc *NoiseConn) performKResponder(ctx context.Context) error {
+func (nc *Conn) performKResponder(ctx context.Context) error {
 	log.WithFields(i2plogger.Fields{"pkg": "noise", "func": "NoiseConn.performKResponder"}).Debug("starting K pattern responder")
 	return nc.receiveNoiseHandshakeMsg(handshake.PhaseInitial, "K")
 }
 
 // performXResponder handles X pattern as responder: → e, es, s, ss
-func (nc *NoiseConn) performXResponder(ctx context.Context) error {
+func (nc *Conn) performXResponder(ctx context.Context) error {
 	log.WithFields(i2plogger.Fields{"pkg": "noise", "func": "NoiseConn.performXResponder"}).Debug("starting X pattern responder")
 	return nc.receiveNoiseHandshakeMsg(handshake.PhaseInitial, "X")
 }
@@ -148,7 +148,7 @@ func (nc *NoiseConn) performXResponder(ctx context.Context) error {
 // ============================================================================
 
 // performNNInitiator handles NN pattern as initiator
-func (nc *NoiseConn) performNNInitiator(ctx context.Context) error {
+func (nc *Conn) performNNInitiator(ctx context.Context) error {
 	log.WithFields(i2plogger.Fields{"pkg": "noise", "func": "NoiseConn.performNNInitiator"}).Debug("starting NN pattern initiator")
 	if err := nc.sendNoiseHandshakeMsg(handshake.PhaseInitial, "first NN"); err != nil {
 		return err
@@ -157,7 +157,7 @@ func (nc *NoiseConn) performNNInitiator(ctx context.Context) error {
 }
 
 // performNNResponder handles NN pattern as responder
-func (nc *NoiseConn) performNNResponder(ctx context.Context) error {
+func (nc *Conn) performNNResponder(ctx context.Context) error {
 	log.WithFields(i2plogger.Fields{"pkg": "noise", "func": "NoiseConn.performNNResponder"}).Debug("starting NN pattern responder")
 	if err := nc.receiveNoiseHandshakeMsg(handshake.PhaseInitial, "first NN"); err != nil {
 		return err
@@ -166,7 +166,7 @@ func (nc *NoiseConn) performNNResponder(ctx context.Context) error {
 }
 
 // performNKInitiator handles NK pattern as initiator: → e, es, ← e, ee
-func (nc *NoiseConn) performNKInitiator(ctx context.Context) error {
+func (nc *Conn) performNKInitiator(ctx context.Context) error {
 	log.WithFields(i2plogger.Fields{"pkg": "noise", "func": "NoiseConn.performNKInitiator"}).Debug("starting NK pattern initiator")
 	if err := nc.sendNoiseHandshakeMsg(handshake.PhaseInitial, "first NK"); err != nil {
 		return err
@@ -175,7 +175,7 @@ func (nc *NoiseConn) performNKInitiator(ctx context.Context) error {
 }
 
 // performNKResponder handles NK pattern as responder: → e, es, ← e, ee
-func (nc *NoiseConn) performNKResponder(ctx context.Context) error {
+func (nc *Conn) performNKResponder(ctx context.Context) error {
 	log.WithFields(i2plogger.Fields{"pkg": "noise", "func": "NoiseConn.performNKResponder"}).Debug("starting NK pattern responder")
 	if err := nc.receiveNoiseHandshakeMsg(handshake.PhaseInitial, "first NK"); err != nil {
 		return err
@@ -184,7 +184,7 @@ func (nc *NoiseConn) performNKResponder(ctx context.Context) error {
 }
 
 // performNXInitiator handles NX pattern as initiator: → e, ← e, ee, s, es
-func (nc *NoiseConn) performNXInitiator(ctx context.Context) error {
+func (nc *Conn) performNXInitiator(ctx context.Context) error {
 	log.WithFields(i2plogger.Fields{"pkg": "noise", "func": "NoiseConn.performNXInitiator"}).Debug("starting NX pattern initiator")
 	if err := nc.sendNoiseHandshakeMsg(handshake.PhaseInitial, "first NX"); err != nil {
 		return err
@@ -193,7 +193,7 @@ func (nc *NoiseConn) performNXInitiator(ctx context.Context) error {
 }
 
 // performNXResponder handles NX pattern as responder: → e, ← e, ee, s, es
-func (nc *NoiseConn) performNXResponder(ctx context.Context) error {
+func (nc *Conn) performNXResponder(ctx context.Context) error {
 	log.WithFields(i2plogger.Fields{"pkg": "noise", "func": "NoiseConn.performNXResponder"}).Debug("starting NX pattern responder")
 	if err := nc.receiveNoiseHandshakeMsg(handshake.PhaseInitial, "first NX"); err != nil {
 		return err
@@ -202,7 +202,7 @@ func (nc *NoiseConn) performNXResponder(ctx context.Context) error {
 }
 
 // performKNInitiator handles KN pattern as initiator: → e, ← e, ee, se, es
-func (nc *NoiseConn) performKNInitiator(ctx context.Context) error {
+func (nc *Conn) performKNInitiator(ctx context.Context) error {
 	log.WithFields(i2plogger.Fields{"pkg": "noise", "func": "NoiseConn.performKNInitiator"}).Debug("starting KN pattern initiator")
 	if err := nc.sendNoiseHandshakeMsg(handshake.PhaseInitial, "first KN"); err != nil {
 		return err
@@ -211,7 +211,7 @@ func (nc *NoiseConn) performKNInitiator(ctx context.Context) error {
 }
 
 // performKNResponder handles KN pattern as responder: → e, ← e, ee, se, es
-func (nc *NoiseConn) performKNResponder(ctx context.Context) error {
+func (nc *Conn) performKNResponder(ctx context.Context) error {
 	log.WithFields(i2plogger.Fields{"pkg": "noise", "func": "NoiseConn.performKNResponder"}).Debug("starting KN pattern responder")
 	if err := nc.receiveNoiseHandshakeMsg(handshake.PhaseInitial, "first KN"); err != nil {
 		return err
@@ -220,7 +220,7 @@ func (nc *NoiseConn) performKNResponder(ctx context.Context) error {
 }
 
 // performKKInitiator handles KK pattern as initiator: → e, es, ss, ← e, ee, se
-func (nc *NoiseConn) performKKInitiator(ctx context.Context) error {
+func (nc *Conn) performKKInitiator(ctx context.Context) error {
 	log.WithFields(i2plogger.Fields{"pkg": "noise", "func": "NoiseConn.performKKInitiator"}).Debug("starting KK pattern initiator")
 	if err := nc.sendNoiseHandshakeMsg(handshake.PhaseInitial, "first KK"); err != nil {
 		return err
@@ -229,7 +229,7 @@ func (nc *NoiseConn) performKKInitiator(ctx context.Context) error {
 }
 
 // performKKResponder handles KK pattern as responder: → e, es, ss, ← e, ee, se
-func (nc *NoiseConn) performKKResponder(ctx context.Context) error {
+func (nc *Conn) performKKResponder(ctx context.Context) error {
 	log.WithFields(i2plogger.Fields{"pkg": "noise", "func": "NoiseConn.performKKResponder"}).Debug("starting KK pattern responder")
 	if err := nc.receiveNoiseHandshakeMsg(handshake.PhaseInitial, "first KK"); err != nil {
 		return err
@@ -238,7 +238,7 @@ func (nc *NoiseConn) performKKResponder(ctx context.Context) error {
 }
 
 // performINInitiator handles IN pattern as initiator: → e, s, ← e, ee, se, es
-func (nc *NoiseConn) performINInitiator(ctx context.Context) error {
+func (nc *Conn) performINInitiator(ctx context.Context) error {
 	log.WithFields(i2plogger.Fields{"pkg": "noise", "func": "NoiseConn.performINInitiator"}).Debug("starting IN pattern initiator")
 	if err := nc.sendNoiseHandshakeMsg(handshake.PhaseInitial, "first IN"); err != nil {
 		return err
@@ -247,7 +247,7 @@ func (nc *NoiseConn) performINInitiator(ctx context.Context) error {
 }
 
 // performINResponder handles IN pattern as responder: → e, s, ← e, ee, se, es
-func (nc *NoiseConn) performINResponder(ctx context.Context) error {
+func (nc *Conn) performINResponder(ctx context.Context) error {
 	log.WithFields(i2plogger.Fields{"pkg": "noise", "func": "NoiseConn.performINResponder"}).Debug("starting IN pattern responder")
 	if err := nc.receiveNoiseHandshakeMsg(handshake.PhaseInitial, "first IN"); err != nil {
 		return err
@@ -256,7 +256,7 @@ func (nc *NoiseConn) performINResponder(ctx context.Context) error {
 }
 
 // performIKInitiator handles IK pattern as initiator: → e, es, s, ss, ← e, ee, se
-func (nc *NoiseConn) performIKInitiator(ctx context.Context) error {
+func (nc *Conn) performIKInitiator(ctx context.Context) error {
 	log.WithFields(i2plogger.Fields{"pkg": "noise", "func": "NoiseConn.performIKInitiator"}).Debug("starting IK pattern initiator")
 	if err := nc.sendNoiseHandshakeMsg(handshake.PhaseInitial, "first IK"); err != nil {
 		return err
@@ -265,7 +265,7 @@ func (nc *NoiseConn) performIKInitiator(ctx context.Context) error {
 }
 
 // performIKResponder handles IK pattern as responder: → e, es, s, ss, ← e, ee, se
-func (nc *NoiseConn) performIKResponder(ctx context.Context) error {
+func (nc *Conn) performIKResponder(ctx context.Context) error {
 	log.WithFields(i2plogger.Fields{"pkg": "noise", "func": "NoiseConn.performIKResponder"}).Debug("starting IK pattern responder")
 	if err := nc.receiveNoiseHandshakeMsg(handshake.PhaseInitial, "first IK"); err != nil {
 		return err
@@ -274,7 +274,7 @@ func (nc *NoiseConn) performIKResponder(ctx context.Context) error {
 }
 
 // performIXInitiator handles IX pattern as initiator: → e, s, ← e, ee, se, s, es
-func (nc *NoiseConn) performIXInitiator(ctx context.Context) error {
+func (nc *Conn) performIXInitiator(ctx context.Context) error {
 	log.WithFields(i2plogger.Fields{"pkg": "noise", "func": "NoiseConn.performIXInitiator"}).Debug("starting IX pattern initiator")
 	if err := nc.sendNoiseHandshakeMsg(handshake.PhaseInitial, "first IX"); err != nil {
 		return err
@@ -283,7 +283,7 @@ func (nc *NoiseConn) performIXInitiator(ctx context.Context) error {
 }
 
 // performIXResponder handles IX pattern as responder: → e, s, ← e, ee, se, s, es
-func (nc *NoiseConn) performIXResponder(ctx context.Context) error {
+func (nc *Conn) performIXResponder(ctx context.Context) error {
 	log.WithFields(i2plogger.Fields{"pkg": "noise", "func": "NoiseConn.performIXResponder"}).Debug("starting IX pattern responder")
 	if err := nc.receiveNoiseHandshakeMsg(handshake.PhaseInitial, "first IX"); err != nil {
 		return err
@@ -296,7 +296,7 @@ func (nc *NoiseConn) performIXResponder(ctx context.Context) error {
 //	pre-message: → s
 //	→ e
 //	← e, ee, se, s, es
-func (nc *NoiseConn) performKXInitiator(ctx context.Context) error {
+func (nc *Conn) performKXInitiator(ctx context.Context) error {
 	log.WithFields(i2plogger.Fields{"pkg": "noise", "func": "NoiseConn.performKXInitiator"}).Debug("starting KX pattern initiator")
 	if err := nc.sendNoiseHandshakeMsg(handshake.PhaseInitial, "first KX"); err != nil {
 		return err
@@ -309,7 +309,7 @@ func (nc *NoiseConn) performKXInitiator(ctx context.Context) error {
 //	pre-message: → s
 //	→ e
 //	← e, ee, se, s, es
-func (nc *NoiseConn) performKXResponder(ctx context.Context) error {
+func (nc *Conn) performKXResponder(ctx context.Context) error {
 	log.WithFields(i2plogger.Fields{"pkg": "noise", "func": "NoiseConn.performKXResponder"}).Debug("starting KX pattern responder")
 	if err := nc.receiveNoiseHandshakeMsg(handshake.PhaseInitial, "first KX"); err != nil {
 		return err
@@ -322,7 +322,7 @@ func (nc *NoiseConn) performKXResponder(ctx context.Context) error {
 // ============================================================================
 
 // performXXInitiator handles XX pattern as initiator
-func (nc *NoiseConn) performXXInitiator(ctx context.Context) error {
+func (nc *Conn) performXXInitiator(ctx context.Context) error {
 	log.WithFields(i2plogger.Fields{"pkg": "noise", "func": "NoiseConn.performXXInitiator"}).Debug("starting XX pattern initiator")
 	if err := nc.sendNoiseHandshakeMsg(handshake.PhaseInitial, "first XX"); err != nil {
 		return err
@@ -334,7 +334,7 @@ func (nc *NoiseConn) performXXInitiator(ctx context.Context) error {
 }
 
 // performXXResponder handles XX pattern as responder
-func (nc *NoiseConn) performXXResponder(ctx context.Context) error {
+func (nc *Conn) performXXResponder(ctx context.Context) error {
 	log.WithFields(i2plogger.Fields{"pkg": "noise", "func": "NoiseConn.performXXResponder"}).Debug("starting XX pattern responder")
 	if err := nc.receiveNoiseHandshakeMsg(handshake.PhaseInitial, "first XX"); err != nil {
 		return err
@@ -350,7 +350,7 @@ func (nc *NoiseConn) performXXResponder(ctx context.Context) error {
 //	→ e
 //	← e, ee
 //	→ s, se
-func (nc *NoiseConn) performXNInitiator(ctx context.Context) error {
+func (nc *Conn) performXNInitiator(ctx context.Context) error {
 	log.WithFields(i2plogger.Fields{"pkg": "noise", "func": "NoiseConn.performXNInitiator"}).Debug("starting XN pattern initiator")
 	if err := nc.sendNoiseHandshakeMsg(handshake.PhaseInitial, "first XN"); err != nil {
 		return err
@@ -366,7 +366,7 @@ func (nc *NoiseConn) performXNInitiator(ctx context.Context) error {
 //	→ e
 //	← e, ee
 //	→ s, se
-func (nc *NoiseConn) performXNResponder(ctx context.Context) error {
+func (nc *Conn) performXNResponder(ctx context.Context) error {
 	log.WithFields(i2plogger.Fields{"pkg": "noise", "func": "NoiseConn.performXNResponder"}).Debug("starting XN pattern responder")
 	if err := nc.receiveNoiseHandshakeMsg(handshake.PhaseInitial, "first XN"); err != nil {
 		return err
@@ -383,7 +383,7 @@ func (nc *NoiseConn) performXNResponder(ctx context.Context) error {
 //	→ e, es
 //	← e, ee
 //	→ s, se
-func (nc *NoiseConn) performXKInitiator(ctx context.Context) error {
+func (nc *Conn) performXKInitiator(ctx context.Context) error {
 	log.WithFields(i2plogger.Fields{"pkg": "noise", "func": "NoiseConn.performXKInitiator"}).Debug("starting XK pattern initiator")
 	if err := nc.sendNoiseHandshakeMsg(handshake.PhaseInitial, "first XK"); err != nil {
 		return err
@@ -400,7 +400,7 @@ func (nc *NoiseConn) performXKInitiator(ctx context.Context) error {
 //	→ e, es
 //	← e, ee
 //	→ s, se
-func (nc *NoiseConn) performXKResponder(ctx context.Context) error {
+func (nc *Conn) performXKResponder(ctx context.Context) error {
 	log.WithFields(i2plogger.Fields{"pkg": "noise", "func": "NoiseConn.performXKResponder"}).Debug("starting XK pattern responder")
 	if err := nc.receiveNoiseHandshakeMsg(handshake.PhaseInitial, "first XK"); err != nil {
 		return err

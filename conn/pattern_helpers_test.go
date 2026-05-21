@@ -13,7 +13,7 @@ import (
 
 // getPatternMessageCount returns the expected number of handshake messages for each pattern.
 // Returns an error for unknown patterns instead of defaulting, preventing configuration errors.
-func (nc *NoiseConn) getPatternMessageCount() (int, error) {
+func (nc *Conn) getPatternMessageCount() (int, error) {
 	pattern := nc.config.Pattern
 
 	switch pattern {
@@ -33,7 +33,7 @@ func (nc *NoiseConn) getPatternMessageCount() (int, error) {
 
 // matchFullFormPattern detects full-form Noise protocol pattern names (e.g.
 // "Noise_XX_25519_AESGCM_SHA256") and returns the expected message count.
-func matchFullFormPattern(nc *NoiseConn, pattern string) (int, error) {
+func matchFullFormPattern(nc *Conn, pattern string) (int, error) {
 	oneWay := []string{"_N_", "_K_", "_X_"}
 	twoMsg := []string{"_NN_", "_NK_", "_NX_", "_KN_", "_KK_", "_KX_", "_IN_", "_IK_", "_IX_"}
 	threeMsg := []string{"_XN_", "_XK_", "_XX_"}
@@ -59,7 +59,7 @@ func matchFullFormPattern(nc *NoiseConn, pattern string) (int, error) {
 }
 
 // logPatternDetected logs the detection of a handshake pattern with its expected message count.
-func (nc *NoiseConn) logPatternDetected(pattern string, msgCount int, patternType, patternFormat string) {
+func (nc *Conn) logPatternDetected(pattern string, msgCount int, patternType, patternFormat string) {
 	nc.logger.WithFields(i2plogger.Fields{
 		"pattern":           pattern,
 		"expected_messages": msgCount,

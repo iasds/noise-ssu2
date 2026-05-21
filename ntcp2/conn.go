@@ -13,7 +13,7 @@ import (
 	"github.com/samber/oops"
 )
 
-// NTCP2Conn implements net.Conn for NTCP2 transport connections.
+// Conn implements net.Conn for NTCP2 transport connections.
 // It wraps a NoiseConn with NTCP2-specific addressing and protocol handling.
 //
 // This package implements the Noise XK handshake with NTCP2 extensions
@@ -25,15 +25,15 @@ import (
 // termination blocks, options negotiation, timestamp validation, replay
 // caches, and version detection — belong in the router transport layer
 // (github.com/go-i2p/go-i2p/lib/transport/ntcp).
-type NTCP2Conn struct {
+type Conn struct {
 	// noiseConn is the underlying encrypted connection
 	noiseConn *noise.NoiseConn
 
 	// localAddr is the NTCP2-specific local address
-	localAddr *NTCP2Addr
+	localAddr *Addr
 
 	// remoteAddr is the NTCP2-specific remote address
-	remoteAddr *NTCP2Addr
+	remoteAddr *Addr
 
 	// lengthObfuscator applies SipHash-2-4 frame length obfuscation
 	// in the data phase. When non-nil, Read/Write use framed I/O:
@@ -62,7 +62,7 @@ type NTCP2Conn struct {
 	// stores derived SipHash keys on the config), the caller can call
 	// PropagateSipHash() to copy them to lengthObfuscator.
 	// Access is via atomic.Pointer for thread safety.
-	ntcp2Config atomic.Pointer[NTCP2Config]
+	ntcp2Config atomic.Pointer[Config]
 
 	// peerMsg3Payload stores the decrypted plaintext from the responder's
 	// view of NTCP2 message 3 part 2. This is the I2NP block frame
@@ -110,7 +110,7 @@ type NTCP2Conn struct {
 
 // NewNTCP2Conn creates a new NTCP2Conn wrapping the provided NoiseConn.
 // The NoiseConn must already be configured with appropriate NTCP2 modifiers.
-func NewNTCP2Conn(noiseConn *noise.NoiseConn, localAddr, remoteAddr *NTCP2Addr) (*NTCP2Conn, error) {
+func NewNTCP2Conn(noiseConn *noise.NoiseConn, localAddr, remoteAddr *Addr) (*Conn, error) {
 	if noiseConn == nil {
 		return nil, oops.
 			Code("INVALID_NOISE_CONN").
@@ -131,7 +131,7 @@ func NewNTCP2Conn(noiseConn *noise.NoiseConn, localAddr, remoteAddr *NTCP2Addr) 
 			In("ntcp2").
 			Errorf("remote address cannot be nil")
 	}
-	conn := &NTCP2Conn{
+	conn := &Conn{
 		noiseConn:  noiseConn,
 		localAddr:  localAddr,
 		remoteAddr: remoteAddr,
@@ -148,7 +148,7 @@ func NewNTCP2Conn(noiseConn *noise.NoiseConn, localAddr, remoteAddr *NTCP2Addr) 
 // SetLengthObfuscator sets the SipHash length obfuscator for data-phase framing.
 // When set, Read/Write will use framed I/O with SipHash-obfuscated length prefixes.
 // This is safe to call concurrently with Read/Write (uses atomic.Pointer).
-func (nc *NTCP2Conn) SetLengthObfuscator(slm *SipHashLengthModifier) {
+func (nc *Conn) SetLengthObfuscator(slm *SipHashLengthModifier) {
 	log.WithFields(logger.Fields{"pkg": "ntcp2", "func": "NTCP2Conn.SetLengthObfuscator"}).Debug("Storing SipHash length obfuscator")
 	nc.lengthObfuscator.Store(slm)
 }
@@ -156,7 +156,7 @@ func (nc *NTCP2Conn) SetLengthObfuscator(slm *SipHashLengthModifier) {
 // SetNTCP2Config stores a reference to the originating NTCP2Config so that
 // PropagateSipHash can copy PostHandshakeHook-derived keys after handshake.
 // This is safe to call concurrently with PropagateSipHash (uses atomic.Pointer).
-func (nc *NTCP2Conn) SetNTCP2Config(cfg *NTCP2Config) {
+func (nc *Conn) SetNTCP2Config(cfg *Config) {
 	log.WithFields(logger.Fields{"pkg": "ntcp2", "func": "NTCP2Conn.SetNTCP2Config"}).Debug("Storing NTCP2 config reference")
 	nc.ntcp2Config.Store(cfg)
 }
@@ -164,7 +164,7 @@ func (nc *NTCP2Conn) SetNTCP2Config(cfg *NTCP2Config) {
 // PropagateSipHash copies the SipHash modifier from the stored NTCP2Config
 // (populated by the PostHandshakeHook during Handshake) into this connection's
 // lengthObfuscator. Call this immediately after a successful Handshake().
-func (nc *NTCP2Conn) PropagateSipHash() {
+func (nc *Conn) PropagateSipHash() {
 	cfg := nc.ntcp2Config.Load()
 	if cfg == nil {
 		log.WithFields(logger.Fields{"pkg": "ntcp2", "func": "NTCP2Conn.PropagateSipHash"}).Debug("No NTCP2 config stored, skipping")
@@ -179,7 +179,7 @@ func (nc *NTCP2Conn) PropagateSipHash() {
 // Close implements net.Conn.Close.
 // Closes the underlying Noise connection, zeroes key material, and cleans up
 // resources. Close is idempotent — calling it multiple times is safe.
-func (nc *NTCP2Conn) Close() error {
+func (nc *Conn) Close() error {
 	var closeErr error
 	nc.closeOnce.Do(func() {
 		nc.logger.Debug("NTCP2 connection closing",
@@ -224,7 +224,7 @@ func (nc *NTCP2Conn) Close() error {
 // zeroKeyMaterial zeroes SipHash keys and any buffered plaintext to prevent
 // sensitive data from lingering in memory after connection close. Per the
 // NTCP2 spec: "routers should zero-out any in-memory ephemeral data".
-func (nc *NTCP2Conn) zeroKeyMaterial() {
+func (nc *Conn) zeroKeyMaterial() {
 	log.WithFields(logger.Fields{"pkg": "ntcp2", "func": "NTCP2Conn.zeroKeyMaterial"}).Debug("Zeroing SipHash keys and buffered plaintext")
 	if slm := nc.lengthObfuscator.Load(); slm != nil {
 		slm.ZeroKeys()
@@ -246,19 +246,19 @@ func (nc *NTCP2Conn) zeroKeyMaterial() {
 
 // LocalAddr implements net.Conn.LocalAddr.
 // Returns the NTCP2-specific local address.
-func (nc *NTCP2Conn) LocalAddr() net.Addr {
+func (nc *Conn) LocalAddr() net.Addr {
 	return nc.localAddr
 }
 
 // RemoteAddr implements net.Conn.RemoteAddr.
 // Returns the NTCP2-specific remote address.
-func (nc *NTCP2Conn) RemoteAddr() net.Addr {
+func (nc *Conn) RemoteAddr() net.Addr {
 	return nc.remoteAddr
 }
 
 // SetDeadline implements net.Conn.SetDeadline.
 // Sets read and write deadlines on the underlying connection.
-func (nc *NTCP2Conn) SetDeadline(t time.Time) error {
+func (nc *Conn) SetDeadline(t time.Time) error {
 	err := nc.noiseConn.SetDeadline(t)
 	if err != nil {
 		return oops.
@@ -275,7 +275,7 @@ func (nc *NTCP2Conn) SetDeadline(t time.Time) error {
 
 // SetReadDeadline implements net.Conn.SetReadDeadline.
 // Sets the read deadline on the underlying connection.
-func (nc *NTCP2Conn) SetReadDeadline(t time.Time) error {
+func (nc *Conn) SetReadDeadline(t time.Time) error {
 	err := nc.noiseConn.SetReadDeadline(t)
 	if err != nil {
 		return oops.
@@ -292,7 +292,7 @@ func (nc *NTCP2Conn) SetReadDeadline(t time.Time) error {
 
 // SetWriteDeadline implements net.Conn.SetWriteDeadline.
 // Sets the write deadline on the underlying connection.
-func (nc *NTCP2Conn) SetWriteDeadline(t time.Time) error {
+func (nc *Conn) SetWriteDeadline(t time.Time) error {
 	err := nc.noiseConn.SetWriteDeadline(t)
 	if err != nil {
 		return oops.
@@ -309,18 +309,18 @@ func (nc *NTCP2Conn) SetWriteDeadline(t time.Time) error {
 
 // RouterHash returns the router hash from the remote address.
 // This is I2P-specific functionality for NTCP2 connections.
-func (nc *NTCP2Conn) RouterHash() data.Hash {
+func (nc *Conn) RouterHash() data.Hash {
 	return nc.remoteAddr.RouterHash()
 }
 
 // Role returns the connection role (initiator or responder).
-func (nc *NTCP2Conn) Role() string {
+func (nc *Conn) Role() string {
 	return nc.localAddr.Role()
 }
 
 // UnderlyingConn returns the underlying NoiseConn for advanced operations.
 // This allows access to Noise-specific functionality when needed.
-func (nc *NTCP2Conn) UnderlyingConn() *noise.NoiseConn {
+func (nc *Conn) UnderlyingConn() *noise.NoiseConn {
 	return nc.noiseConn
 }
 
@@ -331,7 +331,7 @@ func (nc *NTCP2Conn) UnderlyingConn() *noise.NoiseConn {
 // This method allows NTCP2Conn to satisfy a Rekeyer interface:
 //
 //	type Rekeyer interface { Rekey() error }
-func (nc *NTCP2Conn) Rekey() error {
+func (nc *Conn) Rekey() error {
 	return nc.noiseConn.Rekey()
 }
 
@@ -343,7 +343,7 @@ func (nc *NTCP2Conn) Rekey() error {
 //
 // If the peer static key is not available (handshake not completed) or the
 // remote address already has a non-zero router hash, this is a no-op.
-func (nc *NTCP2Conn) PropagatePeerStaticKey() {
+func (nc *Conn) PropagatePeerStaticKey() {
 	peerKey := nc.noiseConn.PeerStatic()
 	if len(peerKey) != RouterHashSize {
 		return
@@ -375,7 +375,7 @@ func (nc *NTCP2Conn) PropagatePeerStaticKey() {
 // router transport layer (github.com/go-i2p/go-i2p/lib/transport/ntcp) to
 // compute the full router hash via SHA-256(RouterIdentity) using
 // github.com/go-i2p/common/router_identity.
-func (nc *NTCP2Conn) PeerStaticKey() []byte {
+func (nc *Conn) PeerStaticKey() []byte {
 	return nc.noiseConn.PeerStatic()
 }
 
@@ -383,7 +383,7 @@ func (nc *NTCP2Conn) PeerStaticKey() []byte {
 // This is needed by the router transport layer to derive data-phase keys via
 // DeriveSipHashKeys(ask_master, h) for SipHash frame length obfuscation.
 // Returns nil if the handshake has not been initiated.
-func (nc *NTCP2Conn) HandshakeHash() []byte {
+func (nc *Conn) HandshakeHash() []byte {
 	return nc.noiseConn.ChannelBinding()
 }
 
@@ -394,7 +394,7 @@ func (nc *NTCP2Conn) HandshakeHash() []byte {
 // The Noise Protocol's Rekey() operation does NOT reset nonce counters,
 // so the correct response to imminent exhaustion is to establish a new
 // connection rather than attempt a rekey.
-func (nc *NTCP2Conn) NonceExhaustionImminent() bool {
+func (nc *Conn) NonceExhaustionImminent() bool {
 	nc.writeMu.Lock()
 	wn := nc.writeNonce
 	nc.writeMu.Unlock()
@@ -420,7 +420,7 @@ func (nc *NTCP2Conn) NonceExhaustionImminent() bool {
 // back to her NTCP2 address.
 //
 // The returned slice is a defensive copy and may be modified freely.
-func (nc *NTCP2Conn) PeerMessage3Payload() []byte {
+func (nc *Conn) PeerMessage3Payload() []byte {
 	p := nc.peerMsg3Payload.Load()
 	if p == nil {
 		return nil
@@ -444,7 +444,7 @@ func (nc *NTCP2Conn) PeerMessage3Payload() []byte {
 //
 // For the RouterInfo block (type 2) the first data byte is a flag field;
 // the remaining bytes are the serialized RouterInfo.
-func (nc *NTCP2Conn) PeerRouterInfoBytes() []byte {
+func (nc *Conn) PeerRouterInfoBytes() []byte {
 	payload := nc.PeerMessage3Payload()
 	if payload == nil {
 		return nil

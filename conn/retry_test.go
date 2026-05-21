@@ -214,7 +214,7 @@ func containsError(err error, contains string) bool {
 }
 
 // Helper function to create test NoiseConn for testing
-func createTestNoiseConn(config *ConnConfig) (*NoiseConn, error) {
+func createTestNoiseConn(config *ConnConfig) (*Conn, error) {
 	localAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8080"}
 	remoteAddr := &mockNetAddr{network: "tcp", address: "127.0.0.1:8081"}
 	mockConn := newMockNetConn(localAddr, remoteAddr)

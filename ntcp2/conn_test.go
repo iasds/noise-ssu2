@@ -75,8 +75,8 @@ func TestNewNTCP2Conn(t *testing.T) {
 	tests := []struct {
 		name        string
 		noiseConn   *noise.NoiseConn
-		localAddr   *NTCP2Addr
-		remoteAddr  *NTCP2Addr
+		localAddr   *Addr
+		remoteAddr  *Addr
 		expectError bool
 		errorCode   string
 	}{
@@ -305,46 +305,46 @@ func TestNTCP2Conn_Deadlines(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		method        func(*NTCP2Conn, time.Time) error
+		method        func(*Conn, time.Time) error
 		deadlineErr   error
 		expectError   bool
 		errorContains string
 	}{
 		{
 			name:        "SetDeadline success",
-			method:      (*NTCP2Conn).SetDeadline,
+			method:      (*Conn).SetDeadline,
 			deadlineErr: nil,
 			expectError: false,
 		},
 		{
 			name:          "SetDeadline error",
-			method:        (*NTCP2Conn).SetDeadline,
+			method:        (*Conn).SetDeadline,
 			deadlineErr:   assert.AnError,
 			expectError:   true,
 			errorContains: "ntcp2 set deadline failed",
 		},
 		{
 			name:        "SetReadDeadline success",
-			method:      (*NTCP2Conn).SetReadDeadline,
+			method:      (*Conn).SetReadDeadline,
 			deadlineErr: nil,
 			expectError: false,
 		},
 		{
 			name:          "SetReadDeadline error",
-			method:        (*NTCP2Conn).SetReadDeadline,
+			method:        (*Conn).SetReadDeadline,
 			deadlineErr:   assert.AnError,
 			expectError:   true,
 			errorContains: "ntcp2 set read deadline failed",
 		},
 		{
 			name:        "SetWriteDeadline success",
-			method:      (*NTCP2Conn).SetWriteDeadline,
+			method:      (*Conn).SetWriteDeadline,
 			deadlineErr: nil,
 			expectError: false,
 		},
 		{
 			name:          "SetWriteDeadline error",
-			method:        (*NTCP2Conn).SetWriteDeadline,
+			method:        (*Conn).SetWriteDeadline,
 			deadlineErr:   assert.AnError,
 			expectError:   true,
 			errorContains: "ntcp2 set write deadline failed",
@@ -426,7 +426,7 @@ func TestNTCP2Conn_NetConnInterface(t *testing.T) {
 
 // Helper functions for creating test objects
 
-func createTestNTCP2Addr(prefix, role string) *NTCP2Addr {
+func createTestNTCP2Addr(prefix, role string) *Addr {
 	var routerHash data.Hash
 	copy(routerHash[:], prefix+"-router-hash")
 
@@ -440,13 +440,13 @@ func createTestNTCP2Addr(prefix, role string) *NTCP2Addr {
 	return addr
 }
 
-func createTestNTCP2Conn(mockNoise *mockNoiseConn) *NTCP2Conn {
+func createTestNTCP2Conn(mockNoise *mockNoiseConn) *Conn {
 	localAddr := createTestNTCP2Addr("local", "initiator")
 	remoteAddr := createTestNTCP2Addr("remote", "responder")
 	return createTestNTCP2ConnWithAddrs(mockNoise, localAddr, remoteAddr)
 }
 
-func createTestNTCP2ConnWithAddrs(mockNoise *mockNoiseConn, localAddr, remoteAddr *NTCP2Addr) *NTCP2Conn {
+func createTestNTCP2ConnWithAddrs(mockNoise *mockNoiseConn, localAddr, remoteAddr *Addr) *Conn {
 	// For testing, we'll create a minimal NoiseConn that doesn't require handshake
 	// We'll create it directly rather than using the constructor to bypass validation
 	config := noise.NewConnConfig("XK", true)
@@ -514,7 +514,7 @@ func TestAEADErrorConstants(t *testing.T) {
 
 // setNonces sets the write and read nonces on the connection under their
 // respective locks.
-func setNonces(conn *NTCP2Conn, writeNonce, readNonce uint64) {
+func setNonces(conn *Conn, writeNonce, readNonce uint64) {
 	conn.writeMu.Lock()
 	conn.writeNonce = writeNonce
 	conn.writeMu.Unlock()
@@ -765,7 +765,7 @@ func TestAuditFix_GetMaxFrameSize_DefaultsToConstant(t *testing.T) {
 
 func TestAuditFix_GetMaxFrameSize_UsesConfigValue(t *testing.T) {
 	conn := createTestNTCP2Conn(&mockNoiseConn{})
-	cfg := &NTCP2Config{MaxFrameSize: 16384}
+	cfg := &Config{MaxFrameSize: 16384}
 	conn.SetNTCP2Config(cfg)
 
 	assert.Equal(t, 16384, conn.getMaxFrameSize())
@@ -773,7 +773,7 @@ func TestAuditFix_GetMaxFrameSize_UsesConfigValue(t *testing.T) {
 
 func TestAuditFix_GetMaxFrameSize_IgnoresZeroConfig(t *testing.T) {
 	conn := createTestNTCP2Conn(&mockNoiseConn{})
-	cfg := &NTCP2Config{MaxFrameSize: 0}
+	cfg := &Config{MaxFrameSize: 0}
 	conn.SetNTCP2Config(cfg)
 
 	assert.Equal(t, DefaultMaxFrameSize, conn.getMaxFrameSize(),
@@ -782,7 +782,7 @@ func TestAuditFix_GetMaxFrameSize_IgnoresZeroConfig(t *testing.T) {
 
 func TestAuditFix_GetMaxFrameSize_IgnoresOversizedConfig(t *testing.T) {
 	conn := createTestNTCP2Conn(&mockNoiseConn{})
-	cfg := &NTCP2Config{MaxFrameSize: SpecMaxFrameSize + 100}
+	cfg := &Config{MaxFrameSize: SpecMaxFrameSize + 100}
 	conn.SetNTCP2Config(cfg)
 
 	assert.Equal(t, DefaultMaxFrameSize, conn.getMaxFrameSize(),
@@ -797,7 +797,7 @@ func TestAuditFix_SetNTCP2Config_ThreadSafe(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			cfg := &NTCP2Config{MaxFrameSize: 1000 + i}
+			cfg := &Config{MaxFrameSize: 1000 + i}
 			conn.SetNTCP2Config(cfg)
 		}(i)
 	}
@@ -822,7 +822,7 @@ func TestAuditFix_PropagateSipHash_ThreadSafe(t *testing.T) {
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
-			cfg := &NTCP2Config{EnableSipHashLength: true}
+			cfg := &Config{EnableSipHashLength: true}
 			conn.SetNTCP2Config(cfg)
 		}()
 		go func() {
@@ -1050,7 +1050,7 @@ func TestAuditFix_GetMaxFrameSize_FallsBackToDefaultMax(t *testing.T) {
 
 func TestAuditFix_GetMaxFrameSize_RespectsConfig(t *testing.T) {
 	conn := createTestNTCP2Conn(&mockNoiseConn{})
-	cfg := &NTCP2Config{MaxFrameSize: 8192}
+	cfg := &Config{MaxFrameSize: 8192}
 	conn.ntcp2Config.Store(cfg)
 	assert.Equal(t, 8192, conn.getMaxFrameSize())
 }
@@ -1596,7 +1596,7 @@ func (m *ntcp2TrackingModifier) Close() error { return nil }
 // createTestNTCP2ConnWithModifier creates an NTCP2Conn whose underlying
 // NoiseConn has the supplied modifier configured. Use this to verify that
 // applyOutboundModifier / applyInboundModifier delegate to the chain.
-func createTestNTCP2ConnWithModifier(mod handshake.HandshakeModifier) *NTCP2Conn {
+func createTestNTCP2ConnWithModifier(mod handshake.HandshakeModifier) *Conn {
 	mockNet := &mockNoiseConn{}
 	cfg := noise.NewConnConfig("XK", true).WithModifiers(mod)
 	noiseConn, err := noise.NewNoiseConn(mockNet, cfg)

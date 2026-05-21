@@ -10,25 +10,25 @@ import (
 	"time"
 
 	"github.com/go-i2p/common/data"
-	ntcp2shared "github.com/go-i2p/go-noise/examples/ntcp2-shared"
-	"github.com/go-i2p/go-noise/examples/shared"
+	
+	"github.com/go-i2p/go-noise/examples/cliutil"
 	"github.com/go-i2p/go-noise/ntcp2"
 )
 
 func main() {
-	ntcp2shared.RunNTCP2Example(
+	shared.RunNTCP2Example(
 		"ntcp2-listener",
 		"NTCP2Listener demonstration for I2P transport",
 		"127.0.0.1:0",
 		runNTCP2ListenerDemo,
-		func(args *ntcp2shared.NTCP2Args, routerHash, _, _, staticKey []byte) {
+		func(args *shared.NTCP2Args, routerHash, _, _, staticKey []byte) {
 			runNTCP2Listener(args, routerHash, staticKey)
 		},
 	)
 }
 
 // createDemoConfig creates and displays an NTCP2 config for demo purposes
-func createDemoConfig(routerHash, staticKey []byte, args *ntcp2shared.NTCP2Args) {
+func createDemoConfig(routerHash, staticKey []byte, args *shared.NTCP2Args) {
 	var rh data.Hash
 	copy(rh[:], routerHash)
 	config, err := ntcp2.NewNTCP2Config(rh, false) // false = responder
@@ -53,11 +53,11 @@ func createDemoConfig(routerHash, staticKey []byte, args *ntcp2shared.NTCP2Args)
 }
 
 // runNTCP2ListenerDemo demonstrates NTCP2 listener functionality with demo mode
-func runNTCP2ListenerDemo(args *ntcp2shared.NTCP2Args) {
+func runNTCP2ListenerDemo(args *shared.NTCP2Args) {
 	fmt.Println("🎭 NTCP2 Listener Demo Mode")
 	fmt.Println("===========================")
 
-	ntcp2shared.RunNTCP2Demo()
+	shared.RunNTCP2Demo()
 
 	routerHash, err := shared.GenerateRandomKey()
 	if err != nil {
@@ -80,7 +80,7 @@ func runNTCP2ListenerDemo(args *ntcp2shared.NTCP2Args) {
 }
 
 // createNTCP2ListenerConfig creates and validates NTCP2 configuration for the listener
-func createNTCP2ListenerConfig(args *ntcp2shared.NTCP2Args, routerHash, staticKey []byte) *ntcp2.NTCP2Config {
+func createNTCP2ListenerConfig(args *shared.NTCP2Args, routerHash, staticKey []byte) *ntcp2.Config {
 	var rh data.Hash
 	copy(rh[:], routerHash)
 	config, err := ntcp2.NewNTCP2Config(rh, false) // false = responder
@@ -101,7 +101,7 @@ func createNTCP2ListenerConfig(args *ntcp2shared.NTCP2Args, routerHash, staticKe
 }
 
 // runNTCP2Listener starts an NTCP2 listener with the provided configuration
-func runNTCP2Listener(args *ntcp2shared.NTCP2Args, routerHash, staticKey []byte) {
+func runNTCP2Listener(args *shared.NTCP2Args, routerHash, staticKey []byte) {
 	fmt.Printf("🚀 Starting NTCP2 Listener on %s\n", args.ServerAddr)
 	fmt.Printf("Router Hash: %x...\n", routerHash[:8])
 
@@ -129,7 +129,7 @@ func runNTCP2Listener(args *ntcp2shared.NTCP2Args, routerHash, staticKey []byte)
 }
 
 // acceptConnections handles incoming NTCP2 connections
-func acceptConnections(listener *ntcp2.NTCP2Listener) {
+func acceptConnections(listener *ntcp2.Listener) {
 	connCount := 0
 
 	for {
@@ -154,11 +154,11 @@ func handleNTCP2Connection(conn net.Conn, connID int) {
 	fmt.Printf("🔗 [Conn %d] Processing connection from %s\n", connID, conn.RemoteAddr())
 
 	// Cast to NTCP2Conn to access I2P-specific methods
-	if ntcp2Conn, ok := conn.(*ntcp2.NTCP2Conn); ok {
+	if ntcp2Conn, ok := conn.(*ntcp2.Conn); ok {
 		rHash := ntcp2Conn.RouterHash()
 		fmt.Printf("🔗 [Conn %d] Router hash: %x...\n", connID, rHash[:8])
 		fmt.Printf("🔗 [Conn %d] Role: %s\n", connID, ntcp2Conn.Role())
-		fmt.Printf("🔗 [Conn %d] IdentHash: %x\n", connID, ntcp2Conn.RemoteAddr().(*ntcp2.NTCP2Addr).IdentHash())
+		fmt.Printf("🔗 [Conn %d] IdentHash: %x\n", connID, ntcp2Conn.RemoteAddr().(*ntcp2.Addr).IdentHash())
 	}
 
 	// Read data from the connection

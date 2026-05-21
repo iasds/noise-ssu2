@@ -22,7 +22,7 @@ import (
 //  6. Copy plaintext into the caller's buffer; buffer any remainder
 //
 // When no length obfuscator is set, delegates directly to NoiseConn.Read.
-func (nc *NTCP2Conn) Read(b []byte) (int, error) {
+func (nc *Conn) Read(b []byte) (int, error) {
 	if nc.broken.Load() {
 		log.WithFields(logger.Fields{"pkg": "ntcp2", "func": "NTCP2Conn.Read"}).Warn("Read attempted on broken NTCP2 connection")
 		return 0, oops.
@@ -62,7 +62,7 @@ func (nc *NTCP2Conn) Read(b []byte) (int, error) {
 // Per the io.Reader contract, returns both the bytes read and any error.
 // Errors from NoiseConn are returned directly without re-wrapping, since
 // NoiseConn already wraps errors with appropriate context.
-func (nc *NTCP2Conn) readDirect(b []byte) (int, error) {
+func (nc *Conn) readDirect(b []byte) (int, error) {
 	n, err := nc.noiseConn.Read(b)
 	if n > 0 {
 		nc.logger.Trace("NTCP2 data read (direct)",
@@ -74,7 +74,7 @@ func (nc *NTCP2Conn) readDirect(b []byte) (int, error) {
 }
 
 // readFramed reads an NTCP2 data-phase frame with SipHash length deobfuscation.
-func (nc *NTCP2Conn) readFramed(b []byte) (int, error) {
+func (nc *Conn) readFramed(b []byte) (int, error) {
 	if err := nc.guardReadNonce(); err != nil {
 		return 0, err
 	}
@@ -125,7 +125,7 @@ func (nc *NTCP2Conn) readFramed(b []byte) (int, error) {
 // readObfuscatedFrameLength reads and deobfuscates the 2-byte SipHash frame length field.
 // After this call the SipHash inbound state has advanced; any subsequent error means
 // the connection is irrecoverably desynchronized.
-func (nc *NTCP2Conn) readObfuscatedFrameLength(underlying net.Conn, slm *SipHashLengthModifier) (uint16, error) {
+func (nc *Conn) readObfuscatedFrameLength(underlying net.Conn, slm *SipHashLengthModifier) (uint16, error) {
 	lengthBuf := make([]byte, FrameLengthFieldSize)
 	if _, err := io.ReadFull(underlying, lengthBuf); err != nil {
 		return 0, oops.
@@ -164,7 +164,7 @@ func (nc *NTCP2Conn) readObfuscatedFrameLength(underlying net.Conn, slm *SipHash
 // readAndDecryptFrame reads exactly frameLen bytes of ciphertext from the underlying
 // connection and decrypts them via the Noise cipher state. On AEAD failure, applies
 // probing-resistance behaviour before returning the error.
-func (nc *NTCP2Conn) readAndDecryptFrame(underlying net.Conn, frameLen uint16) ([]byte, error) {
+func (nc *Conn) readAndDecryptFrame(underlying net.Conn, frameLen uint16) ([]byte, error) {
 	ciphertext := make([]byte, frameLen)
 	nRead, err := io.ReadFull(underlying, ciphertext)
 	if err != nil {
@@ -205,7 +205,7 @@ func (nc *NTCP2Conn) readAndDecryptFrame(underlying net.Conn, frameLen uint16) (
 
 // bufferPlaintext copies decrypted plaintext into the caller's buffer and stores
 // any remainder in readBuffer for subsequent Read calls.
-func (nc *NTCP2Conn) bufferPlaintext(b, plaintext []byte) int {
+func (nc *Conn) bufferPlaintext(b, plaintext []byte) int {
 	n := copy(b, plaintext)
 	if n < len(plaintext) {
 		nc.readBuffer = make([]byte, len(plaintext)-n)
@@ -219,7 +219,7 @@ func (nc *NTCP2Conn) bufferPlaintext(b, plaintext []byte) int {
 // Per the spec: "Take the same error action for an invalid length field value
 // in the data phase" — i.e., the probing-resistance delay from handleAEADError
 // is applied before returning the error.
-func (nc *NTCP2Conn) validateFrameLength(frameLen uint16) error {
+func (nc *Conn) validateFrameLength(frameLen uint16) error {
 	if frameLen < MinDataPhaseFrameSize {
 		log.WithFields(logger.Fields{"pkg": "ntcp2", "func": "NTCP2Conn.validateFrameLength", "frame_length": frameLen}).Warn("Frame length below minimum")
 		nc.applyProbingResistanceDelay()
@@ -251,7 +251,7 @@ func (nc *NTCP2Conn) validateFrameLength(frameLen uint16) error {
 // When no length obfuscator is set, delegates directly to NoiseConn.Write.
 // Large writes are transparently split into multiple frames of at most
 // MaxFrameSize minus Poly1305Overhead bytes of plaintext each.
-func (nc *NTCP2Conn) Write(b []byte) (int, error) {
+func (nc *Conn) Write(b []byte) (int, error) {
 	if nc.broken.Load() {
 		log.WithFields(logger.Fields{"pkg": "ntcp2", "func": "NTCP2Conn.Write"}).Warn("Write attempted on broken NTCP2 connection")
 		return 0, oops.
@@ -268,7 +268,7 @@ func (nc *NTCP2Conn) Write(b []byte) (int, error) {
 // writeDirect delegates directly to the underlying NoiseConn for unframed writes.
 // Errors from NoiseConn are returned directly without re-wrapping, since
 // NoiseConn already wraps errors with appropriate context.
-func (nc *NTCP2Conn) writeDirect(b []byte) (int, error) {
+func (nc *Conn) writeDirect(b []byte) (int, error) {
 	n, err := nc.noiseConn.Write(b)
 	if err != nil {
 		return n, err
@@ -285,7 +285,7 @@ func (nc *NTCP2Conn) writeDirect(b []byte) (int, error) {
 // applyOutboundModifier passes plaintext through the NoiseConn's modifier chain
 // for PhaseData. Used by the framed write path before Encrypt. Returns data
 // unchanged when no modifier chain is configured.
-func (nc *NTCP2Conn) applyOutboundModifier(data []byte) ([]byte, error) {
+func (nc *Conn) applyOutboundModifier(data []byte) ([]byte, error) {
 	chain := nc.noiseConn.GetModifierChain()
 	if chain == nil {
 		return data, nil
@@ -296,7 +296,7 @@ func (nc *NTCP2Conn) applyOutboundModifier(data []byte) ([]byte, error) {
 // applyInboundModifier passes decrypted plaintext through the NoiseConn's
 // modifier chain for PhaseData. Used by the framed read path after Decrypt.
 // Returns data unchanged when no modifier chain is configured.
-func (nc *NTCP2Conn) applyInboundModifier(data []byte) ([]byte, error) {
+func (nc *Conn) applyInboundModifier(data []byte) ([]byte, error) {
 	chain := nc.noiseConn.GetModifierChain()
 	if chain == nil {
 		return data, nil
@@ -310,7 +310,7 @@ func (nc *NTCP2Conn) applyInboundModifier(data []byte) ([]byte, error) {
 // The frame size is determined by the NTCP2Config if set, otherwise
 // falls back to the constant MaxFrameSize. Per the spec, senders should
 // "limit frames to a few KB rather than maximizing the frame size."
-func (nc *NTCP2Conn) writeFramed(b []byte) (int, error) {
+func (nc *Conn) writeFramed(b []byte) (int, error) {
 	nc.writeMu.Lock()
 	defer nc.writeMu.Unlock()
 
@@ -335,7 +335,7 @@ func (nc *NTCP2Conn) writeFramed(b []byte) (int, error) {
 }
 
 // writeSingleFrame encrypts one chunk and writes it as an NTCP2 wire frame.
-func (nc *NTCP2Conn) writeSingleFrame(b []byte) (int, error) {
+func (nc *Conn) writeSingleFrame(b []byte) (int, error) {
 	if err := nc.guardWriteNonce(); err != nil {
 		return 0, err
 	}
@@ -432,7 +432,7 @@ func (nc *NTCP2Conn) writeSingleFrame(b []byte) (int, error) {
 
 // encryptFrame encrypts plaintext and validates the resulting ciphertext size
 // against the NTCP2 maximum frame size.
-func (nc *NTCP2Conn) encryptFrame(b []byte) ([]byte, error) {
+func (nc *Conn) encryptFrame(b []byte) ([]byte, error) {
 	encrypted, err := nc.noiseConn.Encrypt(b)
 	if err != nil {
 		return nil, oops.
@@ -457,14 +457,14 @@ func (nc *NTCP2Conn) encryptFrame(b []byte) ([]byte, error) {
 
 // buildWireFrame constructs the NTCP2 wire frame by prepending a 2-byte SipHash-obfuscated
 // length to the ciphertext. After this call the SipHash outbound state has advanced.
-func (nc *NTCP2Conn) buildWireFrame(encrypted []byte, slm *SipHashLengthModifier) []byte {
+func (nc *Conn) buildWireFrame(encrypted []byte, slm *SipHashLengthModifier) []byte {
 	frame, _ := nc.buildWireFrameWithMask(encrypted, slm)
 	return frame
 }
 
 // buildWireFrameWithMask is identical to buildWireFrame but also returns the
 // SipHash mask used for the obfuscated length field, for diagnostic logging.
-func (nc *NTCP2Conn) buildWireFrameWithMask(encrypted []byte, slm *SipHashLengthModifier) ([]byte, uint16) {
+func (nc *Conn) buildWireFrameWithMask(encrypted []byte, slm *SipHashLengthModifier) ([]byte, uint16) {
 	frameLen := uint16(len(encrypted))
 	mask := slm.NextOutboundMask()
 	obfuscatedLen := frameLen ^ mask
@@ -478,7 +478,7 @@ func (nc *NTCP2Conn) buildWireFrameWithMask(encrypted []byte, slm *SipHashLength
 // writeWireFrame writes the complete wire frame atomically to the underlying TCP connection.
 // Marks the connection as broken on any write error or partial write. Returns the
 // number of bytes actually accepted by the underlying socket (for diagnostics).
-func (nc *NTCP2Conn) writeWireFrame(frame []byte) (int, error) {
+func (nc *Conn) writeWireFrame(frame []byte) (int, error) {
 	underlying := nc.noiseConn.Underlying()
 	n, err := underlying.Write(frame)
 	if err != nil {
@@ -509,7 +509,7 @@ func (nc *NTCP2Conn) writeWireFrame(frame []byte) (int, error) {
 // Otherwise falls back to DefaultMaxFrameSize (16384).
 // Per the spec: "it is recommended that the sender limit frames to a few KB
 // rather than maximizing the frame size."
-func (nc *NTCP2Conn) getMaxFrameSize() int {
+func (nc *Conn) getMaxFrameSize() int {
 	cfg := nc.ntcp2Config.Load()
 	if cfg != nil && cfg.MaxFrameSize > 0 && cfg.MaxFrameSize <= SpecMaxFrameSize {
 		return cfg.MaxFrameSize

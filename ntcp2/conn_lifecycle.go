@@ -12,7 +12,7 @@ import (
 
 // guardReadNonce rejects read operations when the nonce counter has reached MaxNonce.
 // Per the spec: "Connection must be dropped and restarted after it reaches that value."
-func (nc *NTCP2Conn) guardReadNonce() error {
+func (nc *Conn) guardReadNonce() error {
 	if nc.readNonce >= MaxNonce {
 		nc.broken.Store(true)
 		log.WithFields(logger.Fields{"pkg": "ntcp2", "func": "NTCP2Conn.guardReadNonce", "read_nonce": nc.readNonce}).Error("Read nonce exhausted, connection must be terminated")
@@ -28,7 +28,7 @@ func (nc *NTCP2Conn) guardReadNonce() error {
 
 // guardWriteNonce rejects write operations when the nonce counter has reached MaxNonce.
 // Per the spec: "Connection must be dropped and restarted after it reaches that value."
-func (nc *NTCP2Conn) guardWriteNonce() error {
+func (nc *Conn) guardWriteNonce() error {
 	if nc.writeNonce >= MaxNonce {
 		nc.broken.Store(true)
 		log.WithFields(logger.Fields{"pkg": "ntcp2", "func": "NTCP2Conn.guardWriteNonce", "write_nonce": nc.writeNonce}).Error("Write nonce exhausted, connection must be terminated")
@@ -45,7 +45,7 @@ func (nc *NTCP2Conn) guardWriteNonce() error {
 // applyProbingResistanceDelay applies the same probing-resistance delay
 // as handleAEADError, per the NTCP2 spec: "Take the same error action
 // for an invalid length field value in the data phase."
-func (nc *NTCP2Conn) applyProbingResistanceDelay() {
+func (nc *Conn) applyProbingResistanceDelay() {
 	if underlying := nc.noiseConn.Underlying(); underlying != nil {
 		nc.handleAEADError(underlying)
 	}
@@ -59,7 +59,7 @@ func (nc *NTCP2Conn) applyProbingResistanceDelay() {
 //
 // Termination blocks (reason code 4 = AEAD failure) are handled by the
 // router transport layer (go-i2p/go-i2p/lib/transport/ntcp).
-func (nc *NTCP2Conn) handleAEADError(underlying net.Conn) {
+func (nc *Conn) handleAEADError(underlying net.Conn) {
 	log.WithFields(logger.Fields{"pkg": "ntcp2", "func": "NTCP2Conn.handleAEADError"}).Warn("AEAD error detected, applying probing-resistance behaviour")
 	nc.broken.Store(true)
 
@@ -115,7 +115,7 @@ func randomAEADTimeout() time.Duration {
 //
 // Sets underlyingClosed so that the subsequent NTCP2Conn.Close() call skips a
 // second close of the same socket, avoiding an fd-reuse double-close race.
-func (nc *NTCP2Conn) sendTCPRST(conn net.Conn) {
+func (nc *Conn) sendTCPRST(conn net.Conn) {
 	log.WithFields(logger.Fields{"pkg": "ntcp2", "func": "NTCP2Conn.sendTCPRST"}).Debug("Sending TCP RST (abnormal close) per NTCP2 spec")
 	if tcpConn, ok := conn.(*net.TCPConn); ok {
 		tcpConn.SetLinger(0) //nolint:errcheck

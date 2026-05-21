@@ -16,7 +16,7 @@ import (
 // If HandshakeRetries is 0 (the default), this method behaves identically to
 // Handshake() — a single attempt with no retries.
 // It respects context cancellation between retry attempts.
-func (nc *NoiseConn) HandshakeWithRetry(ctx context.Context) error {
+func (nc *Conn) HandshakeWithRetry(ctx context.Context) error {
 	if nc.shouldUseSingleAttempt() {
 		return nc.Handshake(ctx)
 	}
@@ -25,12 +25,12 @@ func (nc *NoiseConn) HandshakeWithRetry(ctx context.Context) error {
 }
 
 // shouldUseSingleAttempt determines if only a single handshake attempt should be made.
-func (nc *NoiseConn) shouldUseSingleAttempt() bool {
+func (nc *Conn) shouldUseSingleAttempt() bool {
 	return nc.config.HandshakeRetries == 0
 }
 
 // executeRetryLoop performs the main retry logic with exponential backoff.
-func (nc *NoiseConn) executeRetryLoop(ctx context.Context) error {
+func (nc *Conn) executeRetryLoop(ctx context.Context) error {
 	maxRetries := nc.config.HandshakeRetries
 	attempt := 0
 
@@ -55,7 +55,7 @@ func (nc *NoiseConn) executeRetryLoop(ctx context.Context) error {
 }
 
 // logSuccessAfterRetries logs successful handshake completion after retries.
-func (nc *NoiseConn) logSuccessAfterRetries(attempt int) {
+func (nc *Conn) logSuccessAfterRetries(attempt int) {
 	if attempt > 0 {
 		nc.logger.WithFields(i2plogger.Fields{
 			"pkg":  "noise",
@@ -68,7 +68,7 @@ func (nc *NoiseConn) logSuccessAfterRetries(attempt int) {
 }
 
 // shouldRetry determines if a handshake should be retried based on attempt count and error type.
-func (nc *NoiseConn) shouldRetry(attempt, maxRetries int, err error) bool {
+func (nc *Conn) shouldRetry(attempt, maxRetries int, err error) bool {
 	// Check maximum retry limit (-1 means infinite retries)
 	if maxRetries != -1 && attempt >= maxRetries {
 		return false
@@ -80,7 +80,7 @@ func (nc *NoiseConn) shouldRetry(attempt, maxRetries int, err error) bool {
 }
 
 // waitForRetry implements exponential backoff delay before retry attempt.
-func (nc *NoiseConn) waitForRetry(ctx context.Context, attempt int) error {
+func (nc *Conn) waitForRetry(ctx context.Context, attempt int) error {
 	if nc.config.RetryBackoff <= 0 {
 		return nil // No delay configured
 	}
@@ -116,7 +116,7 @@ func (nc *NoiseConn) waitForRetry(ctx context.Context, attempt int) error {
 }
 
 // logRetryAttempt logs information about the retry attempt.
-func (nc *NoiseConn) logRetryAttempt(attempt int, lastErr error) {
+func (nc *Conn) logRetryAttempt(attempt int, lastErr error) {
 	// Extract error code if available from oops error
 	errorCode := "UNKNOWN"
 	if oe, ok := lastErr.(interface{ Code() string }); ok {
@@ -137,7 +137,7 @@ func (nc *NoiseConn) logRetryAttempt(attempt int, lastErr error) {
 }
 
 // wrapRetryError wraps the final error with retry context information.
-func (nc *NoiseConn) wrapRetryError(err error, totalAttempts int) error {
+func (nc *Conn) wrapRetryError(err error, totalAttempts int) error {
 	return oops.
 		Code("HANDSHAKE_RETRY_FAILED").
 		In("noise").

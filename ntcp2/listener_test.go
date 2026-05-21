@@ -35,7 +35,7 @@ func TestNewNTCP2ListenerErrors(t *testing.T) {
 	tests := []struct {
 		name          string
 		listener      net.Listener
-		config        *NTCP2Config
+		config        *Config
 		expectedError string
 	}{
 		{
@@ -59,7 +59,7 @@ func TestNewNTCP2ListenerErrors(t *testing.T) {
 				l, _ := net.Listen("tcp", "127.0.0.1:0")
 				return l
 			}(),
-			config: func() *NTCP2Config {
+			config: func() *Config {
 				c, _ := NewNTCP2Config(routerHash, false)
 				// With data.Hash, BobRouterHash is always 32 bytes,
 				// so we invalidate by clearing the pattern instead
@@ -93,7 +93,7 @@ func TestNTCP2ListenerAddr(t *testing.T) {
 	assert.Equal(t, "ntcp2", addr.Network())
 
 	// Should be NTCP2Addr
-	ntcp2Addr, ok := addr.(*NTCP2Addr)
+	ntcp2Addr, ok := addr.(*Addr)
 	assert.True(t, ok)
 	assert.Equal(t, tl.routerHash, ntcp2Addr.routerHash)
 	assert.Equal(t, "responder", ntcp2Addr.role)

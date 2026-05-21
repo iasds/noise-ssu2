@@ -13,10 +13,10 @@ import (
 	"github.com/samber/oops"
 )
 
-// NTCP2Addr implements net.Addr for NTCP2 transport connections.
+// Addr implements net.Addr for NTCP2 transport connections.
 // It provides I2P-specific addressing information including router identity,
 // destination hash, and session parameters for the NTCP2 protocol.
-type NTCP2Addr struct {
+type Addr struct {
 	// mu protects routerHash from concurrent access
 	mu sync.RWMutex
 	// underlying is the TCP network address
@@ -30,7 +30,7 @@ type NTCP2Addr struct {
 // NewNTCP2Addr creates a new NTCP2Addr with the specified TCP address and router hash.
 // routerHash is the I2P router identity hash.
 // role should be either "initiator" or "responder".
-func NewNTCP2Addr(underlying net.Addr, routerHash data.Hash, role string) (*NTCP2Addr, error) {
+func NewNTCP2Addr(underlying net.Addr, routerHash data.Hash, role string) (*Addr, error) {
 	log.WithFields(logger.Fields{"pkg": "ntcp2", "func": "NewNTCP2Addr", "role": role}).Debug("Creating new NTCP2Addr")
 	if underlying == nil {
 		return nil, oops.
@@ -47,7 +47,7 @@ func NewNTCP2Addr(underlying net.Addr, routerHash data.Hash, role string) (*NTCP
 			Errorf("role must be 'initiator' or 'responder'")
 	}
 
-	return &NTCP2Addr{
+	return &Addr{
 		underlying: underlying,
 		routerHash: routerHash,
 		role:       role,
@@ -56,14 +56,14 @@ func NewNTCP2Addr(underlying net.Addr, routerHash data.Hash, role string) (*NTCP
 
 // Network returns "ntcp2" to identify this as an NTCP2 transport address.
 // This implements the net.Addr interface requirement.
-func (na *NTCP2Addr) Network() string {
+func (na *Addr) Network() string {
 	return "ntcp2"
 }
 
 // String returns a string representation of the NTCP2 address.
 // Format: "ntcp2://[router_hash]/[role]/[tcp_address][?dest=dest_hash]"
 // Router hash and optional parameters are base64 encoded for readability.
-func (na *NTCP2Addr) String() string {
+func (na *Addr) String() string {
 	if na.underlying == nil {
 		return "ntcp2://invalid"
 	}
@@ -76,14 +76,14 @@ func (na *NTCP2Addr) String() string {
 }
 
 // RouterHash returns the router identity hash.
-func (na *NTCP2Addr) RouterHash() data.Hash {
+func (na *Addr) RouterHash() data.Hash {
 	na.mu.RLock()
 	defer na.mu.RUnlock()
 	return na.routerHash
 }
 
 // IdentHash returns the router identity hash as a fixed-size [32]byte array.
-func (na *NTCP2Addr) IdentHash() [32]byte {
+func (na *Addr) IdentHash() [32]byte {
 	na.mu.RLock()
 	defer na.mu.RUnlock()
 	return na.routerHash.Bytes()
@@ -92,7 +92,7 @@ func (na *NTCP2Addr) IdentHash() [32]byte {
 // SetRouterHash updates the router identity hash.
 // This is used to update a placeholder zero hash after the Noise handshake
 // reveals the remote peer's static key.
-func (na *NTCP2Addr) SetRouterHash(routerHash data.Hash) {
+func (na *Addr) SetRouterHash(routerHash data.Hash) {
 	log.WithFields(logger.Fields{"pkg": "ntcp2", "func": "NTCP2Addr.SetRouterHash"}).Debug("Updating router identity hash")
 	na.mu.Lock()
 	na.routerHash = routerHash
@@ -100,11 +100,11 @@ func (na *NTCP2Addr) SetRouterHash(routerHash data.Hash) {
 }
 
 // Role returns the connection role ("initiator" or "responder").
-func (na *NTCP2Addr) Role() string {
+func (na *Addr) Role() string {
 	return na.role
 }
 
 // UnderlyingAddr returns the underlying TCP network address.
-func (na *NTCP2Addr) UnderlyingAddr() net.Addr {
+func (na *Addr) UnderlyingAddr() net.Addr {
 	return na.underlying
 }

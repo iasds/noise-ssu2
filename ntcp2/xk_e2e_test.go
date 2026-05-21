@@ -80,7 +80,7 @@ func TestXKHandshake_NTCP2_FullE2E(t *testing.T) {
 	// ── Step 6: Responder goroutine ───────────────────────────────────
 	var wg sync.WaitGroup
 	var responderErr error
-	var responderNTCP2 *NTCP2Conn
+	var responderNTCP2 *Conn
 
 	wg.Add(1)
 	go func() {
@@ -309,11 +309,11 @@ func TestXKHandshake_NTCP2_CloseAfterHandshake(t *testing.T) {
 func dialAndHandshakeInitiator(
 	t *testing.T,
 	addr string,
-	initiatorConfig *NTCP2Config,
+	initiatorConfig *Config,
 	initiatorHash, responderHash data.Hash,
 	wg *sync.WaitGroup,
 	responderErr *error,
-) *NTCP2Conn {
+) *Conn {
 	t.Helper()
 	rawConn, err := net.DialTimeout("tcp", addr, 5*time.Second)
 	require.NoError(t, err)
@@ -349,7 +349,7 @@ func dialAndHandshakeInitiator(
 // Test helper: creates a fully handshaked initiator↔responder NTCP2 pair
 // ============================================================================
 
-func setupHandshakedPair(t *testing.T) (initiator, responder *NTCP2Conn) {
+func setupHandshakedPair(t *testing.T) (initiator, responder *Conn) {
 	t.Helper()
 
 	p := newTestXKConfigPair(t)
@@ -362,7 +362,7 @@ func setupHandshakedPair(t *testing.T) (initiator, responder *NTCP2Conn) {
 	// Responder goroutine
 	var wg sync.WaitGroup
 	var responderErr error
-	var responderNTCP2 *NTCP2Conn
+	var responderNTCP2 *Conn
 
 	wg.Add(1)
 	go func() {
@@ -472,7 +472,7 @@ func TestInboundRouterHash(t *testing.T) {
 	// --- Responder goroutine: AcceptWithHandshake ---
 	var wg sync.WaitGroup
 	var responderErr error
-	var responderNTCP2 *NTCP2Conn
+	var responderNTCP2 *Conn
 
 	wg.Add(1)
 	go func() {
@@ -589,7 +589,7 @@ func TestXKHandshake_NTCP2_AESObfuscation(t *testing.T) {
 	// ── Step 7: Responder goroutine ───────────────────────────────────
 	var wg sync.WaitGroup
 	var responderErr error
-	var responderNTCP2 *NTCP2Conn
+	var responderNTCP2 *Conn
 
 	wg.Add(1)
 	go func() {

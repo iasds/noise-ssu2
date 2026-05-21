@@ -17,7 +17,7 @@ import (
 // applyOutboundModifier passes encrypted plaintext through the modifier chain
 // for PhaseData (post-handshake data transport). Called by Write before encryption.
 // Returns data unchanged if no modifier chain is configured.
-func (nc *NoiseConn) applyOutboundModifier(data []byte) ([]byte, error) {
+func (nc *Conn) applyOutboundModifier(data []byte) ([]byte, error) {
 	chain := nc.config.GetModifierChain()
 	if chain == nil {
 		return data, nil
@@ -29,7 +29,7 @@ func (nc *NoiseConn) applyOutboundModifier(data []byte) ([]byte, error) {
 // applyInboundModifier passes decrypted plaintext through the modifier chain
 // for PhaseData (post-handshake data transport). Called by Read after decryption.
 // Returns data unchanged if no modifier chain is configured.
-func (nc *NoiseConn) applyInboundModifier(data []byte) ([]byte, error) {
+func (nc *Conn) applyInboundModifier(data []byte) ([]byte, error) {
 	chain := nc.config.GetModifierChain()
 	if chain == nil {
 		return data, nil
@@ -41,7 +41,7 @@ func (nc *NoiseConn) applyInboundModifier(data []byte) ([]byte, error) {
 // applyHandshakeOutbound passes outgoing handshake data through the modifier
 // chain for the given handshake phase. Called by sendNoiseHandshakeMsg after
 // WriteMessage and before writeFramedMessage.
-func (nc *NoiseConn) applyHandshakeOutbound(phase handshake.HandshakePhase, data []byte) ([]byte, error) {
+func (nc *Conn) applyHandshakeOutbound(phase handshake.HandshakePhase, data []byte) ([]byte, error) {
 	chain := nc.config.GetModifierChain()
 	if chain == nil {
 		return data, nil
@@ -53,7 +53,7 @@ func (nc *NoiseConn) applyHandshakeOutbound(phase handshake.HandshakePhase, data
 // applyHandshakeInbound passes incoming handshake data through the modifier
 // chain for the given handshake phase. Called by receiveNoiseHandshakeMsg after
 // readFramedMessage and before ReadMessage.
-func (nc *NoiseConn) applyHandshakeInbound(phase handshake.HandshakePhase, data []byte) ([]byte, error) {
+func (nc *Conn) applyHandshakeInbound(phase handshake.HandshakePhase, data []byte) ([]byte, error) {
 	chain := nc.config.GetModifierChain()
 	if chain == nil {
 		return data, nil
@@ -63,7 +63,7 @@ func (nc *NoiseConn) applyHandshakeInbound(phase handshake.HandshakePhase, data 
 }
 
 // validateWriteState validates the connection state before writing.
-func (nc *NoiseConn) validateWriteState() error {
+func (nc *Conn) validateWriteState() error {
 	if nc.isClosed() {
 		return oops.
 			Code("CONN_CLOSED").
@@ -91,7 +91,7 @@ func (nc *NoiseConn) validateWriteState() error {
 }
 
 // configureWriteTimeout sets the write timeout if configured.
-func (nc *NoiseConn) configureWriteTimeout() error {
+func (nc *Conn) configureWriteTimeout() error {
 	if nc.config.WriteTimeout > 0 {
 		log.WithFields(i2plogger.Fields{"pkg": "noise", "func": "NoiseConn.configureWriteTimeout", "timeout": nc.config.WriteTimeout}).Debug("setting write deadline")
 		if err := nc.underlying.SetWriteDeadline(time.Now().Add(nc.config.WriteTimeout)); err != nil {
@@ -106,7 +106,7 @@ func (nc *NoiseConn) configureWriteTimeout() error {
 }
 
 // encryptData encrypts the provided data using the send cipher state.
-func (nc *NoiseConn) encryptData(data []byte) ([]byte, error) {
+func (nc *Conn) encryptData(data []byte) ([]byte, error) {
 	encrypted, err := nc.sendCipherState.Encrypt(nil, nil, data)
 	if err != nil {
 		return nil, oops.
@@ -121,7 +121,7 @@ func (nc *NoiseConn) encryptData(data []byte) ([]byte, error) {
 // writeEncryptedData writes a length-prefixed encrypted frame to the
 // underlying connection and handles the response. Per Noise spec §12.3,
 // each message is preceded by a 2-byte big-endian length prefix.
-func (nc *NoiseConn) writeEncryptedData(originalData, encryptedData []byte) (int, error) {
+func (nc *Conn) writeEncryptedData(originalData, encryptedData []byte) (int, error) {
 	if err := nc.writeFramedMessage(encryptedData); err != nil {
 		return 0, oops.
 			Code("UNDERLYING_WRITE_FAILED").
@@ -146,7 +146,7 @@ func (nc *NoiseConn) writeEncryptedData(originalData, encryptedData []byte) (int
 }
 
 // validateReadState validates the connection state before reading.
-func (nc *NoiseConn) validateReadState() error {
+func (nc *Conn) validateReadState() error {
 	if nc.isClosed() {
 		return oops.
 			Code("CONN_CLOSED").
@@ -175,7 +175,7 @@ func (nc *NoiseConn) validateReadState() error {
 }
 
 // configureReadTimeout sets the read timeout if configured.
-func (nc *NoiseConn) configureReadTimeout() error {
+func (nc *Conn) configureReadTimeout() error {
 	if nc.config.ReadTimeout > 0 {
 		if err := nc.underlying.SetReadDeadline(time.Now().Add(nc.config.ReadTimeout)); err != nil {
 			return oops.
@@ -192,7 +192,7 @@ func (nc *NoiseConn) configureReadTimeout() error {
 // underlying connection. Per the Noise spec §12.3, each message is preceded
 // by a 2-byte big-endian length field. This method reads the length, then
 // reads exactly that many bytes of ciphertext before returning.
-func (nc *NoiseConn) readEncryptedData(b []byte) ([]byte, int, error) {
+func (nc *Conn) readEncryptedData(b []byte) ([]byte, int, error) {
 	encrypted, err := nc.readFramedMessage()
 	if err != nil {
 		return nil, 0, err
@@ -203,7 +203,7 @@ func (nc *NoiseConn) readEncryptedData(b []byte) ([]byte, int, error) {
 // writeFramedMessage writes a 2-byte big-endian length prefix followed by
 // the message data to the underlying connection. Per Noise spec §12.3:
 // "Applications should add a length field for each Noise message."
-func (nc *NoiseConn) writeFramedMessage(data []byte) error {
+func (nc *Conn) writeFramedMessage(data []byte) error {
 	if len(data) > maxNoiseMessageSize {
 		return oops.
 			Code("MESSAGE_TOO_LARGE").
@@ -233,7 +233,7 @@ func (nc *NoiseConn) writeFramedMessage(data []byte) error {
 // underlying connection, then reads exactly that many bytes. This ensures
 // complete Noise messages are received before decryption, preventing
 // AES-GCM authentication failures from partial TCP reads.
-func (nc *NoiseConn) readFramedMessage() ([]byte, error) {
+func (nc *Conn) readFramedMessage() ([]byte, error) {
 	var header [2]byte
 	if _, err := io.ReadFull(nc.underlying, header[:]); err != nil {
 		return nil, oops.
@@ -264,7 +264,7 @@ func (nc *NoiseConn) readFramedMessage() ([]byte, error) {
 }
 
 // decryptData decrypts the provided encrypted data.
-func (nc *NoiseConn) decryptData(encrypted []byte, encryptedLen int) ([]byte, error) {
+func (nc *Conn) decryptData(encrypted []byte, encryptedLen int) ([]byte, error) {
 	decrypted, err := nc.recvCipherState.Decrypt(nil, nil, encrypted)
 	if err != nil {
 		return nil, oops.
@@ -277,7 +277,7 @@ func (nc *NoiseConn) decryptData(encrypted []byte, encryptedLen int) ([]byte, er
 }
 
 // copyDecryptedData copies decrypted data to the user buffer and logs the operation.
-func (nc *NoiseConn) copyDecryptedData(b, decrypted []byte, encryptedLen, decryptedLen int) (int, error) {
+func (nc *Conn) copyDecryptedData(b, decrypted []byte, encryptedLen, decryptedLen int) (int, error) {
 	copied := copy(b, decrypted)
 
 	// Track metrics for read data

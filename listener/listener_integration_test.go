@@ -21,7 +21,7 @@ func TestNoiseListenerIntegration(t *testing.T) {
 	// Test that we can get the address
 	addr := noiseListener.Addr()
 	require.NotNil(t, addr)
-	noiseAddr, ok := addr.(*conn.NoiseAddr)
+	noiseAddr, ok := addr.(*conn.Addr)
 	require.True(t, ok)
 	assert.Equal(t, "noise+tcp", noiseAddr.Network())
 	assert.Contains(t, noiseAddr.String(), "NN")
@@ -52,7 +52,7 @@ func TestNoiseListenerWithDifferentPatterns(t *testing.T) {
 
 			// Verify the pattern is set correctly
 			addr := noiseListener.Addr()
-			noiseAddr, ok := addr.(*conn.NoiseAddr)
+			noiseAddr, ok := addr.(*conn.Addr)
 			require.True(t, ok)
 			assert.Contains(t, noiseAddr.String(), pattern)
 		})

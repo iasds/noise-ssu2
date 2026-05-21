@@ -151,7 +151,7 @@ type handshakePairConfig struct {
 // setupHandshakePairConn creates a pair of NoiseConn instances connected over
 // TCP that have completed the Noise handshake. The caller is responsible for
 // closing both returned connections.
-func setupHandshakePairConn(t *testing.T, cfg handshakePairConfig) (initiator, responder *NoiseConn) {
+func setupHandshakePairConn(t *testing.T, cfg handshakePairConfig) (initiator, responder *Conn) {
 	t.Helper()
 
 	cs := upstreamnoise.NewCipherSuite(
@@ -188,7 +188,7 @@ func setupHandshakePairConn(t *testing.T, cfg handshakePairConfig) (initiator, r
 
 	var wg sync.WaitGroup
 	var responderErr error
-	var responderConn *NoiseConn
+	var responderConn *Conn
 
 	wg.Add(1)
 	go func() {
