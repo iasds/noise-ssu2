@@ -130,22 +130,27 @@ func TestNoiseListenerShutdownManagerIntegration(t *testing.T) {
 
 // assertShutdownRegistered checks whether a resource (conn or listener) is
 // present in (or absent from) the shutdown manager's tracked set.
+// Direct map lookup is used because the tracked sets use interface key types
+// (ShutdownConn / ShutdownListener), which allows assert.Contains to behave
+// unpredictably when the element is a concrete pointer type.
 func assertShutdownRegistered(t *testing.T, sm *ShutdownManager, resource interface{}, expected bool) {
 	t.Helper()
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 	switch v := resource.(type) {
 	case *NoiseConn:
+		_, found := sm.connections[v]
 		if expected {
-			assert.Contains(t, sm.connections, v)
+			assert.True(t, found, "expected connection to be registered in ShutdownManager")
 		} else {
-			assert.NotContains(t, sm.connections, v)
+			assert.False(t, found, "expected connection to not be registered in ShutdownManager")
 		}
 	case *NoiseListener:
+		_, found := sm.listeners[v]
 		if expected {
-			assert.Contains(t, sm.listeners, v)
+			assert.True(t, found, "expected listener to be registered in ShutdownManager")
 		} else {
-			assert.NotContains(t, sm.listeners, v)
+			assert.False(t, found, "expected listener to not be registered in ShutdownManager")
 		}
 	default:
 		t.Fatalf("unsupported resource type: %T", resource)

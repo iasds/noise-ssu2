@@ -13,6 +13,20 @@ import (
 	"github.com/samber/oops"
 )
 
+// Pool is the interface satisfied by *ConnPool.
+// Callers that need to substitute a test double, an LRU pool, or a
+// metrics-instrumented pool can depend on Pool instead of *ConnPool.
+type Pool interface {
+	// Get retrieves an idle connection for remoteAddr, or nil if none is available.
+	Get(remoteAddr string) net.Conn
+	// Put returns a connection to the pool for reuse.
+	Put(conn net.Conn) error
+	// GetOrDial retrieves an idle connection for remoteAddr or dials a new one.
+	GetOrDial(ctx context.Context, remoteAddr string, dial func(context.Context) (net.Conn, error)) (net.Conn, error)
+	// Close closes the pool and all connections it holds.
+	Close() error
+}
+
 // ConnPool manages a pool of reusable connections for performance optimization.
 // It only uses interface types (net.Conn, net.Addr) for maximum compatibility.
 type ConnPool struct {

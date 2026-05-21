@@ -16,7 +16,7 @@ import (
 var globalMu sync.RWMutex
 
 // globalConnPool is the default connection pool used by transport functions
-var globalConnPool *pool.ConnPool
+var globalConnPool pool.Pool
 
 // globalShutdownManager is the default shutdown manager for coordinated shutdown
 var globalShutdownManager *ShutdownManager
@@ -31,8 +31,9 @@ func init() {
 	globalShutdownManager = NewShutdownManager(30 * time.Second)
 }
 
-// SetGlobalConnPool sets a custom connection pool for transport functions
-func SetGlobalConnPool(p *pool.ConnPool) {
+// SetGlobalConnPool sets a custom connection pool for transport functions.
+// p may be any implementation of pool.Pool, including *pool.ConnPool.
+func SetGlobalConnPool(p pool.Pool) {
 	globalMu.Lock()
 	defer globalMu.Unlock()
 	if globalConnPool != nil {
@@ -41,8 +42,8 @@ func SetGlobalConnPool(p *pool.ConnPool) {
 	globalConnPool = p
 }
 
-// GetGlobalConnPool returns the current global connection pool
-func GetGlobalConnPool() *pool.ConnPool {
+// GetGlobalConnPool returns the current global connection pool as a pool.Pool interface.
+func GetGlobalConnPool() pool.Pool {
 	globalMu.RLock()
 	defer globalMu.RUnlock()
 	return globalConnPool
@@ -339,13 +340,13 @@ func createNoiseListener(listener net.Listener, config *ListenerConfig, network,
 // This is used by DialNoiseWithPool for new (non-pool-retrieved) connections.
 type putOnCloseWrapper struct {
 	net.Conn
-	p    *pool.ConnPool
+	p    pool.Pool
 	mu   sync.Mutex
 	done bool
 }
 
 // newPutOnCloseWrapper creates a putOnCloseWrapper for the given connection.
-func newPutOnCloseWrapper(conn net.Conn, p *pool.ConnPool) net.Conn {
+func newPutOnCloseWrapper(conn net.Conn, p pool.Pool) net.Conn {
 	return &putOnCloseWrapper{Conn: conn, p: p}
 }
 

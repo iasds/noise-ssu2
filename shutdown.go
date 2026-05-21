@@ -2,6 +2,8 @@ package noise
 
 import (
 	"context"
+	"io"
+	"net"
 	"sync"
 	"time"
 
@@ -9,6 +11,21 @@ import (
 	i2plogger "github.com/go-i2p/logger"
 	"github.com/samber/oops"
 )
+
+// ShutdownConn is implemented by any connection that can be managed by ShutdownManager.
+// *NoiseConn satisfies this interface, as do *ntcp2.NTCP2Conn and *ssu2.SSU2Conn.
+type ShutdownConn interface {
+	io.Closer
+	LocalAddr() net.Addr
+	RemoteAddr() net.Addr
+}
+
+// ShutdownListener is implemented by any listener that can be managed by ShutdownManager.
+// *NoiseListener satisfies this interface, as do *ntcp2.NTCP2Listener and *ssu2.SSU2Listener.
+type ShutdownListener interface {
+	io.Closer
+	Addr() net.Addr
+}
 
 // ShutdownManager coordinates graceful shutdown of noise components.
 // It provides context-based cancellation and ensures proper resource cleanup
@@ -21,10 +38,10 @@ type ShutdownManager struct {
 	cancel context.CancelFunc
 
 	// connections tracks active connections for graceful shutdown
-	connections map[*NoiseConn]struct{}
+	connections map[ShutdownConn]struct{}
 
 	// listeners tracks active listeners for shutdown coordination
-	listeners map[*NoiseListener]struct{}
+	listeners map[ShutdownListener]struct{}
 
 	// mu protects the connection and listener maps
 	mu sync.RWMutex
@@ -54,8 +71,8 @@ func NewShutdownManager(timeout time.Duration) *ShutdownManager {
 	return &ShutdownManager{
 		ctx:             ctx,
 		cancel:          cancel,
-		connections:     make(map[*NoiseConn]struct{}),
-		listeners:       make(map[*NoiseListener]struct{}),
+		connections:     make(map[ShutdownConn]struct{}),
+		listeners:       make(map[ShutdownListener]struct{}),
 		shutdownTimeout: timeout,
 		logger:          logger.GetGoI2PLogger(),
 		done:            make(chan struct{}),
@@ -64,7 +81,9 @@ func NewShutdownManager(timeout time.Duration) *ShutdownManager {
 
 // RegisterConnection adds a connection to be managed during shutdown.
 // The connection will be gracefully closed during shutdown.
-func (sm *ShutdownManager) RegisterConnection(conn *NoiseConn) {
+// conn may be any type satisfying ShutdownConn, including *NoiseConn,
+// *ntcp2.NTCP2Conn, and *ssu2.SSU2Conn.
+func (sm *ShutdownManager) RegisterConnection(conn ShutdownConn) {
 	if conn == nil {
 		return
 	}
@@ -84,7 +103,7 @@ func (sm *ShutdownManager) RegisterConnection(conn *NoiseConn) {
 
 // UnregisterConnection removes a connection from shutdown management.
 // This should be called when a connection is closed normally.
-func (sm *ShutdownManager) UnregisterConnection(conn *NoiseConn) {
+func (sm *ShutdownManager) UnregisterConnection(conn ShutdownConn) {
 	if conn == nil {
 		return
 	}
@@ -104,7 +123,9 @@ func (sm *ShutdownManager) UnregisterConnection(conn *NoiseConn) {
 
 // RegisterListener adds a listener to be managed during shutdown.
 // The listener will be gracefully closed during shutdown.
-func (sm *ShutdownManager) RegisterListener(listener *NoiseListener) {
+// listener may be any type satisfying ShutdownListener, including *NoiseListener,
+// *ntcp2.NTCP2Listener, and *ssu2.SSU2Listener.
+func (sm *ShutdownManager) RegisterListener(listener ShutdownListener) {
 	if listener == nil {
 		return
 	}
@@ -123,7 +144,7 @@ func (sm *ShutdownManager) RegisterListener(listener *NoiseListener) {
 
 // UnregisterListener removes a listener from shutdown management.
 // This should be called when a listener is closed normally.
-func (sm *ShutdownManager) UnregisterListener(listener *NoiseListener) {
+func (sm *ShutdownManager) UnregisterListener(listener ShutdownListener) {
 	if listener == nil {
 		return
 	}
@@ -237,7 +258,7 @@ func (sm *ShutdownManager) Wait() {
 // closeListeners closes all registered listeners.
 func (sm *ShutdownManager) closeListeners() error {
 	sm.mu.RLock()
-	listeners := make([]*NoiseListener, 0, len(sm.listeners))
+	listeners := make([]ShutdownListener, 0, len(sm.listeners))
 	for listener := range sm.listeners {
 		listeners = append(listeners, listener)
 	}
@@ -299,7 +320,7 @@ func (sm *ShutdownManager) waitForConnectionsDrain() error {
 // forceCloseConnections forcefully closes all remaining connections.
 func (sm *ShutdownManager) forceCloseConnections() error {
 	sm.mu.RLock()
-	connections := make([]*NoiseConn, 0, len(sm.connections))
+	connections := make([]ShutdownConn, 0, len(sm.connections))
 	for conn := range sm.connections {
 		connections = append(connections, conn)
 	}
