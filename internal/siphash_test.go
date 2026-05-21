@@ -192,13 +192,13 @@ func TestSipHashLengthModifier_ZeroKeys(t *testing.T) {
 
 	mod.ZeroKeys()
 
-	if mod.outboundKeys[0] != 0 || mod.outboundKeys[1] != 0 {
+	if k := mod.PeekOutboundKeys(); k[0] != 0 || k[1] != 0 {
 		t.Error("outbound keys not zeroed")
 	}
-	if mod.inboundKeys[0] != 0 || mod.inboundKeys[1] != 0 {
+	if k := mod.PeekInboundKeys(); k[0] != 0 || k[1] != 0 {
 		t.Error("inbound keys not zeroed")
 	}
-	if mod.outboundIV != 0 || mod.inboundIV != 0 {
+	if mod.PeekOutboundIV() != 0 || mod.PeekInboundIV() != 0 {
 		t.Error("IVs not zeroed")
 	}
 }
@@ -208,8 +208,11 @@ func TestSipHashLengthModifier_Close(t *testing.T) {
 	if err := mod.Close(); err != nil {
 		t.Fatalf("Close() error: %v", err)
 	}
-	if mod.outboundKeys[0] != 0 || mod.inboundIV != 0 {
+	if k := mod.PeekOutboundKeys(); k[0] != 0 {
 		t.Error("Close did not zero key material")
+	}
+	if mod.PeekInboundIV() != 0 {
+		t.Error("Close did not zero IV")
 	}
 }
 
