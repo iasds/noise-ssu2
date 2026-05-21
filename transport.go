@@ -73,11 +73,18 @@ func GracefulShutdown() error {
 	log.WithFields(logger.Fields{"pkg": "noise", "func": "GracefulShutdown"}).Debug("Initiating graceful shutdown of global components")
 	globalMu.RLock()
 	sm := globalShutdownManager
+	cp := globalConnPool
 	globalMu.RUnlock()
+	var shutdownErr error
 	if sm != nil {
-		return sm.Shutdown()
+		shutdownErr = sm.Shutdown()
 	}
-	return nil
+	if cp != nil {
+		if err := cp.Close(); err != nil && shutdownErr == nil {
+			shutdownErr = err
+		}
+	}
+	return shutdownErr
 }
 
 // shutdownRegisterer is implemented by types that support global shutdown management.

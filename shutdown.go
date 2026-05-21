@@ -216,13 +216,6 @@ func (sm *ShutdownManager) executeShutdownSequence() error {
 		}
 	}
 
-	// Close global connection pool
-	if err := sm.closeGlobalConnectionPool(); err != nil {
-		if shutdownErr == nil {
-			shutdownErr = err
-		}
-	}
-
 	return shutdownErr
 }
 
@@ -238,21 +231,31 @@ func (sm *ShutdownManager) handleConnectionDraining() error {
 	return nil
 }
 
-// closeGlobalConnectionPool closes the global connection pool if it exists.
-func (sm *ShutdownManager) closeGlobalConnectionPool() error {
-	if globalConnPool != nil {
-		if err := globalConnPool.Close(); err != nil {
-			sm.logger.WithFields(i2plogger.Fields{"pkg": "noise", "func": "ShutdownManager.closeGlobalConnectionPool"}).WithError(err).Error("error closing global connection pool")
-			return err
-		}
-	}
-	return nil
-}
-
 // Wait blocks until shutdown is complete.
 // This can be used to wait for shutdown to finish after calling Shutdown().
 func (sm *ShutdownManager) Wait() {
 	<-sm.done
+}
+
+// Timeout returns the configured graceful shutdown timeout duration.
+func (sm *ShutdownManager) Timeout() time.Duration {
+	return sm.shutdownTimeout
+}
+
+// ConnectionRegistered reports whether conn is currently tracked by this ShutdownManager.
+func (sm *ShutdownManager) ConnectionRegistered(conn ShutdownConn) bool {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	_, ok := sm.connections[conn]
+	return ok
+}
+
+// ListenerRegistered reports whether listener is currently tracked by this ShutdownManager.
+func (sm *ShutdownManager) ListenerRegistered(listener ShutdownListener) bool {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	_, ok := sm.listeners[listener]
+	return ok
 }
 
 // closeListeners closes all registered listeners.

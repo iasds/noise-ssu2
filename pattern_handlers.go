@@ -458,3 +458,13 @@ func parseHandshakePattern(patternName string) (noise.HandshakePattern, error) {
 			Errorf("unsupported handshake pattern: %s", patternName)
 	}
 }
+
+// ValidateHandshakePattern reports whether pattern is a known Noise handshake
+// pattern name. It accepts both short names ("XX") and full protocol names
+// ("Noise_XX_25519_AESGCM_SHA256"). Returns a non-nil error if the pattern
+// is unknown. This exported form allows sibling packages (e.g., noise/listener)
+// to validate patterns without importing the unexported parseHandshakePattern.
+func ValidateHandshakePattern(pattern string) error {
+	_, err := parseHandshakePattern(pattern)
+	return err
+}
