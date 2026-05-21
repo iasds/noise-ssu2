@@ -12,69 +12,99 @@ import (
 	"github.com/samber/oops"
 )
 
-// globalMu guards globalConnPool and globalShutdownManager against concurrent access.
-var globalMu sync.RWMutex
-
-// globalConnPool is the default connection pool used by transport functions
-var globalConnPool pool.Pool
-
-// globalShutdownManager is the default shutdown manager for coordinated shutdown
-var globalShutdownManager *ShutdownManager
-
-// init initializes the global connection pool and shutdown manager with default settings
-func init() {
-	globalConnPool = pool.NewConnPool(&pool.PoolConfig{
-		MaxSize: 10,
-		MaxAge:  30 * time.Minute,
-		MaxIdle: 5 * time.Minute,
-	})
-	globalShutdownManager = NewShutdownManager(30 * time.Second)
+// Transport owns a Pool and ShutdownManager and provides Dial/Listen methods.
+// Construct one with NewTransport; use the package-level Default for the
+// conventional singleton.
+type Transport struct {
+	mu   sync.RWMutex
+	pool pool.Pool
+	sm   *ShutdownManager
 }
 
-// SetGlobalConnPool sets a custom connection pool for transport functions.
+// NewTransport creates a Transport backed by the given pool and shutdown
+// manager. Either may be nil: a nil pool disables connection reuse; a nil
+// ShutdownManager disables shutdown registration.
+func NewTransport(p pool.Pool, sm *ShutdownManager) *Transport {
+	return &Transport{pool: p, sm: sm}
+}
+
+var (
+	defaultOnce sync.Once
+	defaultInst *Transport
+)
+
+// Default is the package-level Transport used by DialNoise, ListenNoise, etc.
+// It is lazily initialised on first use via getDefault().
+var Default *Transport
+
+// getDefault lazily creates the singleton Transport and exposes it as Default.
+func getDefault() *Transport {
+	defaultOnce.Do(func() {
+		defaultInst = NewTransport(
+			pool.NewConnPool(&pool.PoolConfig{
+				MaxSize: 10,
+				MaxAge:  30 * time.Minute,
+				MaxIdle: 5 * time.Minute,
+			}),
+			NewShutdownManager(30*time.Second),
+		)
+		Default = defaultInst
+	})
+	return defaultInst
+}
+
+// SetGlobalConnPool sets a custom connection pool on the Default Transport.
 // p may be any implementation of pool.Pool, including *pool.ConnPool.
 func SetGlobalConnPool(p pool.Pool) {
-	globalMu.Lock()
-	defer globalMu.Unlock()
-	if globalConnPool != nil {
-		globalConnPool.Close()
+	dt := getDefault()
+	dt.mu.Lock()
+	defer dt.mu.Unlock()
+	if dt.pool != nil {
+		dt.pool.Close()
 	}
-	globalConnPool = p
+	dt.pool = p
 }
 
-// GetGlobalConnPool returns the current global connection pool as a pool.Pool interface.
+// GetGlobalConnPool returns the Default Transport's connection pool.
 func GetGlobalConnPool() pool.Pool {
-	globalMu.RLock()
-	defer globalMu.RUnlock()
-	return globalConnPool
+	dt := getDefault()
+	dt.mu.RLock()
+	defer dt.mu.RUnlock()
+	return dt.pool
 }
 
-// SetGlobalShutdownManager sets a custom shutdown manager for transport functions.
-// The previous shutdown manager will be shut down gracefully.
+// SetGlobalShutdownManager sets a custom shutdown manager on the Default Transport.
+// The previous shutdown manager is shut down gracefully before being replaced.
 func SetGlobalShutdownManager(sm *ShutdownManager) {
-	globalMu.Lock()
-	defer globalMu.Unlock()
-	if globalShutdownManager != nil {
-		globalShutdownManager.Shutdown()
+	dt := getDefault()
+	dt.mu.Lock()
+	defer dt.mu.Unlock()
+	if dt.sm != nil {
+		dt.sm.Shutdown()
 	}
-	globalShutdownManager = sm
+	dt.sm = sm
 }
 
-// GetGlobalShutdownManager returns the current global shutdown manager.
+// GetGlobalShutdownManager returns the Default Transport's shutdown manager.
 func GetGlobalShutdownManager() *ShutdownManager {
-	globalMu.RLock()
-	defer globalMu.RUnlock()
-	return globalShutdownManager
+	dt := getDefault()
+	dt.mu.RLock()
+	defer dt.mu.RUnlock()
+	return dt.sm
 }
 
-// GracefulShutdown initiates graceful shutdown of all global components.
-// This includes the global connection pool and all registered connections/listeners.
+// GracefulShutdown initiates graceful shutdown of all Default Transport components.
 func GracefulShutdown() error {
 	log.WithFields(logger.Fields{"pkg": "noise", "func": "GracefulShutdown"}).Debug("Initiating graceful shutdown of global components")
-	globalMu.RLock()
-	sm := globalShutdownManager
-	cp := globalConnPool
-	globalMu.RUnlock()
+	return getDefault().GracefulShutdown()
+}
+
+// GracefulShutdown shuts down this Transport's ShutdownManager and Pool.
+func (t *Transport) GracefulShutdown() error {
+	t.mu.RLock()
+	sm := t.sm
+	cp := t.pool
+	t.mu.RUnlock()
 	var shutdownErr error
 	if sm != nil {
 		shutdownErr = sm.Shutdown()
@@ -85,6 +115,52 @@ func GracefulShutdown() error {
 		}
 	}
 	return shutdownErr
+}
+
+// Dial creates a Noise-wrapped connection to the given address using this Transport's
+// ShutdownManager and Pool. It is the Transport-scoped equivalent of DialNoise.
+func (t *Transport) Dial(network, addr string, config *ConnConfig) (*NoiseConn, error) {
+	log.WithFields(logger.Fields{"pkg": "noise", "func": "Transport.Dial", "network": network, "address": addr}).Debug("starting")
+	nc, err := openAndWrapTransport(
+		func() error { return validateDialParams(network, addr, config) },
+		func() (io.Closer, error) { return createNewConn(network, addr) },
+		func(c io.Closer) (*NoiseConn, error) {
+			return createNoiseConn(c.(net.Conn), config, network, addr)
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+	t.mu.RLock()
+	sm := t.sm
+	t.mu.RUnlock()
+	if sm != nil {
+		nc.SetShutdownManager(sm)
+	}
+	return nc, nil
+}
+
+// Listen creates a Noise-wrapped listener on the given address using this Transport's
+// ShutdownManager. It is the Transport-scoped equivalent of ListenNoise.
+func (t *Transport) Listen(network, addr string, config *ListenerConfig) (*NoiseListener, error) {
+	log.WithFields(logger.Fields{"pkg": "noise", "func": "Transport.Listen", "network": network, "address": addr}).Debug("starting")
+	nl, err := openAndWrapTransport(
+		func() error { return validateListenParams(network, addr, config) },
+		func() (io.Closer, error) { return createNewListener(network, addr) },
+		func(c io.Closer) (*NoiseListener, error) {
+			return createNoiseListener(c.(net.Listener), config, network, addr)
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+	t.mu.RLock()
+	sm := t.sm
+	t.mu.RUnlock()
+	if sm != nil {
+		nl.SetShutdownManager(sm)
+	}
+	return nl, nil
 }
 
 // shutdownRegisterer is implemented by types that support global shutdown management.
@@ -104,13 +180,9 @@ func wrapTransportError(code, network, addr, msg string, err error, args ...inte
 		Wrapf(err, msg, args...)
 }
 
-// registerShutdown registers a shutdownRegisterer with the global shutdown
-// manager if one is configured. This consolidates the shutdown registration
-// pattern shared by DialNoise and ListenNoise.
-func registerShutdown(target shutdownRegisterer) {
-	globalMu.RLock()
-	sm := globalShutdownManager
-	globalMu.RUnlock()
+// registerShutdownWith registers a shutdownRegisterer with the given shutdown
+// manager if it is non-nil. This is a helper for openAndWrapTransport.
+func registerShutdownWith(target shutdownRegisterer, sm *ShutdownManager) {
 	if sm != nil {
 		target.SetShutdownManager(sm)
 	}
@@ -138,36 +210,19 @@ func openAndWrapTransport[R shutdownRegisterer](
 		resource.Close()
 		return zero, err
 	}
-	registerShutdown(result)
 	return result, nil
 }
 
 // DialNoise creates a connection to the given address and wraps it with NoiseConn.
-// This is a convenience function that combines net.Dial and NewNoiseConn.
-// For more control over the underlying connection, use net.Dial followed by NewNoiseConn.
+// This is a convenience function that delegates to the Default Transport.
 func DialNoise(network, addr string, config *ConnConfig) (*NoiseConn, error) {
-	log.WithFields(logger.Fields{"pkg": "noise", "func": "DialNoise", "network": network, "address": addr}).Debug("starting")
-	return openAndWrapTransport(
-		func() error { return validateDialParams(network, addr, config) },
-		func() (io.Closer, error) { return createNewConn(network, addr) },
-		func(c io.Closer) (*NoiseConn, error) {
-			return createNoiseConn(c.(net.Conn), config, network, addr)
-		},
-	)
+	return getDefault().Dial(network, addr, config)
 }
 
 // ListenNoise creates a listener on the given address and wraps it with NoiseListener.
-// This is a convenience function that combines net.Listen and NewNoiseListener.
-// For more control over the underlying listener, use net.Listen followed by NewNoiseListener.
+// This is a convenience function that delegates to the Default Transport.
 func ListenNoise(network, addr string, config *ListenerConfig) (*NoiseListener, error) {
-	log.WithFields(logger.Fields{"pkg": "noise", "func": "ListenNoise", "network": network, "address": addr}).Debug("starting")
-	return openAndWrapTransport(
-		func() error { return validateListenParams(network, addr, config) },
-		func() (io.Closer, error) { return createNewListener(network, addr) },
-		func(c io.Closer) (*NoiseListener, error) {
-			return createNoiseListener(c.(net.Listener), config, network, addr)
-		},
-	)
+	return getDefault().Listen(network, addr, config)
 }
 
 // WrapConn wraps an existing net.Conn with NoiseConn.
@@ -251,9 +306,10 @@ func DialNoiseWithPool(network, addr string, config *ConnConfig) (*NoiseConn, er
 		// the pool instead of closing it to the OS.  Pool-retrieved conns are
 		// already wrapped in PoolConnWrapper by ConnPool.Get(), which handles
 		// the release path; this wrapper covers only the new-connection case.
-		globalMu.RLock()
-		p := globalConnPool
-		globalMu.RUnlock()
+		dt := getDefault()
+		dt.mu.RLock()
+		p := dt.pool
+		dt.mu.RUnlock()
 		if p != nil {
 			conn = newPutOnCloseWrapper(conn, p)
 		}
@@ -269,12 +325,13 @@ func DialNoiseWithPool(network, addr string, config *ConnConfig) (*NoiseConn, er
 	return noiseConn, nil
 }
 
-// tryGetPooledConn attempts to retrieve a connection from the global pool.
+// tryGetPooledConn attempts to retrieve a connection from the Default Transport's pool.
 // Returns the connection and a boolean indicating if it came from the pool.
 func tryGetPooledConn(addr string) (net.Conn, bool) {
-	globalMu.RLock()
-	p := globalConnPool
-	globalMu.RUnlock()
+	dt := getDefault()
+	dt.mu.RLock()
+	p := dt.pool
+	dt.mu.RUnlock()
 	if p != nil {
 		conn := p.Get(addr)
 		if conn != nil {
@@ -419,9 +476,9 @@ func createAndHandshakeConn(ctx context.Context, conn net.Conn, config *ConnConf
 			Wrapf(err, "failed to create noise connection")
 	}
 
-	// Register with global shutdown manager
-	if globalShutdownManager != nil {
-		noiseConn.SetShutdownManager(globalShutdownManager)
+	// Register with Default Transport's shutdown manager
+	if sm := GetGlobalShutdownManager(); sm != nil {
+		noiseConn.SetShutdownManager(sm)
 	}
 
 	// Perform handshake with retry logic
@@ -457,9 +514,10 @@ func DialNoiseWithPoolAndHandshakeContext(ctx context.Context, network, addr str
 
 	// pool.Put stores entries under conn.RemoteAddr().String(), which is the
 	// plain "host:port" string — use addr directly so the keys match.
-	globalMu.RLock()
-	p := globalConnPool
-	globalMu.RUnlock()
+	dt := getDefault()
+	dt.mu.RLock()
+	p := dt.pool
+	dt.mu.RUnlock()
 	if p != nil {
 		if rawConn := p.Get(addr); rawConn != nil {
 			noiseConn, err := createAndHandshakeConn(ctx, rawConn, config, network, addr)

@@ -1,7 +1,7 @@
 package ssu2
 
 import (
-	"github.com/go-i2p/go-noise/internal"
+	pkgsiphash "github.com/go-i2p/go-noise/handshake/siphash"
 )
 
 // SipHashIVSize is the byte size of a SipHash IV (uint64 = 8 bytes).
@@ -12,18 +12,19 @@ const SipHashIVSize = 8
 const DataLengthFieldSize = 2
 
 // SipHashLengthModifier implements SSU2's SipHash-2-4 length obfuscation
-// for data-phase packet lengths. This type delegates to the shared implementation
-// in the internal package.
-type SipHashLengthModifier = internal.SipHashLengthModifier
+// for data-phase packet lengths. The canonical implementation lives in
+// handshake/siphash; this alias makes the type directly accessible from
+// the ssu2 package without an extra import.
+type SipHashLengthModifier = pkgsiphash.LengthModifier
 
 // NewSipHashLengthModifier creates a new SipHash length modifier with shared
 // keys for both directions.
 func NewSipHashLengthModifier(name string, sipKeys [2]uint64, initialIV uint64) *SipHashLengthModifier {
-	return internal.NewSipHashLengthModifier(name, sipKeys, initialIV)
+	return pkgsiphash.NewLengthModifier(name, sipKeys, initialIV)
 }
 
 // NewSipHashLengthModifierDirectional creates a SipHash length modifier with
 // per-direction keys as required by the SSU2 specification.
 func NewSipHashLengthModifierDirectional(name string, outKeys, inKeys [2]uint64, outIV, inIV uint64) *SipHashLengthModifier {
-	return internal.NewSipHashLengthModifierDirectional(name, outKeys, inKeys, outIV, inIV)
+	return pkgsiphash.NewLengthModifierDirectional(name, outKeys, inKeys, outIV, inIV)
 }
