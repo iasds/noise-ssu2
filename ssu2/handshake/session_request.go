@@ -1,0 +1,187 @@
+package handshake
+
+import (
+	"crypto/rand"
+	"crypto/sha256"
+
+	"github.com/go-i2p/logger"
+	"github.com/go-i2p/noise"
+	"github.com/samber/oops"
+)
+
+// CreateSessionRequest creates a SessionRequest message (Message 0, XK pattern message 1).
+// This is the first handshake message sent by the initiator.
+//
+// SessionRequest contains:
+// - Ephemeral key (32 bytes)
+// - Encrypted static key (32 + 16 bytes MAC)
+// - Encrypted blocks (DateTime, Options)
+//
+// XK pattern message 1: → e, es
+func (h *HandshakeHandler) CreateSessionRequest(sourceConnID, destConnID uint64) (*SSU2Packet, error) {
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "CreateSessionRequest", "sourceConnID": sourceConnID, "destConnID": destConnID}).Debug("Creating SessionRequest")
+	if !h.initiator {
+		return nil, oops.Errorf("only initiator can create SessionRequest")
+	}
+
+	// Create payload blocks for SessionRequest
+	blocks := h.createHandshakeBlocks(MessageTypeSessionRequest)
+
+	return h.buildHandshakePacket(blocks, MessageTypeSessionRequest, sourceConnID, destConnID, nil)
+}
+
+// CreateSessionRequestWithToken creates a SessionRequest with a Retry token
+// inserted into header bytes 24-31. This is used when resending SessionRequest
+// after receiving a Retry message from the responder.
+//
+// Per SSU2 spec §Retry, the handshake state must be reset before resending
+// because the first SessionRequest already advanced the Noise state machine.
+// This method calls ResetForRetry internally to create a fresh handshake state
+// with a new ephemeral key and clean chaining key (C-3).
+func (h *HandshakeHandler) CreateSessionRequestWithToken(sourceConnID, destConnID uint64, token []byte) (*SSU2Packet, error) {
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "CreateSessionRequestWithToken", "sourceConnID": sourceConnID, "destConnID": destConnID, "tokenLen": len(token)}).Debug("Creating SessionRequest with retry token")
+	if !h.initiator {
+		return nil, oops.Errorf("only initiator can create SessionRequest")
+	}
+	if len(token) != 8 {
+		return nil, oops.Errorf("retry token must be exactly 8 bytes, got %d", len(token))
+	}
+	// Per SSU2 spec §Session Request: token must be nonzero when retrying (G-5).
+	allZero := true
+	for _, b := range token {
+		if b != 0 {
+			allZero = false
+			break
+		}
+	}
+	if allZero {
+		return nil, oops.Errorf("retry token must be nonzero per SSU2 spec")
+	}
+
+	// Reset the Noise handshake state so the new SessionRequest
+	// starts from a clean message index 0 with a fresh ephemeral key (C-3).
+	if err := h.ResetForRetry(); err != nil {
+		return nil, oops.Wrapf(err, "failed to reset handshake state for Retry")
+	}
+
+	blocks := h.createHandshakeBlocks(MessageTypeSessionRequest)
+
+	return h.buildHandshakePacket(blocks, MessageTypeSessionRequest, sourceConnID, destConnID, token)
+}
+
+// ResetForRetry recreates the internal Noise handshake state from scratch,
+// preserving the static key, remote static key, and local options. This is
+// required after receiving a Retry message because the original
+// CreateSessionRequest already advanced the handshake state machine past
+// message 1. Per SSU2 spec, the retried SessionRequest must use a fresh
+// ephemeral key and start from a clean chaining key (C-3).
+func (h *HandshakeHandler) ResetForRetry() error {
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "ResetForRetry"}).Debug("Resetting handshake state for retry")
+	cs := noise.NewCipherSuite(noise.DH25519, noise.CipherChaChaPoly, noise.HashSHA256)
+	pub, err := derivePublicKey(h.staticKey)
+	if err != nil {
+		return oops.Wrapf(err, "derive local static public key for retry")
+	}
+	config := noise.Config{
+		CipherSuite:  cs,
+		Random:       rand.Reader,
+		Pattern:      noise.HandshakeXK,
+		Initiator:    h.initiator,
+		Prologue:     buildSSU2Prologue(),
+		ProtocolName: []byte(SSU2ProtocolName),
+		StaticKeypair: noise.DHKey{
+			Private: copyBytes(h.staticKey),
+			Public:  pub,
+		},
+	}
+	if h.initiator && len(h.remoteStaticKey) == 32 {
+		config.PeerStatic = copyBytes(h.remoteStaticKey)
+	}
+	hs, err := noise.NewHandshakeState(config)
+	if err != nil {
+		return oops.Wrapf(err, "failed to recreate handshake state for retry")
+	}
+	h.handshakeState = hs
+	h.sendCipher = nil
+	h.recvCipher = nil
+	h.sessCreateHeaderKey = nil
+	h.sessionConfirmedHeaderKey = nil
+	return nil
+}
+
+// ProcessSessionRequest processes a received SessionRequest message.
+// This is called by the responder to process the initiator's first message.
+//
+// Returns the initiator's static public key learned from the handshake.
+func (h *HandshakeHandler) ProcessSessionRequest(packet *SSU2Packet) ([]byte, error) {
+	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "ProcessSessionRequest"}).Debug("Processing received SessionRequest")
+	if h.initiator {
+		return nil, oops.Errorf("initiator cannot process SessionRequest")
+	}
+
+	if packet.MessageType != MessageTypeSessionRequest {
+		return nil, oops.Errorf("expected SessionRequest (type 0), got type %d", packet.MessageType)
+	}
+
+	if len(packet.EphemeralKey) != 32 {
+		return nil, oops.Errorf("SessionRequest missing ephemeral key")
+	}
+
+	// Replay protection: hash the ephemeral key + payload as a unique message ID.
+	// The ephemeral key is randomly generated per handshake attempt, so its
+	// hash is a reliable replay detection key.
+	if h.replayCache != nil {
+		digest := sha256.Sum256(append(packet.EphemeralKey, packet.Payload...))
+		if h.replayCache.CheckAndAdd(digest) {
+			return nil, oops.Errorf("replayed SessionRequest detected")
+		}
+	}
+
+	// MixHash(header) per SSU2 spec §KDF — binds the header into
+	// the handshake hash before processing the Noise message.
+	h.handshakeState.MixHash(packet.Header)
+
+	// Reconstruct Noise message: ephemeral key + encrypted payload + MAC
+	noiseMessage := append(append(copyBytes(packet.EphemeralKey), packet.Payload...), packet.MAC...)
+
+	// Process handshake message using Noise protocol
+	// ReadMessage will: receive ephemeral key, perform DH, decrypt payload
+	payload, cs1, cs2, err := h.handshakeState.ReadMessage(nil, noiseMessage)
+	if err != nil {
+		return nil, oops.Wrapf(err, "failed to process SessionRequest handshake message")
+	}
+
+	// After processing message 1 (→ e, es), derive "SessCreateHeader" from
+	// the intermediate chainKey per SSU2 spec §KDF for Session Request.
+	h.sessCreateHeaderKey = deriveIntermediateHeaderKey(
+		h.handshakeState.ChainingKey(), "SessCreateHeader",
+	)
+
+	// Store cipher states
+	h.updateCipherStates(cs1, cs2)
+
+	// Parse blocks from decrypted payload
+	blocks, err := DeserializeBlocks(payload)
+	if err != nil {
+		return nil, oops.Wrapf(err, "failed to deserialize SessionRequest blocks")
+	}
+
+	// Validate required blocks (DateTime, Options)
+	if err := h.validateHandshakeBlocks(blocks, MessageTypeSessionRequest); err != nil {
+		return nil, err
+	}
+
+	// Extract peer's Options block for padding negotiation (G-3).
+	h.extractPeerOptions(blocks)
+
+	// Note: In the XK pattern, the initiator's static key is transmitted encrypted,
+	// but the noise library doesn't expose it via PeerStatic() on the responder side.
+	// The static key is used internally for DH operations to establish the session.
+	// If you need the initiator's identity (RouterInfo), it should be transmitted
+	// in the payload blocks (e.g., RouterInfo block) rather than extracted from
+	// the Noise handshake state.
+	//
+	// For now, we return nil to indicate the handshake succeeded but the static key
+	// is not directly available. The session is authenticated via the successful DH.
+	return nil, nil
+}
