@@ -5,7 +5,7 @@ import (
 	"math"
 	"time"
 
-	"github.com/go-i2p/go-noise/internal"
+	"github.com/go-i2p/go-noise/mod"
 	i2plogger "github.com/go-i2p/logger"
 	"github.com/samber/oops"
 )
@@ -76,7 +76,7 @@ func (nc *Conn) shouldRetry(attempt, maxRetries int, err error) bool {
 
 	// Check if the connection is in a retriable state
 	// Only retry from Init state (handshake sets state back to Init on failure)
-	return nc.getState() == internal.StateInit
+	return nc.getState() == mod.StateInit
 }
 
 // waitForRetry implements exponential backoff delay before retry attempt.

@@ -3,7 +3,7 @@ package conn
 import (
 	"time"
 
-	"github.com/go-i2p/go-noise/internal"
+	"github.com/go-i2p/go-noise/mod"
 	shutdown "github.com/go-i2p/go-noise/shutdown"
 	i2plogger "github.com/go-i2p/logger"
 	"github.com/go-i2p/noise"
@@ -18,7 +18,7 @@ func (nc *Conn) GetConnectionMetrics() (bytesRead, bytesWritten int64, handshake
 // metricsForTest returns the underlying ConnectionMetrics for test access.
 // This decouples tests from the internal field name, so only this accessor
 // needs updating if the field is renamed or restructured.
-func (nc *Conn) metricsForTest() *internal.ConnectionMetrics {
+func (nc *Conn) metricsForTest() *mod.ConnectionMetrics {
 	return nc.metrics
 }
 
@@ -115,7 +115,7 @@ func (nc *Conn) AdditionalSymmetricKeys() [][]byte {
 // Rekey requires the handshake to be complete (connection in Established state).
 // It is safe for concurrent use; the underlying CipherState.Rekey() is mutex-protected.
 func (nc *Conn) Rekey() error {
-	if nc.getState() != internal.StateEstablished {
+	if nc.getState() != mod.StateEstablished {
 		return oops.
 			Code("REKEY_INVALID_STATE").
 			In("noise").
@@ -152,25 +152,25 @@ func (nc *Conn) SetShutdownManager(sm shutdown.Shutdowner) {
 
 // isClosed returns true if the connection is closed
 func (nc *Conn) isClosed() bool {
-	return nc.getState() == internal.StateClosed
+	return nc.getState() == mod.StateClosed
 }
 
 // isHandshakeDone returns true if the handshake is complete
 // Only established connections have completed handshakes - closed connections should not pass this check
 func (nc *Conn) isHandshakeDone() bool {
 	state := nc.getState()
-	return state == internal.StateEstablished
+	return state == mod.StateEstablished
 }
 
 // getState returns the current connection state in a thread-safe manner
-func (nc *Conn) getState() internal.ConnState {
+func (nc *Conn) getState() mod.ConnState {
 	nc.stateMutex.RLock()
 	defer nc.stateMutex.RUnlock()
 	return nc.state
 }
 
 // setState sets the connection state in a thread-safe manner
-func (nc *Conn) setState(newState internal.ConnState) {
+func (nc *Conn) setState(newState mod.ConnState) {
 	nc.stateMutex.Lock()
 	defer nc.stateMutex.Unlock()
 

@@ -3,7 +3,7 @@ package ntcp2
 import (
 	"time"
 
-	"github.com/go-i2p/go-noise/internal/replaycache"
+	"github.com/go-i2p/go-noise/mod/replaycache"
 	"github.com/go-i2p/logger"
 )
 

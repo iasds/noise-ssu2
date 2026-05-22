@@ -8,7 +8,7 @@ import (
 
 	i2pcurve25519 "github.com/go-i2p/crypto/curve25519"
 	"github.com/go-i2p/crypto/ecies"
-	"github.com/go-i2p/go-noise/internal/replaycache"
+	"github.com/go-i2p/go-noise/mod/replaycache"
 	"github.com/go-i2p/logger"
 	"github.com/samber/oops"
 )

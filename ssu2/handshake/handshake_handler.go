@@ -7,7 +7,7 @@ import (
 	"encoding/binary"
 	"time"
 
-	"github.com/go-i2p/go-noise/internal/replaycache"
+	"github.com/go-i2p/go-noise/mod/replaycache"
 	"github.com/go-i2p/logger"
 	"github.com/go-i2p/noise"
 	"github.com/samber/oops"

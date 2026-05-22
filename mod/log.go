@@ -1,4 +1,4 @@
-package internal
+package mod
 
 import "github.com/go-i2p/logger"
 

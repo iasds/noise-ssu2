@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/go-i2p/go-noise/handshake"
-	"github.com/go-i2p/go-noise/internal"
+	"github.com/go-i2p/go-noise/mod"
 	"github.com/go-i2p/noise"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -583,7 +583,7 @@ func TestNoiseConnReadWriteAfterHandshake(t *testing.T) {
 
 	// Manually set handshake as done for testing read/write paths
 	// This is testing internal state, which isn't ideal, but necessary for coverage
-	conn.setState(internal.StateEstablished)
+	conn.setState(mod.StateEstablished)
 
 	// Test read from underlying connection
 	testData := []byte("test data")
@@ -693,7 +693,7 @@ func TestNoiseConnCipherOperations(t *testing.T) {
 	conn, mockConn := newTestNoiseConn(t, "XX", true)
 
 	// Manually set handshake as done and set a mock cipher state
-	conn.setState(internal.StateEstablished)
+	conn.setState(mod.StateEstablished)
 
 	// Test read with nil cipher state
 	testData := []byte("encrypted data")
@@ -929,8 +929,8 @@ func TestConnectionStateManagement(t *testing.T) {
 		}
 		defer conn.Close()
 
-		if state := conn.GetConnectionState(); state != internal.StateInit {
-			t.Errorf("Expected initial state to be %v, got %v", internal.StateInit, state)
+		if state := conn.GetConnectionState(); state != mod.StateInit {
+			t.Errorf("Expected initial state to be %v, got %v", mod.StateInit, state)
 		}
 
 		if conn.isHandshakeDone() {
@@ -949,8 +949,8 @@ func TestConnectionStateManagement(t *testing.T) {
 		}
 		defer conn.Close()
 
-		if state := conn.GetConnectionState(); state != internal.StateInit {
-			t.Errorf("Expected initial state to be %v, got %v", internal.StateInit, state)
+		if state := conn.GetConnectionState(); state != mod.StateInit {
+			t.Errorf("Expected initial state to be %v, got %v", mod.StateInit, state)
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
@@ -958,7 +958,7 @@ func TestConnectionStateManagement(t *testing.T) {
 
 		_ = conn.Handshake(ctx)
 
-		if state := conn.GetConnectionState(); state != internal.StateInit {
+		if state := conn.GetConnectionState(); state != mod.StateInit {
 			t.Logf("State after failed handshake: %v (this is expected)", state)
 		}
 	})
@@ -974,8 +974,8 @@ func TestConnectionStateManagement(t *testing.T) {
 			t.Errorf("Failed to close connection: %v", err)
 		}
 
-		if state := conn.GetConnectionState(); state != internal.StateClosed {
-			t.Errorf("Expected state to be %v after close, got %v", internal.StateClosed, state)
+		if state := conn.GetConnectionState(); state != mod.StateClosed {
+			t.Errorf("Expected state to be %v after close, got %v", mod.StateClosed, state)
 		}
 
 		if !conn.isClosed() {
@@ -1055,14 +1055,14 @@ func TestStateTransitionLogging(t *testing.T) {
 	}
 	defer conn.Close()
 
-	conn.setState(internal.StateHandshaking)
-	if state := conn.getState(); state != internal.StateHandshaking {
-		t.Errorf("Expected state to be %v, got %v", internal.StateHandshaking, state)
+	conn.setState(mod.StateHandshaking)
+	if state := conn.getState(); state != mod.StateHandshaking {
+		t.Errorf("Expected state to be %v, got %v", mod.StateHandshaking, state)
 	}
 
-	conn.setState(internal.StateEstablished)
-	if state := conn.getState(); state != internal.StateEstablished {
-		t.Errorf("Expected state to be %v, got %v", internal.StateEstablished, state)
+	conn.setState(mod.StateEstablished)
+	if state := conn.getState(); state != mod.StateEstablished {
+		t.Errorf("Expected state to be %v, got %v", mod.StateEstablished, state)
 	}
 
 	if !conn.isHandshakeDone() {

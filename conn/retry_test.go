@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-i2p/go-noise/internal"
+	"github.com/go-i2p/go-noise/mod"
 	"github.com/samber/oops"
 )
 
@@ -125,15 +125,15 @@ func TestNoiseConn_shouldRetry(t *testing.T) {
 		name       string
 		attempt    int
 		maxRetries int
-		state      internal.ConnState
+		state      mod.ConnState
 		expected   bool
 	}{
-		{"first attempt within limit", 0, 3, internal.StateInit, true},
-		{"at retry limit", 3, 3, internal.StateInit, false},
-		{"beyond retry limit", 4, 3, internal.StateInit, false},
-		{"infinite retries", 100, -1, internal.StateInit, true},
-		{"wrong state established", 0, 3, internal.StateEstablished, false},
-		{"wrong state closed", 0, 3, internal.StateClosed, false},
+		{"first attempt within limit", 0, 3, mod.StateInit, true},
+		{"at retry limit", 3, 3, mod.StateInit, false},
+		{"beyond retry limit", 4, 3, mod.StateInit, false},
+		{"infinite retries", 100, -1, mod.StateInit, true},
+		{"wrong state established", 0, 3, mod.StateEstablished, false},
+		{"wrong state closed", 0, 3, mod.StateClosed, false},
 	}
 
 	for _, tt := range tests {

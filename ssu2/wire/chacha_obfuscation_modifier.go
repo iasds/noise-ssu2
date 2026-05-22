@@ -2,7 +2,7 @@ package wire
 
 import (
 	"github.com/go-i2p/go-noise/handshake"
-	"github.com/go-i2p/go-noise/internal"
+	"github.com/go-i2p/go-noise/mod"
 	"github.com/go-i2p/logger"
 	"github.com/samber/oops"
 	"golang.org/x/crypto/chacha20"
@@ -117,6 +117,6 @@ func (com *ChaChaObfuscationModifier) applyChacha(data []byte) ([]byte, error) {
 // Close releases resources and zeroes sensitive key material.
 func (com *ChaChaObfuscationModifier) Close() error {
 	log.WithFields(logger.Fields{"pkg": "wire", "func": "Close", "name": com.name}).Debug("Close: releasing ChaChaObfuscationModifier resources")
-	internal.SecureZero(com.introKey)
+	mod.SecureZero(com.introKey)
 	return nil
 }

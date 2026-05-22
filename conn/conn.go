@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-i2p/go-noise/internal"
+	"github.com/go-i2p/go-noise/mod"
 	shutdown "github.com/go-i2p/go-noise/shutdown"
 	i2plogger "github.com/go-i2p/logger"
 	"github.com/go-i2p/noise"
@@ -19,17 +19,17 @@ const maxNoiseMessageSize = 65535
 // Connection state constants for public API
 const (
 	// StateInit represents a newly created connection
-	StateInit = internal.StateInit
+	StateInit = mod.StateInit
 	// StateHandshaking represents a connection performing handshake
-	StateHandshaking = internal.StateHandshaking
+	StateHandshaking = mod.StateHandshaking
 	// StateEstablished represents a connection with completed handshake
-	StateEstablished = internal.StateEstablished
+	StateEstablished = mod.StateEstablished
 	// StateClosed represents a closed connection
-	StateClosed = internal.StateClosed
+	StateClosed = mod.StateClosed
 )
 
 // ConnState represents the state of a NoiseConn
-type ConnState = internal.ConnState
+type ConnState = mod.ConnState
 
 // Conn implements net.Conn with Noise Protocol encryption.
 // It wraps an underlying net.Conn and provides encrypted communication
@@ -73,10 +73,10 @@ type Conn struct {
 	remoteAddr *Addr
 
 	// state tracks the connection lifecycle and metrics
-	state internal.ConnState
+	state mod.ConnState
 
 	// metrics tracks connection performance data
-	metrics *internal.ConnectionMetrics
+	metrics *mod.ConnectionMetrics
 
 	// stateMutex protects state transitions
 	stateMutex sync.RWMutex
@@ -121,8 +121,8 @@ func NewNoiseConn(underlying net.Conn, config *ConnConfig) (*Conn, error) {
 		localAddr:      localAddr,
 		remoteAddr:     remoteAddr,
 		logger:         log,
-		metrics:        internal.NewConnectionMetrics(),
-		state:          internal.StateInit,
+		metrics:        mod.NewConnectionMetrics(),
+		state:          mod.StateInit,
 	}
 
 	nc.logger.WithFields(i2plogger.Fields{
@@ -219,20 +219,20 @@ func (nc *Conn) Close() error {
 
 	// Check and set state atomically to prevent race conditions
 	nc.stateMutex.Lock()
-	if nc.state == internal.StateClosed {
+	if nc.state == mod.StateClosed {
 		nc.stateMutex.Unlock()
 		return nil // Already closed
 	}
 
 	oldState := nc.state
-	nc.state = internal.StateClosed
+	nc.state = mod.StateClosed
 	nc.stateMutex.Unlock()
 
 	nc.logger.WithFields(i2plogger.Fields{
 		"pkg":       "noise",
 		"func":      "NoiseConn.Close",
 		"old_state": oldState.String(),
-		"new_state": internal.StateClosed.String(),
+		"new_state": mod.StateClosed.String(),
 	}).Debug("Connection state changed")
 
 	nc.logger.WithFields(i2plogger.Fields{"pkg": "noise", "func": "NoiseConn.Close"}).Debug("Closing NoiseConn")
@@ -247,7 +247,7 @@ func (nc *Conn) Close() error {
 
 	// Zero static key material from config to prevent lingering in memory
 	if nc.config != nil && len(nc.config.StaticKey) > 0 {
-		internal.SecureZero(nc.config.StaticKey)
+		mod.SecureZero(nc.config.StaticKey)
 	}
 
 	// Unregister from shutdown manager if set

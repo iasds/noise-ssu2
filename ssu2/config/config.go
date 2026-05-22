@@ -8,7 +8,7 @@ import (
 	"github.com/go-i2p/common/router_info"
 	noise "github.com/go-i2p/go-noise"
 	"github.com/go-i2p/go-noise/handshake"
-	"github.com/go-i2p/go-noise/internal"
+	"github.com/go-i2p/go-noise/mod"
 	ssu2hs "github.com/go-i2p/go-noise/ssu2/handshake"
 	"github.com/go-i2p/go-noise/ssu2/wire"
 	"github.com/go-i2p/logger"
@@ -581,7 +581,7 @@ func (sc *SSU2Config) WithRouterInfoValidator(validator func(routerInfo, authent
 // Validate checks if the configuration is valid for SSU2.
 func (sc *SSU2Config) Validate() error {
 	log.WithFields(logger.Fields{"pkg": "config", "func": "Validate"}).Debug("Validating SSU2Config")
-	return internal.RunValidators(
+	return mod.RunValidators(
 		sc.validateBasicConfiguration,
 		sc.validateCryptographicParameters,
 		sc.validateTimeoutConfiguration,
@@ -594,7 +594,7 @@ func (sc *SSU2Config) Validate() error {
 func (sc *SSU2Config) validateBasicConfiguration() error {
 	log.WithFields(logger.Fields{"pkg": "config", "func": "validateBasicConfiguration", "pattern": sc.Pattern}).Debug("Checking pattern and router hash")
 	// Validate pattern (SSU2 typically uses XK)
-	if err := internal.ValidatePattern(sc.Pattern, "ssu2"); err != nil {
+	if err := mod.ValidatePattern(sc.Pattern, "ssu2"); err != nil {
 		return err
 	}
 
@@ -605,7 +605,7 @@ func (sc *SSU2Config) validateBasicConfiguration() error {
 func (sc *SSU2Config) validateCryptographicParameters() error {
 	log.WithFields(logger.Fields{"pkg": "config", "func": "validateCryptographicParameters", "initiator": sc.Initiator, "has_static_key": len(sc.StaticKey) > 0}).Debug("Checking keys and obfuscation settings")
 	// Validate static key if provided
-	if err := internal.ValidateKeyLength(sc.StaticKey, "static key", "ssu2"); err != nil {
+	if err := mod.ValidateKeyLength(sc.StaticKey, "static key", "ssu2"); err != nil {
 		return err
 	}
 
@@ -652,12 +652,12 @@ func (sc *SSU2Config) validateCryptographicParameters() error {
 func (sc *SSU2Config) validateTimeoutConfiguration() error {
 	log.WithFields(logger.Fields{"pkg": "config", "func": "validateTimeoutConfiguration", "handshake_timeout": sc.HandshakeTimeout, "keepalive_interval": sc.KeepaliveInterval}).Debug("Checking timeout and retry settings")
 	// Validate handshake timeout
-	if err := internal.ValidateHandshakeTimeout(sc.HandshakeTimeout, "ssu2"); err != nil {
+	if err := mod.ValidateHandshakeTimeout(sc.HandshakeTimeout, "ssu2"); err != nil {
 		return err
 	}
 
 	// Validate retry configuration
-	if err := internal.ValidateRetryConfig(sc.HandshakeRetries, sc.RetryBackoff, "ssu2"); err != nil {
+	if err := mod.ValidateRetryConfig(sc.HandshakeRetries, sc.RetryBackoff, "ssu2"); err != nil {
 		return err
 	}
 

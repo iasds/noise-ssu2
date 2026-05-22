@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-i2p/go-noise/internal"
+	"github.com/go-i2p/go-noise/mod"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -136,7 +136,7 @@ func TestCryptoOp_NilCipherState(t *testing.T) {
 			defer conn.Close()
 
 			// Force established state without cipher states
-			conn.setState(internal.StateEstablished)
+			conn.setState(mod.StateEstablished)
 
 			if tt.op == "encrypt" {
 				_, err = conn.Encrypt(tt.input)
@@ -256,7 +256,7 @@ func TestRekey_ErrorStates(t *testing.T) {
 				t.Helper()
 				conn, err := createTestConnection()
 				require.NoError(t, err)
-				conn.setState(internal.StateEstablished)
+				conn.setState(mod.StateEstablished)
 				return conn
 			},
 			errSubstr: "cipher states not available",
@@ -278,7 +278,7 @@ func TestRekey_ErrorStates(t *testing.T) {
 				t.Helper()
 				conn, err := createTestConnection()
 				require.NoError(t, err)
-				conn.setState(internal.StateHandshaking)
+				conn.setState(mod.StateHandshaking)
 				return conn
 			},
 			errSubstr: "not in established state",
@@ -391,7 +391,7 @@ func TestChannelBinding_NilHandshakeState(t *testing.T) {
 			&mockNetAddr{"tcp", "127.0.0.1:1"},
 			&mockNetAddr{"tcp", "127.0.0.1:2"},
 		),
-		metrics: internal.NewConnectionMetrics(),
+		metrics: mod.NewConnectionMetrics(),
 		logger:  log,
 	}
 
@@ -465,7 +465,7 @@ func TestAdditionalSymmetricKeys_NilHandshakeState(t *testing.T) {
 			&mockNetAddr{"tcp", "127.0.0.1:1"},
 			&mockNetAddr{"tcp", "127.0.0.1:2"},
 		),
-		metrics: internal.NewConnectionMetrics(),
+		metrics: mod.NewConnectionMetrics(),
 		logger:  log,
 	}
 
@@ -499,7 +499,7 @@ func TestPeerStatic_NilHandshakeState(t *testing.T) {
 			&mockNetAddr{"tcp", "127.0.0.1:1"},
 			&mockNetAddr{"tcp", "127.0.0.1:2"},
 		),
-		metrics: internal.NewConnectionMetrics(),
+		metrics: mod.NewConnectionMetrics(),
 		logger:  log,
 	}
 

@@ -1,6 +1,6 @@
-// Package internal provides shared helpers and secure utilities used across
+// Package mod provides shared helpers and secure utilities used across
 // go-noise sub-packages, including state management and cryptographic zeroing.
-package internal
+package mod
 
 import (
 	"sync"
@@ -53,7 +53,7 @@ type ConnectionMetrics struct {
 
 // NewConnectionMetrics creates a new ConnectionMetrics instance
 func NewConnectionMetrics() *ConnectionMetrics {
-	log.WithFields(logger.Fields{"pkg": "internal", "func": "NewConnectionMetrics"}).Debug("Creating new connection metrics")
+	log.WithFields(logger.Fields{"pkg": "mod", "func": "NewConnectionMetrics"}).Debug("Creating new connection metrics")
 	return &ConnectionMetrics{
 		Created: time.Now(),
 	}
@@ -72,7 +72,7 @@ func (m *ConnectionMetrics) HandshakeDuration() time.Duration {
 
 // SetHandshakeStart records the handshake start time
 func (m *ConnectionMetrics) SetHandshakeStart() {
-	log.WithFields(logger.Fields{"pkg": "internal", "func": "ConnectionMetrics.SetHandshakeStart"}).Debug("Recording handshake start time")
+	log.WithFields(logger.Fields{"pkg": "mod", "func": "ConnectionMetrics.SetHandshakeStart"}).Debug("Recording handshake start time")
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.handshakeStarted = time.Now()
@@ -80,7 +80,7 @@ func (m *ConnectionMetrics) SetHandshakeStart() {
 
 // SetHandshakeEnd records the handshake completion time
 func (m *ConnectionMetrics) SetHandshakeEnd() {
-	log.WithFields(logger.Fields{"pkg": "internal", "func": "ConnectionMetrics.SetHandshakeEnd"}).Debug("Recording handshake end time")
+	log.WithFields(logger.Fields{"pkg": "mod", "func": "ConnectionMetrics.SetHandshakeEnd"}).Debug("Recording handshake end time")
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.handshakeEnded = time.Now()

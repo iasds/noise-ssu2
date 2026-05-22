@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/go-i2p/go-noise/handshake"
-	"github.com/go-i2p/go-noise/internal"
+	"github.com/go-i2p/go-noise/mod"
 	i2plogger "github.com/go-i2p/logger"
 	"github.com/go-i2p/noise"
 	"github.com/samber/oops"
@@ -34,7 +34,7 @@ func (nc *Conn) Handshake(ctx context.Context) error {
 		return nil // Already completed
 	}
 
-	nc.setState(internal.StateHandshaking)
+	nc.setState(mod.StateHandshaking)
 	nc.metrics.SetHandshakeStart()
 	nc.logger.WithFields(i2plogger.Fields{
 		"pkg":               "noise",
@@ -56,7 +56,7 @@ func (nc *Conn) Handshake(ctx context.Context) error {
 		// start with fresh nonce counters and chaining key, as required by
 		// the Noise protocol specification.
 		nc.resetHandshakeState()
-		nc.setState(internal.StateInit)
+		nc.setState(mod.StateInit)
 		return err
 	}
 
@@ -65,7 +65,7 @@ func (nc *Conn) Handshake(ctx context.Context) error {
 	// (e.g., SipHash keys from the handshake hash for NTCP2).
 	if nc.config.PostHandshakeHook != nil {
 		if err := nc.config.PostHandshakeHook(nc); err != nil {
-			nc.setState(internal.StateInit)
+			nc.setState(mod.StateInit)
 			return oops.
 				Code("POST_HANDSHAKE_HOOK_FAILED").
 				In("noise").
@@ -332,7 +332,7 @@ func (nc *Conn) executeRoleBasedHandshake(ctx context.Context) error {
 
 // markHandshakeComplete sets the handshake completion state and logs success.
 func (nc *Conn) markHandshakeComplete() {
-	nc.setState(internal.StateEstablished)
+	nc.setState(mod.StateEstablished)
 	nc.metrics.SetHandshakeEnd()
 	nc.logger.WithFields(i2plogger.Fields{"pkg": "noise", "func": "NoiseConn.markHandshakeComplete"}).Info("Noise handshake completed successfully")
 }
@@ -405,7 +405,7 @@ func (nc *Conn) ReadHandshakeMsgFromBytes(phase handshake.HandshakePhase, wireDa
 // records the handshake start time. Call this once before the first
 // WriteHandshakeMsgToBytes or ReadHandshakeMsgFromBytes call.
 func (nc *Conn) StartHandshake() {
-	nc.setState(internal.StateHandshaking)
+	nc.setState(mod.StateHandshaking)
 	nc.metrics.SetHandshakeStart()
 }
 
@@ -433,7 +433,7 @@ func (nc *Conn) RunPostHandshakeHook() error {
 // can be made (or so that close/cleanup code sees a consistent state).
 func (nc *Conn) FailHandshake() {
 	nc.resetHandshakeState()
-	nc.setState(internal.StateInit)
+	nc.setState(mod.StateInit)
 }
 
 // GetHandshakeHash returns the hash of the handshake transcript from the
