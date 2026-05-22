@@ -1,0 +1,854 @@
+package server
+
+import (
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/binary"
+	"errors"
+	"net"
+	"sync"
+	"time"
+
+	"github.com/go-i2p/common/data"
+	"github.com/go-i2p/logger"
+	"github.com/samber/oops"
+)
+
+// errNoTokenPresent is a sentinel error returned by validateSessionRequestToken
+// when the SessionRequest does not contain a NewToken block. This is used by
+// handleNewSession to decide whether to send a Retry message.
+var errNoTokenPresent = errors.New("no token present in SessionRequest")
+
+// SSU2Listener implements net.Listener for accepting SSU2 connections over UDP.
+// It manages incoming packets, routes them to existing sessions, and creates
+// new sessions for valid handshake packets.
+//
+// Design rationale:
+// - Uses PacketRouter to dispatch packets to appropriate sessions
+// - Uses TokenCache to validate retry tokens and prevent spoofing
+// - Implements net.Listener interface for compatibility with standard library
+// - Single UDP socket shared across all sessions (multiplexing)
+// - Worker pool limits goroutine count under traffic floods
+//
+// Thread Safety: All public methods are thread-safe.
+type SSU2Listener struct {
+	// underlying is the UDP socket for receiving packets
+	underlying net.PacketConn
+
+	// config holds listener configuration
+	config *SSU2Config
+
+	// addr is the SSU2 address for this listener
+	addr *SSU2Addr
+
+	// sessions maps connection ID to active SSU2Conn instances
+	sessions     map[uint64]*SSU2Conn
+	sessionMutex sync.RWMutex
+
+	// tokenCache validates retry tokens
+	tokenCache *TokenCache
+
+	// tokenAdmission gates retry-token issuance against off-path
+	// spoofed-source flooding. Two layers are applied before a token
+	// cache entry is allocated:
+	//  - firstSight demands that the source address be observed in a
+	//    prior packet within FirstSightWindow before a token is issued
+	//    (forcing an attacker to spend ≥2 packets per spoofed IP, on
+	//    separate, cheaper tracker state).
+	//  - issuanceLimiter caps the total tokens/sec issued across all
+	//    peers so that even a bypassed first-sight cannot amplify
+	//    issuance rate.
+	firstSight      *firstSightTracker
+	issuanceLimiter *tokenIssuanceLimiter
+
+	// acceptQueue buffers established connections ready to be accepted
+	acceptQueue chan *SSU2Conn
+
+	// packetQueue buffers incoming packets for worker pool processing
+	packetQueue chan incomingPacket
+
+	// router routes packets to sessions
+	router *PacketRouter
+
+	// sessionRateLimiter limits SessionRequest processing per source IP (M-6)
+	sessionRateLimiter *ipRateLimiter
+
+	// Lifecycle management
+	closed       bool
+	closeMutex   sync.Mutex
+	shutdownChan chan struct{}
+	wg           sync.WaitGroup
+}
+
+// incomingPacket holds a received packet and its source address for worker processing.
+type incomingPacket struct {
+	data       []byte
+	remoteAddr *net.UDPAddr
+}
+
+// packetWorkers is the number of goroutines in the packet processing pool.
+const packetWorkers = 8
+
+// packetQueueSize is the buffer size for the incoming packet channel.
+// Packets arriving when the queue is full are dropped.
+const packetQueueSize = 256
+
+// NewSSU2Listener creates a new SSU2 listener wrapping the specified packet connection.
+// The listener starts in an idle state; call Start() to begin accepting connections.
+//
+// Parameters:
+//   - underlying: UDP PacketConn to receive packets from
+//   - config: SSU2 configuration for accepted connections
+//
+// Returns a new SSU2Listener ready to start, or an error if configuration is invalid.
+func NewSSU2Listener(underlying net.PacketConn, config *SSU2Config) (*SSU2Listener, error) {
+	log.WithFields(logger.Fields{"pkg": "server", "func": "NewSSU2Listener"}).Debug("Creating new SSU2 listener")
+	if underlying == nil {
+		return nil, oops.
+			Code("INVALID_PACKET_CONN").
+			In("ssu2_listener").
+			Errorf("underlying packet connection cannot be nil")
+	}
+
+	if config == nil {
+		return nil, oops.
+			Code("INVALID_CONFIG").
+			In("ssu2_listener").
+			Errorf("configuration cannot be nil")
+	}
+
+	// Validate configuration
+	if err := config.Validate(); err != nil {
+		return nil, oops.Wrapf(err, "invalid configuration")
+	}
+
+	// Generate connection ID for listener address
+	connID, err := GenerateConnectionID()
+	if err != nil {
+		return nil, oops.Wrapf(err, "failed to generate connection ID")
+	}
+
+	// Create listener SSU2 address using config's router hash
+	addr, err := NewSSU2Addr(underlying.LocalAddr(), config.RouterHash, connID, "responder")
+	if err != nil {
+		return nil, oops.Wrapf(err, "failed to create SSU2 address")
+	}
+
+	l := &SSU2Listener{
+		underlying:         underlying,
+		config:             config,
+		addr:               addr,
+		sessions:           make(map[uint64]*SSU2Conn),
+		tokenCache:         newTokenCacheFromConfig(config),
+		sessionRateLimiter: newIPRateLimiter(sessionRequestsPerSecond, sessionRateLimiterMaxIPs),
+		firstSight:         newFirstSightTracker(config.FirstSightWindow, config.FirstSightMaxEntries),
+		issuanceLimiter:    newTokenIssuanceLimiter(config.GlobalTokenIssuanceRate, config.GlobalTokenIssuanceBurst),
+		acceptQueue:        make(chan *SSU2Conn, 100), // Buffer 100 pending connections
+		packetQueue:        make(chan incomingPacket, packetQueueSize),
+		shutdownChan:       make(chan struct{}),
+	}
+
+	// Create packet router with session creation callback
+	l.router = NewPacketRouter(l.handleNewSession)
+
+	return l, nil
+}
+
+// Start begins accepting connections on the listener.
+// This starts a goroutine to read packets from the underlying connection
+// and route them to appropriate sessions.
+//
+// Returns error if the listener is already closed.
+func (l *SSU2Listener) Start() error {
+	log.WithFields(logger.Fields{"pkg": "server", "func": "Start"}).Debug("Starting SSU2 listener")
+	l.closeMutex.Lock()
+	defer l.closeMutex.Unlock()
+
+	if l.closed {
+		return oops.
+			Code("LISTENER_CLOSED").
+			In("ssu2_listener").
+			Errorf("listener is closed")
+	}
+
+	// Start packet processing worker pool
+	for i := 0; i < packetWorkers; i++ {
+		l.wg.Add(1)
+		go l.packetWorker()
+	}
+
+	// Start packet receive loop
+	l.wg.Add(1)
+	go l.receiveLoop()
+
+	// G-5: Start periodic token cache cleanup to prevent expired token
+	// accumulation under sustained connection churn.
+	l.wg.Add(1)
+	go l.tokenCleanupLoop()
+
+	return nil
+}
+
+// Accept waits for and returns the next connection to the listener.
+// Implements net.Listener interface.
+//
+// Returns:
+//   - net.Conn: The accepted connection
+//   - error: If the listener is closed or an error occurs
+func (l *SSU2Listener) Accept() (net.Conn, error) {
+	log.WithFields(logger.Fields{"pkg": "server", "func": "Accept"}).Debug("Waiting to accept SSU2 connection")
+	select {
+	case conn := <-l.acceptQueue:
+		if conn == nil {
+			return nil, oops.
+				Code("LISTENER_CLOSED").
+				In("ssu2_listener").
+				Errorf("listener closed")
+		}
+		return conn, nil
+	case <-l.shutdownChan:
+		return nil, oops.
+			Code("LISTENER_CLOSED").
+			In("ssu2_listener").
+			Errorf("listener closed")
+	}
+}
+
+// Close closes the listener, preventing new connections from being accepted.
+// Existing sessions are not closed; they must be closed separately.
+// Implements net.Listener interface.
+//
+// Returns error if close fails.
+func (l *SSU2Listener) Close() error {
+	log.WithFields(logger.Fields{"pkg": "server", "func": "Close"}).Debug("Closing SSU2 listener")
+	l.closeMutex.Lock()
+	defer l.closeMutex.Unlock()
+
+	if l.closed {
+		return nil // Already closed
+	}
+
+	l.closed = true
+	close(l.shutdownChan)
+
+	// M-2: Close the underlying connection first to unblock ReadFrom
+	// in receiveLoop, rather than relying on deadline-based polling.
+	closeErr := l.underlying.Close()
+
+	// Wait for goroutines to finish before closing channels.
+	// This prevents send-on-closed-channel panics in handleNewSession.
+	l.wg.Wait()
+
+	// Safe to close accept queue now — all senders have exited
+	close(l.acceptQueue)
+
+	if closeErr != nil {
+		return oops.Wrapf(closeErr, "failed to close underlying connection")
+	}
+
+	return nil
+}
+
+// Addr returns the listener's network address.
+// Implements net.Listener interface.
+//
+// Returns the SSU2 address for this listener.
+func (l *SSU2Listener) Addr() net.Addr {
+	return l.addr
+}
+
+// receiveLoop continuously reads packets from the underlying connection
+// and routes them to appropriate sessions or creates new sessions.
+// M-2: Blocking ReadFrom is used instead of 100ms deadline polling.
+// The loop exits when the underlying connection is closed by Close().
+func (l *SSU2Listener) receiveLoop() {
+	log.WithFields(logger.Fields{"pkg": "server", "func": "receiveLoop"}).Debug("receiveLoop: starting packet receive loop")
+	defer l.wg.Done()
+
+	buf := make([]byte, MaxPacketSizeIPv4)
+
+	for {
+		n, remoteAddr, err := l.underlying.ReadFrom(buf)
+		if err != nil {
+			// Check if we're shutting down
+			select {
+			case <-l.shutdownChan:
+				return
+			default:
+			}
+			// Non-shutdown error (transient); continue reading
+			continue
+		}
+
+		udpAddr, ok := remoteAddr.(*net.UDPAddr)
+		if !ok {
+			continue
+		}
+
+		packetData := make([]byte, n)
+		copy(packetData, buf[:n])
+
+		select {
+		case l.packetQueue <- incomingPacket{data: packetData, remoteAddr: udpAddr}:
+		default:
+		}
+	}
+}
+
+// packetWorker drains the packet queue and processes packets.
+// Multiple workers run concurrently as a bounded pool.
+func (l *SSU2Listener) packetWorker() {
+	log.WithFields(logger.Fields{"pkg": "server", "func": "packetWorker"}).Debug("packetWorker: starting packet processing worker")
+	defer l.wg.Done()
+
+	for {
+		select {
+		case pkt, ok := <-l.packetQueue:
+			if !ok {
+				return
+			}
+			l.handleIncomingPacket(pkt.data, pkt.remoteAddr)
+		case <-l.shutdownChan:
+			return
+		}
+	}
+}
+
+// handleIncomingPacket processes a received packet and routes it appropriately.
+// This is called in a goroutine for each received packet.
+func (l *SSU2Listener) handleIncomingPacket(data []byte, remoteAddr *net.UDPAddr) {
+	log.WithFields(logger.Fields{"pkg": "server", "func": "handleIncomingPacket", "remote_addr": remoteAddr.String(), "data_len": len(data)}).Debug("handleIncomingPacket: processing received packet")
+	// Parse packet (basic validation)
+	packet := &SSU2Packet{}
+	if err := packet.Deserialize(data); err != nil {
+		// Invalid packet, ignore
+		return
+	}
+
+	// Route packet to appropriate handler
+	if err := l.router.RoutePacket(packet, remoteAddr); err != nil {
+		// Routing failed, check if this is a token request
+		if packet.MessageType == MessageTypeTokenRequest {
+			_ = l.processTokenRequest(packet, remoteAddr)
+		}
+		// Otherwise ignore error
+	}
+}
+
+// handleNewSession is called by the router when a handshake packet arrives
+// for a new session. It creates a new SSU2Conn and adds it to the accept queue.
+//
+// When config.RequireRetry is true and the SessionRequest does not carry a
+// valid token, the listener sends a Retry message (with a generated token)
+// instead of accepting the session. The initiator is expected to resend
+// SessionRequest including the token from the Retry.
+func (l *SSU2Listener) handleNewSession(remoteAddr *net.UDPAddr, packet *SSU2Packet) (*SSU2Conn, error) {
+	log.WithFields(logger.Fields{"pkg": "server", "func": "handleNewSession", "remote_addr": remoteAddr.String()}).Debug("handleNewSession: creating new session for incoming handshake")
+	if err := l.enforceRateLimit(remoteAddr); err != nil {
+		return nil, err
+	}
+
+	if err := l.handleSessionRequestToken(packet, remoteAddr); err != nil {
+		return nil, err
+	}
+
+	connID, err := l.generateUniqueConnectionID()
+	if err != nil {
+		return nil, err
+	}
+
+	connConfig := l.buildConnConfig(packet, connID)
+
+	if connConfig.InitiatorConnectionID != 0 && connConfig.InitiatorConnectionID == connID {
+		return nil, oops.Errorf("connection ID collision: source and destination IDs are identical (%d)", connID)
+	}
+
+	conn, err := NewSSU2Conn(l.underlying, remoteAddr, connConfig, false, l.config.StaticKey, nil)
+	if err != nil {
+		return nil, oops.Wrapf(err, "failed to create SSU2 connection")
+	}
+
+	return l.registerAndQueueConn(conn, connID)
+}
+
+// enforceRateLimit checks if the source IP has exceeded the SessionRequest rate.
+func (l *SSU2Listener) enforceRateLimit(remoteAddr *net.UDPAddr) error {
+	log.WithFields(logger.Fields{"pkg": "server", "func": "enforceRateLimit", "remote_ip": remoteAddr.IP.String()}).Debug("enforceRateLimit: checking session request rate")
+	if !l.sessionRateLimiter.Allow(remoteAddr.IP.String()) {
+		return oops.
+			Code("RATE_LIMITED").
+			In("ssu2_listener").
+			Errorf("SessionRequest rate limit exceeded for %s", remoteAddr.IP)
+	}
+	return nil
+}
+
+// handleSessionRequestToken validates the token in a SessionRequest, sending
+// a Retry if required by config and no token is present.
+func (l *SSU2Listener) handleSessionRequestToken(packet *SSU2Packet, remoteAddr *net.UDPAddr) error {
+	log.WithFields(logger.Fields{"pkg": "server", "func": "handleSessionRequestToken", "remote_addr": remoteAddr.String(), "message_type": packet.MessageType}).Debug("handleSessionRequestToken: validating session request token")
+	if packet.MessageType != MessageTypeSessionRequest {
+		return nil
+	}
+
+	err := l.validateSessionRequestToken(packet, remoteAddr)
+	if err == nil {
+		return nil
+	}
+
+	if errors.Is(err, errNoTokenPresent) && l.config.RequireRetry {
+		if retryErr := l.processTokenRequest(packet, remoteAddr); retryErr != nil {
+			return oops.Wrapf(retryErr, "failed to send Retry")
+		}
+		return oops.
+			Code("RETRY_SENT").
+			In("ssu2_listener").
+			Errorf("sent Retry to %s, awaiting re-request with token", remoteAddr)
+	}
+
+	if !errors.Is(err, errNoTokenPresent) {
+		return oops.
+			Code("TOKEN_VALIDATION_FAILED").
+			In("ssu2_listener").
+			Wrap(err)
+	}
+	return nil
+}
+
+// generateUniqueConnectionID generates a connection ID and verifies uniqueness
+// among active sessions.
+func (l *SSU2Listener) generateUniqueConnectionID() (uint64, error) {
+	log.WithFields(logger.Fields{"pkg": "server", "func": "generateUniqueConnectionID"}).Debug("generateUniqueConnectionID: generating unique connection ID")
+	connID, err := GenerateConnectionID()
+	if err != nil {
+		return 0, oops.Wrapf(err, "failed to generate connection ID")
+	}
+
+	l.sessionMutex.RLock()
+	_, exists := l.sessions[connID]
+	l.sessionMutex.RUnlock()
+	if !exists {
+		return connID, nil
+	}
+
+	connID, err = GenerateConnectionID()
+	if err != nil {
+		return 0, oops.Wrapf(err, "failed to regenerate connection ID")
+	}
+
+	l.sessionMutex.RLock()
+	_, exists = l.sessions[connID]
+	l.sessionMutex.RUnlock()
+	if exists {
+		return 0, oops.Errorf("connection ID collision after regeneration (%d)", connID)
+	}
+	return connID, nil
+}
+
+// buildConnConfig creates a connection-specific config from the listener config
+// and the incoming SessionRequest packet.
+func (l *SSU2Listener) buildConnConfig(packet *SSU2Packet, connID uint64) *SSU2Config {
+	log.WithFields(logger.Fields{"pkg": "server", "func": "buildConnConfig", "conn_id": connID}).Debug("buildConnConfig: building connection config from session request")
+	var routerHash data.Hash
+	if len(packet.EphemeralKey) == 32 {
+		routerHash = data.NewHash(sha256.Sum256(packet.EphemeralKey))
+	}
+
+	connConfig := *l.config
+	connConfig.ConnectionID = connID
+	connConfig.RouterHash = routerHash
+	connConfig.Initiator = false
+
+	if len(packet.Header) >= 24 {
+		connConfig.InitiatorConnectionID = binary.BigEndian.Uint64(packet.Header[16:24])
+	}
+	return &connConfig
+}
+
+// registerAndQueueConn registers the connection in the sessions map and
+// queues it for acceptance.
+func (l *SSU2Listener) registerAndQueueConn(conn *SSU2Conn, connID uint64) (*SSU2Conn, error) {
+	log.WithFields(logger.Fields{"pkg": "server", "func": "registerAndQueueConn", "conn_id": connID}).Debug("registerAndQueueConn: registering session and queuing for accept")
+	l.sessionMutex.Lock()
+	l.sessions[connID] = conn
+	l.sessionMutex.Unlock()
+
+	select {
+	case l.acceptQueue <- conn:
+		return conn, nil
+	case <-l.shutdownChan:
+		return nil, oops.
+			Code("LISTENER_CLOSED").
+			In("ssu2_listener").
+			Errorf("listener closed during session creation")
+	default:
+		return nil, oops.
+			Code("ACCEPT_QUEUE_FULL").
+			In("ssu2_listener").
+			Errorf("accept queue full, connection dropped")
+	}
+}
+
+// validateSessionRequestToken extracts and validates the token from a SessionRequest.
+// Returns nil if the token is valid, errNoTokenPresent if no token block exists,
+// or an error describing the validation failure.
+func (l *SSU2Listener) validateSessionRequestToken(packet *SSU2Packet, remoteAddr *net.UDPAddr) error {
+	// Parse blocks from payload
+	if len(packet.Payload) == 0 {
+		return errNoTokenPresent
+	}
+
+	blocks, err := DeserializeBlocks(packet.Payload)
+	if err != nil {
+		return errNoTokenPresent
+	}
+
+	// Find NewToken block
+	tokenBlock := FindBlockByType(blocks, BlockTypeNewToken)
+	if tokenBlock == nil {
+		return errNoTokenPresent
+	}
+
+	// Parse token from block
+	newToken, err := ParseNewTokenBlock(tokenBlock)
+	if err != nil {
+		return oops.Wrapf(err, "failed to parse NewToken block")
+	}
+
+	// Check token expiration
+	if time.Now().Unix() > int64(newToken.Expiration) {
+		return oops.
+			Code("TOKEN_EXPIRED").
+			In("ssu2_listener").
+			With("expiration", newToken.Expiration).
+			Errorf("token has expired")
+	}
+
+	// Validate and consume token against cache
+	if !l.tokenCache.ConsumeToken(newToken.Token, remoteAddr) {
+		return oops.
+			Code("INVALID_TOKEN").
+			In("ssu2_listener").
+			With("address", remoteAddr.String()).
+			Errorf("token validation failed")
+	}
+
+	return nil
+}
+
+// processTokenRequest handles a TokenRequest message by generating and sending
+// a Retry message with a new token.
+//
+// Two admission gates run before a token cache entry is allocated, to blunt
+// off-path spoofed-source flooding attacks:
+//
+//  1. First-sight: unless FirstSightRequired is disabled, a brand-new
+//     source address is recorded but declined. The peer must re-request to
+//     obtain a token. SSU2 clients retry TokenRequests per spec, so
+//     legitimate peers recover transparently.
+//  2. Global issuance rate: a single bucket caps total tokens/sec issued
+//     across all peers, backstopping the first-sight gate against any
+//     bypass and preventing issuance-rate amplification.
+//
+// When either gate rejects a request, no packet is sent in reply and no
+// token cache state is allocated for the caller. The returned error is
+// informational (callers of this method currently ignore it) and uses the
+// NO_TOKEN_ISSUED code so operators can surface the counter.
+func (l *SSU2Listener) processTokenRequest(packet *SSU2Packet, remoteAddr *net.UDPAddr) error {
+	if remoteAddr == nil {
+		return oops.
+			Code("NIL_ADDRESS").
+			In("ssu2_listener").
+			Errorf("remote address cannot be nil")
+	}
+	addrKey := remoteAddr.String()
+
+	// Gate 1 (Strategy 3): first-sight tracker. A brand-new address is
+	// recorded and declined; the peer must re-request. This forces a
+	// spoofing attacker to spend ≥2 packets per spoofed IP, and the
+	// per-sighting state is smaller than a Token struct and lives in an
+	// independent bounded map so exhausting first-sight cannot evict
+	// real tokens.
+	if l.config.FirstSightRequired && !l.firstSight.ObserveAndAllow(addrKey) {
+		log.WithFields(logger.Fields{
+			"pkg":         "ssu2_listener",
+			"func":        "processTokenRequest",
+			"remote_addr": addrKey,
+		}).Debug("declining token issuance: first-sight only, peer must retry")
+		return oops.
+			Code("NO_TOKEN_ISSUED").
+			In("ssu2_listener").
+			With("reason", "first_sight").
+			With("address", addrKey).
+			Errorf("first-sight gate: deferring token issuance until retry")
+	}
+
+	// Gate 2 (Strategy 1): global issuance bucket. Even if the first-sight
+	// gate passes, never issue more than the configured rate in aggregate.
+	if !l.issuanceLimiter.Allow() {
+		log.WithFields(logger.Fields{
+			"pkg":         "ssu2_listener",
+			"func":        "processTokenRequest",
+			"remote_addr": addrKey,
+		}).Debug("declining token issuance: global issuance rate exceeded")
+		return oops.
+			Code("NO_TOKEN_ISSUED").
+			In("ssu2_listener").
+			With("reason", "global_rate_limit").
+			With("address", addrKey).
+			Errorf("global token issuance rate limit exceeded")
+	}
+
+	// Generate token for this address
+	token, err := l.tokenCache.GenerateToken(remoteAddr)
+	if err != nil {
+		return oops.Wrapf(err, "failed to generate token")
+	}
+
+	// Create and send Retry message with token.
+	// Per spec: Retry must not be larger than 3x the incoming message.
+	incomingSize := len(packet.Header) + len(packet.Payload) + len(packet.MAC)
+	return l.sendRetry(remoteAddr, token, packet.Header, incomingSize)
+}
+
+// sendRetry sends a Retry message containing the specified token to the remote address.
+// Per SSU2 spec §Retry, the Retry message uses the same long header format as
+// SessionCreated and must include:
+//   - dest_conn_id (bytes 0-7): initiator's source connection ID from the request
+//   - src_conn_id (bytes 16-23): a new destination connection ID chosen by responder
+//   - token (bytes 24-31): the retry token value
+//   - payload: DateTime + NewToken blocks, AEAD-encrypted
+//
+// Per spec, the Retry message must not be larger than 3x the incoming message size.
+//
+// Parameters:
+//   - remoteAddr: Destination UDP address
+//   - token: 8-byte token value for the NewToken block
+//   - originalHeader: Header from the SessionRequest (for connection ID extraction)
+//   - incomingSize: Size of the incoming message (for amplification limit)
+func (l *SSU2Listener) sendRetry(remoteAddr *net.UDPAddr, token, originalHeader []byte, incomingSize int) error {
+	if len(token) != TokenSize {
+		return oops.Errorf("token must be exactly %d bytes, got %d", TokenSize, len(token))
+	}
+
+	payload, err := l.buildRetryPayload(token)
+	if err != nil {
+		return err
+	}
+
+	header, err := buildRetryHeader(originalHeader, token)
+	if err != nil {
+		return err
+	}
+
+	retryPacket := NewSSU2Packet(MessageTypeRetry, 0)
+	retryPacket.Header = header
+	retryPacket.Payload = payload
+	retryPacket.MAC = make([]byte, MACSize)
+
+	packetData, err := retryPacket.Serialize()
+	if err != nil {
+		return oops.Wrapf(err, "failed to serialize Retry packet")
+	}
+
+	if incomingSize > 0 && len(packetData) > 3*incomingSize {
+		return oops.Errorf("Retry message (%d bytes) exceeds 3x amplification limit of incoming message (%d bytes)", len(packetData), incomingSize)
+	}
+
+	_, err = l.underlying.WriteTo(packetData, remoteAddr)
+	if err != nil {
+		return oops.Wrapf(err, "failed to send Retry packet")
+	}
+	return nil
+}
+
+// buildRetryPayload creates the DateTime + NewToken payload for a Retry message.
+func (l *SSU2Listener) buildRetryPayload(token []byte) ([]byte, error) {
+	now := time.Now()
+
+	dtData := make([]byte, 4)
+	binary.BigEndian.PutUint32(dtData, uint32(now.Unix()))
+	dateTimeBlock := NewSSU2Block(BlockTypeDateTime, dtData)
+
+	expiration := now.Add(l.tokenCache.GetTTL())
+	tokenBlock, err := NewNewTokenBlock(expiration, token)
+	if err != nil {
+		return nil, oops.Wrapf(err, "failed to create NewToken block")
+	}
+
+	payload, err := SerializeBlocks([]*SSU2Block{dateTimeBlock, tokenBlock})
+	if err != nil {
+		return nil, oops.Wrapf(err, "failed to serialize Retry payload blocks")
+	}
+	return payload, nil
+}
+
+// buildRetryHeader constructs the 32-byte long header for a Retry message.
+func buildRetryHeader(originalHeader, token []byte) ([]byte, error) {
+	header := make([]byte, LongHeaderSize)
+
+	if len(originalHeader) >= 24 {
+		copy(header[0:8], originalHeader[16:24])
+	} else if len(originalHeader) >= 8 {
+		copy(header[0:8], originalHeader[0:8])
+	}
+
+	header[12] = MessageTypeRetry
+	header[13] = SSU2ProtocolVersion
+	header[14] = SSU2NetworkID
+
+	var srcConnID [8]byte
+	if _, err := rand.Read(srcConnID[:]); err != nil {
+		return nil, oops.Wrapf(err, "failed to generate source connection ID for Retry")
+	}
+	copy(header[16:24], srcConnID[:])
+	copy(header[24:32], token)
+
+	return header, nil
+}
+
+// removeSession removes a session from the listener's session map.
+// This should be called when a connection closes.
+func (l *SSU2Listener) removeSession(connID uint64) {
+	l.sessionMutex.Lock()
+	defer l.sessionMutex.Unlock()
+
+	delete(l.sessions, connID)
+}
+
+// SessionCount returns the current number of active sessions.
+// Useful for monitoring and debugging.
+func (l *SSU2Listener) SessionCount() int {
+	l.sessionMutex.RLock()
+	defer l.sessionMutex.RUnlock()
+
+	return len(l.sessions)
+}
+
+// AddSession registers an SSU2Conn under the given connection ID.
+// This is primarily useful for testing and for reconnection scenarios.
+func (l *SSU2Listener) AddSession(connID uint64, conn *SSU2Conn) {
+	l.sessionMutex.Lock()
+	l.sessions[connID] = conn
+	l.sessionMutex.Unlock()
+}
+
+// RemoveSession deregisters the session with the given connection ID.
+func (l *SSU2Listener) RemoveSession(connID uint64) {
+	l.removeSession(connID)
+}
+
+// Underlying returns the PacketConn used by this listener.
+func (l *SSU2Listener) Underlying() net.PacketConn {
+	return l.underlying
+}
+
+// Config returns the SSU2Config used by this listener.
+func (l *SSU2Listener) Config() *SSU2Config {
+	return l.config
+}
+
+// TokenCache returns the token cache used by this listener.
+func (l *SSU2Listener) TokenCache() *TokenCache {
+	return l.tokenCache
+}
+
+// Router returns the packet router used by this listener.
+func (l *SSU2Listener) Router() *PacketRouter {
+	return l.router
+}
+
+// tokenCleanupInterval is how often the listener removes expired tokens (G-5).
+const tokenCleanupInterval = 60 * time.Second
+
+// tokenCleanupLoop periodically removes expired tokens from the cache (G-5).
+func (l *SSU2Listener) tokenCleanupLoop() {
+	log.WithFields(logger.Fields{"pkg": "server", "func": "tokenCleanupLoop", "interval": tokenCleanupInterval}).Debug("tokenCleanupLoop: starting periodic token cache cleanup")
+	defer l.wg.Done()
+
+	ticker := time.NewTicker(tokenCleanupInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-l.shutdownChan:
+			return
+		case <-ticker.C:
+			l.tokenCache.Cleanup()
+		}
+	}
+}
+
+// M-6: Per-IP rate limiter for SessionRequest processing.
+
+const (
+	// sessionRequestsPerSecond is the maximum SessionRequests per IP per second.
+	sessionRequestsPerSecond = 10
+
+	// sessionRateLimiterMaxIPs is the maximum number of IPs tracked.
+	sessionRateLimiterMaxIPs = 10000
+)
+
+// ipRateLimiter implements a simple per-IP rate limiter using a token bucket
+// approximation. Each IP is allowed a fixed number of requests per second.
+type ipRateLimiter struct {
+	entries map[string]*rateLimitEntry
+	rate    int // max requests per second
+	maxIPs  int
+	mutex   sync.Mutex
+}
+
+type rateLimitEntry struct {
+	tokens    float64
+	lastCheck time.Time
+}
+
+func newIPRateLimiter(rate, maxIPs int) *ipRateLimiter {
+	return &ipRateLimiter{
+		entries: make(map[string]*rateLimitEntry),
+		rate:    rate,
+		maxIPs:  maxIPs,
+	}
+}
+
+// Allow returns true if the request from the given IP should be permitted.
+func (rl *ipRateLimiter) Allow(ip string) bool {
+	rl.mutex.Lock()
+	defer rl.mutex.Unlock()
+
+	now := time.Now()
+	entry, exists := rl.entries[ip]
+	if !exists {
+		if len(rl.entries) >= rl.maxIPs {
+			// Evict oldest entry
+			var oldestIP string
+			var oldestTime time.Time
+			for k, v := range rl.entries {
+				if oldestIP == "" || v.lastCheck.Before(oldestTime) {
+					oldestIP = k
+					oldestTime = v.lastCheck
+				}
+			}
+			delete(rl.entries, oldestIP)
+		}
+		rl.entries[ip] = &rateLimitEntry{
+			tokens:    float64(rl.rate) - 1,
+			lastCheck: now,
+		}
+		return true
+	}
+
+	// Refill tokens based on elapsed time
+	elapsed := now.Sub(entry.lastCheck).Seconds()
+	entry.tokens += elapsed * float64(rl.rate)
+	if entry.tokens > float64(rl.rate) {
+		entry.tokens = float64(rl.rate)
+	}
+	entry.lastCheck = now
+
+	if entry.tokens >= 1 {
+		entry.tokens--
+		return true
+	}
+	return false
+}
