@@ -41,5 +41,7 @@ func (d *dialerImpl) DialContext(ctx context.Context, network, addr string, conf
 }
 
 // Compile-time interface satisfaction checks.
-var _ Acceptor = (*Listener)(nil)
-var _ Dialer = (*dialerImpl)(nil)
+var (
+	_ Acceptor = (*Listener)(nil)
+	_ Dialer   = (*dialerImpl)(nil)
+)

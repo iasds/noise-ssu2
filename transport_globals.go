@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-i2p/pool"
 	"github.com/go-i2p/logger"
+	"github.com/go-i2p/pool"
 	"github.com/samber/oops"
 )
 

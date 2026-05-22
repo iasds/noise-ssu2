@@ -34,6 +34,8 @@ func (d *dialerImpl) DialContext(ctx context.Context, localAddr, remoteAddr *net
 }
 
 // Compile-time interface satisfaction checks.
-var _ Acceptor = (*SSU2Listener)(nil)
-var _ Router = (*PacketRouter)(nil)
-var _ Dialer = (*dialerImpl)(nil)
+var (
+	_ Acceptor = (*SSU2Listener)(nil)
+	_ Router   = (*PacketRouter)(nil)
+	_ Dialer   = (*dialerImpl)(nil)
+)
