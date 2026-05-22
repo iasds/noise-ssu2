@@ -13,14 +13,29 @@ package ssu2
 import (
 	"context"
 	"net"
+
+	"github.com/go-i2p/go-noise/ssu2/session"
 )
+
+// ConnIface is the minimal interface satisfied by *SSU2Conn.
+// Dialer.DialContext returns ConnIface so that callers can substitute test
+// doubles without importing the concrete *session.SSU2Conn type.
+// Where SSU2-specific methods are needed, use a type assertion:
+//
+//	conn.(*session.SSU2Conn).CloseWithReason(...)
+type ConnIface interface {
+	net.Conn
+	// Handshake performs the SSU2 XK handshake.
+	// Must be called before Read/Write.
+	Handshake(ctx context.Context) error
+}
 
 // Dialer establishes outbound SSU2 connections with handshake.
 // Use NewDialer to obtain the default implementation.
 type Dialer interface {
 	// DialContext establishes a new SSU2 session from localAddr to remoteAddr.
 	// The context controls connection and handshake timeouts.
-	DialContext(ctx context.Context, localAddr, remoteAddr *net.UDPAddr, config *SSU2Config) (*SSU2Conn, error)
+	DialContext(ctx context.Context, localAddr, remoteAddr *net.UDPAddr, config *SSU2Config) (ConnIface, error)
 }
 
 // dialerImpl wraps DialSSU2WithHandshakeContext as a Dialer.
@@ -29,13 +44,14 @@ type dialerImpl struct{}
 // NewDialer returns a Dialer backed by DialSSU2WithHandshakeContext.
 func NewDialer() Dialer { return &dialerImpl{} }
 
-func (d *dialerImpl) DialContext(ctx context.Context, localAddr, remoteAddr *net.UDPAddr, config *SSU2Config) (*SSU2Conn, error) {
+func (d *dialerImpl) DialContext(ctx context.Context, localAddr, remoteAddr *net.UDPAddr, config *SSU2Config) (ConnIface, error) {
 	return DialSSU2WithHandshakeContext(ctx, localAddr, remoteAddr, config)
 }
 
 // Compile-time interface satisfaction checks.
 var (
-	_ Acceptor = (*SSU2Listener)(nil)
-	_ Router   = (*PacketRouter)(nil)
-	_ Dialer   = (*dialerImpl)(nil)
+	_ Acceptor  = (*SSU2Listener)(nil)
+	_ Router    = (*PacketRouter)(nil)
+	_ Dialer    = (*dialerImpl)(nil)
+	_ ConnIface = (*session.SSU2Conn)(nil)
 )
