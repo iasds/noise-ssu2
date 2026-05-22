@@ -5,7 +5,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-i2p/go-noise/handshake"
 	"github.com/go-i2p/go-noise/internal"
 	shutdown "github.com/go-i2p/go-noise/shutdown"
 	i2plogger "github.com/go-i2p/logger"
@@ -206,57 +205,6 @@ func (nc *Conn) Write(b []byte) (int, error) {
 	}
 
 	return nc.writeEncryptedData(b, encrypted)
-}
-
-// Encrypt encrypts plaintext data using the connection's cipher state
-// without writing to the underlying connection. This allows callers to
-// separate encryption from wire-level framing (e.g., for NTCP2's
-// SipHash-obfuscated length prefix).
-//
-// The connection must have completed the Noise handshake.
-// Thread Safety: Same guarantees as Write().
-func (nc *Conn) Encrypt(data []byte) ([]byte, error) {
-	if err := nc.validateWriteState(); err != nil {
-		return nil, err
-	}
-	return nc.encryptData(data)
-}
-
-// Decrypt decrypts ciphertext data using the connection's cipher state
-// without reading from the underlying connection. This allows callers to
-// separate decryption from wire-level framing (e.g., for NTCP2's
-// SipHash-obfuscated length prefix).
-//
-// The connection must have completed the Noise handshake.
-// Thread Safety: Same guarantees as Read().
-func (nc *Conn) Decrypt(encrypted []byte) ([]byte, error) {
-	if err := nc.validateReadState(); err != nil {
-		return nil, err
-	}
-	return nc.decryptData(encrypted, len(encrypted))
-}
-
-// Underlying returns the underlying net.Conn for direct wire access.
-// This is needed for protocols like NTCP2 that add framing (e.g.,
-// SipHash-obfuscated length prefixes) between the TCP connection and
-// the encrypted Noise frames.
-//
-// Callers should use Encrypt/Decrypt for crypto and write/read the
-// resulting bytes to/from this connection with their own framing.
-func (nc *Conn) Underlying() net.Conn {
-	return nc.underlying
-}
-
-// Config returns the connection configuration.
-func (nc *Conn) Config() *ConnConfig {
-	return nc.config
-}
-
-// GetModifierChain returns the HandshakeModifier chain from the config.
-// Returns nil if no modifiers are configured. NTCP2 framed I/O uses this
-// to apply PhaseData transforms (padding, obfuscation) around Encrypt/Decrypt.
-func (nc *Conn) GetModifierChain() *handshake.ModifierChain {
-	return nc.config.GetModifierChain()
 }
 
 // Close closes the connection.
