@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/go-i2p/common/data"
-	ntcp2shared "github.com/go-i2p/go-noise/examples/cliutil"
+	ntcp2shared "github.com/go-i2p/go-noise/examples/shared"
 	"github.com/go-i2p/go-noise/handshake"
 	"github.com/go-i2p/go-noise/ntcp2"
 )

@@ -6,7 +6,7 @@ import (
 	"net"
 
 	"github.com/go-i2p/go-noise"
-	"github.com/go-i2p/go-noise/examples/cliutil"
+	"github.com/go-i2p/go-noise/examples/shared"
 )
 
 func main() {
