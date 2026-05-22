@@ -2,6 +2,7 @@ package conn
 
 import (
 	"context"
+	"sync"
 
 	"github.com/go-i2p/go-noise/handshake"
 	i2plogger "github.com/go-i2p/logger"
@@ -9,11 +10,15 @@ import (
 	"github.com/samber/oops"
 )
 
-// patternHandlerFunc is the signature for a Noise handshake pattern handler.
-type patternHandlerFunc func(nc *Conn, ctx context.Context) error
+// PatternHandlerFunc is the signature for a Noise handshake pattern handler.
+// Consumers can implement custom patterns and register them via RegisterPattern.
+type PatternHandlerFunc func(nc *Conn, ctx context.Context) error
+
+// patternMu guards concurrent access to initiatorHandlers and responderHandlers.
+var patternMu sync.RWMutex
 
 // initiatorHandlers maps pattern names to their initiator handshake implementations.
-var initiatorHandlers = map[string]patternHandlerFunc{
+var initiatorHandlers = map[string]PatternHandlerFunc{
 	"N":  (*Conn).performNInitiator,
 	"K":  (*Conn).performKInitiator,
 	"X":  (*Conn).performXInitiator,
@@ -32,7 +37,7 @@ var initiatorHandlers = map[string]patternHandlerFunc{
 }
 
 // responderHandlers maps pattern names to their responder handshake implementations.
-var responderHandlers = map[string]patternHandlerFunc{
+var responderHandlers = map[string]PatternHandlerFunc{
 	"N":  (*Conn).performNResponder,
 	"K":  (*Conn).performKResponder,
 	"X":  (*Conn).performXResponder,
@@ -72,7 +77,10 @@ func (nc *Conn) performInitiatorHandshake(ctx context.Context) error {
 	}).Debug("performing handshake as initiator")
 
 	normalized := normalizePattern(pattern)
-	if handler, ok := initiatorHandlers[normalized]; ok {
+	patternMu.RLock()
+	handler, ok := initiatorHandlers[normalized]
+	patternMu.RUnlock()
+	if ok {
 		return handler(nc, ctx)
 	}
 	return oops.
@@ -94,13 +102,30 @@ func (nc *Conn) performResponderHandshake(ctx context.Context) error {
 	}).Debug("performing handshake as responder")
 
 	normalized := normalizePattern(pattern)
-	if handler, ok := responderHandlers[normalized]; ok {
+	patternMu.RLock()
+	handler, ok := responderHandlers[normalized]
+	patternMu.RUnlock()
+	if ok {
 		return handler(nc, ctx)
 	}
 	return oops.
 		Code("UNSUPPORTED_PATTERN").
 		In("noise").
 		Errorf("unsupported handshake pattern: %s", pattern)
+}
+
+// RegisterPattern registers custom initiator and responder handlers for the
+// given Noise pattern name. Both handlers must be non-nil. RegisterPattern is
+// safe to call concurrently with connection handshakes and is intended to be
+// called once at program start (e.g., from an init() function).
+func RegisterPattern(name string, initiator, responder PatternHandlerFunc) {
+	if name == "" || initiator == nil || responder == nil {
+		return
+	}
+	patternMu.Lock()
+	initiatorHandlers[name] = initiator
+	responderHandlers[name] = responder
+	patternMu.Unlock()
 }
 
 // ============================================================================
