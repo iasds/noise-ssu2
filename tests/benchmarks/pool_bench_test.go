@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-i2p/go-noise/pool"
+	"github.com/go-i2p/pool"
 )
 
 // mockConn implements net.Conn for benchmarking

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-i2p/go-noise/pool"
+	"github.com/go-i2p/pool"
 	"github.com/samber/oops"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

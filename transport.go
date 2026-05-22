@@ -5,8 +5,8 @@ import (
 	"net"
 	"sync"
 
-	"github.com/go-i2p/go-noise/pool"
 	"github.com/go-i2p/logger"
+	"github.com/go-i2p/pool"
 )
 
 // Transport owns a Pool and ShutdownManager and provides Dial/Listen methods.

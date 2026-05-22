@@ -4,7 +4,7 @@ import (
 	"net"
 	"sync"
 
-	"github.com/go-i2p/go-noise/pool"
+	"github.com/go-i2p/pool"
 )
 
 // putOnCloseWrapper wraps a freshly-dialed net.Conn so that its Close() call
