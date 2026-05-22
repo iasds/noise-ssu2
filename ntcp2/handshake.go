@@ -3,15 +3,10 @@ package ntcp2
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"io"
-	"net"
-	"os"
-	"sync/atomic"
 	"time"
 
 	noise "github.com/go-i2p/go-noise"
@@ -22,49 +17,6 @@ import (
 
 	i2pbase64 "github.com/go-i2p/common/base64"
 )
-
-// msg1WireDumpRemaining is decremented each time we hex-dump a msg1 wire
-// payload. When NTCP2_DUMP_MSG1=N is set in the environment, the first N
-// initiator handshakes will emit a one-shot hex dump of the AES key,
-// AES IV, full 64-byte msg1, and the 16-byte cleartext options that were
-// AEAD-encrypted into bytes 32-63. This is intended for one-shot
-// interop debugging against i2pd / Java I2P; it is a no-op when the
-// env var is unset or its budget is exhausted.
-var (
-	msg1WireDumpRemaining atomic.Int32
-	msg3WireDumpRemaining atomic.Int32
-)
-
-func init() {
-	if v := os.Getenv("NTCP2_DUMP_MSG1"); v != "" {
-		var n int32
-		for _, c := range v {
-			if c < '0' || c > '9' {
-				return
-			}
-			n = n*10 + int32(c-'0')
-			if n > 1000 {
-				n = 1000
-				break
-			}
-		}
-		msg1WireDumpRemaining.Store(n)
-	}
-	if v := os.Getenv("NTCP2_DUMP_MSG3"); v != "" {
-		var n int32
-		for _, c := range v {
-			if c < '0' || c > '9' {
-				return
-			}
-			n = n*10 + int32(c-'0')
-			if n > 1000 {
-				n = 1000
-				break
-			}
-		}
-		msg3WireDumpRemaining.Store(n)
-	}
-}
 
 // NTCP2 handshake wire-format constants.
 const (
@@ -193,13 +145,13 @@ func (c *Conn) Handshake(ctx context.Context) error {
 }
 
 // performInitiatorHandshake executes the three-message NTCP2 XK exchange.
+// Each phase is delegated to sendInitiatorMsg1, receiveResponderMsg2, and
+// sendInitiatorMsg3 so each step can be tested independently.
 func performInitiatorHandshake(cfg *Config, nc *noise.NoiseConn) error {
 	riBytes := cfg.LocalRouterInfo
 	// m3p2Len includes the block header (3B), flag byte (1B), RouterInfo bytes, and the AEAD tag (16B).
 	// Per the NTCP2 spec, the RouterInfo block (type 2) data starts with a 1-byte flag field.
 	m3p2Len := uint16(BlockHeaderSize + 1 + len(riBytes) + Poly1305Overhead)
-
-	raw := nc.Underlying()
 
 	// Defense-in-depth: verify the public key derived from our Noise static
 	// private key actually appears in the LocalRouterInfo we are about to
@@ -221,7 +173,19 @@ func performInitiatorHandshake(cfg *Config, nc *noise.NoiseConn) error {
 		}).Warn("LocalRouterInfo does not advertise the static key we will send in the Noise handshake; i2pd peers will silently close the TCP connection after msg3 (frame #0 EOF). See PROMPT.md.")
 	}
 
-	// === Message 1 (Alice -> Bob) ============================================
+	if err := sendInitiatorMsg1(cfg, nc, m3p2Len); err != nil {
+		return err
+	}
+	if err := receiveResponderMsg2(cfg, nc); err != nil {
+		return err
+	}
+	return sendInitiatorMsg3(cfg, nc, riBytes, m3p2Len)
+}
+
+// sendInitiatorMsg1 builds and sends the NTCP2 message 1 (AES-obfuscation step).
+// opts construction, Noise WriteHandshakeMsg, size check, dump, and wire write
+// are kept together so this step can be unit-tested with a mock NoiseConn.
+func sendInitiatorMsg1(cfg *Config, nc *noise.NoiseConn, m3p2Len uint16) error {
 	opts1 := buildMessage1Options(m3p2Len)
 	msg1, err := nc.WriteHandshakeMsgToBytes(handshake.PhaseInitial, opts1)
 	if err != nil {
@@ -232,14 +196,21 @@ func performInitiatorHandshake(cfg *Config, nc *noise.NoiseConn) error {
 		return oops.Code("MSG1_SIZE_MISMATCH").In("ntcp2").
 			Errorf("expected message 1 to be %d bytes, got %d", msg1Size, len(msg1))
 	}
+	raw := nc.Underlying()
 	dumpMsg1IfEnabled(cfg, raw, opts1, msg1)
 	if _, err := raw.Write(msg1); err != nil {
 		return oops.Code("MSG1_SEND_FAILED").In("ntcp2").
 			Wrapf(err, "failed to send NTCP2 message 1")
 	}
 	// padLen = 0: no cleartext padding appended after message 1.
+	return nil
+}
 
-	// === Message 2 (Bob -> Alice) ============================================
+// receiveResponderMsg2 reads and processes the NTCP2 message 2 (Noise exchange step).
+// It uses a 1-byte probe read to distinguish early peer-close from partial
+// msg2, then MixHashes Bob's cleartext padding into the handshake state.
+func receiveResponderMsg2(cfg *Config, nc *noise.NoiseConn) error {
+	raw := nc.Underlying()
 	// Split the read into a 1-byte probe + the remaining 63 bytes so we can
 	// distinguish "peer rejected msg1 (closed before writing any byte)" from
 	// "peer started msg2 then aborted (partial write)". This is critical
@@ -290,15 +261,20 @@ func performInitiatorHandshake(cfg *Config, nc *noise.NoiseConn) error {
 	// a 0 value should be rare).
 	log.WithFields(logger.Fields{
 		"pkg":          "ntcp2",
-		"func":         "performInitiatorHandshake",
+		"func":         "receiveResponderMsg2",
 		"event":        "msg2_processed",
 		"bob_padlen":   bobPadLen,
 		"bob_opts_len": len(bobOpts),
 		"bob_opts_hex": bobOptsHex,
 		"remote":       raw.RemoteAddr().String(),
 	}).Warn("NTCP2 msg2 processed; bob padlen extracted")
+	return nil
+}
 
-	// === Message 3 (Alice -> Bob) ============================================
+// sendInitiatorMsg3 builds and sends the NTCP2 message 3 (RouterInfo framing step).
+// It wraps the local RouterInfo in the NTCP2 block frame, encrypts it via the
+// Noise PhaseFinal WriteHandshakeMsg, validates the wire length, and writes it.
+func sendInitiatorMsg3(cfg *Config, nc *noise.NoiseConn, riBytes []byte, m3p2Len uint16) error {
 	msg3Payload := buildMsg3Part2Payload(riBytes)
 	msg3, err := nc.WriteHandshakeMsgToBytes(handshake.PhaseFinal, msg3Payload)
 	if err != nil {
@@ -310,6 +286,7 @@ func performInitiatorHandshake(cfg *Config, nc *noise.NoiseConn) error {
 		return oops.Code("MSG3_SIZE_MISMATCH").In("ntcp2").
 			Errorf("expected message 3 to be %d bytes, got %d", expectedLen, len(msg3))
 	}
+	raw := nc.Underlying()
 	dumpMsg3IfEnabled(cfg, raw, msg3, riBytes, m3p2Len)
 	if _, err := raw.Write(msg3); err != nil {
 		return oops.Code("MSG3_SEND_FAILED").In("ntcp2").
@@ -323,7 +300,7 @@ func performInitiatorHandshake(cfg *Config, nc *noise.NoiseConn) error {
 	// libi2pd/NTCP2.cpp:634 (HandleSessionConfirmedReceived).
 	log.WithFields(logger.Fields{
 		"pkg":      "ntcp2",
-		"func":     "performInitiatorHandshake",
+		"func":     "sendInitiatorMsg3",
 		"event":    "msg3_sent",
 		"msg3_len": len(msg3),
 		"m3p1_len": msg3Part1Size,
@@ -480,143 +457,6 @@ func buildMsg3Part2Payload(routerInfoBytes []byte) []byte {
 	return payload
 }
 
-// rawConn is the minimum surface needed by dumpMsg1IfEnabled to identify
-// the remote peer. We accept any value that exposes RemoteAddr() and
-// LocalAddr() to avoid importing net here just for the type assertion.
-type rawConn interface {
-	RemoteAddr() net.Addr
-	LocalAddr() net.Addr
-}
-
-// dumpMsg1IfEnabled emits a one-shot hex dump of every cryptographic input
-// to NTCP2 message 1 plus the final 64-byte wire payload. It is intended for
-// interop debugging against i2pd / Java I2P when peers reject our message 1.
-//
-// Activation: set NTCP2_DUMP_MSG1=N (positive integer) in the environment.
-// The next N initiator handshakes will dump; subsequent handshakes are silent.
-//
-// Output goes through the structured logger at Info level. The dump exposes
-// the peer's published router hash and IV (both already public via netDb)
-// and the encrypted msg1 bytes (visible on the wire). It does NOT expose any
-// private key material.
-func dumpMsg1IfEnabled(cfg *Config, raw interface{}, opts1, msg1 []byte) {
-	if msg1WireDumpRemaining.Load() <= 0 {
-		return
-	}
-	if msg1WireDumpRemaining.Add(-1) < 0 {
-		return
-	}
-	fields := logger.Fields{
-		"pkg":           "ntcp2",
-		"func":          "dumpMsg1IfEnabled",
-		"aes_key":       hex.EncodeToString(cfg.BobRouterHash[:]),
-		"aes_iv":        hex.EncodeToString(cfg.ObfuscationIV),
-		"remote_s":      hex.EncodeToString(cfg.RemoteStaticKey),
-		"opts_clear":    hex.EncodeToString(opts1),
-		"msg1_wire":     hex.EncodeToString(msg1),
-		"msg1_x_obf":    hex.EncodeToString(msg1[:32]),
-		"msg1_aead_ct":  hex.EncodeToString(msg1[32:]),
-		"local_ri_len":  len(cfg.LocalRouterInfo),
-		"protocol_name": NTCP2ProtocolName,
-	}
-	if rc, ok := raw.(rawConn); ok && rc != nil {
-		if a := rc.RemoteAddr(); a != nil {
-			fields["peer"] = a.String()
-		}
-		if a := rc.LocalAddr(); a != nil {
-			fields["local"] = a.String()
-		}
-	}
-	log.WithFields(fields).Info("NTCP2 msg1 wire dump (one-shot interop debug)")
-}
-
-// dumpInboundMsg1IfEnabled emits a one-shot hex dump of an inbound NTCP2
-// message 1 from the responder's perspective. Useful for diagnosing rejected
-// peer connections (where decryptedOpts is nil and decryptErr is set) or
-// confirming what i2pd actually sends. Shares the NTCP2_DUMP_MSG1 budget
-// with the initiator-side dumper.
-func dumpInboundMsg1IfEnabled(cfg *Config, raw interface{}, buf1, decryptedOpts []byte, decryptErr error) {
-	if msg1WireDumpRemaining.Load() <= 0 {
-		return
-	}
-	if msg1WireDumpRemaining.Add(-1) < 0 {
-		return
-	}
-	fields := logger.Fields{
-		"pkg":       "ntcp2",
-		"func":      "dumpInboundMsg1IfEnabled",
-		"aes_key":   hex.EncodeToString(cfg.BobRouterHash[:]),
-		"aes_iv":    hex.EncodeToString(cfg.ObfuscationIV),
-		"msg1_wire": hex.EncodeToString(buf1),
-	}
-	if len(decryptedOpts) > 0 {
-		fields["opts_clear"] = hex.EncodeToString(decryptedOpts)
-		fields["status"] = "decrypted_ok"
-	}
-	if decryptErr != nil {
-		fields["status"] = "decrypt_failed"
-		fields["err"] = decryptErr.Error()
-	}
-	if rc, ok := raw.(rawConn); ok && rc != nil {
-		if a := rc.RemoteAddr(); a != nil {
-			fields["peer"] = a.String()
-		}
-		if a := rc.LocalAddr(); a != nil {
-			fields["local"] = a.String()
-		}
-	}
-	log.WithFields(fields).Info("NTCP2 inbound msg1 wire dump (one-shot interop debug)")
-}
-
-// classifyMsg2ReadFailure logs a structured classification of a failed
-// msg2 read so we can distinguish between three interop failure modes:
-//
-//  1. bytes_read == 0 + io.EOF:         peer accepted TCP but rejected msg1
-//     silently (most likely AEAD failure
-//     on their side, or msg1 framing bug).
-//  2. bytes_read == 0 + ECONNRESET:     peer sent RST without writing
-//     (firewall, banlist, version policy).
-//  3. bytes_read in 1..63 + EOF/RST:    peer started msg2 then aborted
-//     (msg2 construction bug on their side
-//     or our side closing prematurely).
-//
-// Always logged (not gated by NTCP2_DUMP_MSG1) because it is cheap and the
-// most actionable signal for live interop debugging.
-func classifyMsg2ReadFailure(cfg *Config, raw interface{}, bytesRead int, err error) {
-	var category string
-	switch {
-	case bytesRead == 0 && errors.Is(err, io.EOF):
-		category = "peer_closed_silently_after_msg1"
-	case bytesRead == 0:
-		category = "peer_reset_after_msg1"
-	case bytesRead < msg2Size:
-		category = "peer_truncated_msg2"
-	default:
-		category = "unknown"
-	}
-	fields := logger.Fields{
-		"pkg":        "ntcp2",
-		"func":       "classifyMsg2ReadFailure",
-		"event":      "msg2_read_failure",
-		"category":   category,
-		"bytes_read": bytesRead,
-		"bytes_want": msg2Size,
-		"err":        err.Error(),
-	}
-	if cfg != nil && cfg.RemoteRouterHash != nil {
-		fields["peer_hash_b64"] = base64.StdEncoding.EncodeToString(cfg.RemoteRouterHash[:])
-	}
-	if rc, ok := raw.(rawConn); ok && rc != nil {
-		if a := rc.RemoteAddr(); a != nil {
-			fields["peer"] = a.String()
-		}
-		if a := rc.LocalAddr(); a != nil {
-			fields["local"] = a.String()
-		}
-	}
-	log.WithFields(fields).Warn("NTCP2 msg2 read failed (interop diagnostic)")
-}
-
 // verifyLocalRouterInfoMatchesStaticKey is a defense-in-depth check that
 // verifies the public key derived from staticPriv (32-byte Curve25519 scalar)
 // is actually advertised in riBytes (a serialized RouterInfo).
@@ -657,48 +497,4 @@ func verifyLocalRouterInfoMatchesStaticKey(staticPriv, riBytes []byte) error {
 		Errorf("derived public key from live NTCP2 static private key does not " +
 			"appear in serialized LocalRouterInfo (no NTCP2 address publishes " +
 			"this key as its `s=` option)")
-}
-
-// dumpMsg3IfEnabled emits a one-shot hex dump of the NTCP2 message 3 wire
-// payload (m3p1 + m3p2) plus the inner RouterInfo bytes that were just
-// AEAD-encrypted into m3p2. Activation: NTCP2_DUMP_MSG3=N. The dump exposes
-// only data already on the wire (after AEAD encryption) and the local
-// RouterInfo bytes (which we publish to the netDb anyway). It does NOT
-// expose any private key material or the data-phase keys.
-func dumpMsg3IfEnabled(cfg *Config, raw interface{}, msg3, riBytes []byte, m3p2Len uint16) {
-	if msg3WireDumpRemaining.Load() <= 0 {
-		return
-	}
-	if msg3WireDumpRemaining.Add(-1) < 0 {
-		return
-	}
-	var remote, local string
-	if rc, ok := raw.(rawConn); ok {
-		if a := rc.RemoteAddr(); a != nil {
-			remote = a.String()
-		}
-		if a := rc.LocalAddr(); a != nil {
-			local = a.String()
-		}
-	}
-	m3p1End := msg3Part1Size
-	if m3p1End > len(msg3) {
-		m3p1End = len(msg3)
-	}
-	log.WithFields(logger.Fields{
-		"pkg":      "ntcp2",
-		"func":     "dumpMsg3IfEnabled",
-		"event":    "ntcp2_msg3_wire_dump",
-		"remote":   remote,
-		"local":    local,
-		"msg3_len": len(msg3),
-		"m3p1_len": msg3Part1Size,
-		"m3p2_len": int(m3p2Len),
-		"ri_len":   len(riBytes),
-		"m3p1_hex": hex.EncodeToString(msg3[:m3p1End]),
-		"m3p2_hex": hex.EncodeToString(msg3[m3p1End:]),
-		"ri_hex":   hex.EncodeToString(riBytes),
-		"sent_ns":  time.Now().UnixNano(),
-	}).Info("NTCP2 msg3 hex dump (wire bytes about to be written)")
-	_ = cfg
 }
