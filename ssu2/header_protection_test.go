@@ -274,7 +274,7 @@ func TestHeaderProtector_IsLongHeader(t *testing.T) {
 	for _, tt := range tests {
 		t.Run("", func(t *testing.T) {
 			hp, _ := NewHeaderProtector(k1, k2, tt.headerType)
-			assert.Equal(t, tt.isLong, hp.isLongHeader())
+			assert.Equal(t, tt.isLong, hp.IsLongHeader())
 		})
 	}
 }
@@ -626,7 +626,7 @@ func TestHeaderProtector_AllHeaderTypes_Roundtrip(t *testing.T) {
 			require.NoError(t, err)
 
 			headerSize := ShortHeaderSize
-			if hp.isLongHeader() {
+			if hp.IsLongHeader() {
 				headerSize = LongHeaderSize
 			}
 
@@ -677,19 +677,19 @@ func TestGenerateMask(t *testing.T) {
 	hp, _ := NewHeaderProtector(k, k, HeaderTypeData)
 
 	nonce := make([]byte, 12)
-	mask1, err := hp.generateMask(k, nonce)
+	mask1, err := hp.GenerateMask(k, nonce)
 	require.NoError(t, err)
 	assert.Len(t, mask1, 8)
 
 	// Same key + nonce = same mask
-	mask2, err := hp.generateMask(k, nonce)
+	mask2, err := hp.GenerateMask(k, nonce)
 	require.NoError(t, err)
 	assert.Equal(t, mask1, mask2)
 
 	// Different nonce = different mask
 	differentNonce := make([]byte, 12)
 	differentNonce[0] = 1
-	mask3, err := hp.generateMask(k, differentNonce)
+	mask3, err := hp.GenerateMask(k, differentNonce)
 	require.NoError(t, err)
 	assert.NotEqual(t, mask1, mask3)
 }

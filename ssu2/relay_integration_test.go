@@ -444,12 +444,7 @@ func TestRelayFlowWithErrors(t *testing.T) {
 		assert.True(t, bob.relayMgr.ValidateRelayTag(tag, alice.addr))
 
 		// Manually expire the tag
-		bob.relayMgr.mutex.Lock()
-		if relayTag, exists := bob.relayMgr.relayTags[tag]; exists {
-			relayTag.ExpiresAt = time.Now().Add(-1 * time.Hour)
-		}
-		bob.relayMgr.mutex.Unlock()
-
+		bob.relayMgr.SetRelayTagExpiry(tag, time.Now().Add(-1*time.Hour))
 		// Tag should now be invalid
 		assert.False(t, bob.relayMgr.ValidateRelayTag(tag, alice.addr))
 	})

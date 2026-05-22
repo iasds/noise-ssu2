@@ -531,3 +531,21 @@ func (hpc *HolePunchCoordinator) GetStats() map[string]int {
 
 	return stats
 }
+
+// SetAttemptStartTime sets the StartTime of an attempt (test helper).
+func (hpc *HolePunchCoordinator) SetAttemptStartTime(sessionID uint64, t time.Time) {
+	hpc.mutex.Lock()
+	defer hpc.mutex.Unlock()
+	if attempt, exists := hpc.attempts[sessionID]; exists {
+		attempt.StartTime = t
+	}
+}
+
+// SetAttemptState sets the State of an attempt (test helper).
+func (hpc *HolePunchCoordinator) SetAttemptState(sessionID uint64, state HolePunchState) {
+	hpc.mutex.Lock()
+	defer hpc.mutex.Unlock()
+	if attempt, exists := hpc.attempts[sessionID]; exists {
+		attempt.State = state
+	}
+}

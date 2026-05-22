@@ -788,3 +788,65 @@ func (ptm *PeerTestManager) DetermineNATType(result *TestResult) NATType {
 
 	return NATUnknown
 }
+
+// GetListener returns the listener reference (for testing).
+func (ptm *PeerTestManager) GetListener() ListenerRef {
+	return ptm.listener
+}
+
+// GetTestsMap returns the raw tests map under lock (for testing).
+func (ptm *PeerTestManager) GetTestsMap() map[uint32]*PeerTest {
+	ptm.mutex.RLock()
+	defer ptm.mutex.RUnlock()
+	result := make(map[uint32]*PeerTest, len(ptm.tests))
+	for k, v := range ptm.tests {
+		result[k] = v
+	}
+	return result
+}
+
+// GetResultsMap returns the raw results map under lock (for testing).
+func (ptm *PeerTestManager) GetResultsMap() map[string]*TestResult {
+	ptm.mutex.RLock()
+	defer ptm.mutex.RUnlock()
+	result := make(map[string]*TestResult, len(ptm.results))
+	for k, v := range ptm.results {
+		result[k] = v
+	}
+	return result
+}
+
+// SetTestAliceAddr sets AliceAddr on the test with the given nonce (for testing).
+func (ptm *PeerTestManager) SetTestAliceAddr(nonce uint32, addr *net.UDPAddr) {
+	ptm.mutex.Lock()
+	defer ptm.mutex.Unlock()
+	if test, exists := ptm.tests[nonce]; exists {
+		test.AliceAddr = addr
+	}
+}
+
+// SetRawResult stores a result directly in the results map (for testing).
+func (ptm *PeerTestManager) SetRawResult(key string, result *TestResult) {
+	ptm.mutex.Lock()
+	defer ptm.mutex.Unlock()
+	ptm.results[key] = result
+}
+
+// SetTestStartTime sets StartTime on the test with the given nonce (for testing).
+func (ptm *PeerTestManager) SetTestStartTime(nonce uint32, t time.Time) {
+	ptm.mutex.Lock()
+	defer ptm.mutex.Unlock()
+	if test, exists := ptm.tests[nonce]; exists {
+		test.StartTime = t
+	}
+}
+
+// NewPeerTestManagerWithFields creates a PeerTestManager with pre-populated fields (for testing).
+func NewPeerTestManagerWithFields(listener ListenerRef, tests map[uint32]*PeerTest, results map[string]*TestResult) *PeerTestManager {
+	ptm := &PeerTestManager{
+		listener: listener,
+		tests:    tests,
+		results:  results,
+	}
+	return ptm
+}

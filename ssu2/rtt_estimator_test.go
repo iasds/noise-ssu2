@@ -30,8 +30,8 @@ func TestNewRTTEstimator(t *testing.T) {
 		t.Errorf("New estimator minRTT = %v, want 0", got)
 	}
 
-	if got := est.GetRTO(); got != initialRTO {
-		t.Errorf("Uninitialized estimator RTO = %v, want %v", got, initialRTO)
+	if got := est.GetRTO(); got != InitialRTO {
+		t.Errorf("Uninitialized estimator RTO = %v, want %v", got, InitialRTO)
 	}
 }
 
@@ -165,16 +165,16 @@ func TestRTTEstimatorRTOCalculation(t *testing.T) {
 	}
 
 	// RTO should include variance component
-	expectedVarianceComponent := time.Duration(rttK * float64(est.GetRTTVariance()))
-	if expectedVarianceComponent < clockGranularity {
-		expectedVarianceComponent = clockGranularity
+	expectedVarianceComponent := time.Duration(RTTKMultiplier * float64(est.GetRTTVariance()))
+	if expectedVarianceComponent < ClockGranularity {
+		expectedVarianceComponent = ClockGranularity
 	}
 
 	expectedRTO := est.GetSmoothedRTT() + expectedVarianceComponent
-	if expectedRTO < minRTO {
-		expectedRTO = minRTO
-	} else if expectedRTO > maxRTO {
-		expectedRTO = maxRTO
+	if expectedRTO < MinRTO {
+		expectedRTO = MinRTO
+	} else if expectedRTO > MaxRTO {
+		expectedRTO = MaxRTO
 	}
 
 	if rto != expectedRTO {
@@ -190,15 +190,15 @@ func TestRTTEstimatorRTOBounds(t *testing.T) {
 	est.Update(1 * time.Millisecond)
 	rto := est.GetRTO()
 
-	if rto < minRTO {
-		t.Errorf("RTO (%v) below minimum (%v)", rto, minRTO)
+	if rto < MinRTO {
+		t.Errorf("RTO (%v) below minimum (%v)", rto, MinRTO)
 	}
 
 	// Large RTT should be clamped to maximum
-	// Note: With our algorithm, it's hard to exceed maxRTO naturally,
+	// Note: With our algorithm, it's hard to exceed MaxRTO naturally,
 	// but we verify the clamp logic exists
-	if rto > maxRTO {
-		t.Errorf("RTO (%v) exceeds maximum (%v)", rto, maxRTO)
+	if rto > MaxRTO {
+		t.Errorf("RTO (%v) exceeds maximum (%v)", rto, MaxRTO)
 	}
 }
 
@@ -297,8 +297,8 @@ func TestRTTEstimatorReset(t *testing.T) {
 		t.Errorf("After reset, minRTT = %v, want 0", got)
 	}
 
-	if got := est.GetRTO(); got != initialRTO {
-		t.Errorf("After reset, RTO = %v, want %v", got, initialRTO)
+	if got := est.GetRTO(); got != InitialRTO {
+		t.Errorf("After reset, RTO = %v, want %v", got, InitialRTO)
 	}
 }
 
@@ -421,7 +421,7 @@ func TestRTTEstimatorExponentialSmoothing(t *testing.T) {
 	}
 
 	// Verify it's moving in the right direction with the right magnitude
-	expectedIncrease := time.Duration(rttAlpha * float64(highRTT-baselineSRTT))
+	expectedIncrease := time.Duration(0.125 * float64(highRTT-baselineSRTT))
 	actualIncrease := newSRTT - baselineSRTT
 
 	tolerance := 2 * time.Millisecond

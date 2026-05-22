@@ -31,13 +31,14 @@ func (h *SSU2Conn) Write(b []byte) (int, error) {
 
 	// Maximum block data that fits in a single Data packet.
 	// Available = MTU - IP(40) - UDP(8) - SSU2_header(16) - AEAD_MAC(16) - block_TLV(3)
-	maxBlockData := h.config.MTU - 80 - minBlockHeaderSize
+	const blockHdrSize = 3 // wire.minBlockHeaderSize: Type(1)+Length(2)
+	maxBlockData := h.config.MTU - 80 - blockHdrSize
 
-	if len(b)+minBlockHeaderSize <= maxBlockData+minBlockHeaderSize {
+	if len(b)+blockHdrSize <= maxBlockData+blockHdrSize {
 		// Fits in a single I2NP message block
 		block := &SSU2Block{
 			Type: BlockTypeI2NPMessage,
-			Data: copyBytes(b),
+			Data: append([]byte(nil), b...),
 		}
 		if err := h.writeBlock(block); err != nil {
 			return 0, err

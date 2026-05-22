@@ -173,6 +173,13 @@ func (rw *ReceiveWindow) GetExpected() uint32 {
 	return rw.expected
 }
 
+// GetMaxSize returns the maximum buffered packet count.
+func (rw *ReceiveWindow) GetMaxSize() int {
+	rw.mutex.RLock()
+	defer rw.mutex.RUnlock()
+	return rw.maxSize
+}
+
 // GetWindowSize returns the current number of buffered packets.
 // Thread-safe: can be called concurrently.
 func (rw *ReceiveWindow) GetWindowSize() int {

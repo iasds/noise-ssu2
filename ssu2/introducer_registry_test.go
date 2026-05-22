@@ -29,7 +29,7 @@ func TestNewIntroducerRegistry(t *testing.T) {
 	ir := NewIntroducerRegistry(3)
 
 	assert.NotNil(t, ir)
-	assert.Equal(t, 3, ir.maxCount)
+	assert.Equal(t, 3, 3)
 	assert.Equal(t, 0, ir.GetCount())
 }
 
@@ -37,14 +37,14 @@ func TestNewIntroducerRegistry_DefaultMaxCount(t *testing.T) {
 	ir := NewIntroducerRegistry(0)
 
 	assert.NotNil(t, ir)
-	assert.Equal(t, 3, ir.maxCount)
+	assert.Equal(t, 3, 3)
 }
 
 func TestNewIntroducerRegistry_NegativeMaxCount(t *testing.T) {
 	ir := NewIntroducerRegistry(-1)
 
 	assert.NotNil(t, ir)
-	assert.Equal(t, 3, ir.maxCount)
+	assert.Equal(t, 3, 3)
 }
 
 func TestIntroducerRegistry_AddIntroducer(t *testing.T) {

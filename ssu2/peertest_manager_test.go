@@ -18,11 +18,11 @@ func TestNewPeerTestManager(t *testing.T) {
 	ptm := NewPeerTestManager(listener)
 	require.NotNil(t, ptm)
 
-	assert.NotNil(t, ptm.listener)
-	assert.NotNil(t, ptm.tests)
-	assert.NotNil(t, ptm.results)
-	assert.Empty(t, ptm.tests)
-	assert.Empty(t, ptm.results)
+	assert.NotNil(t, ptm.GetListener())
+	assert.NotNil(t, ptm.GetTestsMap())
+	assert.NotNil(t, ptm.GetResultsMap())
+	assert.Empty(t, ptm.GetTestsMap())
+	assert.Empty(t, ptm.GetResultsMap())
 }
 
 // TestPeerTestManager_InitiatePeerTest tests initiating a peer test.
@@ -144,11 +144,7 @@ func TestPeerTestManager_CompleteTest(t *testing.T) {
 	require.NoError(t, err)
 
 	// Set Alice address for result caching
-	ptm.mutex.Lock()
-	if test, exists := ptm.tests[nonce]; exists {
-		test.AliceAddr = &net.UDPAddr{IP: net.IPv4(10, 0, 0, 1), Port: 9090}
-	}
-	ptm.mutex.Unlock()
+	ptm.SetTestAliceAddr(nonce, &net.UDPAddr{IP: net.IPv4(10, 0, 0, 1), Port: 9090})
 
 	// Complete test
 	result := &TestResult{
@@ -229,13 +225,11 @@ func TestPeerTestManager_GetResult(t *testing.T) {
 	assert.Nil(t, result)
 
 	// Store result
-	ptm.mutex.Lock()
-	ptm.results[aliceAddr.String()] = &TestResult{
+	ptm.SetRawResult(aliceAddr.String(), &TestResult{
 		NATType:   NATCone,
 		Reachable: true,
 		TestTime:  time.Now(),
-	}
-	ptm.mutex.Unlock()
+	})
 
 	// Retrieve result
 	result = ptm.GetResult(aliceAddr)
@@ -289,11 +283,7 @@ func TestPeerTestManager_CleanupExpired(t *testing.T) {
 	require.NoError(t, err)
 
 	// Manually expire the test
-	ptm.mutex.Lock()
-	if test, exists := ptm.tests[nonce]; exists {
-		test.StartTime = time.Now().Add(-2 * time.Minute)
-	}
-	ptm.mutex.Unlock()
+	ptm.SetTestStartTime(nonce, time.Now().Add(-2*time.Minute))
 
 	// Cleanup
 	ptm.CleanupExpired()

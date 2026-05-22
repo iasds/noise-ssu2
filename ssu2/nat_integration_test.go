@@ -64,11 +64,7 @@ func TestNATTraversal_CompleteRelayFlow(t *testing.T) {
 	assert.Equal(t, HolePunchRequested, attempt.State)
 
 	// Simulate hole punch progress by directly updating state
-	alice.holePunchCoord.mutex.Lock()
-	if attempt, exists := alice.holePunchCoord.attempts[sessionID]; exists {
-		attempt.State = HolePunchSent
-	}
-	alice.holePunchCoord.mutex.Unlock()
+	alice.holePunchCoord.SetAttemptState(sessionID, HolePunchSent)
 
 	attempt = alice.holePunchCoord.GetAttempt(sessionID)
 	assert.Equal(t, HolePunchSent, attempt.State)
@@ -95,11 +91,7 @@ func TestNATTraversal_IntroducerExpiration(t *testing.T) {
 	require.NoError(t, err)
 
 	// Manually expire the introducer
-	alice.relayMgr.mutex.Lock()
-	if len(alice.relayMgr.introducers) > 0 {
-		alice.relayMgr.introducers[0].ExpiresAt = time.Now().Add(-1 * time.Hour)
-	}
-	alice.relayMgr.mutex.Unlock()
+	alice.relayMgr.ExpireAllIntroducers()
 
 	// Trigger cleanup (using time-based cleanup timer or manual check)
 	// Since cleanupExpired is private, we verify expiration through GetIntroducers
@@ -273,11 +265,7 @@ func TestNATTraversal_HolePunchTimeout(t *testing.T) {
 	require.NoError(t, err)
 
 	// Manually set start time to past (simulate timeout)
-	alice.holePunchCoord.mutex.Lock()
-	if attempt, exists := alice.holePunchCoord.attempts[sessionID]; exists {
-		attempt.StartTime = time.Now().Add(-2 * time.Minute)
-	}
-	alice.holePunchCoord.mutex.Unlock()
+	alice.holePunchCoord.SetAttemptStartTime(sessionID, time.Now().Add(-2*time.Minute))
 
 	// Check if timed out
 	attempt := alice.holePunchCoord.GetAttempt(sessionID)
@@ -404,11 +392,9 @@ func TestNATTraversal_PendingSessionTracking(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify pending session exists in relay manager
-	alice.relayMgr.mutex.RLock()
-	pending, exists := alice.relayMgr.pendingSessions[sessionID]
-	alice.relayMgr.mutex.RUnlock()
+	pending := alice.relayMgr.GetPendingSession(sessionID)
 
-	require.True(t, exists)
+	require.NotNil(t, pending)
 	assert.Equal(t, charlie.addr.String(), pending.RemoteAddr.String())
 	assert.Equal(t, bob.addr.String(), pending.IntroducerAddr.String())
 	assert.Equal(t, relayTag, pending.RelayTag)

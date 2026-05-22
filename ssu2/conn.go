@@ -295,7 +295,7 @@ func resolveConnectionID(config *SSU2Config) (uint64, error) {
 
 func buildHandshakeHandler(initiator bool, staticKey, remoteStaticKey []byte, config *SSU2Config) (*HandshakeHandler, error) {
 	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "buildHandshakeHandler", "initiator": initiator, "has_remote_key": len(remoteStaticKey) > 0}).Debug("Creating handshake handler")
-	prologue := buildSSU2Prologue()
+	prologue := []byte(nil) // SSU2 spec: null prologue (MixHash(h) with empty data)
 	handler, err := NewHandshakeHandler(initiator, staticKey, remoteStaticKey, prologue)
 	if err != nil {
 		return nil, oops.Wrapf(err, "failed to create handshake handler")
@@ -304,7 +304,7 @@ func buildHandshakeHandler(initiator bool, staticKey, remoteStaticKey []byte, co
 	if config.ReplayCacheTTL > 0 && !initiator {
 		handler.ReconfigureReplayCache(config.ReplayCacheTTL)
 	}
-	handler.maxClockSkew = config.MaxClockSkew
+	handler.SetMaxClockSkew(config.MaxClockSkew)
 	handler.SetLocalOptions(&OptionsParams{
 		TMinRatio: 0,
 		TMaxRatio: config.PaddingRatio,
@@ -663,3 +663,13 @@ func (h *SSU2Conn) SetDataHandlerCallbacks(cbs DataHandlerCallbacks) {
 }
 
 // sendLoop handles outbound packet transmission.
+
+// copyBytes returns a copy of src, or nil if src is nil.
+func copyBytes(src []byte) []byte {
+	if src == nil {
+		return nil
+	}
+	out := make([]byte, len(src))
+	copy(out, src)
+	return out
+}

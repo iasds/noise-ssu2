@@ -136,7 +136,7 @@ func (h *ACKHandler) GenerateACK() (*SSU2Block, error) {
 		return nil, nil
 	}
 
-	sorted := sortDescDedupPackets(h.receivedPackets)
+	sorted := SortDescDedupPackets(h.receivedPackets)
 	throughPN := sorted[0]
 	acnt := countConsecutiveFromTop(sorted) - 1
 
@@ -316,9 +316,9 @@ func (h *ACKHandler) ClearPending() {
 	h.receivedPackets = h.receivedPackets[:0]
 }
 
-// sortDescDedupPackets returns a deduplicated copy of packets sorted in
+// SortDescDedupPackets returns a deduplicated copy of packets sorted in
 // descending order.
-func sortDescDedupPackets(packets []uint32) []uint32 {
+func SortDescDedupPackets(packets []uint32) []uint32 {
 	if len(packets) == 0 {
 		return nil
 	}

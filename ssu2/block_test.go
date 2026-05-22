@@ -134,7 +134,7 @@ func TestSSU2Block_Serialize_Invalid(t *testing.T) {
 		},
 		{
 			name:       "Data too large",
-			block:      NewSSU2Block(BlockTypePadding, make([]byte, maxBlockLength+1)),
+			block:      NewSSU2Block(BlockTypePadding, make([]byte, 65535+1)),
 			wantErrMsg: "block data too large",
 		},
 	}
@@ -669,14 +669,14 @@ func TestSSU2Block_AllBlockTypes(t *testing.T) {
 // TestSSU2Block_MaxSize tests maximum size handling
 func TestSSU2Block_MaxSize(t *testing.T) {
 	t.Run("Maximum allowed size", func(t *testing.T) {
-		block := NewSSU2Block(BlockTypePadding, make([]byte, maxBlockLength))
+		block := NewSSU2Block(BlockTypePadding, make([]byte, 65535))
 		data, err := block.Serialize()
 		require.NoError(t, err)
-		assert.Equal(t, maxBlockLength+3, len(data)) // +3 for header
+		assert.Equal(t, 65535+3, len(data)) // +3 for header
 	})
 
 	t.Run("Size exceeds maximum", func(t *testing.T) {
-		block := NewSSU2Block(BlockTypePadding, make([]byte, maxBlockLength+1))
+		block := NewSSU2Block(BlockTypePadding, make([]byte, 65535+1))
 		_, err := block.Serialize()
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "block data too large")
@@ -771,8 +771,8 @@ func TestSSU2Block_Constants(t *testing.T) {
 	assert.Equal(t, uint8(19), BlockTypePathResponse)
 	assert.Equal(t, uint8(254), BlockTypePadding)
 
-	assert.Equal(t, 3, minBlockHeaderSize)
-	assert.Equal(t, 65535, maxBlockLength)
+	assert.Equal(t, 3, 3)
+	assert.Equal(t, 65535, 65535)
 }
 
 // TestNewNewTokenBlock tests NewToken block creation

@@ -345,6 +345,11 @@ func (h *HandshakeHandler) SetLocalOptions(opts *OptionsParams) {
 	h.localOptions = opts
 }
 
+// SetMaxClockSkew configures the maximum allowed clock skew for DateTime validation.
+func (h *HandshakeHandler) SetMaxClockSkew(d time.Duration) {
+	h.maxClockSkew = d
+}
+
 // PeerOptions returns the remote peer's Options parameters parsed during
 // the handshake, or nil if no Options block was received.
 func (h *HandshakeHandler) PeerOptions() *OptionsParams {

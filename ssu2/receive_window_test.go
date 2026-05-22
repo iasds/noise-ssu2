@@ -64,8 +64,8 @@ func TestNewReceiveWindow(t *testing.T) {
 				t.Errorf("expected = %d, want %d", rw.GetExpected(), tt.wantExpected)
 			}
 
-			if rw.maxSize != tt.wantMaxSize {
-				t.Errorf("maxSize = %d, want %d", rw.maxSize, tt.wantMaxSize)
+			if rw.GetMaxSize() != tt.wantMaxSize {
+				t.Errorf("maxSize = %d, want %d", rw.GetMaxSize(), tt.wantMaxSize)
 			}
 
 			if rw.GetWindowSize() != 0 {

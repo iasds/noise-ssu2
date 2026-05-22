@@ -657,7 +657,7 @@ func TestBuildI2NPFragmentBlocks_SmallPayload(t *testing.T) {
 
 	// A small payload that fits in one fragment
 	data := make([]byte, 100)
-	maxBlockData := config.MTU - 80 - minBlockHeaderSize
+	maxBlockData := config.MTU - 80 - 3
 	blocks, err := conn.buildI2NPFragmentBlocks(data, maxBlockData)
 	require.NoError(t, err)
 
@@ -702,7 +702,7 @@ func TestBuildI2NPFragmentBlocks_LargePayload(t *testing.T) {
 		data[i] = byte(i % 256)
 	}
 
-	maxBlockData := config.MTU - 80 - minBlockHeaderSize
+	maxBlockData := config.MTU - 80 - 3
 	blocks, err := conn.buildI2NPFragmentBlocks(data, maxBlockData)
 	require.NoError(t, err)
 	require.Greater(t, len(blocks), 1, "large payload should produce multiple fragments")
@@ -758,7 +758,7 @@ func TestBuildI2NPFragmentBlocks_MessageIDConsistent(t *testing.T) {
 	require.NoError(t, err)
 
 	data := make([]byte, 3000)
-	maxBlockData := config.MTU - 80 - minBlockHeaderSize
+	maxBlockData := config.MTU - 80 - 3
 	blocks, err := conn.buildI2NPFragmentBlocks(data, maxBlockData)
 	require.NoError(t, err)
 	require.Greater(t, len(blocks), 1)
@@ -813,4 +813,18 @@ func TestDataPhaseNonce_PacketNumberAsNonce(t *testing.T) {
 	decrypted, err := recvCS.Decrypt(nil, ad, ciphertext)
 	require.NoError(t, err)
 	assert.Equal(t, plaintext, decrypted, "round-trip with same nonce must recover plaintext")
+}
+
+// setupHandshakePair creates an initiator/responder pair for tests.
+func setupHandshakePair(t *testing.T) (*HandshakeHandler, *HandshakeHandler, []byte, []byte) {
+	t.Helper()
+	initDH, err := noise.DH25519.GenerateKeypair(nil)
+	require.NoError(t, err)
+	respDH, err := noise.DH25519.GenerateKeypair(nil)
+	require.NoError(t, err)
+	initiator, err := NewHandshakeHandlerWithKeys(true, initDH, respDH.Public, nil)
+	require.NoError(t, err)
+	responder, err := NewHandshakeHandlerWithKeys(false, respDH, nil, nil)
+	require.NoError(t, err)
+	return initiator, responder, initDH.Public, respDH.Public
 }

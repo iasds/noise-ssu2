@@ -45,17 +45,17 @@ type RTTEstimator struct {
 
 const (
 	// RFC 6298 constants
-	rttAlpha         = 0.125 // 1/8 - weight for new RTT samples
-	rttBeta          = 0.25  // 1/4 - weight for variance updates
-	rttK             = 4.0   // Multiplier for variance in RTO calculation
-	clockGranularity = time.Millisecond
+	rttAlpha         = 0.125            // 1/8 - weight for new RTT samples
+	rttBeta          = 0.25             // 1/4 - weight for variance updates
+	RTTKMultiplier   = 4.0              // Multiplier for variance in RTO calculation
+	ClockGranularity = time.Millisecond // Minimum clock granularity for RTO
 
 	// Initial RTO value (RFC 6298 section 2.1)
-	initialRTO = 1 * time.Second
+	InitialRTO = 1 * time.Second
 
 	// Bounds for RTO (RFC 6298 section 2.4)
-	minRTO = 1 * time.Second
-	maxRTO = 60 * time.Second
+	MinRTO = 1 * time.Second
+	MaxRTO = 60 * time.Second
 )
 
 // NewRTTEstimator creates a new RTT estimator with default initial values.
@@ -132,7 +132,7 @@ func (r *RTTEstimator) Update(sample time.Duration) {
 //	RTO = SRTT + max(G, K*RTTVAR)
 //
 // where G is the clock granularity (1ms) and K=4.
-// The result is clamped to [minRTO, maxRTO] = [1s, 60s].
+// The result is clamped to [MinRTO, MaxRTO] = [1s, 60s].
 //
 // If no samples have been recorded, returns the initial RTO of 1 second.
 func (r *RTTEstimator) GetRTO() time.Duration {
@@ -140,22 +140,22 @@ func (r *RTTEstimator) GetRTO() time.Duration {
 	defer r.mutex.RUnlock()
 
 	if !r.initialized {
-		return initialRTO
+		return InitialRTO
 	}
 
 	// RTO = SRTT + max(G, K*RTTVAR)
-	variance := time.Duration(rttK * float64(r.rttVariance))
-	if variance < clockGranularity {
-		variance = clockGranularity
+	variance := time.Duration(RTTKMultiplier * float64(r.rttVariance))
+	if variance < ClockGranularity {
+		variance = ClockGranularity
 	}
 
 	rto := r.smoothedRTT + variance
 
 	// Clamp to bounds (RFC 6298 section 2.4)
-	if rto < minRTO {
-		rto = minRTO
-	} else if rto > maxRTO {
-		rto = maxRTO
+	if rto < MinRTO {
+		rto = MinRTO
+	} else if rto > MaxRTO {
+		rto = MaxRTO
 	}
 
 	return rto

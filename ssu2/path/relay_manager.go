@@ -109,7 +109,7 @@ func NewRelayManager(listener ListenerRef) *RelayManager {
 	}
 
 	// Start cleanup timer (every 5 minutes)
-	rm.cleanupTimer = time.AfterFunc(5*time.Minute, rm.cleanupExpired)
+	rm.cleanupTimer = time.AfterFunc(5*time.Minute, rm.CleanupExpired)
 
 	return rm
 }
@@ -461,9 +461,9 @@ func (rm *RelayManager) IncrementRetries(sessionID uint64) int {
 	return session.Retries
 }
 
-// cleanupExpired removes expired relay tags, introducers, and pending sessions.
+// CleanupExpired removes expired relay tags, introducers, and pending sessions.
 // This is called periodically by the cleanup timer.
-func (rm *RelayManager) cleanupExpired() {
+func (rm *RelayManager) CleanupExpired() {
 	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "cleanupExpired"}).Debug("Removing expired relay tags and introducers")
 	rm.mutex.Lock()
 	defer rm.mutex.Unlock()
@@ -508,5 +508,58 @@ func (rm *RelayManager) GetStats() map[string]int {
 		"introducers":      len(rm.introducers),
 		"relay_tags":       len(rm.relayTags),
 		"pending_sessions": len(rm.pendingSessions),
+	}
+}
+
+// ExpireAllIntroducers immediately expires all registered introducers (test helper).
+func (rm *RelayManager) ExpireAllIntroducers() {
+	rm.mutex.Lock()
+	defer rm.mutex.Unlock()
+	for i := range rm.introducers {
+		rm.introducers[i].ExpiresAt = time.Now().Add(-1 * time.Hour)
+	}
+}
+
+// GetListener returns the listener reference (for testing).
+func (rm *RelayManager) GetListener() ListenerRef {
+	return rm.listener
+}
+
+// GetAllIntroducers returns all introducers including expired (for testing).
+func (rm *RelayManager) GetAllIntroducers() []*IntroducerInfo {
+	rm.mutex.RLock()
+	defer rm.mutex.RUnlock()
+	return rm.introducers
+}
+
+// GetRelayTagsMap returns the relay tags map (for testing).
+func (rm *RelayManager) GetRelayTagsMap() map[uint32]*RelayTag {
+	rm.mutex.RLock()
+	defer rm.mutex.RUnlock()
+	return rm.relayTags
+}
+
+// GetPendingSessionsMap returns the pending sessions map (for testing).
+func (rm *RelayManager) GetPendingSessionsMap() map[uint64]*PendingSession {
+	rm.mutex.RLock()
+	defer rm.mutex.RUnlock()
+	return rm.pendingSessions
+}
+
+// SetRelayTagExpiry sets the expiry of a relay tag (for testing).
+func (rm *RelayManager) SetRelayTagExpiry(tag uint32, t time.Time) {
+	rm.mutex.Lock()
+	defer rm.mutex.Unlock()
+	if relayTag, exists := rm.relayTags[tag]; exists {
+		relayTag.ExpiresAt = t
+	}
+}
+
+// SetIntroducerExpiry sets the expiry of the introducer at given index (for testing).
+func (rm *RelayManager) SetIntroducerExpiry(idx int, t time.Time) {
+	rm.mutex.Lock()
+	defer rm.mutex.Unlock()
+	if idx < len(rm.introducers) {
+		rm.introducers[idx].ExpiresAt = t
 	}
 }

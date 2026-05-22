@@ -17,6 +17,7 @@ const (
 const (
 	BlockTypeACK        = wire.BlockTypeACK
 	BlockTypeCongestion = wire.BlockTypeCongestion
+	BlockTypePadding    = wire.BlockTypePadding
 )
 
 // Constructor aliases

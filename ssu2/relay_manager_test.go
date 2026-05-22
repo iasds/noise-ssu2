@@ -19,10 +19,10 @@ func TestNewRelayManager(t *testing.T) {
 	require.NotNil(t, rm)
 	defer rm.Stop()
 
-	assert.NotNil(t, rm.listener)
-	assert.Empty(t, rm.introducers)
-	assert.Empty(t, rm.relayTags)
-	assert.Empty(t, rm.pendingSessions)
+	assert.NotNil(t, rm.GetListener())
+	assert.Empty(t, rm.GetAllIntroducers())
+	assert.Empty(t, rm.GetRelayTagsMap())
+	assert.Empty(t, rm.GetPendingSessionsMap())
 }
 
 // TestRelayManager_Stop tests cleanup on stop.
@@ -43,9 +43,9 @@ func TestRelayManager_Stop(t *testing.T) {
 	rm.Stop()
 
 	// State should be nil after stop
-	assert.Nil(t, rm.introducers)
-	assert.Nil(t, rm.relayTags)
-	assert.Nil(t, rm.pendingSessions)
+	assert.Nil(t, rm.GetAllIntroducers())
+	assert.Nil(t, rm.GetRelayTagsMap())
+	assert.Nil(t, rm.GetPendingSessionsMap())
 }
 
 // TestRelayManager_RegisterIntroducer tests introducer registration.
@@ -519,12 +519,10 @@ func TestRelayManager_CleanupExpired(t *testing.T) {
 	require.NoError(t, err)
 
 	// Manually expire it
-	rm.mutex.Lock()
-	rm.introducers[0].ExpiresAt = time.Now().Add(-1 * time.Hour)
-	rm.mutex.Unlock()
+	rm.SetIntroducerExpiry(0, time.Now().Add(-1*time.Hour))
 
 	// Run cleanup
-	rm.cleanupExpired()
+	rm.CleanupExpired()
 
 	// Should be removed
 	introducers := rm.GetIntroducers()

@@ -105,6 +105,11 @@ func (p *SSU2Packet) hasEphemeralKey() bool {
 		p.MessageType == MessageTypeSessionCreated
 }
 
+// HasEphemeralKey returns true if this message type includes an ephemeral key.
+func (p *SSU2Packet) HasEphemeralKey() bool {
+	return p.hasEphemeralKey()
+}
+
 // getHeaderSize returns the expected header size for this message type.
 // Returns 32 bytes for long header messages, 16 bytes for short header messages.
 func (p *SSU2Packet) getHeaderSize() int {
@@ -114,6 +119,11 @@ func (p *SSU2Packet) getHeaderSize() int {
 	default:
 		return LongHeaderSize
 	}
+}
+
+// GetHeaderSize returns the expected header size for this message type.
+func (p *SSU2Packet) GetHeaderSize() int {
+	return p.getHeaderSize()
 }
 
 // Serialize converts the packet to wire format for transmission.

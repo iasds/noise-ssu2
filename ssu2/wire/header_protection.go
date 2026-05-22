@@ -234,6 +234,16 @@ func (hp *HeaderProtector) applyXORMasks(packet []byte) error {
 	return nil
 }
 
+// IsLongHeader returns true if this is a long header type (32 bytes).
+func (hp *HeaderProtector) IsLongHeader() bool {
+	return hp.isLongHeader()
+}
+
+// GenerateMask exposes the internal generateMask for testing.
+func (hp *HeaderProtector) GenerateMask(key, nonce []byte) ([]byte, error) {
+	return hp.generateMask(key, nonce)
+}
+
 // isLongHeader returns true if this is a long header type (32 bytes).
 func (hp *HeaderProtector) isLongHeader() bool {
 	switch hp.headerType {

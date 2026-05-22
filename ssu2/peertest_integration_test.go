@@ -316,11 +316,7 @@ func TestPeerTest_Timeout(t *testing.T) {
 	require.NotNil(t, test)
 
 	// Manually set start time to past
-	alice.ptm.mutex.Lock()
-	if t := alice.ptm.tests[nonce]; t != nil {
-		t.StartTime = time.Now().Add(-70 * time.Second) // Beyond 60s timeout
-	}
-	alice.ptm.mutex.Unlock()
+	alice.ptm.SetTestStartTime(nonce, time.Now().Add(-70*time.Second)) // Beyond 60s timeout
 
 	// Cleanup expired tests
 	alice.ptm.CleanupExpired()
@@ -437,11 +433,7 @@ func setupPeerForTest(t *testing.T, name, addrStr string) *peerTestNode {
 	require.NoError(t, err, "Should resolve address for %s", name)
 
 	// Create a simple peer test manager without full listener
-	ptm := &PeerTestManager{
-		listener: nil, // Not needed for unit tests
-		tests:    make(map[uint32]*PeerTest),
-		results:  make(map[string]*TestResult),
-	}
+	ptm := NewPeerTestManagerWithFields(nil, make(map[uint32]*PeerTest), make(map[string]*TestResult))
 
 	return &peerTestNode{
 		addr:    addr,

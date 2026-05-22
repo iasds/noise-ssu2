@@ -81,7 +81,7 @@ func TestSSU2Packet_hasEphemeralKey(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			pkt := NewSSU2Packet(tt.msgType, 0)
-			got := pkt.hasEphemeralKey()
+			got := pkt.HasEphemeralKey()
 			assert.Equal(t, tt.wantKey, got)
 		})
 	}
@@ -107,7 +107,7 @@ func TestSSU2Packet_getHeaderSize(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			pkt := NewSSU2Packet(tt.msgType, 0)
-			got := pkt.getHeaderSize()
+			got := pkt.GetHeaderSize()
 			assert.Equal(t, tt.wantSize, got)
 		})
 	}
@@ -411,16 +411,16 @@ func TestSSU2Packet_RoundTrip(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Create original packet
 			original := NewSSU2Packet(tt.msgType, 42)
-			original.Header = make([]byte, original.getHeaderSize())
+			original.Header = make([]byte, original.GetHeaderSize())
 			for i := range original.Header {
 				original.Header[i] = byte(i) // Fill with test pattern
 			}
 			// Long headers must contain valid protocol version/netID (G-4).
-			if original.getHeaderSize() == LongHeaderSize {
+			if original.GetHeaderSize() == LongHeaderSize {
 				original.Header[13] = SSU2ProtocolVersion
 				original.Header[14] = SSU2NetworkID
 			}
-			if original.hasEphemeralKey() {
+			if original.HasEphemeralKey() {
 				original.EphemeralKey = make([]byte, EphemeralKeySize)
 				for i := range original.EphemeralKey {
 					original.EphemeralKey[i] = byte(100 + i) // Fill with test pattern
@@ -482,8 +482,8 @@ func TestSSU2Packet_Size(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			pkt := NewSSU2Packet(tt.msgType, 0)
-			pkt.Header = make([]byte, pkt.getHeaderSize())
-			if pkt.hasEphemeralKey() {
+			pkt.Header = make([]byte, pkt.GetHeaderSize())
+			if pkt.HasEphemeralKey() {
 				pkt.EphemeralKey = make([]byte, EphemeralKeySize)
 			}
 			pkt.Payload = tt.payload
