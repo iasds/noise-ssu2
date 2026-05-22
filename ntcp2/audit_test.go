@@ -181,7 +181,7 @@ func TestAcceptWithHandshake_FullE2E(t *testing.T) {
 
 	// Responder goroutine using AcceptWithHandshake
 	var wg sync.WaitGroup
-	var responderConn *Conn
+	var responderConn ConnIface
 	var responderErr error
 
 	wg.Add(1)
@@ -205,7 +205,7 @@ func TestAcceptWithHandshake_FullE2E(t *testing.T) {
 	// Verify SipHash is active on both sides
 	assert.NotNil(t, initiatorNTCP2.lengthObfuscator.Load(),
 		"initiator should have SipHash obfuscator")
-	assert.NotNil(t, responderConn.lengthObfuscator.Load(),
+	assert.NotNil(t, responderConn.(*Conn).lengthObfuscator.Load(),
 		"responder should have SipHash obfuscator via AcceptWithHandshake")
 
 	// Verify bidirectional data exchange

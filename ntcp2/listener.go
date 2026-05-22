@@ -304,7 +304,7 @@ func formatRouterHash(hash data.Hash) string {
 // AcceptWithHandshake waits for the next connection and automatically
 // performs the NTCP2 handshake. This mirrors DialNTCP2WithHandshakeContext
 // for the responder side.
-func (nl *Listener) AcceptWithHandshake(ctx context.Context) (*Conn, error) {
+func (nl *Listener) AcceptWithHandshake(ctx context.Context) (ConnIface, error) {
 	conn, err := nl.Accept()
 	if err != nil {
 		return nil, err

@@ -484,7 +484,7 @@ func TestInboundRouterHash(t *testing.T) {
 			responderErr = err
 			return
 		}
-		responderNTCP2 = conn
+		responderNTCP2 = conn.(*Conn)
 	}()
 
 	// --- Initiator: dial + handshake ---
