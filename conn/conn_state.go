@@ -143,7 +143,7 @@ func (nc *Conn) Rekey() error {
 // SetShutdownManager sets the shutdown manager for this connection.
 // If a shutdown manager is set, the connection will be automatically
 // registered for graceful shutdown coordination.
-func (nc *Conn) SetShutdownManager(sm *shutdown.ShutdownManager) {
+func (nc *Conn) SetShutdownManager(sm shutdown.Shutdowner) {
 	nc.shutdownManager = sm
 	if sm != nil {
 		sm.RegisterConnection(nc)

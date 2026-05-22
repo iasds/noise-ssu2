@@ -12,6 +12,19 @@ import (
 	"github.com/samber/oops"
 )
 
+// Shutdowner is implemented by any type that can coordinate graceful shutdown
+// of noise connections and listeners. *ShutdownManager satisfies this interface.
+// Accepting Shutdowner instead of *ShutdownManager allows callers to substitute
+// test doubles or alternative shutdown coordinators without wrapping them inside
+// a *ShutdownManager.
+type Shutdowner interface {
+	Shutdown() error
+	RegisterConnection(ShutdownConn)
+	UnregisterConnection(ShutdownConn)
+	RegisterListener(ShutdownListener)
+	UnregisterListener(ShutdownListener)
+}
+
 // ShutdownConn is implemented by any connection that can be managed by ShutdownManager.
 // *NoiseConn satisfies this interface, as do *ntcp2.NTCP2Conn and *ssu2.SSU2Conn.
 type ShutdownConn interface {

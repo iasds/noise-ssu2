@@ -30,7 +30,7 @@ type Listener struct {
 	logger *logger.Logger
 
 	// shutdownManager for coordinated shutdown (optional)
-	shutdownManager *shutdown.ShutdownManager
+	shutdownManager shutdown.Shutdowner
 
 	// closed indicates if the listener has been closed
 	closed bool
@@ -380,7 +380,7 @@ func (nl *Listener) Close() error {
 // SetShutdownManager sets the shutdown manager for this listener.
 // If a shutdown manager is set, the listener will be automatically
 // registered for graceful shutdown coordination.
-func (nl *Listener) SetShutdownManager(sm *shutdown.ShutdownManager) {
+func (nl *Listener) SetShutdownManager(sm shutdown.Shutdowner) {
 	nl.shutdownManager = sm
 	if sm != nil {
 		sm.RegisterListener(nl)

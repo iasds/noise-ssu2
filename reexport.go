@@ -42,6 +42,11 @@ type ShutdownConn = shutdown.ShutdownConn
 // ShutdownListener is an alias for shutdown.ShutdownListener.
 type ShutdownListener = shutdown.ShutdownListener
 
+// Shutdowner is an alias for shutdown.Shutdowner.
+// Accept Shutdowner instead of *ShutdownManager to allow substitution of test
+// doubles or alternative shutdown coordinators.
+type Shutdowner = shutdown.Shutdowner
+
 // ─── Constant re-exports ─────────────────────────────────────────────────────
 
 // Connection state constants forwarded from noise/conn for backwards compatibility.

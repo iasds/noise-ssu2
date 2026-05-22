@@ -99,7 +99,7 @@ func TestGlobalShutdownFunctions(t *testing.T) {
 // shutdownRegistrationTest verifies the shutdown registration lifecycle:
 // SetShutdownManager → assert registered → Close → assert deregistered.
 func shutdownRegistrationTest(t *testing.T, sm *ShutdownManager, resource interface {
-	SetShutdownManager(*ShutdownManager)
+	SetShutdownManager(Shutdowner)
 	Close() error
 },
 ) {

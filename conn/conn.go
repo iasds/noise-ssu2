@@ -89,7 +89,7 @@ type Conn struct {
 	logger *i2plogger.Logger
 
 	// shutdownManager for coordinated shutdown (optional)
-	shutdownManager *shutdown.ShutdownManager
+	shutdownManager shutdown.Shutdowner
 
 	// closeMutex protects close operations
 	closeMutex sync.Mutex

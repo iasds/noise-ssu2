@@ -18,13 +18,13 @@ import (
 type Transport struct {
 	mu   sync.RWMutex
 	pool pool.Pool
-	sm   *ShutdownManager
+	sm   Shutdowner
 }
 
 // NewTransport creates a Transport backed by the given pool and shutdown
 // manager. Either may be nil: a nil pool disables connection reuse; a nil
 // ShutdownManager disables shutdown registration.
-func NewTransport(p pool.Pool, sm *ShutdownManager) *Transport {
+func NewTransport(p pool.Pool, sm Shutdowner) *Transport {
 	return &Transport{pool: p, sm: sm}
 }
 
@@ -75,7 +75,7 @@ func GetGlobalConnPool() pool.Pool {
 
 // SetGlobalShutdownManager sets a custom shutdown manager on the Default Transport.
 // The previous shutdown manager is shut down gracefully before being replaced.
-func SetGlobalShutdownManager(sm *ShutdownManager) {
+func SetGlobalShutdownManager(sm Shutdowner) {
 	dt := getDefault()
 	dt.mu.Lock()
 	defer dt.mu.Unlock()
@@ -86,7 +86,7 @@ func SetGlobalShutdownManager(sm *ShutdownManager) {
 }
 
 // GetGlobalShutdownManager returns the Default Transport's shutdown manager.
-func GetGlobalShutdownManager() *ShutdownManager {
+func GetGlobalShutdownManager() Shutdowner {
 	dt := getDefault()
 	dt.mu.RLock()
 	defer dt.mu.RUnlock()
@@ -165,7 +165,7 @@ func (t *Transport) Listen(network, addr string, config *ListenerConfig) (*Noise
 
 // shutdownRegisterer is implemented by types that support global shutdown management.
 type shutdownRegisterer interface {
-	SetShutdownManager(*ShutdownManager)
+	SetShutdownManager(Shutdowner)
 }
 
 // wrapTransportError creates a contextual error with transport metadata.
