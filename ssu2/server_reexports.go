@@ -7,7 +7,12 @@ import "github.com/go-i2p/go-noise/ssu2/server"
 
 // ─── Type aliases ─────────────────────────────────────────────────────────────
 
-type SSU2Listener = server.SSU2Listener
+type (
+	SSU2Listener = server.SSU2Listener
+	// Acceptor is the consumer-facing interface for accepting SSU2 connections.
+	// *SSU2Listener satisfies this interface.
+	Acceptor = server.Acceptor
+)
 
 // ─── Function re-exports ──────────────────────────────────────────────────────
 

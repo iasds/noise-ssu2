@@ -16,6 +16,9 @@ type (
 	DataHandlerStats     = session.DataHandlerStats
 	PacketRouter         = session.PacketRouter
 	FragmentSet          = session.FragmentSet
+	// Router is the consumer-facing interface for routing SSU2 packets.
+	// *PacketRouter satisfies this interface.
+	Router = session.Router
 )
 
 // ─── Function re-exports ──────────────────────────────────────────────────────
