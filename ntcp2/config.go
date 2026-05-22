@@ -341,10 +341,7 @@ func (nc *Config) validateCryptographicParameters() error {
 // validateTimeoutConfiguration checks handshake timeouts and retry settings.
 func (nc *Config) validateTimeoutConfiguration() error {
 	log.WithFields(logger.Fields{"pkg": "ntcp2", "func": "NTCP2Config.validateTimeoutConfiguration"}).Debug("Validating NTCP2 timeout configuration")
-	if err := mod.ValidateHandshakeTimeout(nc.HandshakeTimeout, "ntcp2"); err != nil {
-		return err
-	}
-	return mod.ValidateRetryConfig(nc.HandshakeRetries, nc.RetryBackoff, "ntcp2")
+	return mod.ValidateTransportConfig(nc.HandshakeTimeout, nc.HandshakeRetries, nc.RetryBackoff, "ntcp2")
 }
 
 // validateFrameConfiguration checks frame size and padding settings.

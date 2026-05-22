@@ -651,13 +651,8 @@ func (sc *SSU2Config) validateCryptographicParameters() error {
 // validateTimeoutConfiguration checks handshake timeouts and retry settings.
 func (sc *SSU2Config) validateTimeoutConfiguration() error {
 	log.WithFields(logger.Fields{"pkg": "config", "func": "validateTimeoutConfiguration", "handshake_timeout": sc.HandshakeTimeout, "keepalive_interval": sc.KeepaliveInterval}).Debug("Checking timeout and retry settings")
-	// Validate handshake timeout
-	if err := mod.ValidateHandshakeTimeout(sc.HandshakeTimeout, "ssu2"); err != nil {
-		return err
-	}
-
-	// Validate retry configuration
-	if err := mod.ValidateRetryConfig(sc.HandshakeRetries, sc.RetryBackoff, "ssu2"); err != nil {
+	// Validate handshake timeout and retry configuration via shared helper.
+	if err := mod.ValidateTransportConfig(sc.HandshakeTimeout, sc.HandshakeRetries, sc.RetryBackoff, "ssu2"); err != nil {
 		return err
 	}
 

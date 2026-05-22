@@ -597,12 +597,12 @@ func TestConnState_String(t *testing.T) {
 		state    ConnState
 		expected string
 	}{
-		{StateInit, "Init"},
-		{StateHandshaking, "Handshaking"},
-		{StateEstablished, "Established"},
-		{StateClosing, "Closing"},
-		{StateClosed, "Closed"},
-		{ConnState(99), "Unknown"},
+		{StateInit, "init"},
+		{StateHandshaking, "handshaking"},
+		{StateEstablished, "established"},
+		{StateClosing, "closing"},
+		{StateClosed, "closed"},
+		{ConnState(99), "unknown"},
 	}
 
 	for _, tt := range tests {

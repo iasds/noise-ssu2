@@ -8,45 +8,30 @@ import (
 	"time"
 
 	"github.com/go-i2p/common/data"
+	"github.com/go-i2p/go-noise/mod"
 	"github.com/go-i2p/logger"
 	"github.com/go-i2p/noise"
 	"github.com/samber/oops"
 )
 
-// ConnState represents the current state of an SSU2 connection.
-//
-// SSU2 defines its own ConnState rather than reusing mod.ConnState for two
-// reasons:
-//
-//  1. SSU2 has a distinct StateClosing state that is absent from the shared
-//     type: the SSU2 spec (§Termination) requires the sender to wait up to 11
-//     seconds after transmitting a Termination block before releasing resources.
-//     This intermediate "closing" phase is SSU2-specific and does not apply to
-//     the simpler teardown path in conn.Conn.
-//
-//  2. The SSU2 session package was developed independently and its internal
-//     state machine has different transition semantics than the shared type.
-//
-// If the shared lifecycle model in mod.ConnState is ever extended to include
-// graceful-shutdown semantics (a StateClosing state), the two types may be
-// unified to reduce duplication. mod.ConnState now includes StateClosing;
-// a future refactor may migrate ssu2/session to use it directly.
-type ConnState int
+// ConnState is an alias for mod.ConnState, the shared connection lifecycle
+// type. SSU2 uses mod.ConnState directly, including the StateClosing state
+// which mod now provides for graceful-shutdown semantics (e.g. the SSU2
+// Termination block wait period per spec §Termination).
+type ConnState = mod.ConnState
 
 const (
-	// StateInit is the initial state before handshake
-	StateInit ConnState = iota
-	// StateHandshaking is during the XK handshake
-	StateHandshaking
-	// StateEstablished means handshake complete, ready for data
-	StateEstablished
-	// StateClosing is graceful shutdown in progress — SSU2-specific state
-	// corresponding to the Termination block wait period (spec §Termination).
-	// See the ConnState type comment for why this state exists only here and
-	// not in mod.ConnState.
-	StateClosing
-	// StateClosed means connection is fully closed
-	StateClosed
+	// StateInit is the initial state before handshake.
+	StateInit = mod.StateInit
+	// StateHandshaking is during the XK handshake.
+	StateHandshaking = mod.StateHandshaking
+	// StateEstablished means handshake complete, ready for data.
+	StateEstablished = mod.StateEstablished
+	// StateClosing is graceful shutdown in progress — corresponds to the
+	// Termination block wait period (SSU2 spec §Termination).
+	StateClosing = mod.StateClosing
+	// StateClosed means connection is fully closed.
+	StateClosed = mod.StateClosed
 )
 
 const (
@@ -77,25 +62,6 @@ const (
 	// block. Can be overridden via SSU2Config.DestroyTimeout (M-4).
 	destroyTimeout = 11 * time.Second
 )
-
-// String returns a human-readable state name.
-// String returns a human-readable state name.
-func (s ConnState) String() string {
-	switch s {
-	case StateInit:
-		return "Init"
-	case StateHandshaking:
-		return "Handshaking"
-	case StateEstablished:
-		return "Established"
-	case StateClosing:
-		return "Closing"
-	case StateClosed:
-		return "Closed"
-	default:
-		return "Unknown"
-	}
-}
 
 // SSU2Conn implements net.Conn for SSU2 transport connections over UDP.
 // It integrates HandshakeHandler, DataHandler, and ACKHandler to provide

@@ -102,6 +102,33 @@ func GracefulShutdown() error {
 	return getDefault().GracefulShutdown()
 }
 
+// # Dial function selection matrix
+//
+// The package exposes six DialNoise variants that differ along two axes:
+//
+//   - Pool: reuse idle TCP connections from the Default Transport pool?
+//   - Handshake: perform the Noise handshake (with retry) as part of the call?
+//
+// Use this matrix to pick the right entry-point:
+//
+//	                        │ No handshake │ Handshake (retry) │
+//	────────────────────────┼──────────────┼───────────────────┤
+//	No pool (fresh TCP)     │ DialNoise    │ DialNoiseWithHandshake
+//	                        │              │ DialNoiseWithHandshakeContext
+//	────────────────────────┼──────────────┼───────────────────┤
+//	Pool (reuse TCP)        │ DialNoiseWithPool │ DialNoiseWithPoolAndHandshake
+//	                        │              │ DialNoiseWithPoolAndHandshakeContext
+//
+// Guidance:
+//   - For most applications, use [DialNoiseWithHandshakeContext] (fresh TCP +
+//     handshake + context) — it provides cancellation and retry support.
+//   - Use the *WithPool* variants only if you share long-lived TCP connections
+//     and have already configured the Default Transport pool.
+//   - Use the bare [DialNoise] only when you will perform the handshake yourself
+//     on the returned *NoiseConn.
+//   - Prefer constructing a [Transport] directly for production workloads to
+//     avoid coupling to the package-level Default singleton.
+
 // DialNoise creates a connection to the given address and wraps it with NoiseConn.
 // This is a convenience function that delegates to the Default Transport.
 func DialNoise(network, addr string, config *ConnConfig) (*NoiseConn, error) {
