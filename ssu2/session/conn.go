@@ -14,6 +14,23 @@ import (
 )
 
 // ConnState represents the current state of an SSU2 connection.
+//
+// SSU2 defines its own ConnState rather than reusing mod.ConnState for two
+// reasons:
+//
+//  1. SSU2 has a distinct StateClosing state that is absent from the shared
+//     type: the SSU2 spec (§Termination) requires the sender to wait up to 11
+//     seconds after transmitting a Termination block before releasing resources.
+//     This intermediate "closing" phase is SSU2-specific and does not apply to
+//     the simpler teardown path in conn.Conn.
+//
+//  2. The SSU2 session package was developed independently and its internal
+//     state machine has different transition semantics than the shared type.
+//
+// If the shared lifecycle model in mod.ConnState is ever extended to include
+// graceful-shutdown semantics (a StateClosing state), the two types may be
+// unified to reduce duplication. mod.ConnState now includes StateClosing;
+// a future refactor may migrate ssu2/session to use it directly.
 type ConnState int
 
 const (
@@ -23,7 +40,10 @@ const (
 	StateHandshaking
 	// StateEstablished means handshake complete, ready for data
 	StateEstablished
-	// StateClosing is graceful shutdown in progress
+	// StateClosing is graceful shutdown in progress — SSU2-specific state
+	// corresponding to the Termination block wait period (spec §Termination).
+	// See the ConnState type comment for why this state exists only here and
+	// not in mod.ConnState.
 	StateClosing
 	// StateClosed means connection is fully closed
 	StateClosed

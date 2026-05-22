@@ -18,7 +18,27 @@ var (
 
 // Default is the package-level Transport used by DialNoise, ListenNoise, etc.
 // It is lazily initialised on first use via getDefault().
+//
+// Package-level convenience only: callers that share the Default instance
+// across goroutines or tests affect shared state (pool, shutdown manager).
+// Prefer constructing a Transport directly for production use:
+//
+//	newTransport := noise.NewTransport(myPool, myShutdown)
+//
+// For test isolation, call ResetDefault() in your TestMain or test teardown.
 var Default *Transport
+
+// ResetDefault resets the package-level Default Transport and its initialisation
+// state so that the next call to getDefault() creates a fresh instance.
+//
+// Intended for test isolation only. Do not call in production code; concurrent
+// callers that hold a reference to the previous Default will observe a stale
+// pointer.
+func ResetDefault() {
+	defaultOnce = sync.Once{}
+	defaultInst = nil
+	Default = nil
+}
 
 // getDefault lazily creates the singleton Transport and exposes it as Default.
 func getDefault() *Transport {

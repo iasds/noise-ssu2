@@ -16,6 +16,7 @@ func TestConnState_String_AllValues(t *testing.T) {
 		{StateInit, "init"},
 		{StateHandshaking, "handshaking"},
 		{StateEstablished, "established"},
+		{StateClosing, "closing"},
 		{StateClosed, "closed"},
 	}
 	for _, tt := range tests {

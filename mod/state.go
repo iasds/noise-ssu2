@@ -19,6 +19,11 @@ const (
 	StateHandshaking
 	// StateEstablished represents a connection with completed handshake
 	StateEstablished
+	// StateClosing represents a connection in graceful shutdown (teardown
+	// initiated but not yet fully closed). Transports that require a
+	// protocol-level goodbye exchange (e.g. SSU2 Termination block) may
+	// use this state during that wait period.
+	StateClosing
 	// StateClosed represents a closed connection
 	StateClosed
 )
@@ -32,6 +37,8 @@ func (s ConnState) String() string {
 		return "handshaking"
 	case StateEstablished:
 		return "established"
+	case StateClosing:
+		return "closing"
 	case StateClosed:
 		return "closed"
 	default:
