@@ -63,3 +63,12 @@ var (
 	EncodeCongestionBlock          = reliability.EncodeCongestionBlock
 	SortDescDedupPackets           = reliability.SortDescDedupPackets
 )
+
+// ─── Keepalive type aliases ───────────────────────────────────────────────────
+
+type SendReceiver = reliability.SendReceiver
+type KeepaliveManager = reliability.KeepaliveManager
+
+// ─── Keepalive constructor ────────────────────────────────────────────────────
+
+var NewKeepaliveManager = reliability.NewKeepaliveManager

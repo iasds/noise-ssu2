@@ -21,6 +21,15 @@ type HeaderType = wire.HeaderType
 type HeaderProtector = wire.HeaderProtector
 type HeaderProtectorManager = wire.HeaderProtectorManager
 
+// SipHash / ChaCha / padding modifier types
+type SipHashLengthModifier = wire.SipHashLengthModifier
+type ChaChaObfuscationModifier = wire.ChaChaObfuscationModifier
+type SSU2PaddingModifier = wire.SSU2PaddingModifier
+
+// TokenCache types
+type TokenCache = wire.TokenCache
+type Token = wire.Token
+
 // ─── Block type constants ─────────────────────────────────────────────────────
 
 const (
@@ -144,6 +153,20 @@ const (
 	SSU2NetworkID       = wire.SSU2NetworkID
 )
 
+// ─── SipHash modifier constants ────────────────────────────────────────────────
+
+const (
+	SipHashIVSize       = wire.SipHashIVSize
+	DataLengthFieldSize = wire.DataLengthFieldSize
+)
+
+// ─── TokenCache constants ──────────────────────────────────────────────────────
+
+const (
+	TokenSize         = wire.TokenSize
+	MaxTokenCacheSize = wire.MaxTokenCacheSize
+)
+
 // ─── Function re-exports ───────────────────────────────────────────────────────
 
 var (
@@ -171,4 +194,25 @@ var (
 	EncodeConnectionID  = wire.EncodeConnectionID
 	ExtractPacketNumber = wire.ExtractPacketNumber
 	EncodePacketNumber  = wire.EncodePacketNumber
+
+        // SipHash length modifier constructors
+        NewSipHashLengthModifier            = wire.NewSipHashLengthModifier
+        NewSipHashLengthModifierDirectional = wire.NewSipHashLengthModifierDirectional
+
+        // ChaCha obfuscation modifier constructor
+        NewChaChaObfuscationModifier = wire.NewChaChaObfuscationModifier
+
+        // SSU2 padding modifier constructors
+        NewSSU2PaddingModifier           = wire.NewSSU2PaddingModifier
+        NewSSU2PaddingModifierWithRatio  = wire.NewSSU2PaddingModifierWithRatio
+        NewSSU2PaddingModifierWithMTU    = wire.NewSSU2PaddingModifierWithMTU
+        NewSSU2PaddingModifierForTesting = wire.NewSSU2PaddingModifierForTesting
+
+        // IntroKey / StaticKey helpers
+        IntroKeyFromRouterAddress  = wire.IntroKeyFromRouterAddress
+        StaticKeyFromRouterAddress = wire.StaticKeyFromRouterAddress
+
+        // TokenCache constructors
+        NewTokenCache            = wire.NewTokenCache
+        NewTokenCacheWithMaxSize = wire.NewTokenCacheWithMaxSize
 )
