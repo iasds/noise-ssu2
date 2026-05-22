@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/go-i2p/common/data"
-	
+
 	"github.com/go-i2p/go-noise/examples/cliutil"
 	"github.com/go-i2p/go-noise/ntcp2"
 )

@@ -7,8 +7,10 @@ import "github.com/go-i2p/go-noise/ssu2/handshake"
 
 // ─── Type aliases ─────────────────────────────────────────────────────────────
 
-type HandshakeHandler = handshake.HandshakeHandler
-type OptionsParams = handshake.OptionsParams
+type (
+	HandshakeHandler = handshake.HandshakeHandler
+	OptionsParams    = handshake.OptionsParams
+)
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 

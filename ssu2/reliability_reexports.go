@@ -7,13 +7,15 @@ import "github.com/go-i2p/go-noise/ssu2/reliability"
 
 // ─── Type aliases ─────────────────────────────────────────────────────────────
 
-type ACKHandler = reliability.ACKHandler
-type CongestionController = reliability.CongestionController
-type CongestionState = reliability.CongestionState
-type CongestionStats = reliability.CongestionStats
-type PendingACK = reliability.PendingACK
-type RTTEstimator = reliability.RTTEstimator
-type ReceiveWindow = reliability.ReceiveWindow
+type (
+	ACKHandler           = reliability.ACKHandler
+	CongestionController = reliability.CongestionController
+	CongestionState      = reliability.CongestionState
+	CongestionStats      = reliability.CongestionStats
+	PendingACK           = reliability.PendingACK
+	RTTEstimator         = reliability.RTTEstimator
+	ReceiveWindow        = reliability.ReceiveWindow
+)
 
 // ─── Congestion flag constants ────────────────────────────────────────────────
 
@@ -66,8 +68,10 @@ var (
 
 // ─── Keepalive type aliases ───────────────────────────────────────────────────
 
-type SendReceiver = reliability.SendReceiver
-type KeepaliveManager = reliability.KeepaliveManager
+type (
+	SendReceiver     = reliability.SendReceiver
+	KeepaliveManager = reliability.KeepaliveManager
+)
 
 // ─── Keepalive constructor ────────────────────────────────────────────────────
 

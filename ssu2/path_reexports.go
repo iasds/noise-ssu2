@@ -7,38 +7,42 @@ import "github.com/go-i2p/go-noise/ssu2/path"
 
 // ─── Interface re-exports ──────────────────────────────────────────────────────
 
-type ListenerRef = path.ListenerRef
-type PathValidationConn = path.PathValidationConn
-type TokenCacheAccessor = path.TokenCacheAccessor
-type CongestionControllerAccessor = path.CongestionControllerAccessor
+type (
+	ListenerRef                  = path.ListenerRef
+	PathValidationConn           = path.PathValidationConn
+	TokenCacheAccessor           = path.TokenCacheAccessor
+	CongestionControllerAccessor = path.CongestionControllerAccessor
+)
 
 // ─── Type aliases ─────────────────────────────────────────────────────────────
 
-type HolePunchAttempt = path.HolePunchAttempt
-type HolePunchCoordinator = path.HolePunchCoordinator
-type HolePunchState = path.HolePunchState
-type IntroducerInfo = path.IntroducerInfo
-type IntroducerRegistry = path.IntroducerRegistry
-type NATType = path.NATType
-type PathChallenge = path.PathChallenge
-type PathChallengeState = path.PathChallengeState
-type PathValidator = path.PathValidator
-type PeerTest = path.PeerTest
-type PeerTestBlock = path.PeerTestBlock
-type PeerTestManager = path.PeerTestManager
-type PeerTestMessageCode = path.PeerTestMessageCode
-type PeerTestRole = path.PeerTestRole
-type PeerTestState = path.PeerTestState
-type PendingSession = path.PendingSession
-type RegisteredIntroducer = path.RegisteredIntroducer
-type RelayIntroBlock = path.RelayIntroBlock
-type RelayManager = path.RelayManager
-type RelayRequestBlock = path.RelayRequestBlock
-type RelayResponseBlock = path.RelayResponseBlock
-type RelayTag = path.RelayTag
-type RelayTagBlock = path.RelayTagBlock
-type RelayTagRequestBlock = path.RelayTagRequestBlock
-type TestResult = path.TestResult
+type (
+	HolePunchAttempt     = path.HolePunchAttempt
+	HolePunchCoordinator = path.HolePunchCoordinator
+	HolePunchState       = path.HolePunchState
+	IntroducerInfo       = path.IntroducerInfo
+	IntroducerRegistry   = path.IntroducerRegistry
+	NATType              = path.NATType
+	PathChallenge        = path.PathChallenge
+	PathChallengeState   = path.PathChallengeState
+	PathValidator        = path.PathValidator
+	PeerTest             = path.PeerTest
+	PeerTestBlock        = path.PeerTestBlock
+	PeerTestManager      = path.PeerTestManager
+	PeerTestMessageCode  = path.PeerTestMessageCode
+	PeerTestRole         = path.PeerTestRole
+	PeerTestState        = path.PeerTestState
+	PendingSession       = path.PendingSession
+	RegisteredIntroducer = path.RegisteredIntroducer
+	RelayIntroBlock      = path.RelayIntroBlock
+	RelayManager         = path.RelayManager
+	RelayRequestBlock    = path.RelayRequestBlock
+	RelayResponseBlock   = path.RelayResponseBlock
+	RelayTag             = path.RelayTag
+	RelayTagBlock        = path.RelayTagBlock
+	RelayTagRequestBlock = path.RelayTagRequestBlock
+	TestResult           = path.TestResult
+)
 
 // ─── NAT type constants ────────────────────────────────────────────────────────
 

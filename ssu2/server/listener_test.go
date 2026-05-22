@@ -278,7 +278,7 @@ func TestSSU2Listener_Concurrent(t *testing.T) {
 			defer wg.Done()
 
 			connID := uint64(id + 1000)
-				conn := NewMockSSU2Conn(connID)
+			conn := NewMockSSU2Conn(connID)
 			listener.sessionMutex.Lock()
 			listener.sessions[connID] = conn
 			listener.sessionMutex.Unlock()
@@ -567,7 +567,7 @@ func TestListenerRouterHash(t *testing.T) {
 
 		// The router hash should be SHA-256 of the ephemeral key, not all zeros
 		expectedHash := sha256.Sum256(ephemeralKey)
-			actualHash := conn.GetSSU2Addr().RouterHash()
+		actualHash := conn.GetSSU2Addr().RouterHash()
 		assert.Equal(t, data.Hash(expectedHash), actualHash)
 		assert.False(t, actualHash.IsZero(), "router hash must not be zero-filled")
 	})
@@ -593,6 +593,6 @@ func TestListenerRouterHash(t *testing.T) {
 		require.NotNil(t, conn)
 
 		// Without an ephemeral key, falls back to zero hash
-			assert.True(t, conn.GetSSU2Addr().RouterHash().IsZero())
+		assert.True(t, conn.GetSSU2Addr().RouterHash().IsZero())
 	})
 }

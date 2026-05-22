@@ -7,15 +7,17 @@ import "github.com/go-i2p/go-noise/ssu2/config"
 
 // ─── Type aliases ─────────────────────────────────────────────────────────────
 
-type SSU2Config = config.SSU2Config
-type SSU2Addr = config.SSU2Addr
+type (
+	SSU2Config = config.SSU2Config
+	SSU2Addr   = config.SSU2Addr
+)
 
 // ─── Function re-exports ──────────────────────────────────────────────────────
 
 var (
-	NewSSU2Config             = config.NewSSU2Config
-	NewSSU2Addr               = config.NewSSU2Addr
-	GenerateConnectionID      = config.GenerateConnectionID
+	NewSSU2Config              = config.NewSSU2Config
+	NewSSU2Addr                = config.NewSSU2Addr
+	GenerateConnectionID       = config.GenerateConnectionID
 	DefaultRouterInfoValidator = config.DefaultRouterInfoValidator
 )
 

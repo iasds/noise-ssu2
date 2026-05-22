@@ -11,8 +11,10 @@ import (
 
 // ─── From ssu2/config ─────────────────────────────────────────────────────────
 
-type SSU2Config = ssu2config.SSU2Config
-type SSU2Addr = ssu2config.SSU2Addr
+type (
+	SSU2Config = ssu2config.SSU2Config
+	SSU2Addr   = ssu2config.SSU2Addr
+)
 
 var (
 	NewSSU2Addr                = ssu2config.NewSSU2Addr
@@ -24,23 +26,27 @@ var (
 
 // ─── From ssu2/session ────────────────────────────────────────────────────────
 
-type SSU2Conn = session.SSU2Conn
-type PacketRouter = session.PacketRouter
-type DataHandler = session.DataHandler
+type (
+	SSU2Conn     = session.SSU2Conn
+	PacketRouter = session.PacketRouter
+	DataHandler  = session.DataHandler
+)
 
 var (
-	NewSSU2Conn      = session.NewSSU2Conn
-	NewMockSSU2Conn  = session.NewMockSSU2Conn
-	NewPacketRouter  = session.NewPacketRouter
+	NewSSU2Conn     = session.NewSSU2Conn
+	NewMockSSU2Conn = session.NewMockSSU2Conn
+	NewPacketRouter = session.NewPacketRouter
 )
 
 // ─── From ssu2/wire ───────────────────────────────────────────────────────────
 
-type SSU2Block = wire.SSU2Block
-type SSU2Packet = wire.SSU2Packet
-type TokenCache = wire.TokenCache
-type Token = wire.Token
-type NewTokenBlock = wire.NewTokenBlock
+type (
+	SSU2Block     = wire.SSU2Block
+	SSU2Packet    = wire.SSU2Packet
+	TokenCache    = wire.TokenCache
+	Token         = wire.Token
+	NewTokenBlock = wire.NewTokenBlock
+)
 
 const (
 	BlockTypeDateTime        = wire.BlockTypeDateTime

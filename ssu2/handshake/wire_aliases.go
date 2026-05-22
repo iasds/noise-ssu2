@@ -4,9 +4,11 @@ import "github.com/go-i2p/go-noise/ssu2/wire"
 
 // Type aliases from ssu2/wire so handshake code can reference these types
 // without qualifying them with the wire package name.
-type SSU2Block = wire.SSU2Block
-type SSU2Packet = wire.SSU2Packet
-type TerminationReason = wire.TerminationReason
+type (
+	SSU2Block         = wire.SSU2Block
+	SSU2Packet        = wire.SSU2Packet
+	TerminationReason = wire.TerminationReason
+)
 
 // Block type constant aliases
 const (

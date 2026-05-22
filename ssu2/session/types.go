@@ -13,8 +13,10 @@ import (
 
 // ─── From ssu2/config ─────────────────────────────────────────────────────────
 
-type SSU2Config = ssu2config.SSU2Config
-type SSU2Addr = ssu2config.SSU2Addr
+type (
+	SSU2Config = ssu2config.SSU2Config
+	SSU2Addr   = ssu2config.SSU2Addr
+)
 
 var (
 	NewSSU2Config        = ssu2config.NewSSU2Config
@@ -25,24 +27,26 @@ var (
 
 // ─── From ssu2/wire ───────────────────────────────────────────────────────────
 
-type SSU2Block = wire.SSU2Block
-type SSU2Packet = wire.SSU2Packet
-type TerminationReason = wire.TerminationReason
-type AddressBlock = wire.AddressBlock
-type NewTokenBlock = wire.NewTokenBlock
-type BlockHandler = wire.BlockHandler
-type BlockHandlerFunc = wire.BlockHandlerFunc
-type BlockRouter = wire.BlockRouter
-type BlockRouterStats = wire.BlockRouterStats
-type BlockTypeCategory = wire.BlockTypeCategory
-type HeaderType = wire.HeaderType
-type HeaderProtector = wire.HeaderProtector
-type HeaderProtectorManager = wire.HeaderProtectorManager
-type SipHashLengthModifier = wire.SipHashLengthModifier
-type ChaChaObfuscationModifier = wire.ChaChaObfuscationModifier
-type SSU2PaddingModifier = wire.SSU2PaddingModifier
-type TokenCache = wire.TokenCache
-type Token = wire.Token
+type (
+	SSU2Block                 = wire.SSU2Block
+	SSU2Packet                = wire.SSU2Packet
+	TerminationReason         = wire.TerminationReason
+	AddressBlock              = wire.AddressBlock
+	NewTokenBlock             = wire.NewTokenBlock
+	BlockHandler              = wire.BlockHandler
+	BlockHandlerFunc          = wire.BlockHandlerFunc
+	BlockRouter               = wire.BlockRouter
+	BlockRouterStats          = wire.BlockRouterStats
+	BlockTypeCategory         = wire.BlockTypeCategory
+	HeaderType                = wire.HeaderType
+	HeaderProtector           = wire.HeaderProtector
+	HeaderProtectorManager    = wire.HeaderProtectorManager
+	SipHashLengthModifier     = wire.SipHashLengthModifier
+	ChaChaObfuscationModifier = wire.ChaChaObfuscationModifier
+	SSU2PaddingModifier       = wire.SSU2PaddingModifier
+	TokenCache                = wire.TokenCache
+	Token                     = wire.Token
+)
 
 const (
 	BlockTypeDateTime          = wire.BlockTypeDateTime
@@ -162,13 +166,15 @@ var (
 
 // ─── From ssu2/handshake ──────────────────────────────────────────────────────
 
-type HandshakeHandler = ssu2hs.HandshakeHandler
-type OptionsParams = ssu2hs.OptionsParams
-type KeyState = ssu2hs.KeyState
-type ManagedKey = ssu2hs.ManagedKey
-type KeyRotationCallback = ssu2hs.KeyRotationCallback
-type KeyRotationManager = ssu2hs.KeyRotationManager
-type KeyRotationStatus = ssu2hs.KeyRotationStatus
+type (
+	HandshakeHandler    = ssu2hs.HandshakeHandler
+	OptionsParams       = ssu2hs.OptionsParams
+	KeyState            = ssu2hs.KeyState
+	ManagedKey          = ssu2hs.ManagedKey
+	KeyRotationCallback = ssu2hs.KeyRotationCallback
+	KeyRotationManager  = ssu2hs.KeyRotationManager
+	KeyRotationStatus   = ssu2hs.KeyRotationStatus
+)
 
 const (
 	SSU2ProtocolName         = ssu2hs.SSU2ProtocolName
@@ -195,33 +201,35 @@ var (
 
 // ─── From ssu2/reliability ────────────────────────────────────────────────────
 
-type ACKHandler = reliability.ACKHandler
-type CongestionController = reliability.CongestionController
-type CongestionState = reliability.CongestionState
-type CongestionStats = reliability.CongestionStats
-type PendingACK = reliability.PendingACK
-type RTTEstimator = reliability.RTTEstimator
-type ReceiveWindow = reliability.ReceiveWindow
-type SendReceiver = reliability.SendReceiver
-type KeepaliveManager = reliability.KeepaliveManager
+type (
+	ACKHandler           = reliability.ACKHandler
+	CongestionController = reliability.CongestionController
+	CongestionState      = reliability.CongestionState
+	CongestionStats      = reliability.CongestionStats
+	PendingACK           = reliability.PendingACK
+	RTTEstimator         = reliability.RTTEstimator
+	ReceiveWindow        = reliability.ReceiveWindow
+	SendReceiver         = reliability.SendReceiver
+	KeepaliveManager     = reliability.KeepaliveManager
+)
 
 const (
-	CongestionFlagRequestACK    = reliability.CongestionFlagRequestACK
-	CongestionFlagECN           = reliability.CongestionFlagECN
-	MinCongestionWindow         = reliability.MinCongestionWindow
-	InitialCongestionWindow     = reliability.InitialCongestionWindow
-	MaxCongestionWindow         = reliability.MaxCongestionWindow
-	SlowStart                   = reliability.SlowStart
-	CongestionAvoidance         = reliability.CongestionAvoidance
-	Recovery                    = reliability.Recovery
-	DefaultMaxWindowSize        = reliability.DefaultMaxWindowSize
-	MaxPacketNumber             = reliability.MaxPacketNumber
-	InitialSlowStartThreshold   = reliability.InitialSlowStartThreshold
-	RTTKMultiplier              = reliability.RTTKMultiplier
-	ClockGranularity            = reliability.ClockGranularity
-	InitialRTO                  = reliability.InitialRTO
-	MinRTO                      = reliability.MinRTO
-	MaxRTO                      = reliability.MaxRTO
+	CongestionFlagRequestACK  = reliability.CongestionFlagRequestACK
+	CongestionFlagECN         = reliability.CongestionFlagECN
+	MinCongestionWindow       = reliability.MinCongestionWindow
+	InitialCongestionWindow   = reliability.InitialCongestionWindow
+	MaxCongestionWindow       = reliability.MaxCongestionWindow
+	SlowStart                 = reliability.SlowStart
+	CongestionAvoidance       = reliability.CongestionAvoidance
+	Recovery                  = reliability.Recovery
+	DefaultMaxWindowSize      = reliability.DefaultMaxWindowSize
+	MaxPacketNumber           = reliability.MaxPacketNumber
+	InitialSlowStartThreshold = reliability.InitialSlowStartThreshold
+	RTTKMultiplier            = reliability.RTTKMultiplier
+	ClockGranularity          = reliability.ClockGranularity
+	InitialRTO                = reliability.InitialRTO
+	MinRTO                    = reliability.MinRTO
+	MaxRTO                    = reliability.MaxRTO
 )
 
 var (
@@ -238,35 +246,37 @@ var (
 
 // ─── From ssu2/path ───────────────────────────────────────────────────────────
 
-type ListenerRef = path.ListenerRef
-type PathValidationConn = path.PathValidationConn
-type TokenCacheAccessor = path.TokenCacheAccessor
-type CongestionControllerAccessor = path.CongestionControllerAccessor
-type HolePunchAttempt = path.HolePunchAttempt
-type HolePunchCoordinator = path.HolePunchCoordinator
-type HolePunchState = path.HolePunchState
-type IntroducerInfo = path.IntroducerInfo
-type IntroducerRegistry = path.IntroducerRegistry
-type NATType = path.NATType
-type PathChallenge = path.PathChallenge
-type PathChallengeState = path.PathChallengeState
-type PathValidator = path.PathValidator
-type PeerTest = path.PeerTest
-type PeerTestBlock = path.PeerTestBlock
-type PeerTestManager = path.PeerTestManager
-type PeerTestMessageCode = path.PeerTestMessageCode
-type PeerTestRole = path.PeerTestRole
-type PeerTestState = path.PeerTestState
-type PendingSession = path.PendingSession
-type RegisteredIntroducer = path.RegisteredIntroducer
-type RelayIntroBlock = path.RelayIntroBlock
-type RelayManager = path.RelayManager
-type RelayRequestBlock = path.RelayRequestBlock
-type RelayResponseBlock = path.RelayResponseBlock
-type RelayTag = path.RelayTag
-type RelayTagBlock = path.RelayTagBlock
-type RelayTagRequestBlock = path.RelayTagRequestBlock
-type TestResult = path.TestResult
+type (
+	ListenerRef                  = path.ListenerRef
+	PathValidationConn           = path.PathValidationConn
+	TokenCacheAccessor           = path.TokenCacheAccessor
+	CongestionControllerAccessor = path.CongestionControllerAccessor
+	HolePunchAttempt             = path.HolePunchAttempt
+	HolePunchCoordinator         = path.HolePunchCoordinator
+	HolePunchState               = path.HolePunchState
+	IntroducerInfo               = path.IntroducerInfo
+	IntroducerRegistry           = path.IntroducerRegistry
+	NATType                      = path.NATType
+	PathChallenge                = path.PathChallenge
+	PathChallengeState           = path.PathChallengeState
+	PathValidator                = path.PathValidator
+	PeerTest                     = path.PeerTest
+	PeerTestBlock                = path.PeerTestBlock
+	PeerTestManager              = path.PeerTestManager
+	PeerTestMessageCode          = path.PeerTestMessageCode
+	PeerTestRole                 = path.PeerTestRole
+	PeerTestState                = path.PeerTestState
+	PendingSession               = path.PendingSession
+	RegisteredIntroducer         = path.RegisteredIntroducer
+	RelayIntroBlock              = path.RelayIntroBlock
+	RelayManager                 = path.RelayManager
+	RelayRequestBlock            = path.RelayRequestBlock
+	RelayResponseBlock           = path.RelayResponseBlock
+	RelayTag                     = path.RelayTag
+	RelayTagBlock                = path.RelayTagBlock
+	RelayTagRequestBlock         = path.RelayTagRequestBlock
+	TestResult                   = path.TestResult
+)
 
 const (
 	NATUnknown        = path.NATUnknown
@@ -307,18 +317,18 @@ const (
 )
 
 var (
-	NewPathValidator              = path.NewPathValidator
-	DecodeRelayIntro              = path.DecodeRelayIntro
-	DecodeRelayRequest            = path.DecodeRelayRequest
-	DecodeRelayResponse           = path.DecodeRelayResponse
-	DecodePeerTestBlock           = path.DecodePeerTestBlock
-	EncodeRelayRequest            = path.EncodeRelayRequest
-	EncodeRelayResponse           = path.EncodeRelayResponse
-	EncodeRelayIntro              = path.EncodeRelayIntro
-	EncodeRelayTagRequest         = path.EncodeRelayTagRequest
-	EncodeRelayTag                = path.EncodeRelayTag
-	EncodePeerTestBlock           = path.EncodePeerTestBlock
-	VerifyRelayRequestSignature   = path.VerifyRelayRequestSignature
-	VerifyRelayResponseSignature  = path.VerifyRelayResponseSignature
-	VerifyPeerTestSignature       = path.VerifyPeerTestSignature
+	NewPathValidator             = path.NewPathValidator
+	DecodeRelayIntro             = path.DecodeRelayIntro
+	DecodeRelayRequest           = path.DecodeRelayRequest
+	DecodeRelayResponse          = path.DecodeRelayResponse
+	DecodePeerTestBlock          = path.DecodePeerTestBlock
+	EncodeRelayRequest           = path.EncodeRelayRequest
+	EncodeRelayResponse          = path.EncodeRelayResponse
+	EncodeRelayIntro             = path.EncodeRelayIntro
+	EncodeRelayTagRequest        = path.EncodeRelayTagRequest
+	EncodeRelayTag               = path.EncodeRelayTag
+	EncodePeerTestBlock          = path.EncodePeerTestBlock
+	VerifyRelayRequestSignature  = path.VerifyRelayRequestSignature
+	VerifyRelayResponseSignature = path.VerifyRelayResponseSignature
+	VerifyPeerTestSignature      = path.VerifyPeerTestSignature
 )

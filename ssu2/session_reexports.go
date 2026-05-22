@@ -7,20 +7,22 @@ import "github.com/go-i2p/go-noise/ssu2/session"
 
 // ─── Type aliases ─────────────────────────────────────────────────────────────
 
-type SSU2Conn = session.SSU2Conn
-type PendingPacket = session.PendingPacket
-type ConnState = session.ConnState
-type DataHandler = session.DataHandler
-type DataHandlerCallbacks = session.DataHandlerCallbacks
-type DataHandlerStats = session.DataHandlerStats
-type PacketRouter = session.PacketRouter
-type FragmentSet = session.FragmentSet
+type (
+	SSU2Conn             = session.SSU2Conn
+	PendingPacket        = session.PendingPacket
+	ConnState            = session.ConnState
+	DataHandler          = session.DataHandler
+	DataHandlerCallbacks = session.DataHandlerCallbacks
+	DataHandlerStats     = session.DataHandlerStats
+	PacketRouter         = session.PacketRouter
+	FragmentSet          = session.FragmentSet
+)
 
 // ─── Function re-exports ──────────────────────────────────────────────────────
 
 var (
-	NewSSU2Conn    = session.NewSSU2Conn
-	NewDataHandler = session.NewDataHandler
+	NewSSU2Conn     = session.NewSSU2Conn
+	NewDataHandler  = session.NewDataHandler
 	NewPacketRouter = session.NewPacketRouter
 )
 

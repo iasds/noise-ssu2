@@ -7,28 +7,34 @@ import "github.com/go-i2p/go-noise/ssu2/wire"
 
 // ─── Type aliases ─────────────────────────────────────────────────────────────
 
-type SSU2Block = wire.SSU2Block
-type SSU2Packet = wire.SSU2Packet
-type TerminationReason = wire.TerminationReason
-type AddressBlock = wire.AddressBlock
-type NewTokenBlock = wire.NewTokenBlock
-type BlockHandler = wire.BlockHandler
-type BlockHandlerFunc = wire.BlockHandlerFunc
-type BlockRouter = wire.BlockRouter
-type BlockRouterStats = wire.BlockRouterStats
-type BlockTypeCategory = wire.BlockTypeCategory
-type HeaderType = wire.HeaderType
-type HeaderProtector = wire.HeaderProtector
-type HeaderProtectorManager = wire.HeaderProtectorManager
+type (
+	SSU2Block              = wire.SSU2Block
+	SSU2Packet             = wire.SSU2Packet
+	TerminationReason      = wire.TerminationReason
+	AddressBlock           = wire.AddressBlock
+	NewTokenBlock          = wire.NewTokenBlock
+	BlockHandler           = wire.BlockHandler
+	BlockHandlerFunc       = wire.BlockHandlerFunc
+	BlockRouter            = wire.BlockRouter
+	BlockRouterStats       = wire.BlockRouterStats
+	BlockTypeCategory      = wire.BlockTypeCategory
+	HeaderType             = wire.HeaderType
+	HeaderProtector        = wire.HeaderProtector
+	HeaderProtectorManager = wire.HeaderProtectorManager
+)
 
 // SipHash / ChaCha / padding modifier types
-type SipHashLengthModifier = wire.SipHashLengthModifier
-type ChaChaObfuscationModifier = wire.ChaChaObfuscationModifier
-type SSU2PaddingModifier = wire.SSU2PaddingModifier
+type (
+	SipHashLengthModifier     = wire.SipHashLengthModifier
+	ChaChaObfuscationModifier = wire.ChaChaObfuscationModifier
+	SSU2PaddingModifier       = wire.SSU2PaddingModifier
+)
 
 // TokenCache types
-type TokenCache = wire.TokenCache
-type Token = wire.Token
+type (
+	TokenCache = wire.TokenCache
+	Token      = wire.Token
+)
 
 // ─── Block type constants ─────────────────────────────────────────────────────
 
@@ -195,24 +201,24 @@ var (
 	ExtractPacketNumber = wire.ExtractPacketNumber
 	EncodePacketNumber  = wire.EncodePacketNumber
 
-        // SipHash length modifier constructors
-        NewSipHashLengthModifier            = wire.NewSipHashLengthModifier
-        NewSipHashLengthModifierDirectional = wire.NewSipHashLengthModifierDirectional
+	// SipHash length modifier constructors
+	NewSipHashLengthModifier            = wire.NewSipHashLengthModifier
+	NewSipHashLengthModifierDirectional = wire.NewSipHashLengthModifierDirectional
 
-        // ChaCha obfuscation modifier constructor
-        NewChaChaObfuscationModifier = wire.NewChaChaObfuscationModifier
+	// ChaCha obfuscation modifier constructor
+	NewChaChaObfuscationModifier = wire.NewChaChaObfuscationModifier
 
-        // SSU2 padding modifier constructors
-        NewSSU2PaddingModifier           = wire.NewSSU2PaddingModifier
-        NewSSU2PaddingModifierWithRatio  = wire.NewSSU2PaddingModifierWithRatio
-        NewSSU2PaddingModifierWithMTU    = wire.NewSSU2PaddingModifierWithMTU
-        NewSSU2PaddingModifierForTesting = wire.NewSSU2PaddingModifierForTesting
+	// SSU2 padding modifier constructors
+	NewSSU2PaddingModifier           = wire.NewSSU2PaddingModifier
+	NewSSU2PaddingModifierWithRatio  = wire.NewSSU2PaddingModifierWithRatio
+	NewSSU2PaddingModifierWithMTU    = wire.NewSSU2PaddingModifierWithMTU
+	NewSSU2PaddingModifierForTesting = wire.NewSSU2PaddingModifierForTesting
 
-        // IntroKey / StaticKey helpers
-        IntroKeyFromRouterAddress  = wire.IntroKeyFromRouterAddress
-        StaticKeyFromRouterAddress = wire.StaticKeyFromRouterAddress
+	// IntroKey / StaticKey helpers
+	IntroKeyFromRouterAddress  = wire.IntroKeyFromRouterAddress
+	StaticKeyFromRouterAddress = wire.StaticKeyFromRouterAddress
 
-        // TokenCache constructors
-        NewTokenCache            = wire.NewTokenCache
-        NewTokenCacheWithMaxSize = wire.NewTokenCacheWithMaxSize
+	// TokenCache constructors
+	NewTokenCache            = wire.NewTokenCache
+	NewTokenCacheWithMaxSize = wire.NewTokenCacheWithMaxSize
 )
