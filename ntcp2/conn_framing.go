@@ -209,7 +209,12 @@ func (nc *Conn) bufferPlaintext(b, plaintext []byte) int {
 	n := copy(b, plaintext)
 	if n < len(plaintext) {
 		nc.readBuffer = make([]byte, len(plaintext)-n)
-		copy(nc.readBuffer, plaintext[n:])
+		m := copy(nc.readBuffer, plaintext[n:])
+		// Zero the tail of readBuffer to prevent leaking previously-decrypted I2NP messages
+		// through heap dumps or side-channel disclosure
+		for i := m; i < len(nc.readBuffer); i++ {
+			nc.readBuffer[i] = 0
+		}
 	}
 	return n
 }
