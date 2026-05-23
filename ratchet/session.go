@@ -147,9 +147,10 @@ func (s *Session) GetPendingAcks() []PayloadBlock {
 	if len(s.pendingAcks) == 0 {
 		return nil
 	}
-	blocks := s.pendingAcks
+	// Return a copy to avoid aliasing the backing array.
+	result := append([]PayloadBlock(nil), s.pendingAcks...)
 	s.pendingAcks = nil
-	return blocks
+	return result
 }
 
 // GetLastAckedEntries returns the most recently received Ack entries from the

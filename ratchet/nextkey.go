@@ -36,9 +36,10 @@ func (s *Session) GetPendingNextKeys() []PayloadBlock {
 	if len(s.pendingNextKeys) == 0 {
 		return nil
 	}
-	blocks := s.pendingNextKeys
+	// Return a copy to avoid aliasing the backing array.
+	result := append([]PayloadBlock(nil), s.pendingNextKeys...)
 	s.pendingNextKeys = nil
-	return blocks
+	return result
 }
 
 // HasPendingNextKeys reports whether the session has NextKey blocks
