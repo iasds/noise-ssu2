@@ -47,44 +47,32 @@ func (t *Transport) GracefulShutdown() error {
 // ShutdownManager and Pool. It is the Transport-scoped equivalent of DialNoise.
 func (t *Transport) Dial(network, addr string, config *ConnConfig) (*NoiseConn, error) {
 	log.WithFields(logger.Fields{"pkg": "noise", "func": "Transport.Dial", "network": network, "address": addr}).Debug("starting")
-	nc, err := openAndWrapTransport(
+	t.mu.RLock()
+	sm := t.sm
+	t.mu.RUnlock()
+	return openAndWrapTransport(
+		sm,
 		func() error { return validateDialParams(network, addr, config) },
 		func() (io.Closer, error) { return createNewConn(network, addr) },
 		func(c io.Closer) (*NoiseConn, error) {
 			return createNoiseConn(c.(net.Conn), config, network, addr)
 		},
 	)
-	if err != nil {
-		return nil, err
-	}
-	t.mu.RLock()
-	sm := t.sm
-	t.mu.RUnlock()
-	if sm != nil {
-		nc.SetShutdownManager(sm)
-	}
-	return nc, nil
 }
 
 // Listen creates a Noise-wrapped listener on the given address using this Transport's
 // ShutdownManager. It is the Transport-scoped equivalent of ListenNoise.
 func (t *Transport) Listen(network, addr string, config *ListenerConfig) (*NoiseListener, error) {
 	log.WithFields(logger.Fields{"pkg": "noise", "func": "Transport.Listen", "network": network, "address": addr}).Debug("starting")
-	nl, err := openAndWrapTransport(
+	t.mu.RLock()
+	sm := t.sm
+	t.mu.RUnlock()
+	return openAndWrapTransport(
+		sm,
 		func() error { return validateListenParams(network, addr, config) },
 		func() (io.Closer, error) { return createNewListener(network, addr) },
 		func(c io.Closer) (*NoiseListener, error) {
 			return createNoiseListener(c.(net.Listener), config, network, addr)
 		},
 	)
-	if err != nil {
-		return nil, err
-	}
-	t.mu.RLock()
-	sm := t.sm
-	t.mu.RUnlock()
-	if sm != nil {
-		nl.SetShutdownManager(sm)
-	}
-	return nl, nil
 }

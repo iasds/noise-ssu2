@@ -11,24 +11,24 @@ import (
 
 	"github.com/go-i2p/common/data"
 
-	"github.com/go-i2p/go-noise/examples/shared"
+	"github.com/go-i2p/go-noise/examples/exampleutil"
 	"github.com/go-i2p/go-noise/ntcp2"
 )
 
 func main() {
-	shared.RunNTCP2Example(
+	exampleutil.RunNTCP2Example(
 		"ntcp2-listener",
 		"NTCP2Listener demonstration for I2P transport",
 		"127.0.0.1:0",
 		runNTCP2ListenerDemo,
-		func(args *shared.NTCP2Args, routerHash, _, _, staticKey []byte) {
+		func(args *exampleutil.NTCP2Args, routerHash, _, _, staticKey []byte) {
 			runNTCP2Listener(args, routerHash, staticKey)
 		},
 	)
 }
 
 // createDemoConfig creates and displays an NTCP2 config for demo purposes
-func createDemoConfig(routerHash, staticKey []byte, args *shared.NTCP2Args) {
+func createDemoConfig(routerHash, staticKey []byte, args *exampleutil.NTCP2Args) {
 	var rh data.Hash
 	copy(rh[:], routerHash)
 	config, err := ntcp2.NewNTCP2Config(rh, false) // false = responder
@@ -53,18 +53,18 @@ func createDemoConfig(routerHash, staticKey []byte, args *shared.NTCP2Args) {
 }
 
 // runNTCP2ListenerDemo demonstrates NTCP2 listener functionality with demo mode
-func runNTCP2ListenerDemo(args *shared.NTCP2Args) {
+func runNTCP2ListenerDemo(args *exampleutil.NTCP2Args) {
 	fmt.Println("🎭 NTCP2 Listener Demo Mode")
 	fmt.Println("===========================")
 
-	shared.RunNTCP2Demo()
+	exampleutil.RunNTCP2Demo()
 
-	routerHash, err := shared.GenerateRandomKey()
+	routerHash, err := exampleutil.GenerateRandomKey()
 	if err != nil {
 		log.Fatalf("Failed to generate demo router hash: %v", err)
 	}
 
-	staticKey, err := shared.GenerateRandomKey()
+	staticKey, err := exampleutil.GenerateRandomKey()
 	if err != nil {
 		log.Fatalf("Failed to generate demo static key: %v", err)
 	}
@@ -80,7 +80,7 @@ func runNTCP2ListenerDemo(args *shared.NTCP2Args) {
 }
 
 // createNTCP2ListenerConfig creates and validates NTCP2 configuration for the listener
-func createNTCP2ListenerConfig(args *shared.NTCP2Args, routerHash, staticKey []byte) *ntcp2.Config {
+func createNTCP2ListenerConfig(args *exampleutil.NTCP2Args, routerHash, staticKey []byte) *ntcp2.Config {
 	var rh data.Hash
 	copy(rh[:], routerHash)
 	config, err := ntcp2.NewNTCP2Config(rh, false) // false = responder
@@ -101,7 +101,7 @@ func createNTCP2ListenerConfig(args *shared.NTCP2Args, routerHash, staticKey []b
 }
 
 // runNTCP2Listener starts an NTCP2 listener with the provided configuration
-func runNTCP2Listener(args *shared.NTCP2Args, routerHash, staticKey []byte) {
+func runNTCP2Listener(args *exampleutil.NTCP2Args, routerHash, staticKey []byte) {
 	fmt.Printf("🚀 Starting NTCP2 Listener on %s\n", args.ServerAddr)
 	fmt.Printf("Router Hash: %x...\n", routerHash[:8])
 

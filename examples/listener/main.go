@@ -10,11 +10,11 @@ import (
 	"time"
 
 	"github.com/go-i2p/go-noise"
-	"github.com/go-i2p/go-noise/examples/shared"
+	"github.com/go-i2p/go-noise/examples/exampleutil"
 )
 
 func main() {
-	shared.RunExample(
+	exampleutil.RunExample(
 		"noise-listener",
 		"NoiseListener demonstration supporting all Noise patterns",
 		"127.0.0.1:0",
@@ -26,7 +26,7 @@ func main() {
 }
 
 // createListenerConfig builds a NoiseListener config from args and an optional static key
-func createListenerConfig(args *shared.CommonArgs, staticKey []byte) *noise.ListenerConfig {
+func createListenerConfig(args *exampleutil.CommonArgs, staticKey []byte) *noise.ListenerConfig {
 	config := noise.NewListenerConfig(args.Pattern).
 		WithHandshakeTimeout(args.HandshakeTimeout).
 		WithReadTimeout(args.ReadTimeout).
@@ -38,7 +38,7 @@ func createListenerConfig(args *shared.CommonArgs, staticKey []byte) *noise.List
 }
 
 // runListenerServer starts a persistent listener server
-func runListenerServer(args *shared.CommonArgs, staticKey []byte) {
+func runListenerServer(args *exampleutil.CommonArgs, staticKey []byte) {
 	fmt.Printf("🚀 Starting NoiseListener server on %s with pattern %s\n", args.ServerAddr, args.Pattern)
 
 	config := createListenerConfig(args, staticKey)
@@ -71,7 +71,7 @@ func runListenerServer(args *shared.CommonArgs, staticKey []byte) {
 }
 
 // createDemoNoiseListener creates the TCP and Noise listeners for the demo
-func createDemoNoiseListener(demoAddr string, args *shared.CommonArgs, staticKey []byte) (net.Listener, *noise.NoiseListener) {
+func createDemoNoiseListener(demoAddr string, args *exampleutil.CommonArgs, staticKey []byte) (net.Listener, *noise.NoiseListener) {
 	tcpListener, err := net.Listen("tcp", demoAddr)
 	if err != nil {
 		log.Fatalf("Failed to create TCP listener: %v", err)
@@ -107,7 +107,7 @@ func startDemoEchoServer(noiseListener *noise.NoiseListener) {
 }
 
 // runListenerDemo demonstrates NoiseListener with a simulated client
-func runListenerDemo(args *shared.CommonArgs) {
+func runListenerDemo(args *exampleutil.CommonArgs) {
 	fmt.Printf("🎭 Running NoiseListener demonstration with pattern %s\n", args.Pattern)
 
 	demoAddr := "127.0.0.1:0"
@@ -115,7 +115,7 @@ func runListenerDemo(args *shared.CommonArgs) {
 		demoAddr = args.ServerAddr
 	}
 
-	staticKey, _, err := shared.ParseKeys(args)
+	staticKey, _, err := exampleutil.ParseKeys(args)
 	if err != nil {
 		log.Fatalf("Failed to parse keys for demo: %v", err)
 	}
@@ -201,7 +201,7 @@ func connectSimulatedClient(serverAddr, pattern string, serverKey []byte) (*nois
 		WithReadTimeout(30 * time.Second).
 		WithWriteTimeout(30 * time.Second)
 
-	if shared.RequiresLocalStaticKey(pattern) && serverKey != nil {
+	if exampleutil.RequiresLocalStaticKey(pattern) && serverKey != nil {
 		clientConfig = clientConfig.WithStaticKey(serverKey)
 	}
 
@@ -230,7 +230,7 @@ func connectSimulatedClient(serverAddr, pattern string, serverKey []byte) (*nois
 func testSimulatedClientEcho(conn *noise.NoiseConn) {
 	testMessage := "Hello from simulated client!"
 	fmt.Printf("📤 Sending: %s\n", testMessage)
-	shared.SendAndReceive(conn, testMessage, "Received response")
+	exampleutil.SendAndReceive(conn, testMessage, "Received response")
 	fmt.Println("✅ Client simulation completed successfully!")
 }
 

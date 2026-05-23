@@ -10,12 +10,12 @@ import (
 	"time"
 
 	"github.com/go-i2p/go-noise"
-	"github.com/go-i2p/go-noise/examples/shared"
+	"github.com/go-i2p/go-noise/examples/exampleutil"
 )
 
 func main() {
 	// Parse command line arguments
-	args, err := shared.ParseCommonArgs("retry-example")
+	args, err := exampleutil.ParseCommonArgs("retry-example")
 	if err != nil {
 		log.Fatalf("❌ Failed to parse arguments: %v", err)
 	}
@@ -28,7 +28,7 @@ func main() {
 	// Validate arguments
 	if err := args.ValidateArgs(); err != nil {
 		fmt.Printf("❌ Invalid arguments: %v\n\n", err)
-		shared.PrintUsage("retry-example", "Handshake retry mechanisms supporting all Noise patterns")
+		exampleutil.PrintUsage("retry-example", "Handshake retry mechanisms supporting all Noise patterns")
 		return
 	}
 
@@ -39,12 +39,12 @@ func main() {
 	}
 
 	if args.Generate {
-		shared.RunGenerate()
+		exampleutil.RunGenerate()
 		return
 	}
 
 	// Parse keys for the selected pattern
-	staticKey, _, err := shared.ParseKeys(args)
+	staticKey, _, err := exampleutil.ParseKeys(args)
 	if err != nil {
 		log.Fatalf("❌ Key parsing failed: %v", err)
 	}
@@ -54,7 +54,7 @@ func main() {
 }
 
 // runRetryExample demonstrates retry mechanisms with real connections
-func runRetryExample(args *shared.CommonArgs, staticKey []byte) {
+func runRetryExample(args *exampleutil.CommonArgs, staticKey []byte) {
 	retries := 3                      // Default retry count
 	backoff := 500 * time.Millisecond // Default backoff
 
@@ -121,9 +121,9 @@ func testSuccessfulConnection(serverAddr string, config *noise.ConnConfig) {
 }
 
 // sendAndReceive sends a test message on the connection and logs the response.
-// This is a thin wrapper around shared.SendAndReceive for local use.
+// This is a thin wrapper around exampleutil.SendAndReceive for local use.
 func sendAndReceive(conn *noise.NoiseConn, message, responseLabel string) {
-	shared.SendAndReceive(conn, message, responseLabel)
+	exampleutil.SendAndReceive(conn, message, responseLabel)
 }
 
 // testTransportFunctions tests high-level transport functions with retry
@@ -291,5 +291,5 @@ func handleRetryTestConnection(conn net.Conn) {
 	}
 
 	// Simple echo
-	shared.EchoOnce(conn)
+	exampleutil.EchoOnce(conn)
 }

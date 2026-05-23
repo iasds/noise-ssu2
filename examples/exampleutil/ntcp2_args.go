@@ -1,5 +1,5 @@
 // Package shared provides NTCP2-specific utilities for go-noise examples
-package shared
+package exampleutil
 
 import (
 	"flag"

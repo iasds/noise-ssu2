@@ -1,6 +1,6 @@
 package conn
 
-// conn_io.go contains the low-level I/O helpers for NoiseConn:
+// io.go contains the low-level I/O helpers for NoiseConn:
 // read/write framing, encryption, decryption, modifier chain application,
 // state validation, and exported crypto/config accessors for the data transport path.
 

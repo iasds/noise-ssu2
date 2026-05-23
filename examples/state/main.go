@@ -6,11 +6,11 @@ import (
 	"net"
 
 	"github.com/go-i2p/go-noise"
-	"github.com/go-i2p/go-noise/examples/shared"
+	"github.com/go-i2p/go-noise/examples/exampleutil"
 )
 
 func main() {
-	shared.RunExample(
+	exampleutil.RunExample(
 		"state-example",
 		"Connection state management demonstration supporting all Noise patterns",
 		"localhost:8080",
@@ -22,20 +22,20 @@ func main() {
 }
 
 // runStateDemo demonstrates state management with server and client
-func runStateDemo(args *shared.CommonArgs) {
-	shared.RunDemo2(args, "state", runStateServer, runStateClient)
+func runStateDemo(args *exampleutil.CommonArgs) {
+	exampleutil.RunDemo2(args, "state", runStateServer, runStateClient)
 }
 
 // runStateServer runs a server for state management testing
-func runStateServer(args *shared.CommonArgs, staticKey []byte) {
-	shared.RunServer(args, staticKey, "state", func(conn net.Conn) {
-		shared.HandleConnection(conn, "State", demonstrateServerState)
+func runStateServer(args *exampleutil.CommonArgs, staticKey []byte) {
+	exampleutil.RunServer(args, staticKey, "state", func(conn net.Conn) {
+		exampleutil.HandleConnection(conn, "State", demonstrateServerState)
 	})
 }
 
 // runStateClient runs a client for state management testing
-func runStateClient(args *shared.CommonArgs, staticKey []byte) {
-	shared.RunClient(args, staticKey, nil, "state", demonstrateClientState)
+func runStateClient(args *exampleutil.CommonArgs, staticKey []byte) {
+	exampleutil.RunClient(args, staticKey, nil, "state", demonstrateClientState)
 }
 
 // demonstrateServerState shows server-side state information
@@ -64,7 +64,7 @@ func demonstrateClientState(conn *noise.NoiseConn) {
 		"Connection state demo",
 	}
 
-	shared.SendAndDisplay(conn, messages)
+	exampleutil.SendAndDisplay(conn, messages)
 
 	fmt.Println("\n✅ State demonstration completed!")
 }

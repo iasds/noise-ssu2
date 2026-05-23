@@ -9,12 +9,12 @@ import (
 	"time"
 
 	"github.com/go-i2p/go-noise"
-	"github.com/go-i2p/go-noise/examples/shared"
+	"github.com/go-i2p/go-noise/examples/exampleutil"
 	"github.com/go-i2p/pool"
 )
 
 func main() {
-	shared.RunExample(
+	exampleutil.RunExample(
 		"pool-example",
 		"Connection pooling demonstration supporting all Noise patterns",
 		"127.0.0.1:8080",
@@ -26,7 +26,7 @@ func main() {
 }
 
 // runPoolExample demonstrates connection pooling with handshakes
-func runPoolExample(args *shared.CommonArgs, staticKey []byte) {
+func runPoolExample(args *exampleutil.CommonArgs, staticKey []byte) {
 	poolSize := 5       // Default pool size
 	numConnections := 3 // Default number of test connections
 
@@ -236,16 +236,16 @@ func handlePoolEchoConnection(conn net.Conn) {
 	}
 
 	// Simple echo
-	shared.EchoOnce(conn)
+	exampleutil.EchoOnce(conn)
 }
 
 // runPoolDemo demonstrates the connection pool functionality
-func runPoolDemo(args *shared.CommonArgs) {
+func runPoolDemo(args *exampleutil.CommonArgs) {
 	fmt.Println("🏊‍♂️ Connection Pool Demonstration")
 	fmt.Println("===================================")
 
 	// Parse keys for demo
-	staticKey, _, err := shared.ParseKeys(args)
+	staticKey, _, err := exampleutil.ParseKeys(args)
 	if err != nil {
 		log.Fatalf("Failed to parse keys for demo: %v", err)
 	}

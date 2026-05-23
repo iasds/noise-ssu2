@@ -13,11 +13,11 @@ import (
 	"time"
 
 	"github.com/go-i2p/go-noise"
-	"github.com/go-i2p/go-noise/examples/shared"
+	"github.com/go-i2p/go-noise/examples/exampleutil"
 )
 
 func main() {
-	shared.RunExample(
+	exampleutil.RunExample(
 		"shutdown-example",
 		"Graceful shutdown demonstration supporting all Noise patterns",
 		"localhost:8080",
@@ -29,11 +29,11 @@ func main() {
 }
 
 // runShutdownDemo demonstrates graceful shutdown with server and clients
-func runShutdownDemo(args *shared.CommonArgs) {
+func runShutdownDemo(args *exampleutil.CommonArgs) {
 	fmt.Printf("🎭 Running shutdown demo with graceful termination\n")
 
 	// Parse keys for demo
-	staticKey, _, err := shared.ParseKeys(args)
+	staticKey, _, err := exampleutil.ParseKeys(args)
 	if err != nil {
 		log.Fatalf("❌ Key parsing failed: %v", err)
 	}
@@ -46,9 +46,9 @@ func runShutdownDemo(args *shared.CommonArgs) {
 		fmt.Printf("✓ No static key required for pattern %s\n", args.Pattern)
 	}
 
-	shared.PrintLines(
+	exampleutil.PrintLines(
 		"\n🎯 Shutdown Features Demonstrated:",
-		"  • Argument parsing with shared.ParseCommonArgs",
+		"  • Argument parsing with exampleutil.ParseCommonArgs",
 		"  • Pattern validation for all 15 Noise patterns",
 		"  • Key generation and validation",
 		"  • Builder pattern configuration",
@@ -59,7 +59,7 @@ func runShutdownDemo(args *shared.CommonArgs) {
 }
 
 // runShutdownServer demonstrates server with graceful shutdown capability
-func runShutdownServer(args *shared.CommonArgs, staticKey []byte) {
+func runShutdownServer(args *exampleutil.CommonArgs, staticKey []byte) {
 	fmt.Printf("🚀 Starting shutdown server on %s\n", args.ServerAddr)
 
 	if err := runShutdownServerFunc(args.ServerAddr, args.Pattern, staticKey); err != nil {
@@ -137,7 +137,7 @@ func runShutdownServerFunc(addr, pattern string, staticKey []byte) error {
 }
 
 // runShutdownClient connects to server and handles graceful shutdown
-func runShutdownClient(args *shared.CommonArgs, staticKey []byte) {
+func runShutdownClient(args *exampleutil.CommonArgs, staticKey []byte) {
 	fmt.Printf("🔗 Connecting to server at %s\n", args.ClientAddr)
 
 	config := noise.NewConnConfig(args.Pattern, true). // initiator = true

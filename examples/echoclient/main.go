@@ -13,12 +13,12 @@ import (
 	"time"
 
 	"github.com/go-i2p/go-noise"
-	"github.com/go-i2p/go-noise/examples/shared"
+	"github.com/go-i2p/go-noise/examples/exampleutil"
 )
 
 func main() {
 	// Parse command line arguments
-	args, err := shared.ParseCommonArgs("echoclient")
+	args, err := exampleutil.ParseCommonArgs("echoclient")
 	if err != nil {
 		log.Fatalf("❌ Failed to parse arguments: %v", err)
 	}
@@ -31,17 +31,17 @@ func main() {
 	// Validate arguments
 	if err := args.ValidateArgs(); err != nil {
 		fmt.Printf("❌ Invalid arguments: %v\n\n", err)
-		shared.PrintUsage("echoclient", "Noise Protocol echo client supporting all patterns")
+		exampleutil.PrintUsage("echoclient", "Noise Protocol echo client supporting all patterns")
 		return
 	}
 
 	// Handle special modes
-	if shared.HandleSpecialModes(args, func(_ *shared.CommonArgs) { shared.RunDemo() }) {
+	if exampleutil.HandleSpecialModes(args, func(_ *exampleutil.CommonArgs) { exampleutil.RunDemo() }) {
 		return
 	}
 
 	// Parse keys for the selected pattern
-	staticKey, remoteKey, err := shared.ParseKeys(args)
+	staticKey, remoteKey, err := exampleutil.ParseKeys(args)
 	if err != nil {
 		log.Fatalf("❌ Key parsing failed: %v", err)
 	}
@@ -51,17 +51,17 @@ func main() {
 }
 
 // dispatchMode runs the echo client or prints usage
-func dispatchMode(args *shared.CommonArgs, staticKey, remoteKey []byte) {
+func dispatchMode(args *exampleutil.CommonArgs, staticKey, remoteKey []byte) {
 	if args.ClientAddr != "" {
 		runEchoClient(args, staticKey, remoteKey)
 	} else {
 		fmt.Println("❌ Echo client requires -client address")
-		shared.PrintUsage("echoclient", "Noise Protocol echo client supporting all patterns")
+		exampleutil.PrintUsage("echoclient", "Noise Protocol echo client supporting all patterns")
 	}
 }
 
 // runEchoClient connects to echo server and performs interactive communication
-func runEchoClient(args *shared.CommonArgs, staticKey, remoteKey []byte) {
+func runEchoClient(args *exampleutil.CommonArgs, staticKey, remoteKey []byte) {
 	fmt.Printf("🔌 Connecting to echo server at %s with pattern %s\n", args.ClientAddr, args.Pattern)
 
 	// Create client configuration
@@ -88,7 +88,7 @@ func runEchoClient(args *shared.CommonArgs, staticKey, remoteKey []byte) {
 }
 
 // createClientConfig builds the noise connection configuration for the client
-func createClientConfig(args *shared.CommonArgs, staticKey, remoteKey []byte) *noise.ConnConfig {
+func createClientConfig(args *exampleutil.CommonArgs, staticKey, remoteKey []byte) *noise.ConnConfig {
 	config := noise.NewConnConfig(args.Pattern, true).
 		WithHandshakeTimeout(args.HandshakeTimeout).
 		WithReadTimeout(args.ReadTimeout).

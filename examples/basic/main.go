@@ -8,12 +8,12 @@ import (
 	"time"
 
 	"github.com/go-i2p/go-noise"
-	"github.com/go-i2p/go-noise/examples/shared"
+	"github.com/go-i2p/go-noise/examples/exampleutil"
 )
 
 func main() {
 	// Parse command line arguments
-	args, err := shared.ParseCommonArgs("basic-noise")
+	args, err := exampleutil.ParseCommonArgs("basic-noise")
 	if err != nil {
 		log.Fatalf("❌ Failed to parse arguments: %v", err)
 	}
@@ -21,17 +21,17 @@ func main() {
 	// Validate arguments
 	if err := args.ValidateArgs(); err != nil {
 		fmt.Printf("❌ Invalid arguments: %v\n\n", err)
-		shared.PrintUsage("basic-noise", "Basic Noise Protocol example with all pattern support")
+		exampleutil.PrintUsage("basic-noise", "Basic Noise Protocol example with all pattern support")
 		return
 	}
 
 	// Handle special modes
-	if shared.HandleSpecialModes(args, func(_ *shared.CommonArgs) { shared.RunDemo() }) {
+	if exampleutil.HandleSpecialModes(args, func(_ *exampleutil.CommonArgs) { exampleutil.RunDemo() }) {
 		return
 	}
 
 	// Parse and validate keys for the selected pattern
-	staticKey, remoteKey, err := shared.ParseKeys(args)
+	staticKey, remoteKey, err := exampleutil.ParseKeys(args)
 	if err != nil {
 		log.Fatalf("❌ Key parsing failed: %v", err)
 	}
@@ -111,7 +111,7 @@ func demonstrateNoiseAddressing() {
 
 // printConnectionExample prints a commented example of NoiseConn usage.
 func printConnectionExample() {
-	shared.PrintLines(
+	exampleutil.PrintLines(
 		"\n// Note: Actual connection creation would require a real net.Conn",
 		"// and proper logger setup, which is commented out due to logger issues",
 		"//",
@@ -123,15 +123,15 @@ func printConnectionExample() {
 }
 
 // runBasicServer starts a basic Noise server with complete handshake
-func runBasicServer(args *shared.CommonArgs, staticKey []byte) {
-	shared.RunServer(args, staticKey, "basic", func(conn net.Conn) {
-		shared.HandleConnection(conn, "Basic", nil)
+func runBasicServer(args *exampleutil.CommonArgs, staticKey []byte) {
+	exampleutil.RunServer(args, staticKey, "basic", func(conn net.Conn) {
+		exampleutil.HandleConnection(conn, "Basic", nil)
 	})
 }
 
 // runBasicClient connects to a basic Noise server with complete handshake
-func runBasicClient(args *shared.CommonArgs, staticKey, remoteKey []byte) {
-	shared.RunClient(args, staticKey, remoteKey, "basic", func(conn *noise.NoiseConn) {
+func runBasicClient(args *exampleutil.CommonArgs, staticKey, remoteKey []byte) {
+	exampleutil.RunClient(args, staticKey, remoteKey, "basic", func(conn *noise.NoiseConn) {
 		fmt.Printf("📤 Sending: Hello from basic client!\n")
 		_, err := conn.Write([]byte("Hello from basic client!"))
 		if err != nil {

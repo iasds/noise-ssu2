@@ -5,7 +5,7 @@ import (
 	"log"
 
 	"github.com/go-i2p/go-noise"
-	"github.com/go-i2p/go-noise/examples/shared"
+	"github.com/go-i2p/go-noise/examples/exampleutil"
 )
 
 // patternInfo describes a Noise protocol pattern for testing
@@ -37,7 +37,7 @@ func printPatternSummary(successCount, total int) {
 		successCount, total, float64(successCount)/float64(total)*100)
 
 	if successCount == total {
-		shared.PrintLines(
+		exampleutil.PrintLines(
 			"🚀 COMPLETE: Full Noise Protocol specification coverage achieved!",
 			"\nSupported pattern categories:",
 			"  • One-way patterns (N, K, X)",

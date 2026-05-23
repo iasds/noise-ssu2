@@ -7,7 +7,7 @@ import (
 	"net"
 
 	"github.com/go-i2p/common/data"
-	shared "github.com/go-i2p/go-noise/examples/shared"
+	shared "github.com/go-i2p/go-noise/examples/exampleutil"
 	"github.com/go-i2p/go-noise/ntcp2"
 )
 

@@ -27,10 +27,12 @@ func wrapTransportError(code, network, addr, msg string, err error, args ...inte
 }
 
 // openAndWrapTransport validates parameters, opens a network resource, wraps it
-// in a Noise layer, and registers it for global shutdown. It consolidates the
-// shared validate-open-wrap-cleanup-register pattern used by DialNoise and
-// ListenNoise, eliminating the structural duplication between them.
+// in a Noise layer, and optionally registers it with a shutdown manager. It
+// consolidates the shared validate-open-wrap-cleanup-register pattern used by
+// Transport.Dial and Transport.Listen, eliminating the structural duplication
+// between them.
 func openAndWrapTransport[R shutdownRegisterer](
+	sm Shutdowner,
 	validate func() error,
 	open func() (io.Closer, error),
 	wrap func(io.Closer) (R, error),
@@ -47,6 +49,9 @@ func openAndWrapTransport[R shutdownRegisterer](
 	if err != nil {
 		resource.Close()
 		return zero, err
+	}
+	if sm != nil {
+		result.SetShutdownManager(sm)
 	}
 	return result, nil
 }

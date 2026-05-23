@@ -918,7 +918,7 @@ func TestPatternMessageCountError(t *testing.T) {
 	assert.Contains(t, err.Error(), "unknown handshake pattern: INVALID_PATTERN")
 }
 
-// Tests from conn_state_test.go - state management
+// Tests from state.go - state management
 
 // TestConnectionStateManagement tests the new state management functionality
 func TestConnectionStateManagement(t *testing.T) {

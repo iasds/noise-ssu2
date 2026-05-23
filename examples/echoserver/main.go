@@ -11,24 +11,24 @@ import (
 	"time"
 
 	"github.com/go-i2p/go-noise"
-	"github.com/go-i2p/go-noise/examples/shared"
+	"github.com/go-i2p/go-noise/examples/exampleutil"
 )
 
 func main() {
-	shared.RunExample(
+	exampleutil.RunExample(
 		"echoserver",
 		"Noise Protocol echo server supporting all patterns",
 		"localhost:8080",
 		"",
-		func(_ *shared.CommonArgs) { shared.RunDemo() },
+		func(_ *exampleutil.CommonArgs) { exampleutil.RunDemo() },
 		runEchoServer,
 		nil,
 	)
 }
 
 // runEchoServer starts an echo server with complete Noise handshake
-func runEchoServer(args *shared.CommonArgs, staticKey []byte) {
-	shared.RunServer(args, staticKey, "echo", func(conn net.Conn) {
+func runEchoServer(args *exampleutil.CommonArgs, staticKey []byte) {
+	exampleutil.RunServer(args, staticKey, "echo", func(conn net.Conn) {
 		handleEchoConnection(conn, args)
 	})
 }
@@ -77,7 +77,7 @@ func runEchoLoop(conn net.Conn, clientAddr string) {
 }
 
 // handleEchoConnection handles a single echo connection with handshake
-func handleEchoConnection(conn net.Conn, args *shared.CommonArgs) {
+func handleEchoConnection(conn net.Conn, args *exampleutil.CommonArgs) {
 	defer conn.Close()
 
 	clientAddr := conn.RemoteAddr().String()

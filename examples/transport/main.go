@@ -6,11 +6,11 @@ import (
 	"net"
 
 	"github.com/go-i2p/go-noise"
-	"github.com/go-i2p/go-noise/examples/shared"
+	"github.com/go-i2p/go-noise/examples/exampleutil"
 )
 
 func main() {
-	shared.RunExample(
+	exampleutil.RunExample(
 		"transport-example",
 		"Transport wrapping demonstration supporting all Noise patterns",
 		"localhost:8080",
@@ -22,20 +22,20 @@ func main() {
 }
 
 // runTransportDemo demonstrates transport wrapping with server and client
-func runTransportDemo(args *shared.CommonArgs) {
-	shared.RunDemo2(args, "transport", runTransportServer, runTransportClient)
+func runTransportDemo(args *exampleutil.CommonArgs) {
+	exampleutil.RunDemo2(args, "transport", runTransportServer, runTransportClient)
 }
 
 // runTransportServer runs a server demonstrating transport wrapping
-func runTransportServer(args *shared.CommonArgs, staticKey []byte) {
-	shared.RunServer(args, staticKey, "transport", func(conn net.Conn) {
-		shared.HandleConnection(conn, "Transport", demonstrateTransportServer)
+func runTransportServer(args *exampleutil.CommonArgs, staticKey []byte) {
+	exampleutil.RunServer(args, staticKey, "transport", func(conn net.Conn) {
+		exampleutil.HandleConnection(conn, "Transport", demonstrateTransportServer)
 	})
 }
 
 // runTransportClient runs a client demonstrating transport wrapping
-func runTransportClient(args *shared.CommonArgs, staticKey []byte) {
-	shared.RunClient(args, staticKey, nil, "transport", demonstrateTransportClient)
+func runTransportClient(args *exampleutil.CommonArgs, staticKey []byte) {
+	exampleutil.RunClient(args, staticKey, nil, "transport", demonstrateTransportClient)
 }
 
 // demonstrateTransportServer shows server-side transport features
@@ -63,7 +63,7 @@ func demonstrateTransportClient(conn *noise.NoiseConn) {
 		"Secure communication demo",
 	}
 
-	shared.SendAndDisplay(conn, messages)
+	exampleutil.SendAndDisplay(conn, messages)
 
 	fmt.Println("\n✅ Transport demonstration completed!")
 }

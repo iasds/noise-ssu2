@@ -64,14 +64,6 @@ func init() {
 	}
 }
 
-// rawConn is the minimum surface needed by the dump helpers to identify
-// the remote peer. We accept any value that exposes RemoteAddr() and
-// LocalAddr() to avoid importing net here just for the type assertion.
-type rawConn interface {
-	RemoteAddr() net.Addr
-	LocalAddr() net.Addr
-}
-
 // dumpMsg1IfEnabled emits a one-shot hex dump of every cryptographic input
 // to NTCP2 message 1 plus the final 64-byte wire payload. It is intended for
 // interop debugging against i2pd / Java I2P when peers reject our message 1.
@@ -103,11 +95,11 @@ func dumpMsg1IfEnabled(cfg *Config, raw interface{}, opts1, msg1 []byte) {
 		"local_ri_len":  len(cfg.LocalRouterInfo),
 		"protocol_name": NTCP2ProtocolName,
 	}
-	if rc, ok := raw.(rawConn); ok && rc != nil {
-		if a := rc.RemoteAddr(); a != nil {
+	if nc, ok := raw.(net.Conn); ok && nc != nil {
+		if a := nc.RemoteAddr(); a != nil {
 			fields["peer"] = a.String()
 		}
-		if a := rc.LocalAddr(); a != nil {
+		if a := nc.LocalAddr(); a != nil {
 			fields["local"] = a.String()
 		}
 	}
@@ -141,11 +133,11 @@ func dumpInboundMsg1IfEnabled(cfg *Config, raw interface{}, buf1, decryptedOpts 
 		fields["status"] = "decrypt_failed"
 		fields["err"] = decryptErr.Error()
 	}
-	if rc, ok := raw.(rawConn); ok && rc != nil {
-		if a := rc.RemoteAddr(); a != nil {
+	if nc, ok := raw.(net.Conn); ok && nc != nil {
+		if a := nc.RemoteAddr(); a != nil {
 			fields["peer"] = a.String()
 		}
-		if a := rc.LocalAddr(); a != nil {
+		if a := nc.LocalAddr(); a != nil {
 			fields["local"] = a.String()
 		}
 	}
@@ -190,11 +182,11 @@ func classifyMsg2ReadFailure(cfg *Config, raw interface{}, bytesRead int, err er
 	if cfg != nil && cfg.RemoteRouterHash != nil {
 		fields["peer_hash_b64"] = base64.StdEncoding.EncodeToString(cfg.RemoteRouterHash[:])
 	}
-	if rc, ok := raw.(rawConn); ok && rc != nil {
-		if a := rc.RemoteAddr(); a != nil {
+	if nc, ok := raw.(net.Conn); ok && nc != nil {
+		if a := nc.RemoteAddr(); a != nil {
 			fields["peer"] = a.String()
 		}
-		if a := rc.LocalAddr(); a != nil {
+		if a := nc.LocalAddr(); a != nil {
 			fields["local"] = a.String()
 		}
 	}
@@ -215,11 +207,11 @@ func dumpMsg3IfEnabled(cfg *Config, raw interface{}, msg3, riBytes []byte, m3p2L
 		return
 	}
 	var remote, local string
-	if rc, ok := raw.(rawConn); ok {
-		if a := rc.RemoteAddr(); a != nil {
+	if nc, ok := raw.(net.Conn); ok {
+		if a := nc.RemoteAddr(); a != nil {
 			remote = a.String()
 		}
-		if a := rc.LocalAddr(); a != nil {
+		if a := nc.LocalAddr(); a != nil {
 			local = a.String()
 		}
 	}

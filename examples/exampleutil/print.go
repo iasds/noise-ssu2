@@ -1,5 +1,5 @@
 // Package shared provides common utilities for go-noise examples
-package shared
+package exampleutil
 
 import "fmt"
 
