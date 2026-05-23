@@ -387,7 +387,12 @@ func (sm *SessionManager) decryptExistingSession(
 	}
 
 	// Ensure the key cache covers the full current window.
+	// Use saturating addition to prevent uint32 overflow (AUDIT M-8).
 	windowEnd := session.recvWindowBase + recvWindowSize
+	if windowEnd < session.recvWindowBase {
+		// Overflow: saturate at MaxUint32
+		windowEnd = ^uint32(0) // MaxUint32
+	}
 	if err := fillRecvKeyCache(session, windowEnd); err != nil {
 		return nil, [8]byte{}, err
 	}
