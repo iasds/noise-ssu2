@@ -98,17 +98,16 @@ func (sm *SessionManager) storeNewSessionState(
 	// sessions for other peers (AUDIT L-4).
 	sm.enforcePerPeerQuotaLocked(destinationPubKey)
 
-	sm.sessions[destinationHash] = session
-
-	// Register the expected NSR tag for initiator sessions so that
-	// DecryptGarlicMessage can recognize the responder's reply and dispatch
-	// it to decryptIncomingNSR instead of trying to parse it as a New Session.
+	// Register the expected NSR tag for initiator sessions BEFORE storing the
+	// session, so that if NSR tag registration fails, we don't create an unusable
+	// session (AUDIT M-7: non-fatal NSR registration → initiator deadlock).
 	if isInitiator && hs != nil {
 		if err := sm.registerNSRTagLocked(session, hs); err != nil {
-			// Non-fatal: NSR dispatch won't work, but NS-derived ES will still function.
-			log.WithFields(logger.Fields{"pkg": "ratchet", "func": "storeNewSessionState"}).WithError(err).Warn("Failed to register NSR tag for initiator session")
+			return oops.Wrapf(err, "failed to register NSR tag for initiator session")
 		}
 	}
+
+	sm.sessions[destinationHash] = session
 
 	if err := sm.generateTagWindow(session); err != nil {
 		return oops.Wrapf(err, "failed to generate tag window")
