@@ -74,6 +74,14 @@ func DeriveSipHashKeys(askMaster, handshakeHash []byte) (
 
 	// Step 4: sipkeys_ab = HMAC-SHA256(key=temp_key, data=byte(0x01))[0:24]
 	fullAB := hmac.HMACSHA256(tempKey[:], []byte{0x01})
+	if len(fullAB) < 32 {
+		log.WithFields(logger.Fields{"pkg": "ntcp2", "func": "DeriveSipHashKeys", "length": len(fullAB)}).Error("Unexpected HMAC output length for sipkeys_ab")
+		return sipKeysAB, 0, sipKeysBA, 0, oops.
+			Code("INVALID_HMAC_OUTPUT").
+			In("ntcp2").
+			With("length", len(fullAB)).
+			Errorf("HMAC-SHA256 output must be at least 32 bytes, got %d", len(fullAB))
+	}
 	sipKeysAB[0] = binary.LittleEndian.Uint64(fullAB[0:8])
 	sipKeysAB[1] = binary.LittleEndian.Uint64(fullAB[8:16])
 	sipIVAB = binary.LittleEndian.Uint64(fullAB[16:24])
@@ -86,6 +94,14 @@ func DeriveSipHashKeys(askMaster, handshakeHash []byte) (
 	copy(step5Data, fullAB[:])
 	step5Data[len(fullAB[:])] = 0x02
 	fullBA := hmac.HMACSHA256(tempKey[:], step5Data)
+	if len(fullBA) < 32 {
+		log.WithFields(logger.Fields{"pkg": "ntcp2", "func": "DeriveSipHashKeys", "length": len(fullBA)}).Error("Unexpected HMAC output length for sipkeys_ba")
+		return sipKeysAB, 0, sipKeysBA, 0, oops.
+			Code("INVALID_HMAC_OUTPUT").
+			In("ntcp2").
+			With("length", len(fullBA)).
+			Errorf("HMAC-SHA256 output must be at least 32 bytes, got %d", len(fullBA))
+	}
 	sipKeysBA[0] = binary.LittleEndian.Uint64(fullBA[0:8])
 	sipKeysBA[1] = binary.LittleEndian.Uint64(fullBA[8:16])
 	sipIVBA = binary.LittleEndian.Uint64(fullBA[16:24])

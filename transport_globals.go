@@ -34,7 +34,15 @@ var Default *Transport
 // Intended for test isolation only. Do not call in production code; concurrent
 // callers that hold a reference to the previous Default will observe a stale
 // pointer.
+//
+// If a Default Transport exists, ResetDefault calls GracefulShutdown on it to
+// clean up pool resources and shutdown manager goroutines before dropping the
+// reference. This prevents goroutine leaks in test suites that call ResetDefault
+// multiple times.
 func ResetDefault() {
+	if defaultInst != nil {
+		_ = defaultInst.GracefulShutdown()
+	}
 	defaultOnce = sync.Once{}
 	defaultInst = nil
 	Default = nil

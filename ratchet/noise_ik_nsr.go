@@ -111,8 +111,8 @@ func deriveNSRTagRatchet(chainKey []byte) (*ratchet.TagRatchet, error) {
 //   - hs: handshake state retained from readNoiseIKMessage1
 //   - payload: plaintext payload for the reply
 //
-// Returns the NSR session tag, wire-format message (without the tag prefix),
-// and directional session keys for initializing ES ratchets.
+// Returns the NSR session tag, wire-format message including the 8-byte tag
+// prefix at bytes [0:8], and directional session keys for initializing ES ratchets.
 func writeNoiseIKMessage2(
 	hs *noiseHandshakeState,
 	payload []byte,

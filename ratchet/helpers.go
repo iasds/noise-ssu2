@@ -46,9 +46,7 @@ const (
 	MaxMessageNumber = 65535
 
 	// recvWindowSize is the number of ES message counters we pre-derive keys for
-	// and accept out-of-order.  The I2P spec mandates ≤128; we use 128 to match
-	// the spec's maximum and handle bursty traffic.
-	// Spec ref: ratchet.md §"Existing Session" receive window note.
+	// and accept out-of-order. Fixed at 128 per I2P spec ratchet.md §Existing Session.
 	recvWindowSize = 128
 )
 

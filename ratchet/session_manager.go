@@ -613,30 +613,61 @@ func (sm *SessionManager) evictLRUSessionLocked() {
 // session belonging to that peer is evicted first. This protects sessions
 // from other honest peers from being evicted via LRU churn when a single
 // hostile identity floods the manager with NS messages (AUDIT L-4).
+//
+// Eviction bias: Prefer evicting established sessions (handshakeState == nil)
+// over initiator sessions awaiting NSR (nsrTag != nil). This prevents self-DoS
+// when a caller repeatedly creates outbound sessions to the same destination.
+// If all sessions for a peer are awaiting NSR, the oldest is evicted.
+//
 // Must be called with sm.mu held for writing.
 func (sm *SessionManager) enforcePerPeerQuotaLocked(remotePubKey [32]byte) {
 	var oldestHash [32]byte
 	var oldestTime time.Time
+	var oldestEstablishedHash [32]byte
+	var oldestEstablishedTime time.Time
 	count := 0
 	haveOldest := false
+	haveOldestEstablished := false
 
 	for hash, session := range sm.sessions {
 		if session.RemotePublicKey != remotePubKey {
 			continue
 		}
 		count++
+
+		// Track oldest overall
 		if !haveOldest || session.LastUsed.Before(oldestTime) {
 			oldestHash = hash
 			oldestTime = session.LastUsed
 			haveOldest = true
 		}
+
+		// Track oldest established session (prefer evicting these)
+		if session.nsrTag == nil && session.handshakeState == nil {
+			if !haveOldestEstablished || session.LastUsed.Before(oldestEstablishedTime) {
+				oldestEstablishedHash = hash
+				oldestEstablishedTime = session.LastUsed
+				haveOldestEstablished = true
+			}
+		}
 	}
 
-	if count < MaxSessionsPerPeer || !haveOldest {
+	if count < MaxSessionsPerPeer {
 		return
 	}
 
-	if evicted, ok := sm.sessions[oldestHash]; ok {
+	// Prefer evicting established sessions; fall back to oldest if all are pending NSR
+	hashToEvict := oldestEstablishedHash
+	lastUsedTime := oldestEstablishedTime
+	if !haveOldestEstablished {
+		if !haveOldest {
+			return
+		}
+		hashToEvict = oldestHash
+		lastUsedTime = oldestTime
+	}
+
+	if evicted, ok := sm.sessions[hashToEvict]; ok {
 		for _, tag := range evicted.pendingTags {
 			delete(sm.tagIndex, tag)
 			delete(sm.tagCounterIndex, tag)
@@ -644,12 +675,13 @@ func (sm *SessionManager) enforcePerPeerQuotaLocked(remotePubKey [32]byte) {
 		if evicted.nsrTag != nil {
 			delete(sm.nsrTagIndex, *evicted.nsrTag)
 		}
-		delete(sm.sessions, oldestHash)
+		delete(sm.sessions, hashToEvict)
 		log.WithFields(logger.Fields{
 			"pkg":                "ratchet",
 			"func":               "enforcePerPeerQuotaLocked",
 			"peer_session_count": count,
-			"last_used":          oldestTime,
+			"last_used":          lastUsedTime,
+			"nsr_pending":        evicted.nsrTag != nil,
 		}).Warn("Evicted oldest session for peer exceeding per-peer quota")
 	}
 }

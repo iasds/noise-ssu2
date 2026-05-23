@@ -204,7 +204,8 @@ func TestE2E_PropagateSipHash_CopiesModifierToConn(t *testing.T) {
 	assert.Nil(t, conn.lengthObfuscator.Load())
 
 	// Propagate
-	conn.PropagateSipHash()
+	err = conn.PropagateSipHash()
+	require.NoError(t, err, "PropagateSipHash should succeed after PostHandshakeHook")
 
 	// After propagation: length obfuscator is set
 	loaded := conn.lengthObfuscator.Load()

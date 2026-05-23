@@ -827,7 +827,7 @@ func TestAuditFix_PropagateSipHash_ThreadSafe(t *testing.T) {
 		}()
 		go func() {
 			defer wg.Done()
-			conn.PropagateSipHash()
+			_ = conn.PropagateSipHash() // Ignore error in race test
 		}()
 	}
 

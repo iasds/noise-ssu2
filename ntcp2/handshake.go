@@ -140,7 +140,12 @@ func (c *Conn) Handshake(ctx context.Context) error {
 
 	// Copy the derived SipHash modifier from the config into the connection's
 	// data-phase length obfuscator (mirrors the standard handshake path).
-	c.PropagateSipHash()
+	if err := c.PropagateSipHash(); err != nil {
+		return oops.
+			Code("SIPHASH_PROPAGATION_FAILED").
+			In("ntcp2").
+			Wrapf(err, "failed to propagate SipHash modifier after handshake")
+	}
 	return nil
 }
 

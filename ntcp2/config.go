@@ -662,6 +662,12 @@ func (nc *Config) createPaddingModifierIfEnabled() (handshake.HandshakeModifier,
 }
 
 // SipHashModifier returns the SipHash length modifier created during ToConnConfig().
+//
+// PRECONDITION: This method returns nil until the PostHandshakeHook has executed
+// during Handshake(). Callers MUST NOT call this method before the handshake completes,
+// as the modifier's keys are derived from the handshake state. Calling PropagateSipHash()
+// before the handshake will return an error rather than silently no-op.
+//
 // Returns nil if SipHash length obfuscation is disabled or ToConnConfig() hasn't been called.
 // Each call to ToConnConfig() creates a fresh modifier instance, so configs can be safely
 // reused for multiple connections without sharing IV state.

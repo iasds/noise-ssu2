@@ -9,6 +9,14 @@ import (
 	"github.com/samber/oops"
 )
 
+const (
+	// MaxNACKRangesPerACK is the maximum number of NACK/ACK range pairs
+	// allowed in a single ACK block. With 1280-byte MTU and SSU2 overhead,
+	// the realistic bound is ~150 ranges per packet, but we cap at 200 to
+	// prevent resource exhaustion from malicious peers sending excessive ranges.
+	MaxNACKRangesPerACK = 200
+)
+
 // ACKHandler manages acknowledgment generation and processing for SSU2 connections.
 // It tracks received packets, generates ACK blocks, and processes incoming ACKs
 // to manage retransmission and congestion control.
@@ -245,7 +253,17 @@ func (h *ACKHandler) ProcessACK(ackBlock *SSU2Block) ([]uint32, error) {
 
 	// Parse optional nack/ack range pairs
 	offset := 5
+	rangeCount := 0
 	for offset+1 < len(data) {
+		rangeCount++
+		if rangeCount > MaxNACKRangesPerACK {
+			return nil, oops.
+				Code("ACK_TOO_MANY_RANGES").
+				In("ssu2.reliability").
+				Errorf("ACK block contains too many NACK/ACK ranges: %d (max %d)",
+					rangeCount, MaxNACKRangesPerACK)
+		}
+
 		nacks := int(data[offset]) + 1  // stored minus 1 per spec
 		acks := int(data[offset+1]) + 1 // stored minus 1 per spec
 		offset += 2

@@ -98,3 +98,9 @@ const (
 	// Set to MaxNonce - 1000 to provide advance warning.
 	NonceRekeyThreshold = MaxNonce - 1000
 )
+
+// Compile-time enforcement that AEADErrorMaxJunkBytes is a power of two.
+// If the constant is changed to a non-power-of-two value (e.g., 1000),
+// the expression (AEADErrorMaxJunkBytes & (AEADErrorMaxJunkBytes - 1))
+// will be non-zero, causing a negative array size and a compile error.
+var _ = [1]struct{}{}[AEADErrorMaxJunkBytes&(AEADErrorMaxJunkBytes-1)]

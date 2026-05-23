@@ -164,16 +164,30 @@ func (nc *Conn) SetNTCP2Config(cfg *Config) {
 // PropagateSipHash copies the SipHash modifier from the stored NTCP2Config
 // (populated by the PostHandshakeHook during Handshake) into this connection's
 // lengthObfuscator. Call this immediately after a successful Handshake().
-func (nc *Conn) PropagateSipHash() {
+//
+// Returns an error if:
+// - No NTCP2 config is stored (SetNTCP2Config was not called)
+// - The SipHash modifier is nil (PostHandshakeHook has not yet executed or SipHash is disabled)
+//
+// This prevents silent no-op behavior when PropagateSipHash is called before the handshake completes.
+func (nc *Conn) PropagateSipHash() error {
 	cfg := nc.ntcp2Config.Load()
 	if cfg == nil {
-		log.WithFields(logger.Fields{"pkg": "ntcp2", "func": "NTCP2Conn.PropagateSipHash"}).Debug("No NTCP2 config stored, skipping")
-		return
+		return oops.
+			Code("NO_NTCP2_CONFIG").
+			In("ntcp2").
+			Errorf("PropagateSipHash called but no NTCP2 config is stored")
 	}
-	if slm := cfg.SipHashModifier(); slm != nil {
-		log.WithFields(logger.Fields{"pkg": "ntcp2", "func": "NTCP2Conn.PropagateSipHash"}).Debug("Copying SipHash modifier from config to connection")
-		nc.lengthObfuscator.Store(slm)
+	slm := cfg.SipHashModifier()
+	if slm == nil {
+		return oops.
+			Code("NO_SIPHASH_MODIFIER").
+			In("ntcp2").
+			Errorf("PropagateSipHash called but SipHash modifier is nil (handshake not complete or SipHash disabled)")
 	}
+	log.WithFields(logger.Fields{"pkg": "ntcp2", "func": "NTCP2Conn.PropagateSipHash"}).Debug("Copying SipHash modifier from config to connection")
+	nc.lengthObfuscator.Store(slm)
+	return nil
 }
 
 // Close implements net.Conn.Close.

@@ -860,6 +860,61 @@ func TestPerPeerQuotaProtectsHonestPeers(t *testing.T) {
 		"hostile peer must not exceed per-peer quota")
 }
 
+// TestPerPeerQuotaPreservesNSRPendingSessions verifies that when a peer hits
+// MaxSessionsPerPeer, the eviction logic prefers removing established sessions
+// over initiator sessions awaiting NSR. This prevents self-DoS when a caller
+// repeatedly creates outbound sessions to the same destination (AUDIT LOW-9).
+func TestPerPeerQuotaPreservesNSRPendingSessions(t *testing.T) {
+	initiator := createTestSessionManager(t)
+
+	// Generate a consistent remote public key for all sessions
+	var remotePubKey [32]byte
+	remotePubKey[0] = 0xBB
+
+	// Create 33 outbound sessions to the same peer (MaxSessionsPerPeer + 1)
+	// First 32 will succeed; 33rd triggers eviction
+	sessionHashes := make([][32]byte, 33)
+	for i := 0; i < 33; i++ {
+		var destHash [32]byte
+		destHash[0] = 0xDD
+		destHash[1] = byte(i)
+		sessionHashes[i] = destHash
+
+		nsPayload := mustBuildNSPayload(t, []byte(fmt.Sprintf("outbound-%d", i)))
+		_, err := initiator.EncryptGarlicMessage(destHash, remotePubKey, nsPayload)
+		require.NoError(t, err, "Outbound session %d should succeed", i)
+
+		// Simulate time progression so we have distinct LastUsed values
+		time.Sleep(time.Millisecond)
+	}
+
+	// Count how many sessions remain for this peer and how many have NSR pending
+	initiator.mu.RLock()
+	totalSessionsForPeer := 0
+	nsrPendingCount := 0
+	for _, session := range initiator.sessions {
+		if session.RemotePublicKey == remotePubKey {
+			totalSessionsForPeer++
+			if session.nsrTag != nil {
+				nsrPendingCount++
+			}
+		}
+	}
+	initiator.mu.RUnlock()
+
+	// Total sessions for this peer must not exceed MaxSessionsPerPeer
+	assert.LessOrEqual(t, totalSessionsForPeer, MaxSessionsPerPeer,
+		"total sessions for peer must not exceed per-peer quota")
+
+	// At least one NSR-pending session must survive
+	assert.GreaterOrEqual(t, nsrPendingCount, 1,
+		"at least one NSR-pending session should survive eviction")
+
+	// Verify that nsrTagIndex still has entries (NSR tags not prematurely dropped)
+	assertNSRTagIndexLen(t, initiator, nsrPendingCount,
+		"nsrTagIndex should contain %d entries matching NSR-pending sessions", nsrPendingCount)
+}
+
 // ============================================================================
 // Concurrency
 // ============================================================================

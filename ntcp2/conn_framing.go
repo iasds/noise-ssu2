@@ -378,7 +378,10 @@ func (nc *Conn) writeSingleFrame(b []byte) (int, error) {
 	// session. Captures the full pipeline state needed to diagnose silent
 	// peer EOFs after handshake — see PROMPT.md "Suspect 1" for context.
 	// Bounded log volume: only fires while writeNonce < 3.
-	if nc.writeNonce < 3 && slm != nil {
+	//
+	// Activation: requires NTCP2_DUMP_MSG1=N environment variable to reduce
+	// allocation pressure on short-lived connections during DHT churn.
+	if nc.writeNonce < 3 && slm != nil && msg1WireDumpRemaining.Load() > 0 {
 		ivAfter := slm.PeekOutboundIV()
 		nc.logger.Warn(
 			"NTCP2 outbound frame diagnostic",
