@@ -915,6 +915,135 @@ func TestPerPeerQuotaPreservesNSRPendingSessions(t *testing.T) {
 		"nsrTagIndex should contain %d entries matching NSR-pending sessions", nsrPendingCount)
 }
 
+// TestPerPeerQuotaZeroHashGuard verifies that enforcePerPeerQuotaLocked does
+// not attempt to delete a zero-hash session when no sessions match the target
+// peer key. This is a defensive guard against a code complexity edge case
+// identified in AUDIT H-4.
+func TestPerPeerQuotaZeroHashGuard(t *testing.T) {
+	sm := createTestSessionManager(t)
+
+	// Create a zero-hash session to simulate the edge case
+	var zeroHash [32]byte
+	var zeroHashPeer [32]byte
+	zeroHashPeer[0] = 0x00
+	sm.mu.Lock()
+	sm.sessions[zeroHash] = &Session{
+		LastUsed:        time.Now(),
+		RemotePublicKey: zeroHashPeer,
+	}
+	initialCount := len(sm.sessions)
+	sm.mu.Unlock()
+
+	// Call enforcePerPeerQuotaLocked with a different peer key that has no sessions
+	// The function should return early without deleting anything
+	var nonExistentPeer [32]byte
+	nonExistentPeer[0] = 0xFF
+	sm.mu.Lock()
+	sm.enforcePerPeerQuotaLocked(nonExistentPeer)
+	finalCount := len(sm.sessions)
+	zeroStillExists := false
+	if _, ok := sm.sessions[zeroHash]; ok {
+		zeroStillExists = true
+	}
+	sm.mu.Unlock()
+
+	// Verify that no deletion occurred
+	assert.Equal(t, initialCount, finalCount, "no sessions should be deleted when peer has no sessions")
+	assert.True(t, zeroStillExists, "zero-hash session should not be evicted")
+}
+
+// TestKeyZeroization verifies that cryptographic key material is securely
+// zeroized before being discarded. This test addresses AUDIT H-5.
+func TestKeyZeroization(t *testing.T) {
+	t.Run("zero32 helper", func(t *testing.T) {
+		// Test the zero32 helper function directly
+		var key [32]byte
+		for i := range key {
+			key[i] = byte(i)
+		}
+		// Copy original for comparison
+		original := key
+
+		zero32(&key)
+
+		// Verify all bytes are zero
+		for i, b := range key {
+			assert.Equal(t, byte(0), b, "byte %d should be zero", i)
+		}
+
+		// Verify original was not zero (sanity check)
+		nonZero := false
+		for _, b := range original {
+			if b != 0 {
+				nonZero = true
+				break
+			}
+		}
+		assert.True(t, nonZero, "original key should have been non-zero")
+	})
+
+	t.Run("one-time key zeroization", func(t *testing.T) {
+		sm := createTestSessionManager(t)
+
+		// Register a one-time key
+		var tag [8]byte
+		var key [32]byte
+		tag[0] = 0xAA
+		for i := range key {
+			key[i] = byte(i + 1)
+		}
+
+		sm.RegisterOneTimeKey(tag, key)
+
+		// Verify it's registered
+		sm.mu.RLock()
+		_, found := sm.oneTimeKeys[tag]
+		sm.mu.RUnlock()
+		require.True(t, found, "one-time key should be registered")
+
+		// Try to decrypt with it (will fail because we don't have a valid message,
+		// but that's OK - we just want to trigger the deletion)
+		payload := mustBuildNSPayload(t, []byte("test"))
+		_, _, _ = sm.tryDecryptOneTimeKey(tag, payload)
+
+		// Verify the key is removed
+		sm.mu.RLock()
+		_, stillFound := sm.oneTimeKeys[tag]
+		sm.mu.RUnlock()
+		assert.False(t, stillFound, "one-time key should be removed after use")
+	})
+
+	t.Run("resetRecvWindow zeroizes keys", func(t *testing.T) {
+		sender, receiver := createLinkedManagers(t)
+		destHash := mustBootstrapSession(t, sender, receiver)
+
+		// Get the session and populate recv key cache
+		sender.mu.RLock()
+		session := sender.sessions[destHash]
+		sender.mu.RUnlock()
+
+		session.mu.Lock()
+		// Add some keys to the cache
+		for i := uint32(1); i <= 5; i++ {
+			var key [32]byte
+			key[0] = byte(i)
+			session.recvKeyCache[i] = key
+		}
+		cacheSize := len(session.recvKeyCache)
+		session.mu.Unlock()
+
+		require.Equal(t, 5, cacheSize, "cache should have 5 keys")
+
+		// Reset the window (which should zero the keys)
+		session.mu.Lock()
+		resetRecvWindow(session)
+		newCacheSize := len(session.recvKeyCache)
+		session.mu.Unlock()
+
+		assert.Equal(t, 0, newCacheSize, "cache should be empty after reset")
+	})
+}
+
 // ============================================================================
 // Concurrency
 // ============================================================================

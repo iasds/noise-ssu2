@@ -50,6 +50,16 @@ const (
 	recvWindowSize = 128
 )
 
+// zero32 overwrites a 32-byte key with zeros. This should be called before
+// discarding any cryptographic key material to prevent recovery from memory
+// dumps or core files. The ratchet's forward secrecy guarantees rely on
+// securely destroying keys after use.
+func zero32(k *[32]byte) {
+	for i := range k {
+		k[i] = 0
+	}
+}
+
 // deriveDirectionalKeys derives distinct send and receive keys from a base key
 // using HKDF with the spec-compliant "KDFDHRatchetStep" info string.
 // Produces 64 bytes split into two 32-byte directional keys (a→b and b→a).
@@ -332,6 +342,13 @@ func resetRecvWindow(session *Session) {
 	session.recvWindowBase = 1
 	session.recvFillMark = 1
 	session.nextRecvTagCounter = 1
+	// Zero all pre-derived keys in the old cache before discarding to prevent
+	// recovery from memory dumps. The ratchet's forward secrecy guarantees rely
+	// on securely destroying keys after use.
+	for counter := range session.recvKeyCache {
+		var zeroKey [32]byte
+		session.recvKeyCache[counter] = zeroKey
+	}
 	// Clear the old key cache so stale keys cannot be replayed.
 	session.recvKeyCache = make(map[uint32][32]byte)
 }

@@ -81,7 +81,8 @@ type SSU2Conn struct {
 	underlying net.PacketConn
 
 	// remoteAddr is the UDP address of the peer
-	remoteAddr *net.UDPAddr
+	remoteAddr     *net.UDPAddr
+	remoteAddrLock sync.RWMutex
 
 	// ssu2Addr contains SSU2-specific addressing info
 	ssu2Addr *SSU2Addr
@@ -575,6 +576,8 @@ func (h *SSU2Conn) SendToAddress(block *SSU2Block, addr *net.UDPAddr) error {
 // GetRemoteAddr returns the current remote UDP address (implements PathValidationConn).
 // GetRemoteAddr returns the current remote UDP address (implements PathValidationConn).
 func (h *SSU2Conn) GetRemoteAddr() *net.UDPAddr {
+	h.remoteAddrLock.RLock()
+	defer h.remoteAddrLock.RUnlock()
 	return h.remoteAddr
 }
 
@@ -584,6 +587,8 @@ func (h *SSU2Conn) SetRemoteAddr(addr *net.UDPAddr) error {
 	if addr == nil {
 		return oops.Errorf("address is nil")
 	}
+	h.remoteAddrLock.Lock()
+	defer h.remoteAddrLock.Unlock()
 	h.remoteAddr = addr
 	return nil
 }

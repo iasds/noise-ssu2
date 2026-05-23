@@ -97,7 +97,12 @@ func (h *SSU2Conn) parseInboundPacket(data []byte, addr net.Addr) *SSU2Packet {
 		return nil
 	}
 
+	// Check if the source address has changed (requires lock to read remoteAddr).
+	// Per spec §Connection Migration: packets from a new address require path
+	// validation before accepting the address change.
+	h.remoteAddrLock.RLock()
 	addrChanged := !udpAddr.IP.Equal(h.remoteAddr.IP) || udpAddr.Port != h.remoteAddr.Port
+	h.remoteAddrLock.RUnlock()
 
 	// Decrypt header protection before parsing
 	if h.headerProtector != nil {

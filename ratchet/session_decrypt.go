@@ -118,6 +118,11 @@ func (sm *SessionManager) tryDecryptOneTimeKey(msgTag [8]byte, msg []byte) ([]by
 	sm.mu.Lock()
 	key, found := sm.oneTimeKeys[msgTag]
 	if found {
+		// Zero the key material in the map before deleting to prevent recovery
+		// from memory dumps. The ratchet's forward secrecy guarantees rely on
+		// securely destroying keys.
+		var zeroKey [32]byte
+		sm.oneTimeKeys[msgTag] = zeroKey
 		delete(sm.oneTimeKeys, msgTag)
 	}
 	sm.mu.Unlock()
@@ -325,6 +330,12 @@ func (sm *SessionManager) applyNSRKeysToSessionWhileLocked(session *Session, nsr
 		sendKey = nsrKeys.keyBA // B sends to A
 		recvKey = nsrKeys.keyAB // B receives from A
 	}
+
+	// Zero the NSR keys immediately after copying to prevent recovery from
+	// memory dumps. The ratchet's forward secrecy guarantees rely on securely
+	// destroying keys after use.
+	zero32(&nsrKeys.keyAB)
+	zero32(&nsrKeys.keyBA)
 
 	sendTagKey, sendSymKey, err := deriveTagAndSymKeysFromChainKey(sendKey)
 	if err != nil {
