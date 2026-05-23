@@ -570,3 +570,47 @@ func FuzzProcessACK(f *testing.F) {
 		}
 	})
 }
+
+// TestACKHandler_BurstACKAmplification tests that ACK generation respects minACKInterval
+// to prevent ACK amplification under bursty traffic (M-6 audit finding).
+func TestACKHandler_BurstACKAmplification(t *testing.T) {
+	handler := NewACKHandler()
+	handler.SetACKThreshold(2) // Low threshold to trigger easily
+
+	const rtt = 100 * time.Millisecond
+	const burstSize = 50
+	const burstInterval = 1 * time.Millisecond // Very fast bursts
+
+	acksGenerated := 0
+
+	// Send packets in rapid bursts
+	for burst := 0; burst < 10; burst++ {
+		// Send a burst of packets
+		for i := 0; i < burstSize; i++ {
+			packetNum := uint32(burst*burstSize + i)
+			handler.RecordReceived(packetNum)
+
+			// Check if we should ACK after each packet
+			if handler.ShouldSendACK(rtt) {
+				ack, err := handler.GenerateACK()
+				require.NoError(t, err)
+				if ack != nil {
+					acksGenerated++
+				}
+			}
+		}
+
+		// Small delay between bursts (less than minACKInterval)
+		time.Sleep(burstInterval)
+	}
+
+	// Verify that minACKInterval prevented excessive ACKs
+	// Without the fix, we'd generate ~250 ACKs (5 bursts * 50 packets / threshold of 2)
+	// With the fix and minACKInterval=5ms, and bursts every 1ms, we should get far fewer
+	maxExpectedACKs := 30 // Conservative upper bound
+	assert.LessOrEqual(t, acksGenerated, maxExpectedACKs,
+		"Generated %d ACKs under burst load; minACKInterval should limit amplification", acksGenerated)
+
+	// Should still generate some ACKs (not zero)
+	assert.Greater(t, acksGenerated, 0, "Should generate at least some ACKs")
+}

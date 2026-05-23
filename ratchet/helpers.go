@@ -164,7 +164,7 @@ func buildExistingSessionMessage(sessionTag [8]byte, ciphertext []byte, tag [16]
 // Returns an error if the message counter exceeds MaxMessageNumber (65535).
 func advanceRatchets(session *Session) (messageKey [32]byte, sessionTag [8]byte, err error) {
 	log.WithFields(logger.Fields{"pkg": "ratchet", "func": "advanceRatchets", "message_counter": session.MessageCounter}).Debug("advancing symmetric and tag ratchets")
-	if session.MessageCounter > MaxMessageNumber {
+	if session.MessageCounter >= MaxMessageNumber {
 		return [32]byte{}, [8]byte{}, oops.Errorf(
 			"message number %d exceeds maximum %d, session must be ratcheted",
 			session.MessageCounter, MaxMessageNumber,

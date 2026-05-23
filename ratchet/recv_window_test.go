@@ -707,3 +707,73 @@ func TestRecvWindowOverflow_SaturatingAddition(t *testing.T) {
 	// Most importantly: we did not panic or hang. Test passes if we reach here.
 	t.Logf("Successfully handled recvWindowBase near MaxUint32 without overflow panic")
 }
+
+// TestRecvWindowOverflow_NoBillionIterationLoop verifies that when recvWindowBase
+// approaches MaxUint32, the window calculation caps windowEnd at recvFillMark +
+// recvWindowSize instead of saturating to MaxUint32, preventing a multi-billion
+// iteration loop in fillRecvKeyCache. This addresses AUDIT M-2.
+//
+// The issue: if recvWindowBase + recvWindowSize overflows and saturates to
+// MaxUint32, but recvFillMark is still at a much lower value (e.g., recvWindowBase),
+// then fillRecvKeyCache would iterate from recvFillMark to MaxUint32, which could
+// be billions of iterations.
+func TestRecvWindowOverflow_NoBillionIterationLoop(t *testing.T) {
+	alice, bob := createLinkedManagers(t)
+	_, sessionHash := mustBootstrapSessionWithHash(t, alice, bob)
+
+	bob.mu.Lock()
+	bobSession := bob.sessions[sessionHash]
+	require.NotNil(t, bobSession)
+
+	// Set recvWindowBase very close to MaxUint32 where overflow would happen.
+	// Set recvFillMark at the same position (not pre-filled).
+	// This simulates a long-lived session that has processed billions of messages.
+	bobSession.recvWindowBase = ^uint32(0) - 100 // 100 below MaxUint32
+	bobSession.recvFillMark = bobSession.recvWindowBase
+	bobSession.recvKeyCache = make(map[uint32][32]byte)
+	bob.mu.Unlock()
+
+	// With the old saturation logic, windowEnd would be set to MaxUint32,
+	// and fillRecvKeyCache would iterate from recvFillMark (≈MaxUint32-100)
+	// to MaxUint32, which is only ~100 iterations — acceptable.
+	// BUT if recvFillMark was much lower, e.g., recvWindowBase - 1000000,
+	// it would iterate millions of times.
+
+	// To simulate the worst case, set recvFillMark far below recvWindowBase:
+	bob.mu.Lock()
+	bobSession.recvFillMark = bobSession.recvWindowBase - 10000 // 10k iterations would be slow
+	bob.mu.Unlock()
+
+	// Attempt to decrypt a message. The fix caps windowEnd at recvFillMark +
+	// recvWindowSize (128), so fillRecvKeyCache should iterate at most 128 times,
+	// not billions of times.
+	start := time.Now()
+	dummyMsg := make([]byte, 100)
+	dummyTag := [8]byte{0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88}
+
+	_, _, err := bob.decryptExistingSession(bobSession, dummyMsg, dummyTag, nil)
+
+	elapsed := time.Since(start)
+
+	// We expect an error (no matching key), and it should complete quickly.
+	require.Error(t, err, "decrypt should fail (no key)")
+
+	// The operation should complete in well under 1 second. With the fix,
+	// fillRecvKeyCache iterates at most recvWindowSize (128) times.
+	// Without the fix (saturating to MaxUint32), it would iterate 10k+ times
+	// and take much longer.
+	assert.Less(t, elapsed, 100*time.Millisecond,
+		"fillRecvKeyCache should not iterate billions of times; completed in %v", elapsed)
+
+	// Verify that fillRecvKeyCache only filled the window, not billions of keys.
+	bob.mu.Lock()
+	cacheSize := len(bobSession.recvKeyCache)
+	bob.mu.Unlock()
+
+	// With the fix, we should have at most recvWindowSize (128) keys cached.
+	// The old saturation logic might have tried to fill up to MaxUint32 (hang).
+	assert.LessOrEqual(t, cacheSize, recvWindowSize+1,
+		"recvKeyCache should contain at most recvWindowSize keys, got %d", cacheSize)
+
+	t.Logf("Completed in %v with %d keys cached (expected ≤%d)", elapsed, cacheSize, recvWindowSize)
+}

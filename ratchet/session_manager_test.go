@@ -1228,21 +1228,21 @@ func TestMaxMessageNumberEnforced(t *testing.T) {
 	sender, receiver := createLinkedManagers(t)
 	destHash := mustBootstrapSession(t, sender, receiver)
 
-	// Artificially set message counter to MaxMessageNumber
+	// Artificially set message counter to MaxMessageNumber-1
 	session := requireSessionByHash(t, sender, destHash)
 
 	session.mu.Lock()
-	session.MessageCounter = MaxMessageNumber
+	session.MessageCounter = MaxMessageNumber - 1
 	session.mu.Unlock()
 
-	// This message should still succeed (counter == MaxMessageNumber, which is <= MaxMessageNumber)
-	_, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("at limit"))
-	require.NoError(t, err, "Encryption at MaxMessageNumber should succeed")
+	// This message should succeed (counter == MaxMessageNumber-1, which is < MaxMessageNumber)
+	_, err := sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("before limit"))
+	require.NoError(t, err, "Encryption at MaxMessageNumber-1 should succeed")
 
-	// After incrementing, counter is now MaxMessageNumber+1
-	// The next attempt should fail
-	_, err = sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("past limit"))
-	assert.Error(t, err, "Encryption past MaxMessageNumber should fail")
+	// After incrementing, counter is now MaxMessageNumber
+	// The next attempt should fail (counter >= MaxMessageNumber)
+	_, err = sender.EncryptGarlicMessage(destHash, receiver.ourPublicKey, []byte("at limit"))
+	assert.Error(t, err, "Encryption at MaxMessageNumber should fail")
 	assert.Contains(t, err.Error(), "exceeds maximum")
 }
 

@@ -1599,3 +1599,50 @@ func TestDataHandler_MetadataBlockCallbacks(t *testing.T) {
 		assert.Equal(t, testData, addressData)
 	})
 }
+
+// TestDataHandler_FragmentMapCapacity verifies that the fragments map is bounded
+// to prevent memory exhaustion from fragmentation attacks (M-5 audit finding).
+func TestDataHandler_FragmentMapCapacity(t *testing.T) {
+	handler := NewDataHandler(10)
+
+	// Send more unique first fragments than maxFragmentsPerConn
+	burstSize := maxFragmentsPerConn + 100
+	fragmentData := []byte("test data")
+
+	for i := 0; i < burstSize; i++ {
+		messageID := uint32(i + 1)
+
+		// Build first fragment block
+		blockData := make([]byte, 9+len(fragmentData))
+		blockData[0] = 11 // I2NP type
+		binary.BigEndian.PutUint32(blockData[1:5], messageID)
+		binary.BigEndian.PutUint32(blockData[5:9], uint32(time.Now().Unix()))
+		copy(blockData[9:], fragmentData)
+
+		block := NewSSU2Block(BlockTypeFirstFragment, blockData)
+		payload, err := SerializeBlocks([]*SSU2Block{block})
+		require.NoError(t, err)
+
+		packet := &SSU2Packet{
+			MessageType: MessageTypeData,
+			Payload:     payload,
+		}
+
+		_, err = handler.ProcessDataPacket(packet)
+		require.NoError(t, err)
+
+		// Verify map size never exceeds limit
+		fragmentCount := handler.GetFragmentCount()
+		assert.LessOrEqual(t, fragmentCount, maxFragmentsPerConn,
+			"fragment map size should not exceed maxFragmentsPerConn")
+	}
+
+	// Verify evictions occurred
+	stats := handler.GetStats()
+	assert.Greater(t, stats.MessagesDropped, uint64(0),
+		"MessagesDropped should be incremented when evicting oldest fragments")
+
+	// Final size should be exactly at limit
+	assert.Equal(t, maxFragmentsPerConn, handler.GetFragmentCount(),
+		"fragment map should stabilize at maxFragmentsPerConn")
+}

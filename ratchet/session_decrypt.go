@@ -268,7 +268,10 @@ func (sm *SessionManager) registerNSRTagLocked(session *Session, hs *noiseHandsh
 	if err != nil {
 		return oops.Wrapf(err, "failed to generate NSR tag for initiator registration")
 	}
-	session.nsrTag = &tag
+	// Allocate a new [8]byte on the heap and copy the tag value to avoid
+	// taking the address of a stack-local variable (AUDIT M-3).
+	session.nsrTag = new([8]byte)
+	*session.nsrTag = tag
 	sm.nsrTagIndex[tag] = session
 	return nil
 }
@@ -399,10 +402,14 @@ func (sm *SessionManager) decryptExistingSession(
 
 	// Ensure the key cache covers the full current window.
 	// Use saturating addition to prevent uint32 overflow (AUDIT M-8).
+	// Cap windowEnd to recvFillMark + recvWindowSize to prevent multi-billion
+	// iteration loops when session lifetime approaches MaxUint32 (AUDIT M-2).
 	windowEnd := session.recvWindowBase + recvWindowSize
 	if windowEnd < session.recvWindowBase {
-		// Overflow: saturate at MaxUint32
-		windowEnd = ^uint32(0) // MaxUint32
+		// Overflow: cap at recvFillMark + recvWindowSize instead of saturating
+		// to MaxUint32, which would cause fillRecvKeyCache to iterate billions
+		// of times on long-lived sessions.
+		windowEnd = session.recvFillMark + recvWindowSize
 	}
 	if err := fillRecvKeyCache(session, windowEnd); err != nil {
 		return nil, [8]byte{}, err

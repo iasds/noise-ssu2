@@ -15,6 +15,11 @@ const (
 	// the realistic bound is ~150 ranges per packet, but we cap at 200 to
 	// prevent resource exhaustion from malicious peers sending excessive ranges.
 	MaxNACKRangesPerACK = 200
+
+	// minACKInterval is the minimum time between consecutive ACKs to prevent
+	// ACK amplification under bursty load. Even if ackThreshold is reached,
+	// we won't send another ACK until this interval has elapsed since the last one.
+	minACKInterval = 5 * time.Millisecond
 )
 
 // ACKHandler manages acknowledgment generation and processing for SSU2 connections.
@@ -130,8 +135,10 @@ func (h *ACKHandler) ShouldSendACK(rtt time.Duration) bool {
 	h.ackDelay = delay
 
 	// Send ACK if delay elapsed or we have many packets
+	// BUT always enforce minACKInterval to prevent amplification under bursts
 	timeSinceLastACK := time.Since(h.lastACKTime)
-	return timeSinceLastACK >= h.ackDelay || len(h.receivedPackets) >= h.ackThreshold
+	thresholdOrDelayMet := timeSinceLastACK >= h.ackDelay || len(h.receivedPackets) >= h.ackThreshold
+	return timeSinceLastACK >= minACKInterval && thresholdOrDelayMet
 }
 
 // GenerateACK creates an ACK block (Type 12) for all received packets.

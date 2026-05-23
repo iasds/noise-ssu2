@@ -8,6 +8,11 @@ import (
 	"github.com/samber/oops"
 )
 
+// maxFragmentsPerConn limits the number of in-progress fragment reassemblies
+// to prevent memory exhaustion from fragmentation attacks. An attacker could
+// send unique MessageIDs to force unbounded growth of the fragments map.
+const maxFragmentsPerConn = 512
+
 // FragmentSet represents a message being reassembled from fragments.
 type FragmentSet struct {
 	MessageID       uint32           // I2NP message identifier
@@ -35,6 +40,36 @@ func (h *DataHandler) cleanupStaleFragments() {
 			delete(h.fragments, id)
 		}
 	}
+}
+
+// evictOldestFragment removes the oldest in-progress fragment reassembly
+// when the fragments map reaches maxFragmentsPerConn. Called with mutex held.
+func (h *DataHandler) evictOldestFragment() {
+	if len(h.fragments) == 0 {
+		return
+	}
+
+	var oldestID uint32
+	var oldestTime time.Time
+	first := true
+
+	for id, fs := range h.fragments {
+		if first || fs.CreatedAt.Before(oldestTime) {
+			oldestID = id
+			oldestTime = fs.CreatedAt
+			first = false
+		}
+	}
+
+	log.WithFields(logger.Fields{
+		"pkg":        "session",
+		"func":       "evictOldestFragment",
+		"message_id": oldestID,
+		"age":        time.Since(oldestTime),
+	}).Warn("evicting oldest fragment set due to capacity limit")
+
+	delete(h.fragments, oldestID)
+	h.incrementStat(&h.stats.MessagesDropped)
 }
 
 // handleFirstFragment processes the first fragment of a message.
@@ -87,6 +122,11 @@ func (h *DataHandler) handleFirstFragment(data []byte) error {
 		return nil
 	}
 
+	// Enforce capacity limit: evict oldest if at maximum
+	if len(h.fragments) >= maxFragmentsPerConn {
+		h.evictOldestFragment()
+	}
+
 	// Create new fragment set
 	fragmentSet := &FragmentSet{
 		MessageID:       messageID,
@@ -131,6 +171,11 @@ func (h *DataHandler) handleFollowOnFragment(data []byte) error {
 	// Find or create fragment set
 	fragmentSet, exists := h.fragments[messageID]
 	if !exists {
+		// Enforce capacity limit: evict oldest if at maximum
+		if len(h.fragments) >= maxFragmentsPerConn {
+			h.evictOldestFragment()
+		}
+
 		// Buffer early FollowOnFragment before its FirstFragment arrives
 		now := time.Now()
 		fragmentSet = &FragmentSet{
