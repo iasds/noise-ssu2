@@ -59,6 +59,19 @@ const (
 	// DefaultMaxPaddingSize is the default maximum padding size in bytes.
 	DefaultMaxPaddingSize = 64
 
+	// MaxNTCP2HandshakePadding is the maximum allowed cleartext padding size
+	// during the NTCP2 handshake (bytes). Per spec §4.3, padding is "0..223 bytes"
+	// in practice. We set a conservative limit of 1024 to allow for future spec
+	// changes while preventing DoS via unbounded allocation on malicious padLen.
+	MaxNTCP2HandshakePadding = 1024
+
+	// MaxNTCP2Message3Part2Len is the maximum allowed size for message 3 part 2
+	// (Alice's RouterInfo block plus optional padding/options). Per spec, RouterInfo
+	// is typically < 2 KB; we allow up to 8192 bytes (8 KB) for legitimate RouterInfo
+	// plus generous padding headroom, while preventing DoS via unbounded allocation
+	// on malicious m3p2Len. This limit applies to the AEAD ciphertext size.
+	MaxNTCP2Message3Part2Len = 8192
+
 	// DefaultHandshakeRetries is the default number of handshake retry attempts.
 	DefaultHandshakeRetries = 3
 

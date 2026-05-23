@@ -656,13 +656,20 @@ func (sm *SessionManager) enforcePerPeerQuotaLocked(remotePubKey [32]byte) {
 		return
 	}
 
+	// Guard against zero-hash eviction: if the iteration found no sessions
+	// matching remotePubKey (e.g., due to concurrent deletion or edge case),
+	// haveOldest will be false and hashToEvict will remain zero. We must not
+	// attempt to delete sm.sessions[zero], as this could evict an unrelated
+	// session if the zero hash happens to be in use.
+	if !haveOldest {
+		return
+	}
+
 	// Prefer evicting established sessions; fall back to oldest if all are pending NSR
 	hashToEvict := oldestEstablishedHash
 	lastUsedTime := oldestEstablishedTime
 	if !haveOldestEstablished {
-		if !haveOldest {
-			return
-		}
+		// We already checked haveOldest above, so we know oldestHash is valid
 		hashToEvict = oldestHash
 		lastUsedTime = oldestTime
 	}

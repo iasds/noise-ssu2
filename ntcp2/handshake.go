@@ -339,6 +339,26 @@ func performResponderHandshake(cfg *Config, nc *noise.NoiseConn) ([]byte, error)
 			Wrapf(err, "failed to process NTCP2 message 1")
 	}
 	dumpInboundMsg1IfEnabled(cfg, raw, buf1, aliceOpts, nil)
+
+	// Replay detection: check if the ephemeral key X has been seen before.
+	// Per the I2P NTCP2 spec, Bob must maintain a cache of previously-used
+	// ephemeral keys (the first 32 bytes of message 1, the AES-obfuscated X)
+	// and reject duplicates within the freshness window (±ClockSkewTolerance).
+	// The encrypted-but-deterministic form is sufficient as a replay key
+	// because the same plaintext X always produces the same ciphertext when
+	// obfuscated with the same RH_B and IV.
+	if cfg.ReplayDetector != nil {
+		var ephemeralKey [32]byte
+		copy(ephemeralKey[:], buf1[:32])
+		if cfg.ReplayDetector.CheckAndAdd(ephemeralKey) {
+			return nil, oops.
+				Code("MSG1_REPLAY").
+				In("ntcp2").
+				With("remote", raw.RemoteAddr().String()).
+				Errorf("replay detected: ephemeral key has been seen before within TTL window")
+		}
+	}
+
 	// Parse Alice's options to extract padLen (bytes 2-3) and m3p2Len (bytes 4-5).
 	if len(aliceOpts) < ntcp2OptionsSize {
 		return nil, oops.Code("MSG1_OPTIONS_TOO_SHORT").In("ntcp2").
@@ -346,6 +366,32 @@ func performResponderHandshake(cfg *Config, nc *noise.NoiseConn) ([]byte, error)
 	}
 	alicePadLen := int(binary.BigEndian.Uint16(aliceOpts[2:4]))
 	m3p2Len := binary.BigEndian.Uint16(aliceOpts[4:6])
+
+	// Validate alicePadLen to prevent unbounded allocation DoS.
+	// Per spec §4.3, padding is "0..223 bytes" in practice. We enforce
+	// a conservative limit to prevent an attacker from forcing the responder
+	// to allocate 64 KiB per connection and blocking on io.ReadFull.
+	if alicePadLen > MaxNTCP2HandshakePadding {
+		return nil, oops.
+			Code("MSG1_PADDING_TOO_LARGE").
+			In("ntcp2").
+			With("padLen", alicePadLen).
+			With("max", MaxNTCP2HandshakePadding).
+			Errorf("message 1 padding too large: %d > %d", alicePadLen, MaxNTCP2HandshakePadding)
+	}
+
+	// Validate m3p2Len to prevent unbounded allocation DoS.
+	// Per spec, RouterInfo is typically < 2 KB. We enforce a conservative
+	// limit to prevent an attacker from forcing the responder to allocate
+	// excessive memory (up to 64 KiB with uint16 max) per connection.
+	if m3p2Len > MaxNTCP2Message3Part2Len {
+		return nil, oops.
+			Code("MSG3_PART2_TOO_LARGE").
+			In("ntcp2").
+			With("m3p2Len", m3p2Len).
+			With("max", MaxNTCP2Message3Part2Len).
+			Errorf("message 3 part 2 too large: %d > %d", m3p2Len, MaxNTCP2Message3Part2Len)
+	}
 
 	// Read and MixHash Alice's cleartext padding after message 1.
 	// Per NTCP2 spec §4.1: "padding MUST be mixed into the handshake hash"

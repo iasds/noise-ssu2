@@ -114,6 +114,12 @@ type Config struct {
 	// Access is via atomic.Pointer to avoid data races between the
 	// PostHandshakeHook goroutine and SipHashModifier() callers.
 	sipHashModifier atomic.Pointer[SipHashLengthModifier]
+
+	// ReplayDetector checks for replayed ephemeral keys during handshakes.
+	// If nil, replay detection is disabled (not recommended for production).
+	// Shared across all responder connections using this config (typically
+	// instantiated once per listener). Initiator connections ignore this field.
+	ReplayDetector ReplayDetector
 }
 
 // NewNTCP2Config creates a new NTCP2Config with sensible defaults.
@@ -255,6 +261,16 @@ func (nc *Config) WithLocalRouterInfo(ri []byte) *Config {
 		nc.LocalRouterInfo = make([]byte, len(ri))
 		copy(nc.LocalRouterInfo, ri)
 	}
+	return nc
+}
+
+// WithReplayDetector sets the replay detector for responder handshakes.
+// If nil, replay detection is disabled (not recommended for production).
+// The detector is shared across all responder connections using this config
+// (typically instantiated once per listener). Initiator connections ignore
+// this field.
+func (nc *Config) WithReplayDetector(detector ReplayDetector) *Config {
+	nc.ReplayDetector = detector
 	return nc
 }
 
@@ -706,6 +722,7 @@ func (nc *Config) Clone() *Config {
 		FramePaddingEnabled:  nc.FramePaddingEnabled,
 		MinPaddingSize:       nc.MinPaddingSize,
 		MaxPaddingSize:       nc.MaxPaddingSize,
+		ReplayDetector:       nc.ReplayDetector, // Shared across clones for responder
 	}
 	clone.BobRouterHash = nc.BobRouterHash
 	if nc.StaticKey != nil {
