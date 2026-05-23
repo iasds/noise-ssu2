@@ -344,3 +344,32 @@ func (npm *NTCP2PaddingModifier) Name() string {
 func (npm *NTCP2PaddingModifier) Close() error {
 	return nil
 }
+
+// Clone creates a deep copy of the NTCP2PaddingModifier with independent state.
+// This implements handshake.ModifierCloner to support safe Config.Clone() operations.
+func (npm *NTCP2PaddingModifier) Clone() handshake.HandshakeModifier {
+	npm.mu.Lock()
+	defer npm.mu.Unlock()
+
+	// Deep copy the engine config
+	engineCopy, err := handshake.NewPaddingEngine(handshake.PaddingEngineConfig{
+		MinPadding:   npm.engine.Config.MinPadding,
+		MaxPadding:   npm.engine.Config.MaxPadding,
+		PaddingRatio: npm.engine.Config.PaddingRatio,
+		TestMode:     npm.engine.Config.TestMode,
+		Domain:       npm.engine.Config.Domain,
+	})
+	if err != nil {
+		// Should never happen since we're copying a valid config
+		log.WithFields(logger.Fields{"pkg": "ntcp2", "func": "NTCP2PaddingModifier.Clone"}).
+			Errorf("Failed to clone padding engine: %v", err)
+		// Return the original on error (caller must handle potential shared state)
+		return npm
+	}
+
+	return &NTCP2PaddingModifier{
+		name:           npm.name,
+		engine:         engineCopy,
+		useAEADPadding: npm.useAEADPadding,
+	}
+}

@@ -98,6 +98,10 @@ type Conn struct {
 
 	// writeMutex serializes Write calls to protect sendCipherState nonce
 	writeMutex sync.Mutex
+
+	// pendingPlaintext holds overflow plaintext from a previous Read when the
+	// user buffer was too small. Protected by readMutex.
+	pendingPlaintext []byte
 }
 
 // NewNoiseConn creates a new NoiseConn wrapping the underlying connection.
@@ -153,6 +157,22 @@ func (nc *Conn) Read(b []byte) (int, error) {
 
 	nc.readMutex.Lock()
 	defer nc.readMutex.Unlock()
+
+	// First, drain any pending plaintext from a previous Read call
+	if len(nc.pendingPlaintext) > 0 {
+		n := copy(b, nc.pendingPlaintext)
+		nc.pendingPlaintext = nc.pendingPlaintext[n:]
+		// Zero the consumed portion if fully drained
+		if len(nc.pendingPlaintext) == 0 {
+			nc.pendingPlaintext = nil
+		}
+		nc.metrics.AddBytesRead(int64(n))
+		nc.logger.Trace("Data read from pending", i2plogger.Fields{
+			"copied_len": n,
+			"remaining":  len(nc.pendingPlaintext),
+		})
+		return n, nil
+	}
 
 	encrypted, n, err := nc.readEncryptedData(b)
 	if err != nil {

@@ -24,3 +24,14 @@ type HandshakeModifier interface {
 	// ModifierChain.Close() propagates Close() to all chained members.
 	Close() error
 }
+
+// ModifierCloner is an optional interface that HandshakeModifier implementations
+// can implement to support deep copying. If a modifier holds mutable state
+// (e.g., configuration, statistics), it should implement Clone to return an
+// independent copy. Config.Clone() will attempt to deep-copy modifiers that
+// implement this interface; otherwise, the modifier reference is shared between
+// the original and cloned config.
+type ModifierCloner interface {
+	HandshakeModifier
+	Clone() HandshakeModifier
+}

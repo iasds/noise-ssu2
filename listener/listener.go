@@ -381,6 +381,14 @@ func (nl *Listener) Close() error {
 // If a shutdown manager is set, the listener will be automatically
 // registered for graceful shutdown coordination.
 func (nl *Listener) SetShutdownManager(sm shutdown.Shutdowner) {
+	nl.closeMutex.Lock()
+	defer nl.closeMutex.Unlock()
+
+	// Don't register if the listener is already closed
+	if nl.closed {
+		return
+	}
+
 	nl.shutdownManager = sm
 	if sm != nil {
 		sm.RegisterListener(nl)

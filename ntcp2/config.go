@@ -326,6 +326,19 @@ func (nc *Config) validateCryptographicParameters() error {
 			Errorf("remote static key is required for initiator XK connections (pre-message: ← s)")
 	}
 
+	// Validate LocalRouterInfo size to prevent uint16 overflow in m3p2Len
+	// m3p2Len = BlockHeaderSize (3) + flag (1) + len(riBytes) + Poly1305Overhead (16)
+	// Maximum safe size: 65535 - 20 = 65515 bytes
+	const maxRouterInfoSize = 0xFFFF - (BlockHeaderSize + 1 + Poly1305Overhead)
+	if len(nc.LocalRouterInfo) > maxRouterInfoSize {
+		return oops.
+			Code("ROUTER_INFO_TOO_LARGE").
+			In("ntcp2").
+			With("router_info_size", len(nc.LocalRouterInfo)).
+			With("max_size", maxRouterInfoSize).
+			Errorf("LocalRouterInfo too large for NTCP2 message 3 part 2 (max %d bytes)", maxRouterInfoSize)
+	}
+
 	// Validate AES obfuscation IV if provided
 	if nc.ObfuscationIV != nil && len(nc.ObfuscationIV) != IVSize {
 		return oops.
@@ -354,6 +367,18 @@ func (nc *Config) validateFrameConfiguration() error {
 			In("ntcp2").
 			With("max_size", nc.MaxFrameSize).
 			Errorf("max frame size must be positive")
+	}
+
+	// Minimum frame size must accommodate at least one I2NP block header plus AEAD tag
+	// to prevent arithmetic underflow in writeFramed: maxPlaintext = MaxFrameSize - Poly1305Overhead
+	const minAllowedFrameSize = MinDataPhaseFrameSize + Poly1305Overhead
+	if nc.MaxFrameSize < minAllowedFrameSize {
+		return oops.
+			Code("INVALID_MAX_FRAME_SIZE").
+			In("ntcp2").
+			With("max_size", nc.MaxFrameSize).
+			With("min_allowed", minAllowedFrameSize).
+			Errorf("max frame size %d is too small (minimum %d bytes required for I2NP block header + AEAD tag)", nc.MaxFrameSize, minAllowedFrameSize)
 	}
 
 	if nc.MaxFrameSize > SpecMaxFrameSize {
@@ -695,7 +720,16 @@ func (nc *Config) Clone() *Config {
 	}
 	if nc.Modifiers != nil {
 		clone.Modifiers = make([]handshake.HandshakeModifier, len(nc.Modifiers))
-		copy(clone.Modifiers, nc.Modifiers)
+		for i, mod := range nc.Modifiers {
+			// Deep-copy modifiers that implement ModifierCloner
+			if cloner, ok := mod.(handshake.ModifierCloner); ok {
+				clone.Modifiers[i] = cloner.Clone()
+			} else {
+				// Shallow copy for modifiers without Clone support
+				// These modifiers MUST be either immutable or internally synchronized
+				clone.Modifiers[i] = mod
+			}
+		}
 	}
 	return clone
 }

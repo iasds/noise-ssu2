@@ -539,3 +539,55 @@ func eqFoldASCII(a, b string) bool {
 	}
 	return true
 }
+
+// TestPartialReads verifies that Conn.Read correctly implements io.Reader semantics
+// when the user buffer is smaller than the incoming Noise message. This tests the
+// fix for the HIGH-severity finding where excess plaintext was silently truncated.
+// The test writes a 16 KB payload and reads it back with a 1 KB buffer, asserting
+// that all bytes are recovered across multiple Read calls.
+func TestPartialReads(t *testing.T) {
+	initiatorConn, responderConn := setupHandshakePairConn(t, handshakePairConfig{
+		pattern:      "NN",
+		setRemoteKey: false,
+	})
+	defer initiatorConn.Close()
+	defer responderConn.Close()
+
+	// Write a 16 KB message from initiator
+	const payloadSize = 16 * 1024
+	payload := make([]byte, payloadSize)
+	for i := 0; i < payloadSize; i++ {
+		payload[i] = byte(i & 0xFF)
+	}
+
+	writeErr := make(chan error, 1)
+	go func() {
+		n, err := initiatorConn.Write(payload)
+		if err != nil {
+			writeErr <- err
+			return
+		}
+		if n != payloadSize {
+			writeErr <- errors.New("short write")
+			return
+		}
+		writeErr <- nil
+	}()
+
+	// Read back with a 1 KB buffer, requiring multiple Read calls
+	const bufSize = 1024
+	recovered := make([]byte, 0, payloadSize)
+	buf := make([]byte, bufSize)
+
+	for len(recovered) < payloadSize {
+		n, err := responderConn.Read(buf)
+		require.NoError(t, err, "Read should not fail")
+		require.Greater(t, n, 0, "Read must return > 0 bytes")
+		require.LessOrEqual(t, n, bufSize, "Read must not exceed buffer size")
+		recovered = append(recovered, buf[:n]...)
+	}
+
+	require.NoError(t, <-writeErr, "Write should succeed")
+	require.Equal(t, payloadSize, len(recovered), "All bytes must be recovered")
+	require.Equal(t, payload, recovered, "Recovered bytes must match original payload")
+}

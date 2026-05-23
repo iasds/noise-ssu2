@@ -278,8 +278,16 @@ func (nc *Conn) decryptData(encrypted []byte, encryptedLen int) ([]byte, error) 
 }
 
 // copyDecryptedData copies decrypted data to the user buffer and logs the operation.
+// If the decrypted data exceeds the user buffer, the excess is stored in pendingPlaintext
+// for subsequent Read calls, conforming to the io.Reader contract.
 func (nc *Conn) copyDecryptedData(b, decrypted []byte, encryptedLen, decryptedLen int) (int, error) {
 	copied := copy(b, decrypted)
+
+	// Store overflow for next Read call
+	if copied < len(decrypted) {
+		nc.pendingPlaintext = make([]byte, len(decrypted)-copied)
+		copy(nc.pendingPlaintext, decrypted[copied:])
+	}
 
 	// Track metrics for read data
 	nc.metrics.AddBytesRead(int64(copied))
@@ -288,6 +296,7 @@ func (nc *Conn) copyDecryptedData(b, decrypted []byte, encryptedLen, decryptedLe
 		"encrypted_len": encryptedLen,
 		"decrypted_len": decryptedLen,
 		"copied_len":    copied,
+		"pending_len":   len(nc.pendingPlaintext),
 	})
 
 	return copied, nil

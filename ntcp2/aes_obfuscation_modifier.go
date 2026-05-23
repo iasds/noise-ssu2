@@ -212,3 +212,36 @@ func (aom *AESObfuscationModifier) Close() error {
 	aom.block = nil
 	return nil
 }
+
+// Clone creates a deep copy of the AESObfuscationModifier with independent state.
+// This implements handshake.ModifierCloner to support safe Config.Clone() operations.
+// The cloned modifier starts with a fresh state (no aesState carried over).
+func (aom *AESObfuscationModifier) Clone() handshake.HandshakeModifier {
+	aom.mu.Lock()
+	defer aom.mu.Unlock()
+
+	// Create deep copies of byte slices
+	routerHashCopy := make([]byte, len(aom.routerHash))
+	copy(routerHashCopy, aom.routerHash)
+
+	ivCopy := make([]byte, len(aom.iv))
+	copy(ivCopy, aom.iv)
+
+	// Create a new AES block cipher (independent key schedule)
+	blockCopy, err := aes.NewCipher(aom.routerHash)
+	if err != nil {
+		// Should never happen since we're copying a valid cipher
+		log.WithFields(logger.Fields{"pkg": "ntcp2", "func": "AESObfuscationModifier.Clone"}).
+			Errorf("Failed to create AES cipher: %v", err)
+		// Return the original on error (caller must handle potential shared state)
+		return aom
+	}
+
+	return &AESObfuscationModifier{
+		name:       aom.name,
+		routerHash: routerHashCopy,
+		iv:         ivCopy,
+		aesState:   nil, // Start with fresh state
+		block:      blockCopy,
+	}
+}

@@ -10,6 +10,7 @@ import (
 	"github.com/go-i2p/crypto/rand"
 	"github.com/go-i2p/go-noise/conn"
 	"github.com/go-i2p/go-noise/handshake"
+	"github.com/go-i2p/go-noise/shutdown"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -748,4 +749,108 @@ func TestNoiseListenerConcurrentAccepts(t *testing.T) {
 	// At least one concurrent accept should have succeeded
 	assert.GreaterOrEqual(t, len(conns), 1,
 		"at least one concurrent accept should succeed without acceptMutex serialization")
+}
+
+// mockShutdownManager is a minimal implementation of shutdown.Shutdowner for testing.
+type mockShutdownManager struct {
+	mu        sync.Mutex
+	listeners map[*Listener]bool
+	conns     map[interface{}]bool
+}
+
+func newMockShutdownManager() *mockShutdownManager {
+	return &mockShutdownManager{
+		listeners: make(map[*Listener]bool),
+		conns:     make(map[interface{}]bool),
+	}
+}
+
+func (m *mockShutdownManager) RegisterListener(l shutdown.ShutdownListener) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if nl, ok := l.(*Listener); ok {
+		m.listeners[nl] = true
+	}
+}
+
+func (m *mockShutdownManager) UnregisterListener(l shutdown.ShutdownListener) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if nl, ok := l.(*Listener); ok {
+		delete(m.listeners, nl)
+	}
+}
+
+func (m *mockShutdownManager) RegisterConnection(c shutdown.ShutdownConn) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.conns[c] = true
+}
+
+func (m *mockShutdownManager) UnregisterConnection(c shutdown.ShutdownConn) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.conns, c)
+}
+
+func (m *mockShutdownManager) Shutdown() error {
+	return nil
+}
+
+func (m *mockShutdownManager) isRegistered(l *Listener) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.listeners[l]
+}
+
+// TestListenerSetShutdownManagerRace verifies that SetShutdownManager
+// properly synchronizes with Close to prevent data races and avoid
+// registering an already-closed listener in the shutdown manager.
+// This test addresses the MEDIUM-severity finding.
+func TestListenerSetShutdownManagerRace(t *testing.T) {
+	// Test case 1: SetShutdownManager called after Close should not register
+	t.Run("SetAfterClose", func(t *testing.T) {
+		nl := newTestNoiseListenerFromTCP(t, "XX")
+		sm := newMockShutdownManager()
+
+		// Close the listener
+		err := nl.Close()
+		require.NoError(t, err)
+
+		// Now attempt to set the shutdown manager
+		nl.SetShutdownManager(sm)
+
+		// Listener should NOT be registered since it was already closed
+		assert.False(t, sm.isRegistered(nl), "closed listener should not be registered")
+	})
+
+	// Test case 2: Concurrent SetShutdownManager and Close should not race
+	t.Run("ConcurrentSetAndClose", func(t *testing.T) {
+		const iterations = 100
+		for i := 0; i < iterations; i++ {
+			nl := newTestNoiseListenerFromTCP(t, "XX")
+			sm := newMockShutdownManager()
+
+			var wg sync.WaitGroup
+			wg.Add(2)
+
+			// Goroutine 1: SetShutdownManager
+			go func() {
+				defer wg.Done()
+				nl.SetShutdownManager(sm)
+			}()
+
+			// Goroutine 2: Close
+			go func() {
+				defer wg.Done()
+				nl.Close()
+			}()
+
+			wg.Wait()
+
+			// If the listener is registered, it should not be closed yet,
+			// or if it is closed, it should have been unregistered.
+			// The key is no data race (checked by -race flag).
+		}
+	})
 }

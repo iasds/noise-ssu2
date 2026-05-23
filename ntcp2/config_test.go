@@ -966,3 +966,101 @@ func TestNTCP2ConfigAcceptsValidModifiers(t *testing.T) {
 	err = config.Validate()
 	assert.NoError(t, err, "Validate should accept non-PaddingModifier modifiers")
 }
+
+// TestNTCP2ConfigValidatesOversizedRouterInfo verifies that Config.Validate()
+// rejects LocalRouterInfo that is too large to fit in the uint16 m3p2Len field
+// without overflow. This test addresses the MEDIUM-severity finding.
+func TestNTCP2ConfigValidatesOversizedRouterInfo(t *testing.T) {
+	routerHash := generateRandomHash()
+	config, err := NewNTCP2Config(routerHash, true)
+	require.NoError(t, err)
+
+	m := newTestCryptoMaterial(t)
+	config.WithStaticKey(m.staticKey).
+		WithRemoteRouterHash(m.remoteHash).
+		WithRemoteStaticKey(generateRandomBytes(32))
+
+	// Maximum safe size: 65535 - (BlockHeaderSize=3 + flag=1 + Poly1305Overhead=16) = 65515
+	const maxSafeSize = 0xFFFF - (BlockHeaderSize + 1 + Poly1305Overhead)
+
+	// Test case 1: exactly at the limit should pass
+	config.LocalRouterInfo = make([]byte, maxSafeSize)
+	err = config.Validate()
+	assert.NoError(t, err, "RouterInfo at max safe size (%d bytes) should be accepted", maxSafeSize)
+
+	// Test case 2: one byte over the limit should fail
+	config.LocalRouterInfo = make([]byte, maxSafeSize+1)
+	err = config.Validate()
+	require.Error(t, err, "RouterInfo exceeding max safe size should be rejected")
+	assert.Contains(t, err.Error(), "too large", "error should mention size constraint")
+
+	// Test case 3: significantly oversized should fail
+	config.LocalRouterInfo = make([]byte, 70000)
+	err = config.Validate()
+	require.Error(t, err, "Significantly oversized RouterInfo should be rejected")
+}
+
+// TestNTCP2ConfigValidatesMinimumFrameSize verifies that Config.Validate()
+// rejects MaxFrameSize values that are too small to hold at least one I2NP
+// block header plus AEAD tag, preventing arithmetic underflow panic in writeFramed.
+// This test addresses the MEDIUM-severity finding.
+func TestNTCP2ConfigValidatesMinimumFrameSize(t *testing.T) {
+	routerHash := generateRandomHash()
+	config, err := NewNTCP2Config(routerHash, false)
+	require.NoError(t, err)
+
+	// Minimum allowed: MinDataPhaseFrameSize (16) + Poly1305Overhead (16) = 32
+	const minAllowedFrameSize = MinDataPhaseFrameSize + Poly1305Overhead
+
+	// Test case 1: exactly at minimum should pass
+	config.MaxFrameSize = minAllowedFrameSize
+	err = config.Validate()
+	assert.NoError(t, err, "MaxFrameSize at minimum (%d bytes) should be accepted", minAllowedFrameSize)
+
+	// Test case 2: one byte below minimum should fail
+	config.MaxFrameSize = minAllowedFrameSize - 1
+	err = config.Validate()
+	require.Error(t, err, "MaxFrameSize below minimum should be rejected")
+	assert.Contains(t, err.Error(), "too small", "error should mention size constraint")
+
+	// Test case 3: MaxFrameSize = 1 should fail (would cause panic)
+	config.MaxFrameSize = 1
+	err = config.Validate()
+	require.Error(t, err, "MaxFrameSize = 1 should be rejected")
+	assert.Contains(t, err.Error(), "too small", "error should mention size constraint")
+}
+
+// TestNTCP2ConfigCloneDeepCopiesModifiers verifies that Config.Clone()
+// creates independent copies of modifiers that implement ModifierCloner,
+// preventing concurrent modifications on one cloned config from affecting
+// connections built from sibling clones. This addresses the MEDIUM-severity finding.
+func TestNTCP2ConfigCloneDeepCopiesModifiers(t *testing.T) {
+	routerHash := generateRandomHash()
+	config, err := NewNTCP2Config(routerHash, false)
+	require.NoError(t, err)
+
+	// Add a padding modifier (which has mutable state)
+	paddingMod, err := NewNTCP2PaddingModifier("test-padding", 0, 128, true)
+	require.NoError(t, err)
+	config.Modifiers = []handshake.HandshakeModifier{paddingMod}
+
+	// Clone the config
+	clone := config.Clone()
+	require.NotNil(t, clone)
+	require.Len(t, clone.Modifiers, 1)
+
+	// Verify the modifiers are different instances
+	origPadding := config.Modifiers[0].(*NTCP2PaddingModifier)
+	clonePadding := clone.Modifiers[0].(*NTCP2PaddingModifier)
+
+	// They should be different instances
+	assert.NotSame(t, origPadding, clonePadding, "modifiers should be different instances")
+
+	// But should have the same configuration
+	assert.Equal(t, origPadding.engine.Config.MinPadding, clonePadding.engine.Config.MinPadding)
+	assert.Equal(t, origPadding.engine.Config.MaxPadding, clonePadding.engine.Config.MaxPadding)
+	assert.Equal(t, origPadding.name, clonePadding.name)
+
+	// Verify they have independent engines (different pointers)
+	assert.NotSame(t, origPadding.engine, clonePadding.engine, "padding engines should be independent")
+}
