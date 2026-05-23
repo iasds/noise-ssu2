@@ -24,7 +24,7 @@ This package MUST NOT use any of the following libraries.
 ## Features
 
 - **Configurable Noise Patterns**: Support for all standard Noise Protocol patterns  
-- **net.Conn Interface**: Compatible with Go's standard network interfaces  
+- **net.Conn Interface**: The core Noise connection wrapper (`conn/conn.go`) implements `net.Conn` fully. NTCP2 connections (`ntcp2/conn.go`) implement `net.Conn`. SSU2 connections (`ssu2/session/conn.go`) implement partial `net.Conn` (Close, LocalAddr, RemoteAddr, deadlines) but use callback-based message I/O via `DataHandler.MessageChan()` instead of Read/Write — see [SSU2 README](ssu2/README.md) for details.  
 - **Error Handling**: Contextual error information using samber/oops  
 - **Thread-Safe**: Concurrent connection handling with synchronization - Read/Write operations can be called concurrently, Close() is idempotent, and state access is atomic  
 - **Memory Management**: Structured buffer management  
