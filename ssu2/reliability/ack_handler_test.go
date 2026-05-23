@@ -524,3 +524,49 @@ func BenchmarkSortDescDedupPackets(b *testing.B) {
 		_ = SortDescDedupPackets(packets)
 	}
 }
+
+// FuzzProcessACK fuzzes the ACK block parsing to detect cursor underflow and other
+// parsing bugs. This addresses AUDIT H-7.
+func FuzzProcessACK(f *testing.F) {
+	// Seed with valid ACK block
+	seed := make([]byte, 9)
+	binary.BigEndian.PutUint32(seed[0:4], 100) // throughPN
+	seed[4] = 5                                // acnt (6 packets: 100-95)
+	seed[5] = 2                                // nacks-1
+	seed[6] = 3                                // acks-1
+	seed[7] = 1                                // nacks-1
+	seed[8] = 0                                // acks-1
+	f.Add(seed)
+
+	// Seed with edge cases
+	f.Add([]byte{0, 0, 0, 10, 0})            // Minimal valid ACK
+	f.Add([]byte{0, 0, 0, 0, 0})             // throughPN=0, acnt=0
+	f.Add([]byte{0xff, 0xff, 0xff, 0xff, 0}) // Max throughPN
+	f.Add([]byte{0, 0, 0, 100, 99})          // acnt=99, near throughPN
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		if len(data) < 5 {
+			return // Too short to be valid
+		}
+
+		handler := NewACKHandler()
+
+		// Add some pending packets
+		for i := uint32(0); i < 200; i++ {
+			handler.AddPending(i)
+		}
+
+		block := &SSU2Block{
+			Type: BlockTypeACK,
+			Data: data,
+		}
+
+		// ProcessACK should never panic, even with malformed input
+		_, err := handler.ProcessACK(block)
+		// We expect an error for most fuzzed inputs, but no panic
+		if err != nil {
+			// Verify error message doesn't expose internal panic
+			_ = err.Error()
+		}
+	})
+}

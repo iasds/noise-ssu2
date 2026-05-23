@@ -30,10 +30,23 @@ func (h *SSU2Conn) Handshake(ctx context.Context) error {
 	h.wg.Add(1)
 	go h.recvLoop()
 
+	// Ensure recvLoop is cleaned up if handshake fails. The CloseWithReason
+	// call is idempotent (via closeOnce), so it's safe to call again later.
+	// This prevents goroutine leaks when the handshake fails before
+	// finalizeHandshake calls startDataLoops. (AUDIT H-8)
+	var handshakeErr error
+	defer func() {
+		if handshakeErr != nil {
+			_ = h.CloseWithReason(TerminationTimeout, nil)
+		}
+	}()
+
 	if h.initiator {
-		return h.handshakeInitiator(ctx)
+		handshakeErr = h.handshakeInitiator(ctx)
+	} else {
+		handshakeErr = h.handshakeResponder(ctx)
 	}
-	return h.handshakeResponder(ctx)
+	return handshakeErr
 }
 
 // handshakeInitiator performs the initiator side of XK handshake.
@@ -452,19 +465,23 @@ func (h *SSU2Conn) applyNegotiatedPadding() {
 
 // logOptionsNegotiationWarnings logs M-3 warnings when options negotiation is one-sided.
 func (h *SSU2Conn) logOptionsNegotiationWarnings(localOpts, peerOpts *OptionsParams) {
+	h.remoteAddrLock.RLock()
+	remoteAddrStr := h.remoteAddr.String()
+	h.remoteAddrLock.RUnlock()
+
 	if localOpts != nil && peerOpts == nil {
 		log.WithFields(logger.Fields{
 			"pkg":  "ssu2",
 			"func": "logOptionsNegotiationWarnings",
 			"side": "local_only",
-			"peer": h.remoteAddr.String(),
+			"peer": remoteAddrStr,
 		}).Warn("Options negotiation one-sided: local options set but peer did not send Options block (M-3)")
 	} else if localOpts == nil && peerOpts != nil {
 		log.WithFields(logger.Fields{
 			"pkg":  "ssu2",
 			"func": "logOptionsNegotiationWarnings",
 			"side": "peer_only",
-			"peer": h.remoteAddr.String(),
+			"peer": remoteAddrStr,
 		}).Warn("Options negotiation one-sided: peer sent Options but no local options configured (M-3)")
 	}
 }

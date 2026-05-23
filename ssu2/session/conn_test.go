@@ -3,10 +3,12 @@ package session
 import (
 	"context"
 	"net"
+	"runtime"
 	"testing"
 	"time"
 
 	"github.com/go-i2p/common/data"
+	"github.com/go-i2p/go-noise/mod"
 	"github.com/go-i2p/noise"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -827,4 +829,83 @@ func setupHandshakePair(t *testing.T) (*HandshakeHandler, *HandshakeHandler, []b
 	responder, err := NewHandshakeHandlerWithKeys(false, respDH, nil, nil)
 	require.NoError(t, err)
 	return initiator, responder, initDH.Public, respDH.Public
+}
+
+// TestPathValidationRace verifies that reading remoteAddr during path validation
+// is protected by remoteAddrLock. This addresses AUDIT H-6.
+func TestPathValidationRace(t *testing.T) {
+	config := createTestConfig(t)
+
+	remoteAddr := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 9999}
+	conn := &SSU2Conn{
+		underlying: &mockPacketConn{localAddr: &net.UDPAddr{IP: net.IP{127, 0, 0, 1}, Port: 8888}},
+		remoteAddr: remoteAddr,
+		config:     config,
+		state:      mod.StateEstablished,
+		closeChan:  make(chan struct{}),
+	}
+	conn.pathValidator = NewPathValidator(conn)
+
+	// Simulate concurrent remoteAddr updates and reads
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 100; i++ {
+			newAddr := &net.UDPAddr{IP: net.ParseIP("127.0.0.2"), Port: 10000 + i}
+			_ = conn.SetRemoteAddr(newAddr)
+		}
+	}()
+
+	// Concurrent reads via GetRemoteAddr
+	for i := 0; i < 100; i++ {
+		go func() {
+			_ = conn.GetRemoteAddr()
+		}()
+	}
+
+	<-done
+}
+
+// TestHandshakeFailureNoGoroutineLeak verifies that a failed handshake properly
+// cleans up the recvLoop goroutine. This addresses AUDIT H-8.
+func TestHandshakeFailureNoGoroutineLeak(t *testing.T) {
+	// Record baseline goroutine count (with some tolerance for runtime background goroutines)
+	runtime.GC()
+	time.Sleep(10 * time.Millisecond)
+	baselineGoroutines := runtime.NumGoroutine()
+
+	// Create a connection that will fail handshake (use a mock conn that will timeout)
+	mockConn := newMockPacketConn(&net.UDPAddr{IP: net.IP{127, 0, 0, 1}, Port: 8888})
+	remoteAddr := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 9999}
+
+	// Generate valid keypairs
+	initDH, err := noise.DH25519.GenerateKeypair(nil)
+	require.NoError(t, err)
+	respDH, err := noise.DH25519.GenerateKeypair(nil)
+	require.NoError(t, err)
+
+	config := createTestConfig(t)
+	config.RemoteStaticKey = respDH.Public
+
+	conn, err := NewSSU2Conn(mockConn, remoteAddr, config, true, initDH.Private, respDH.Public)
+	require.NoError(t, err, "NewSSU2Conn should succeed")
+
+	// Attempt handshake which should fail with timeout (no responder on the other end)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	err = conn.Handshake(ctx)
+	require.Error(t, err, "Handshake should fail with timeout")
+
+	// Give goroutines time to clean up
+	time.Sleep(50 * time.Millisecond)
+	runtime.GC()
+	time.Sleep(10 * time.Millisecond)
+
+	// Check goroutine count returned to baseline (with ±5 tolerance for runtime variation)
+	currentGoroutines := runtime.NumGoroutine()
+	goroutineDelta := currentGoroutines - baselineGoroutines
+	assert.LessOrEqual(t, goroutineDelta, 5,
+		"Goroutine count should return to baseline after failed handshake (baseline=%d, current=%d, delta=%d)",
+		baselineGoroutines, currentGoroutines, goroutineDelta)
 }

@@ -245,11 +245,12 @@ func (h *ACKHandler) ProcessACK(ackBlock *SSU2Block) ([]uint32, error) {
 	}
 
 	// cursor tracks the next position below the last acked packet
+	// Use int64 to detect underflow from malformed ACK ranges (AUDIT H-7).
 	base := throughPN - uint32(acnt)
 	if base == 0 {
 		return ackedPackets, nil
 	}
-	cursor := base - 1
+	cursor := int64(base - 1)
 
 	// Parse optional nack/ack range pairs
 	offset := 5
@@ -264,24 +265,30 @@ func (h *ACKHandler) ProcessACK(ackBlock *SSU2Block) ([]uint32, error) {
 					rangeCount, MaxNACKRangesPerACK)
 		}
 
-		nacks := int(data[offset]) + 1  // stored minus 1 per spec
-		acks := int(data[offset+1]) + 1 // stored minus 1 per spec
+		nacks := int64(data[offset]) + 1  // stored minus 1 per spec
+		acks := int64(data[offset+1]) + 1 // stored minus 1 per spec
 		offset += 2
 
 		// Skip the gap (nacked packets) — check for underflow
-		if uint32(nacks) > cursor {
+		if nacks > cursor {
 			return nil, oops.Errorf("ACK nack range (%d) exceeds cursor (%d)", nacks, cursor)
 		}
-		cursor -= uint32(nacks)
+		cursor -= nacks
+		if cursor < 0 {
+			return nil, oops.Errorf("ACK cursor underflow after nacks: cursor=%d", cursor)
+		}
 
 		// Collect the ack run — check for underflow
-		if uint32(acks) > cursor+1 {
+		if acks > cursor+1 {
 			return nil, oops.Errorf("ACK ack range (%d) exceeds remaining cursor (%d)", acks, cursor)
 		}
-		for i := 0; i < acks; i++ {
-			ackedPackets = append(ackedPackets, cursor)
-			delete(h.pendingACKs, cursor)
+		for i := int64(0); i < acks; i++ {
+			ackedPackets = append(ackedPackets, uint32(cursor))
+			delete(h.pendingACKs, uint32(cursor))
 			cursor--
+			if cursor < 0 {
+				return nil, oops.Errorf("ACK cursor underflow in ack loop: cursor=%d", cursor)
+			}
 		}
 	}
 

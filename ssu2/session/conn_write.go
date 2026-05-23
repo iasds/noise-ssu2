@@ -286,7 +286,10 @@ func (h *SSU2Conn) sendPacketDirect(packet *SSU2Packet) error {
 		return err
 	}
 
-	if _, err = h.underlying.WriteTo(data, h.remoteAddr); err != nil {
+	h.remoteAddrLock.RLock()
+	_, err = h.underlying.WriteTo(data, h.remoteAddr)
+	h.remoteAddrLock.RUnlock()
+	if err != nil {
 		return oops.Wrapf(err, "failed to write to UDP")
 	}
 
@@ -407,14 +410,20 @@ func (h *SSU2Conn) handleCongestionBlock(flags uint8) error {
 func (h *SSU2Conn) handlePathChallengeData(data []byte) error {
 	log.WithFields(logger.Fields{"pkg": "session", "func": "handlePathChallengeData", "dataLen": len(data)}).Debug("processing path challenge")
 	block := &SSU2Block{Type: BlockTypePathChallenge, Data: data}
-	return h.pathValidator.HandlePathChallenge(block, h.remoteAddr)
+	h.remoteAddrLock.RLock()
+	addr := h.remoteAddr
+	h.remoteAddrLock.RUnlock()
+	return h.pathValidator.HandlePathChallenge(block, addr)
 }
 
 // handlePathResponseData wraps PathValidator.HandlePathResponse for the DataHandler callback (G-7).
 func (h *SSU2Conn) handlePathResponseData(data []byte) error {
 	log.WithFields(logger.Fields{"pkg": "session", "func": "handlePathResponseData", "dataLen": len(data)}).Debug("processing path response")
 	block := &SSU2Block{Type: BlockTypePathResponse, Data: data}
-	return h.pathValidator.HandlePathResponse(block, h.remoteAddr)
+	h.remoteAddrLock.RLock()
+	addr := h.remoteAddr
+	h.remoteAddrLock.RUnlock()
+	return h.pathValidator.HandlePathResponse(block, addr)
 }
 
 // handleAddressBlock processes an Address block (Type 13) for passive NAT
@@ -579,7 +588,9 @@ func (h *SSU2Conn) sendNextNonceInline() error {
 		_ = h.headerProtector.EncryptOutboundHeader(data, hType)
 	}
 
+	h.remoteAddrLock.RLock()
 	_, err = h.underlying.WriteTo(data, h.remoteAddr)
+	h.remoteAddrLock.RUnlock()
 	if err != nil {
 		return oops.Wrapf(err, "send NextNonce packet")
 	}
