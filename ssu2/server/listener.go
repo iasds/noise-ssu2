@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-i2p/common/data"
@@ -72,6 +73,10 @@ type SSU2Listener struct {
 
 	// sessionRateLimiter limits SessionRequest processing per source IP (M-6)
 	sessionRateLimiter *ipRateLimiter
+
+	// droppedPackets counts packets silently discarded when packetQueue is full (M-7).
+	// Accessed atomically to avoid races between receiveLoop and stats readers.
+	droppedPackets uint64
 
 	// Lifecycle management
 	closed       bool
@@ -291,6 +296,14 @@ func (l *SSU2Listener) receiveLoop() {
 		select {
 		case l.packetQueue <- incomingPacket{data: packetData, remoteAddr: udpAddr}:
 		default:
+			// packetQueue is full - drop packet and warn
+			atomic.AddUint64(&l.droppedPackets, 1)
+			log.WithFields(logger.Fields{
+				"pkg":        "server",
+				"func":       "receiveLoop",
+				"remoteAddr": udpAddr.String(),
+				"dropped":    atomic.LoadUint64(&l.droppedPackets),
+			}).Warn("packetQueue full, dropping packet")
 		}
 	}
 }
@@ -851,4 +864,12 @@ func (rl *ipRateLimiter) Allow(ip string) bool {
 		return true
 	}
 	return false
+}
+
+// GetDroppedPackets returns the number of packets dropped due to full packetQueue.
+// This metric indicates sustained overload where the listener cannot process incoming
+// packets fast enough. Consider increasing packetQueueSize or packetWorkers if this
+// counter grows under normal load.
+func (l *SSU2Listener) GetDroppedPackets() uint64 {
+	return atomic.LoadUint64(&l.droppedPackets)
 }

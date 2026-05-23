@@ -64,6 +64,8 @@ func NewTokenCacheWithMaxSize(ttl time.Duration, maxSize int) *TokenCache {
 // GenerateToken creates a new token for the specified address.
 // The token is cryptographically random and stored in the cache.
 // Returns the token value.
+// If a valid (non-expired) token already exists for this address, returns
+// the existing token instead of generating a new one to prevent retry storms.
 func (tc *TokenCache) GenerateToken(addr *net.UDPAddr) ([]byte, error) {
 	log.WithFields(logger.Fields{"pkg": "wire", "func": "GenerateToken"}).Debug("Generating new token")
 	if addr == nil {
@@ -71,6 +73,24 @@ func (tc *TokenCache) GenerateToken(addr *net.UDPAddr) ([]byte, error) {
 			Code("NIL_ADDRESS").
 			In("wire").
 			Errorf("address cannot be nil")
+	}
+
+	tc.mutex.Lock()
+	defer tc.mutex.Unlock()
+
+	addrStr := addr.String()
+
+	// Check if valid token already exists for this address
+	if existingToken, exists := tc.tokens[addrStr]; exists {
+		if time.Since(existingToken.CreatedAt) <= tc.ttl {
+			log.WithFields(logger.Fields{
+				"pkg":  "wire",
+				"func": "GenerateToken",
+				"addr": addrStr,
+			}).Debug("Returning existing valid token for address")
+			return existingToken.Value, nil
+		}
+		// Token expired, will generate new one
 	}
 
 	// Generate 8-byte random token per SSU2 spec
@@ -89,16 +109,13 @@ func (tc *TokenCache) GenerateToken(addr *net.UDPAddr) ([]byte, error) {
 		CreatedAt: time.Now(),
 	}
 
-	tc.mutex.Lock()
-	defer tc.mutex.Unlock()
-
 	// Evict oldest token if at capacity
 	if len(tc.tokens) >= tc.maxSize {
 		tc.evictOldestLocked()
 	}
 
 	// Store token keyed by address string
-	tc.tokens[addr.String()] = token
+	tc.tokens[addrStr] = token
 
 	return tokenValue, nil
 }

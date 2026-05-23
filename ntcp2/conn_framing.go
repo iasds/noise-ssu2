@@ -319,7 +319,21 @@ func (nc *Conn) writeFramed(b []byte) (int, error) {
 	nc.writeMu.Lock()
 	defer nc.writeMu.Unlock()
 
-	maxPlaintext := nc.getMaxFrameSize() - Poly1305Overhead
+	// Defensive check against config corruption or future atomic-set bugs.
+	// Config validation normally ensures getMaxFrameSize() >= 32, but
+	// if that invariant is broken, the subtraction below would underflow
+	// to a huge uint, causing unbounded allocations.
+	maxFrameSize := nc.getMaxFrameSize()
+	if maxFrameSize < Poly1305Overhead {
+		return 0, oops.
+			Code("INVALID_FRAME_SIZE").
+			In("ntcp2").
+			With("maxFrameSize", maxFrameSize).
+			With("poly1305Overhead", Poly1305Overhead).
+			Errorf("maxFrameSize %d < Poly1305Overhead %d would underflow", maxFrameSize, Poly1305Overhead)
+	}
+
+	maxPlaintext := maxFrameSize - Poly1305Overhead
 	totalWritten := 0
 
 	for len(b) > 0 {
