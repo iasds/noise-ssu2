@@ -385,6 +385,20 @@ func (l *SSU2Listener) handleNewSession(remoteAddr *net.UDPAddr, packet *SSU2Pac
 }
 
 // enforceRateLimit checks if the source IP has exceeded the SessionRequest rate.
+//
+// Design note: Rate limiting is per-IP only, not per-(IP, ConnectionID).
+// This means:
+//   - Legitimate retries (packet loss) consume the same rate-limit budget as floods
+//   - A client experiencing packet loss may be temporarily rate-limited
+//   - This trades some legitimate-retry accommodation for simpler flood defense
+//
+// Alternative designs considered:
+//   - (IP, ConnectionID) bucketing: More complex state, vulnerable to connID cycling attacks
+//   - Exempt-once allowance: Adds stateful tracking, unclear benefit for typical loss rates
+//
+// Current design intentionally treats all SessionRequests equally under the assumption
+// that the configured rate limit (sessionRequestsPerSecond) is generous enough to
+// accommodate reasonable retry behavior under normal packet loss conditions.
 func (l *SSU2Listener) enforceRateLimit(remoteAddr *net.UDPAddr) error {
 	log.WithFields(logger.Fields{"pkg": "server", "func": "enforceRateLimit", "remote_ip": remoteAddr.IP.String()}).Debug("enforceRateLimit: checking session request rate")
 	if !l.sessionRateLimiter.Allow(remoteAddr.IP.String()) {

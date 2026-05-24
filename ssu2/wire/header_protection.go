@@ -197,6 +197,25 @@ func (hp *HeaderProtector) validatePacketSize(packet []byte) error {
 
 // applyXORMasks applies or removes XOR masks on header bytes 0-15.
 // XOR is symmetric so this works for both encrypt and decrypt.
+//
+// SECURITY NOTE: IV derivation and collision resistance.
+// The ChaCha20 IVs (nonces) for header protection are derived from the packet tail
+// (the last 24 bytes, which overlap with the AEAD MAC). Specifically:
+//   - IV1 = packet[len-24:len-12] (12 bytes) for bytes 0-7
+//   - IV2 = packet[len-12:len]    (12 bytes) for bytes 8-15
+//
+// This construction ensures that each packet has a unique IV as long as the MAC is unique,
+// which is guaranteed by the AEAD construction (ChaCha20-Poly1305) that produces unique MACs
+// for distinct plaintexts or nonces. The inner packet number (part of the AEAD-protected
+// payload) provides additional differentiation even if plaintext headers are identical.
+//
+// Theoretical concern: If two packets had (a) identical plaintext headers, (b) identical
+// AEAD MACs (cryptographically negligible probability), and (c) identical obfuscated lengths,
+// then the header protection keystream would repeat. However, AEAD MAC collision is
+// computationally infeasible (negligible probability), and the inner packet counter ensures
+// distinct AEAD inputs. Thus, practical exploitability is zero.
+//
+// This design follows the SSU2 spec §"Header Protection" IV derivation requirements.
 func (hp *HeaderProtector) applyXORMasks(packet []byte) error {
 	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "applyXORMasks", "packetLen": len(packet)}).Debug("Applying XOR masks to header bytes 0-15")
 	// SSU2 spec §"Header Protection": IV1 = packet[len-24 : len-12] (12 bytes).

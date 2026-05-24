@@ -94,8 +94,15 @@ func (sm *SessionManager) validateNSDateTimeFreshness(payload []byte) error {
 }
 
 // nsReplayCacheTTL computes the replay cache TTL from the freshness window.
+// The +1 minute buffer beyond the freshness window accounts for:
+//   - Clock skew between sender and receiver (beyond the configured tolerance)
+//   - Network jitter and packet reordering delays
+//   - Race conditions at window boundaries during concurrent processing
+//
+// This ensures that legitimate messages near the window edge are not incorrectly
+// rejected as replays while still preventing long-lived replay attacks.
 func nsReplayCacheTTL(pastAge, futureAge time.Duration) time.Duration {
-	return pastAge + futureAge + time.Minute
+	return pastAge + futureAge + time.Minute // +1m for clock skew + network jitter
 }
 
 // nsReplayCacheMaxSize is the maximum number of NS ephemeral keys tracked
@@ -573,15 +580,42 @@ func (sm *SessionManager) generateTagWindow(session *Session) error {
 	return nil
 }
 
+// bytesLess returns true if a is lexicographically less than b.
+// Used as a deterministic tiebreaker for LRU eviction when timestamps are equal.
+func bytesLess(a, b []byte) bool {
+	n := len(a)
+	if len(b) < n {
+		n = len(b)
+	}
+	for i := 0; i < n; i++ {
+		if a[i] < b[i] {
+			return true
+		}
+		if a[i] > b[i] {
+			return false
+		}
+	}
+	return len(a) < len(b)
+}
+
 // evictLRUSessionLocked removes the least-recently-used session.
 // Must be called with sm.mu held for writing.
+//
+// Tiebreaker: When multiple sessions have identical LastUsed timestamps,
+// the session with the lexicographically smallest session hash is evicted
+// to ensure deterministic behavior (avoids map iteration order dependency).
 func (sm *SessionManager) evictLRUSessionLocked() {
 	var oldestHash [32]byte
 	var oldestTime time.Time
 	first := true
 
 	for hash, session := range sm.sessions {
-		if first || session.LastUsed.Before(oldestTime) {
+		// Select this session if:
+		// 1. It's the first session we've seen, OR
+		// 2. It has an older LastUsed time, OR
+		// 3. It has the same LastUsed time but a lexicographically smaller hash (deterministic tiebreaker)
+		if first || session.LastUsed.Before(oldestTime) ||
+			(session.LastUsed.Equal(oldestTime) && bytesLess(hash[:], oldestHash[:])) {
 			oldestHash = hash
 			oldestTime = session.LastUsed
 			first = false

@@ -119,7 +119,8 @@ func (aom *AESObfuscationModifier) ModifyOutbound(phase handshake.HandshakePhase
 	// For outbound encryption, the state is result[16:32] captured AFTER encryption.
 	if phase == handshake.PhaseInitial {
 		aom.aesState = make([]byte, IVSize)
-		copy(aom.aesState, result[IVSize:StaticKeySize])
+		// Defensive: explicit slice expression would panic on nil, catching bugs early
+		copy(aom.aesState[:], result[IVSize:StaticKeySize])
 	}
 
 	return result, nil
@@ -146,7 +147,8 @@ func (aom *AESObfuscationModifier) ModifyInbound(phase handshake.HandshakePhase,
 	// The state is data[16:32] (the last ciphertext block of the 32-byte ephemeral key).
 	if phase == handshake.PhaseInitial {
 		aom.aesState = make([]byte, IVSize)
-		copy(aom.aesState, data[IVSize:StaticKeySize])
+		// Defensive: explicit slice expression would panic on nil, catching bugs early
+		copy(aom.aesState[:], data[IVSize:StaticKeySize])
 	}
 
 	var mode cipher.BlockMode

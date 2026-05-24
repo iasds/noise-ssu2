@@ -79,6 +79,31 @@ func NewReceiveWindow(expected uint32, maxSize int) *ReceiveWindow {
 
 // seqBefore returns true when a is before b in the packet number space,
 // handling uint32 wrap-around via half-space comparison.
+//
+// This implements the standard wraparound-safe comparison for sequence numbers:
+//
+//	int32(a - b) < 0
+//
+// PRECONDITION: The difference |a - b| must be less than 2^31 (half the uint32 space).
+// This invariant holds in practice because:
+//   - The SSU2 receive window is bounded (typically 128-1024 packets)
+//   - Out-of-window packets are rejected before reaching this comparison
+//   - The maximum practical packet number gap is << 2^31
+//
+// CORRECTNESS: For values within the half-space:
+//   - If a < b in modular arithmetic (accounting for wrap), (a - b) as uint32
+//     becomes a large positive number (> 2^31), which when cast to int32 is negative.
+//   - If a >= b in modular arithmetic, (a - b) is a small positive number (< 2^31),
+//     which remains positive when cast to int32.
+//
+// EXAMPLES:
+//   - seqBefore(100, 200) → true      (100 < 200)
+//   - seqBefore(200, 100) → false     (200 > 100)
+//   - seqBefore(0xFFFFFFFE, 0x00000001) → true  (wraparound: 0xFFFFFFFE is before 0x1)
+//   - seqBefore(0x00000001, 0xFFFFFFFE) → false (0x1 is after 0xFFFFFFFE in modular space)
+//
+// This pattern is widely used in TCP implementations (RFC 1982) and is correct
+// as long as the precondition on distance is maintained.
 func seqBefore(a, b uint32) bool {
 	return int32(a-b) < 0
 }
