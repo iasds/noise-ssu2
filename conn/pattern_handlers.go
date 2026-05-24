@@ -12,47 +12,72 @@ import (
 
 // PatternHandlerFunc is the signature for a Noise handshake pattern handler.
 // Consumers can implement custom patterns and register them via RegisterPattern.
-type PatternHandlerFunc func(nc *Conn, ctx context.Context) error
+//
+// The handler receives a PatternContext interface that provides access to
+// configuration, logging, and handshake message operations without exposing
+// internal connection state. This allows third-party pattern implementations.
+type PatternHandlerFunc func(pctx PatternContext, ctx context.Context) error
 
 // patternMu guards concurrent access to initiatorHandlers and responderHandlers.
 var patternMu sync.RWMutex
 
 // initiatorHandlers maps pattern names to their initiator handshake implementations.
+// Each handler is wrapped in an adapter that converts the *Conn method to PatternContext.
 var initiatorHandlers = map[string]PatternHandlerFunc{
-	"N":  (*Conn).performNInitiator,
-	"K":  (*Conn).performKInitiator,
-	"X":  (*Conn).performXInitiator,
-	"NN": (*Conn).performNNInitiator,
-	"NK": (*Conn).performNKInitiator,
-	"NX": (*Conn).performNXInitiator,
-	"XN": (*Conn).performXNInitiator,
-	"XK": (*Conn).performXKInitiator,
-	"XX": (*Conn).performXXInitiator,
-	"KN": (*Conn).performKNInitiator,
-	"KK": (*Conn).performKKInitiator,
-	"KX": (*Conn).performKXInitiator,
-	"IN": (*Conn).performINInitiator,
-	"IK": (*Conn).performIKInitiator,
-	"IX": (*Conn).performIXInitiator,
+	"N":  wrapConnHandler((*Conn).performNInitiator),
+	"K":  wrapConnHandler((*Conn).performKInitiator),
+	"X":  wrapConnHandler((*Conn).performXInitiator),
+	"NN": wrapConnHandler((*Conn).performNNInitiator),
+	"NK": wrapConnHandler((*Conn).performNKInitiator),
+	"NX": wrapConnHandler((*Conn).performNXInitiator),
+	"XN": wrapConnHandler((*Conn).performXNInitiator),
+	"XK": wrapConnHandler((*Conn).performXKInitiator),
+	"XX": wrapConnHandler((*Conn).performXXInitiator),
+	"KN": wrapConnHandler((*Conn).performKNInitiator),
+	"KK": wrapConnHandler((*Conn).performKKInitiator),
+	"KX": wrapConnHandler((*Conn).performKXInitiator),
+	"IN": wrapConnHandler((*Conn).performINInitiator),
+	"IK": wrapConnHandler((*Conn).performIKInitiator),
+	"IX": wrapConnHandler((*Conn).performIXInitiator),
 }
 
 // responderHandlers maps pattern names to their responder handshake implementations.
+// Each handler is wrapped in an adapter that converts the *Conn method to PatternContext.
 var responderHandlers = map[string]PatternHandlerFunc{
-	"N":  (*Conn).performNResponder,
-	"K":  (*Conn).performKResponder,
-	"X":  (*Conn).performXResponder,
-	"NN": (*Conn).performNNResponder,
-	"NK": (*Conn).performNKResponder,
-	"NX": (*Conn).performNXResponder,
-	"XN": (*Conn).performXNResponder,
-	"XK": (*Conn).performXKResponder,
-	"XX": (*Conn).performXXResponder,
-	"KN": (*Conn).performKNResponder,
-	"KK": (*Conn).performKKResponder,
-	"KX": (*Conn).performKXResponder,
-	"IN": (*Conn).performINResponder,
-	"IK": (*Conn).performIKResponder,
-	"IX": (*Conn).performIXResponder,
+	"N":  wrapConnHandler((*Conn).performNResponder),
+	"K":  wrapConnHandler((*Conn).performKResponder),
+	"X":  wrapConnHandler((*Conn).performXResponder),
+	"NN": wrapConnHandler((*Conn).performNNResponder),
+	"NK": wrapConnHandler((*Conn).performNKResponder),
+	"NX": wrapConnHandler((*Conn).performNXResponder),
+	"XN": wrapConnHandler((*Conn).performXNResponder),
+	"XK": wrapConnHandler((*Conn).performXKResponder),
+	"XX": wrapConnHandler((*Conn).performXXResponder),
+	"KN": wrapConnHandler((*Conn).performKNResponder),
+	"KK": wrapConnHandler((*Conn).performKKResponder),
+	"KX": wrapConnHandler((*Conn).performKXResponder),
+	"IN": wrapConnHandler((*Conn).performINResponder),
+	"IK": wrapConnHandler((*Conn).performIKResponder),
+	"IX": wrapConnHandler((*Conn).performIXResponder),
+}
+
+// wrapConnHandler adapts a *Conn method into a PatternHandlerFunc.
+// This allows internal handlers to remain as methods while conforming
+// to the public interface signature.
+func wrapConnHandler(method func(*Conn, context.Context) error) PatternHandlerFunc {
+	return func(pctx PatternContext, ctx context.Context) error {
+		// The PatternContext is guaranteed to be a *Conn in our implementation,
+		// so this type assertion is safe. External implementations would provide
+		// their own PatternContext that doesn't depend on *Conn.
+		nc, ok := pctx.(*Conn)
+		if !ok {
+			return oops.
+				Code("INVALID_PATTERN_CONTEXT").
+				In("noise").
+				Errorf("pattern context must be *Conn for built-in handlers")
+		}
+		return method(nc, ctx)
+	}
 }
 
 // normalizePattern extracts the short pattern name from a full Noise protocol
