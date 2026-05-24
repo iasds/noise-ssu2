@@ -166,22 +166,26 @@ func NewSSU2Listener(underlying net.PacketConn, config *SSU2Config) (*SSU2Listen
 	// Create packet router with session creation callback
 	l.router = NewPacketRouter(l.handleNewSession)
 
-	// AUDIT C-1: Build a HeaderProtector for inbound new-session packets when
-	// an IntroKey is configured. SessionRequest and TokenRequest both use the
-	// receiver's intro key for k_header_1 and k_header_2, so a single
-	// protector keyed on HeaderTypeSessionRequest can decrypt either type
-	// (the header type only governs the long-vs-short header size and the
-	// ChaCha20 long-header extension layout, both of which are identical for
-	// SessionRequest and TokenRequest).
-	if len(config.IntroKey) == 32 {
-		hp, err := NewHeaderProtectorFromIntroKey(config.IntroKey, HeaderTypeSessionRequest)
-		if err != nil {
-			return nil, oops.Wrapf(err, "failed to build inbound header protector")
-		}
-		l.introHeaderProtector = hp
+	if err := l.initHeaderProtection(config); err != nil {
+		return nil, err
 	}
 
 	return l, nil
+}
+
+// initHeaderProtection initializes the inbound HeaderProtector when an
+// IntroKey is configured. See the field documentation on SSU2Listener and
+// AUDIT C-1 for the rationale.
+func (l *SSU2Listener) initHeaderProtection(config *SSU2Config) error {
+	if len(config.IntroKey) != 32 {
+		return nil
+	}
+	hp, err := NewHeaderProtectorFromIntroKey(config.IntroKey, HeaderTypeSessionRequest)
+	if err != nil {
+		return oops.Wrapf(err, "failed to build inbound header protector")
+	}
+	l.introHeaderProtector = hp
+	return nil
 }
 
 // Start begins accepting connections on the listener.
