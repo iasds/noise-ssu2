@@ -75,7 +75,8 @@ func TestTokenCache_GenerateToken(t *testing.T) {
 		token2, err := cache.GenerateToken(addr)
 		require.NoError(t, err)
 
-		assert.NotEqual(t, token1, token2)
+		// After MEDIUM-4 fix: returns same token to prevent retry-storm eviction
+		assert.Equal(t, token1, token2, "should return existing valid token, not generate new one")
 		assert.Equal(t, 1, cache.Size())
 	})
 }

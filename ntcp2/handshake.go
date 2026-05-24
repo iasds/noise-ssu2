@@ -499,6 +499,13 @@ func buildMessage1Options(m3p2Len uint16) []byte {
 //	bytes 1-2 : block size = 1 + len(routerInfoBytes) (big-endian uint16)
 //	byte 3    : flag = 0x00 (no flood request)
 //	bytes 4+  : routerInfoBytes
+//
+// Performance note: The make() call zero-initializes the buffer even though
+// we immediately overwrite all bytes. A micro-optimization would use unsafe
+// or a slice of an uninitialized backing array. This is not pursued because:
+//   - Called once per connection (not a hot path)
+//   - Allocation cost is dominated by the Noise AEAD that immediately follows
+//   - Zero-init provides defense-in-depth against partial-write bugs
 func buildMsg3Part2Payload(routerInfoBytes []byte) []byte {
 	payload := make([]byte, BlockHeaderSize+1+len(routerInfoBytes))
 	payload[0] = routerInfoBlockType

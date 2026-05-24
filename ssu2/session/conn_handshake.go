@@ -14,6 +14,21 @@ import (
 // For responders: receives SessionRequest, sends SessionCreated, receives SessionConfirmed
 //
 // After successful handshake, connection state transitions to StateEstablished.
+//
+// Context cancellation semantics:
+// -------------------------------
+// The supplied context is honored via socket deadlines set before each blocking receive.
+// Cancellation does NOT directly interrupt an in-progress ReadFrom syscall; instead,
+// cancellation is detected when:
+//  1. The next read times out (deadline expires), OR
+//  2. Control returns to Handshake code that checks ctx.Err()
+//
+// This means cancellation latency equals the handshake timeout (typically a few seconds).
+// If you require immediate cancellation, you must Close() the connection from another
+// goroutine when ctx.Done() fires.
+//
+// This design avoids the complexity of a watchdog goroutine racing with handshake
+// completion, at the cost of bounded cancellation latency.
 func (h *SSU2Conn) Handshake(ctx context.Context) error {
 	log.WithFields(logger.Fields{"pkg": "session", "func": "Handshake"}).Debug("Starting SSU2 handshake")
 	h.stateMutex.Lock()
