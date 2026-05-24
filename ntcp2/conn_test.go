@@ -1803,3 +1803,28 @@ func TestNTCP2Conn_ZeroKeyMaterial(t *testing.T) {
 	assert.Nil(t, p.conn.readBuffer, "readBuffer should be nil after full drain")
 	p.conn.readMu.Unlock()
 }
+
+// TestWriteFramed_UnderflowGuard verifies that writeFramed detects and rejects
+// maxFrameSize < Poly1305Overhead before arithmetic underflow (M-9 audit finding).
+func TestWriteFramed_UnderflowGuard(t *testing.T) {
+	conn := createTestNTCP2Conn(&mockNoiseConn{})
+
+	// Create a config with MaxFrameSize below Poly1305Overhead (16).
+	// Config validation normally prevents this, but this tests the
+	// defensive check in writeFramed itself.
+	corruptedConfig := &Config{
+		MaxFrameSize: 8, // Below Poly1305Overhead (16)
+	}
+	conn.SetNTCP2Config(corruptedConfig)
+
+	// Call writeFramed directly (bypasses handshake check in Write).
+	payload := []byte("test")
+	_, err := conn.writeFramed(payload)
+	require.Error(t, err, "writeFramed should fail when MaxFrameSize < Poly1305Overhead")
+	assert.Contains(t, err.Error(), "would underflow",
+		"Error should mention underflow risk")
+	assert.Contains(t, err.Error(), "maxFrameSize 8",
+		"Error should report the actual maxFrameSize value")
+	assert.Contains(t, err.Error(), "Poly1305Overhead 16",
+		"Error should report the Poly1305Overhead value")
+}
