@@ -341,6 +341,21 @@ func (h *ACKHandler) HasPending() bool {
 }
 
 // ClearPending removes all pending acknowledgments (used on connection close).
+//
+// IMPORTANT: No-wake contract
+// ---------------------------
+// This method does NOT notify any goroutines that may be waiting on pending ACKs.
+// The current implementation is correct because:
+//   - No existing code blocks waiting for ACKs to be sent or acknowledged
+//   - ClearPending is only called during connection teardown
+//
+// If a future feature adds wait-for-ACK semantics (e.g., FlushWrites() or
+// WaitForAck(packetNum)), you MUST either:
+//  1. Document that waiters must watch for connection closure separately, OR
+//  2. Add a broadcast channel that ClearPending signals to unblock all waiters
+//
+// Failure to address this will cause silent goroutine leaks when connections close
+// while waiters are blocked on ACK delivery.
 func (h *ACKHandler) ClearPending() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
