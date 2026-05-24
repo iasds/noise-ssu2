@@ -1,6 +1,8 @@
 package wire
 
 import (
+	"sync"
+
 	"github.com/go-i2p/go-noise/handshake"
 	"github.com/go-i2p/go-noise/mod"
 	"github.com/go-i2p/logger"
@@ -20,6 +22,8 @@ import (
 // packet. This modifier is available for use in modifier chains where the
 // data is processed separately.
 type ChaChaObfuscationModifier struct {
+	mu       sync.RWMutex
+	closed   bool
 	name     string
 	introKey []byte // 32-byte intro key (Bob's intro key per SSU2 spec)
 }
@@ -94,9 +98,20 @@ func (com *ChaChaObfuscationModifier) Name() string {
 
 // applyChacha creates a ChaCha20 cipher at counter position n=1 per the SSU2
 // spec and XORs the data. Supports 48-byte (spec-compliant) and 32-byte
-// (ephemeral-only) inputs.
+// (ephemeral-only) inputs. Returns an error if the modifier has been closed.
 func (com *ChaChaObfuscationModifier) applyChacha(data []byte) ([]byte, error) {
 	log.WithFields(logger.Fields{"pkg": "wire", "func": "applyChacha", "dataLen": len(data)}).Debug("applyChacha: applying ChaCha20 XOR")
+	com.mu.RLock()
+	defer com.mu.RUnlock()
+
+	if com.closed {
+		return nil, oops.
+			Code("MODIFIER_CLOSED").
+			In("wire").
+			With("modifier_name", com.name).
+			Errorf("ChaChaObfuscationModifier has been closed")
+	}
+
 	cipher, err := chacha20.NewUnauthenticatedCipher(com.introKey, chachaNonce)
 	if err != nil {
 		return nil, oops.
@@ -115,8 +130,15 @@ func (com *ChaChaObfuscationModifier) applyChacha(data []byte) ([]byte, error) {
 }
 
 // Close releases resources and zeroes sensitive key material.
+// After Close returns, ModifyOutbound and ModifyInbound will return an error.
+// Close is safe to call concurrently with ModifyOutbound/ModifyInbound.
 func (com *ChaChaObfuscationModifier) Close() error {
 	log.WithFields(logger.Fields{"pkg": "wire", "func": "Close", "name": com.name}).Debug("Close: releasing ChaChaObfuscationModifier resources")
-	mod.SecureZero(com.introKey)
+	com.mu.Lock()
+	defer com.mu.Unlock()
+	if !com.closed {
+		com.closed = true
+		mod.SecureZero(com.introKey)
+	}
 	return nil
 }

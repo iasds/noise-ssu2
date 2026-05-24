@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 
+	"github.com/go-i2p/go-noise/mod"
 	"github.com/go-i2p/logger"
 	"github.com/go-i2p/noise"
 	"github.com/samber/oops"
@@ -101,6 +102,15 @@ func (h *HandshakeHandler) ResetForRetry() error {
 	if err != nil {
 		return oops.Wrapf(err, "failed to recreate handshake state for retry")
 	}
+	// Zero the outgoing ephemeral private key before replacing the state.
+	// LocalEphemeral returns a DHKey whose Private slice shares the underlying
+	// array with the HandshakeState's internal field, so SecureZero clears it.
+	// Note: the chaining key cannot be zeroed through the public API; it will
+	// be collected by the GC when the old HandshakeState is no longer referenced.
+	if h.handshakeState != nil {
+		oldEphem := h.handshakeState.LocalEphemeral()
+		mod.SecureZero(oldEphem.Private)
+	}
 	h.handshakeState = hs
 	h.sendCipher = nil
 	h.recvCipher = nil
@@ -112,7 +122,12 @@ func (h *HandshakeHandler) ResetForRetry() error {
 // ProcessSessionRequest processes a received SessionRequest message.
 // This is called by the responder to process the initiator's first message.
 //
-// Returns the initiator's static public key learned from the handshake.
+// In the XK pattern, the initiator's static key is NOT transmitted in
+// SessionRequest (message 1); it is sent encrypted in SessionConfirmed
+// (message 3). This function therefore always returns (nil, nil) on success.
+// The initiator's static key becomes available after a successful
+// ProcessSessionConfirmed call via GetRemoteStaticKey(). Do NOT use the
+// first return value of this function for authorization decisions.
 func (h *HandshakeHandler) ProcessSessionRequest(packet *SSU2Packet) ([]byte, error) {
 	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "ProcessSessionRequest"}).Debug("Processing received SessionRequest")
 	if h.initiator {
@@ -174,14 +189,9 @@ func (h *HandshakeHandler) ProcessSessionRequest(packet *SSU2Packet) ([]byte, er
 	// Extract peer's Options block for padding negotiation (G-3).
 	h.extractPeerOptions(blocks)
 
-	// Note: In the XK pattern, the initiator's static key is transmitted encrypted,
-	// but the noise library doesn't expose it via PeerStatic() on the responder side.
-	// The static key is used internally for DH operations to establish the session.
-	// If you need the initiator's identity (RouterInfo), it should be transmitted
-	// in the payload blocks (e.g., RouterInfo block) rather than extracted from
-	// the Noise handshake state.
-	//
-	// For now, we return nil to indicate the handshake succeeded but the static key
-	// is not directly available. The session is authenticated via the successful DH.
+	// In the XK pattern, the initiator's static key is transmitted encrypted
+	// in SessionConfirmed (message 3), not in SessionRequest (message 1).
+	// Returning nil here is correct for XK; the static key will be available
+	// via GetRemoteStaticKey() after ProcessSessionConfirmed succeeds.
 	return nil, nil
 }

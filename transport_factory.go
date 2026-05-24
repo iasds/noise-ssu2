@@ -47,7 +47,9 @@ func openAndWrapTransport[R shutdownRegisterer](
 	}
 	result, err := wrap(resource)
 	if err != nil {
-		resource.Close()
+		if closeErr := resource.Close(); closeErr != nil {
+			log.WithFields(logger.Fields{"pkg": "transport", "func": "openAndWrapTransport", "error": closeErr.Error()}).Warn("resource.Close failed after wrap error")
+		}
 		return zero, err
 	}
 	if sm != nil {

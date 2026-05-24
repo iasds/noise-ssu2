@@ -301,6 +301,12 @@ func (l *SSU2Listener) receiveLoop() {
 
 	buf := make([]byte, MaxPacketSizeIPv4)
 
+	const (
+		backoffMin = 5 * time.Millisecond
+		backoffMax = time.Second
+	)
+	backoff := backoffMin
+
 	for {
 		n, remoteAddr, err := l.underlying.ReadFrom(buf)
 		if err != nil {
@@ -310,9 +316,25 @@ func (l *SSU2Listener) receiveLoop() {
 				return
 			default:
 			}
-			// Non-shutdown error (transient); continue reading
+			// Log non-shutdown errors and apply exponential backoff to
+			// prevent CPU-spin when the socket enters a persistent error state.
+			log.WithFields(logger.Fields{"pkg": "server", "func": "receiveLoop"}).
+				WithError(err).Warn("receiveLoop: ReadFrom error; backing off")
+			select {
+			case <-l.shutdownChan:
+				return
+			case <-time.After(backoff):
+			}
+			if backoff < backoffMax {
+				backoff *= 2
+				if backoff > backoffMax {
+					backoff = backoffMax
+				}
+			}
 			continue
 		}
+		// Reset backoff on successful read.
+		backoff = backoffMin
 
 		udpAddr, ok := remoteAddr.(*net.UDPAddr)
 		if !ok {

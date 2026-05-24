@@ -5,6 +5,7 @@
 package replaycache
 
 import (
+	"sort"
 	"sync"
 	"time"
 
@@ -142,32 +143,31 @@ func (c *TTLCache) evictExpired() {
 }
 
 // evictOldestLocked removes the oldest 10% of entries when the cache
-// is full. Must be called with c.mu held for writing.
+// is full. It sorts entries by insertion time so that the genuinely oldest
+// entries are evicted first. Must be called with c.mu held for writing.
 func (c *TTLCache) evictOldestLocked() {
 	evictCount := len(c.entries) / 10
 	if evictCount < 1 {
 		evictCount = 1
 	}
 
-	// Prefer entries older than half the TTL.
-	cutoff := c.nowFunc().Add(-c.ttl / 2)
-	evicted := 0
-	for key, firstSeen := range c.entries {
-		if evicted >= evictCount {
-			break
-		}
-		if firstSeen.Before(cutoff) {
-			delete(c.entries, key)
-			evicted++
-		}
+	// Collect all entries with their timestamps into a slice so we can sort.
+	type kv struct {
+		key       [32]byte
+		firstSeen time.Time
+	}
+	all := make([]kv, 0, len(c.entries))
+	for k, t := range c.entries {
+		all = append(all, kv{k, t})
 	}
 
-	// If not enough expired entries found, delete any entries.
-	for key := range c.entries {
-		if evicted >= evictCount {
-			break
-		}
-		delete(c.entries, key)
-		evicted++
+	// Sort ascending by insertion time — oldest first.
+	sort.Slice(all, func(i, j int) bool {
+		return all[i].firstSeen.Before(all[j].firstSeen)
+	})
+
+	// Delete the evictCount oldest entries.
+	for i := 0; i < evictCount && i < len(all); i++ {
+		delete(c.entries, all[i].key)
 	}
 }
