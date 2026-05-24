@@ -164,7 +164,12 @@ func (h *HandshakeHandler) finalizeSessionConfirmed(noiseMessage []byte) error {
 		h.remoteStaticKey = copyBytes(ps)
 	}
 
-	h.extractPeerRouterInfo(payload)
+	if err := h.extractPeerRouterInfo(payload); err != nil {
+		return err
+	}
+	if err := h.verifyPeerRouterInfoStaticKey(); err != nil {
+		return err
+	}
 	return nil
 }
 

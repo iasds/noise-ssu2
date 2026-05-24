@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"testing"
 
+	i2pbase64 "github.com/go-i2p/common/base64"
 	"github.com/go-i2p/noise"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -770,7 +771,7 @@ func TestCreateSessionConfirmedFragments_RoundTrip(t *testing.T) {
 }
 
 func TestCreateSessionConfirmedFragments_LargePayload(t *testing.T) {
-	initiator, responder, _, _ := setupHandshakePair(t)
+	initiator, responder, initiatorPub, _ := setupHandshakePair(t)
 
 	req, err := initiator.CreateSessionRequest(11111, 22222)
 	require.NoError(t, err)
@@ -781,13 +782,15 @@ func TestCreateSessionConfirmedFragments_LargePayload(t *testing.T) {
 	err = initiator.ProcessSessionCreated(created)
 	require.NoError(t, err)
 
-	// Create a large RouterInfo that forces fragmentation.
-	// Max per packet is 1216 bytes. Noise overhead is ~64 bytes (static key + MACs).
-	// So payload > 1152 bytes should trigger fragmentation.
-	largeRouterInfo := make([]byte, 1500)
-	for i := range largeRouterInfo {
-		largeRouterInfo[i] = byte(i % 256)
+	// Build a large fake RouterInfo that still contains the initiator's static
+	// key in I2P-base64 form so that verifyPeerRouterInfoStaticKey passes.
+	// The responder's remoteStaticKey after the XK handshake equals initiatorPub.
+	pubB64 := i2pbase64.EncodeToString(initiatorPub)
+	prefix := make([]byte, 1457) // total ≈ 1457 + len(pubB64) ≥ 1500 bytes
+	for i := range prefix {
+		prefix[i] = byte(i % 256)
 	}
+	largeRouterInfo := append(prefix, []byte(pubB64)...)
 
 	fragments, err := initiator.CreateSessionConfirmedFragments(55555, 0, largeRouterInfo)
 	require.NoError(t, err)

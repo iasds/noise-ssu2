@@ -1,12 +1,14 @@
 package handshake
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
 	"time"
 
+	i2pbase64 "github.com/go-i2p/common/base64"
 	"github.com/go-i2p/go-noise/mod/replaycache"
 	"github.com/go-i2p/logger"
 	"github.com/go-i2p/noise"
@@ -440,21 +442,54 @@ func (h *HandshakeHandler) extractPeerOptions(blocks []*SSU2Block) {
 }
 
 // extractPeerRouterInfo parses the decrypted SessionConfirmed payload and
-// stores the RouterInfo block data for later validation (C-2).
-func (h *HandshakeHandler) extractPeerRouterInfo(payload []byte) {
+// stores the RouterInfo block data for later validation.
+// Returns an error if the payload is non-empty but cannot be deserialized.
+func (h *HandshakeHandler) extractPeerRouterInfo(payload []byte) error {
 	if len(payload) == 0 {
-		return
+		return nil
 	}
 	blocks, err := DeserializeBlocks(payload)
 	if err != nil {
-		return
+		log.WithFields(logger.Fields{
+			"pkg":  "ssu2",
+			"func": "extractPeerRouterInfo",
+		}).WithError(err).Warn("failed to deserialize SessionConfirmed blocks")
+		return oops.Wrapf(err, "failed to deserialize SessionConfirmed blocks")
 	}
 	for _, block := range blocks {
 		if block.Type == BlockTypeRouterInfo && len(block.Data) > 0 {
 			h.peerRouterInfo = copyBytes(block.Data)
-			return
+			return nil
 		}
 	}
+	return nil
+}
+
+// verifyPeerRouterInfoStaticKey checks that the RouterInfo received in
+// SessionConfirmed advertises the same Curve25519 static key that the Noise
+// XK handshake authenticated. This binds the claimed I2P identity to the
+// Noise transcript, preventing peer impersonation.
+//
+// The check uses an I2P-base64 substring scan consistent with the NTCP2
+// implementation. It is skipped when either peerRouterInfo or remoteStaticKey
+// is absent (e.g. tests that omit RouterInfo).
+//
+// Returns an error tagged TerminationSParamMissing on mismatch.
+func (h *HandshakeHandler) verifyPeerRouterInfoStaticKey() error {
+	if len(h.peerRouterInfo) == 0 {
+		return nil // RouterInfo optional; skip.
+	}
+	if len(h.remoteStaticKey) != 32 {
+		return nil // Static key not yet established; skip.
+	}
+	pubB64 := i2pbase64.EncodeToString(h.remoteStaticKey)
+	if bytes.Contains(h.peerRouterInfo, []byte(pubB64)) {
+		return nil
+	}
+	return oops.
+		In("handshake").
+		With("termination_reason", TerminationSParamMissing).
+		Errorf("peer RouterInfo does not advertise the static key authenticated by the Noise handshake")
 }
 
 // GetPeerRouterInfo returns the raw RouterInfo block received during

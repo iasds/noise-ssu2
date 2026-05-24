@@ -52,6 +52,11 @@ const (
 	MACSize                     = wire.MACSize
 )
 
+// Termination reason aliases
+const (
+	TerminationSParamMissing = wire.TerminationSParamMissing
+)
+
 // Constructor and function aliases
 var (
 	NewSSU2Block      = wire.NewSSU2Block

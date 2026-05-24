@@ -419,7 +419,21 @@ func (krm *KeyRotationManager) rotateKeyLocked(keyName string, keySize int, curr
 	}(oldKey)
 
 	if krm.onRotation != nil {
-		go krm.onRotation(keyName, oldKey, *current)
+		cb := krm.onRotation
+		captured := *current
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.WithFields(logger.Fields{
+						"pkg":   "handshake",
+						"func":  "rotateKeyLocked",
+						"key":   keyName,
+						"panic": r,
+					}).Error("onRotation callback panicked")
+				}
+			}()
+			cb(keyName, oldKey, captured)
+		}()
 	}
 
 	result := make([]byte, keySize)
