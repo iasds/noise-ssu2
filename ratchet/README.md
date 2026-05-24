@@ -22,6 +22,16 @@ The package implements three main areas:
 3. **ECIES Build Request Crypto** — ECIES-X25519-AEAD encryption/decryption of
    tunnel build request records, identity hash verification.
 
+## Protocol Compliance
+
+- **Pattern**: `Noise_IKelg2+hs2_25519_ChaChaPoly_SHA256`
+- **DH**: Curve25519
+- **Cipher**: ChaCha20-Poly1305 AEAD
+- **Hash**: SHA-256
+- **Modifiers**:
+  - `elg2`: Elligator2 encoding of ephemeral public keys (indistinguishable from random)
+  - `hs2`: Hash pre-message for responder's static key (`Hash(s)` instead of raw key)
+
 ## Interfaces
 
 All public API is defined via interfaces in [`interfaces.go`](interfaces.go):
