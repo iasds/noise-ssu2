@@ -258,6 +258,60 @@ func TestSSU2Listener_HandleIncomingPacket(t *testing.T) {
 		// Should handle without error (even if sendRetry not fully implemented)
 		listener.handleIncomingPacket(data, remoteAddr)
 	})
+
+	// AUDIT C-1: verify that when an IntroKey is configured the listener
+	// successfully decrypts header-protected inbound packets that would
+	// otherwise fail plaintext deserialization.
+	t.Run("HeaderProtectedTokenRequest", func(t *testing.T) {
+		pc := createMockPacketConn(t)
+		config := createValidConfig(t)
+		introKey := make([]byte, 32)
+		for i := range introKey {
+			introKey[i] = byte(i + 0x10)
+		}
+		config.IntroKey = introKey
+
+		listener, err := NewSSU2Listener(pc, config)
+		require.NoError(t, err)
+		defer listener.Close()
+		require.NotNil(t, listener.introHeaderProtector, "expected protector to be initialized")
+
+		// Build a valid long-header TokenRequest with a deterministic body.
+		header := make([]byte, 32)
+		header[13] = 2 // SSU2ProtocolVersion
+		header[14] = 2 // SSU2NetworkID
+		packet := &SSU2Packet{
+			MessageType: MessageTypeTokenRequest,
+			Header:      header,
+			Payload:     make([]byte, 8),
+			MAC:         make([]byte, 16),
+		}
+		plain, err := packet.Serialize()
+		require.NoError(t, err)
+
+		// Plaintext path must succeed (sanity baseline).
+		gotPlain, ok := listener.parseInboundPacket(plain)
+		require.True(t, ok)
+		require.Equal(t, MessageTypeTokenRequest, gotPlain.MessageType)
+
+		// Build a sender-side protector with the same intro key and obfuscate.
+		sender, err := NewHeaderProtectorFromIntroKey(introKey, HeaderTypeTokenRequest)
+		require.NoError(t, err)
+		obfuscated := make([]byte, len(plain))
+		copy(obfuscated, plain)
+		require.NoError(t, sender.EncryptHeader(obfuscated))
+
+		// Obfuscated bytes must differ from plaintext (header bytes mutated).
+		require.NotEqual(t, plain[:16], obfuscated[:16])
+
+		// Plaintext Deserialize on the obfuscated buffer must fail.
+		require.Error(t, (&SSU2Packet{}).Deserialize(obfuscated))
+
+		// Fallback path must recover the original packet.
+		gotDecrypted, ok := listener.parseInboundPacket(obfuscated)
+		require.True(t, ok, "expected header-protection fallback to succeed")
+		require.Equal(t, MessageTypeTokenRequest, gotDecrypted.MessageType)
+	})
 }
 
 // TestSSU2Listener_Concurrent tests concurrent listener operations.

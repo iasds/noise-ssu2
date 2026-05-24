@@ -41,11 +41,12 @@ var (
 // ─── From ssu2/wire ───────────────────────────────────────────────────────────
 
 type (
-	SSU2Block     = wire.SSU2Block
-	SSU2Packet    = wire.SSU2Packet
-	TokenCache    = wire.TokenCache
-	Token         = wire.Token
-	NewTokenBlock = wire.NewTokenBlock
+	SSU2Block       = wire.SSU2Block
+	SSU2Packet      = wire.SSU2Packet
+	TokenCache      = wire.TokenCache
+	Token           = wire.Token
+	NewTokenBlock   = wire.NewTokenBlock
+	HeaderProtector = wire.HeaderProtector
 )
 
 const (
@@ -97,13 +98,14 @@ const (
 )
 
 var (
-	NewSSU2Block             = wire.NewSSU2Block
-	NewSSU2Packet            = wire.NewSSU2Packet
-	NewNewTokenBlock         = wire.NewNewTokenBlock
-	ParseNewTokenBlock       = wire.ParseNewTokenBlock
-	NewTokenCacheWithMaxSize = wire.NewTokenCacheWithMaxSize
-	SerializeBlocks          = wire.SerializeBlocks
-	DeserializeBlocks        = wire.DeserializeBlocks
-	FindBlockByType          = wire.FindBlockByType
-	ExtractConnectionID      = wire.ExtractConnectionID
+	NewSSU2Block                   = wire.NewSSU2Block
+	NewSSU2Packet                  = wire.NewSSU2Packet
+	NewNewTokenBlock               = wire.NewNewTokenBlock
+	ParseNewTokenBlock             = wire.ParseNewTokenBlock
+	NewTokenCacheWithMaxSize       = wire.NewTokenCacheWithMaxSize
+	SerializeBlocks                = wire.SerializeBlocks
+	DeserializeBlocks              = wire.DeserializeBlocks
+	FindBlockByType                = wire.FindBlockByType
+	ExtractConnectionID            = wire.ExtractConnectionID
+	NewHeaderProtectorFromIntroKey = wire.NewHeaderProtectorFromIntroKey
 )

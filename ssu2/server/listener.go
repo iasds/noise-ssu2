@@ -71,6 +71,16 @@ type SSU2Listener struct {
 	// router routes packets to sessions
 	router *PacketRouter
 
+	// introHeaderProtector decrypts header protection on incoming new-session
+	// packets (SessionRequest, TokenRequest). Per SSU2 spec, both header
+	// protection keys for these packet types are the receiver's intro key.
+	// Nil when config.IntroKey is unset, in which case the listener assumes
+	// inbound packets are sent with plaintext headers (legacy / test mode).
+	// Addresses AUDIT C-1: the listener now attempts header-protection
+	// decryption for incoming packets that fail plaintext deserialization,
+	// enabling interop with spec-compliant SSU2 peers (i2pd / Java I2P).
+	introHeaderProtector *HeaderProtector
+
 	// sessionRateLimiter limits SessionRequest processing per source IP (M-6)
 	sessionRateLimiter *ipRateLimiter
 
@@ -155,6 +165,21 @@ func NewSSU2Listener(underlying net.PacketConn, config *SSU2Config) (*SSU2Listen
 
 	// Create packet router with session creation callback
 	l.router = NewPacketRouter(l.handleNewSession)
+
+	// AUDIT C-1: Build a HeaderProtector for inbound new-session packets when
+	// an IntroKey is configured. SessionRequest and TokenRequest both use the
+	// receiver's intro key for k_header_1 and k_header_2, so a single
+	// protector keyed on HeaderTypeSessionRequest can decrypt either type
+	// (the header type only governs the long-vs-short header size and the
+	// ChaCha20 long-header extension layout, both of which are identical for
+	// SessionRequest and TokenRequest).
+	if len(config.IntroKey) == 32 {
+		hp, err := NewHeaderProtectorFromIntroKey(config.IntroKey, HeaderTypeSessionRequest)
+		if err != nil {
+			return nil, oops.Wrapf(err, "failed to build inbound header protector")
+		}
+		l.introHeaderProtector = hp
+	}
 
 	return l, nil
 }
@@ -329,12 +354,17 @@ func (l *SSU2Listener) packetWorker() {
 
 // handleIncomingPacket processes a received packet and routes it appropriately.
 // This is called in a goroutine for each received packet.
+//
+// AUDIT C-1: If plaintext Deserialize fails and an inbound HeaderProtector is
+// configured (i.e. config.IntroKey was set), the listener performs an in-place
+// header-protection decryption attempt before discarding the packet. This is
+// the receiver-side counterpart to spec-compliant SSU2 senders that obfuscate
+// header bytes 0-15 (and, for long headers, bytes 16-63) using ChaCha20 keyed
+// on the receiver's intro key.
 func (l *SSU2Listener) handleIncomingPacket(data []byte, remoteAddr *net.UDPAddr) {
 	log.WithFields(logger.Fields{"pkg": "server", "func": "handleIncomingPacket", "remote_addr": remoteAddr.String(), "data_len": len(data)}).Debug("handleIncomingPacket: processing received packet")
-	// Parse packet (basic validation)
-	packet := &SSU2Packet{}
-	if err := packet.Deserialize(data); err != nil {
-		// Invalid packet, ignore
+	packet, ok := l.parseInboundPacket(data)
+	if !ok {
 		return
 	}
 
@@ -346,6 +376,37 @@ func (l *SSU2Listener) handleIncomingPacket(data []byte, remoteAddr *net.UDPAddr
 		}
 		// Otherwise ignore error
 	}
+}
+
+// parseInboundPacket attempts to deserialize a received datagram. It first tries
+// the plaintext interpretation (used by internal tests and legacy peers that do
+// not apply header protection). If that fails and the listener has an inbound
+// HeaderProtector configured, it falls back to header-protection decryption on
+// a defensive copy and re-tries Deserialize. Returns (packet, true) on success
+// or (nil, false) when the packet should be silently dropped.
+func (l *SSU2Listener) parseInboundPacket(data []byte) (*SSU2Packet, bool) {
+	packet := &SSU2Packet{}
+	if err := packet.Deserialize(data); err == nil {
+		return packet, true
+	}
+
+	if l.introHeaderProtector == nil {
+		return nil, false
+	}
+
+	// Work on a defensive copy: DecryptHeader mutates the buffer in place,
+	// and the inbound buffer may be re-used by the read loop.
+	decrypted := make([]byte, len(data))
+	copy(decrypted, data)
+	if err := l.introHeaderProtector.DecryptHeader(decrypted); err != nil {
+		return nil, false
+	}
+
+	packet = &SSU2Packet{}
+	if err := packet.Deserialize(decrypted); err != nil {
+		return nil, false
+	}
+	return packet, true
 }
 
 // handleNewSession is called by the router when a handshake packet arrives
