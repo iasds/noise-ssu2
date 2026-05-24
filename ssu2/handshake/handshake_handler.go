@@ -1,14 +1,10 @@
 package handshake
 
 import (
-	"bytes"
-	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/binary"
 	"time"
 
-	i2pbase64 "github.com/go-i2p/common/base64"
 	"github.com/go-i2p/go-noise/mod/replaycache"
 	"github.com/go-i2p/logger"
 	"github.com/go-i2p/noise"
@@ -272,74 +268,6 @@ func (h *HandshakeHandler) GetRemoteStaticKey() []byte {
 	return copyBytes(h.remoteStaticKey)
 }
 
-// OptionsParams holds the parsed or configured values from an SSU2 Options
-// block (Type 1, 12 bytes minimum). Padding ratios use 4.4 fixed-point encoding
-// where the value = integerPart + fractionPart/16 (range 0.0–15.9375).
-// Per spec: tmin(1) | tmax(1) | rmin(1) | rmax(1) | tdmy(2) | rdmy(2) | tdelay(2) | rdelay(2)
-type OptionsParams struct {
-	TMinRatio float64 // transmit padding minimum ratio
-	TMaxRatio float64 // transmit padding maximum ratio
-	RMinRatio float64 // receive padding minimum ratio
-	RMaxRatio float64 // receive padding maximum ratio
-	TDummy    uint16  // transmit dummy traffic rate
-	RDummy    uint16  // receive dummy traffic rate
-	TDelay    uint16  // transmit delay (ms)
-	RDelay    uint16  // receive delay (ms)
-}
-
-// fixedPointToFloat decodes a 4.4 fixed-point byte: upper nibble is the
-// integer part, lower nibble is the fractional part (sixteenths).
-func fixedPointToFloat(b byte) float64 {
-	return float64(b>>4) + float64(b&0x0F)/16.0
-}
-
-// floatToFixedPoint encodes a float as a 4.4 fixed-point byte.
-func floatToFixedPoint(f float64) byte {
-	if f < 0 {
-		f = 0
-	}
-	if f > 15.9375 {
-		f = 15.9375
-	}
-	intPart := int(f)
-	fracPart := int((f - float64(intPart)) * 16)
-	return byte(intPart<<4 | fracPart)
-}
-
-// ParseOptionsBlock decodes a 12+ byte Options block into OptionsParams.
-// Per spec: tmin(1) | tmax(1) | rmin(1) | rmax(1) | tdmy(2) | rdmy(2) | tdelay(2) | rdelay(2)
-func ParseOptionsBlock(data []byte) (*OptionsParams, error) {
-	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "ParseOptionsBlock", "dataLen": len(data)}).Debug("decoding options block")
-	if len(data) < 12 {
-		return nil, oops.Errorf("Options block too short: %d bytes, need 12", len(data))
-	}
-	return &OptionsParams{
-		TMinRatio: fixedPointToFloat(data[0]),
-		TMaxRatio: fixedPointToFloat(data[1]),
-		RMinRatio: fixedPointToFloat(data[2]),
-		RMaxRatio: fixedPointToFloat(data[3]),
-		TDummy:    binary.BigEndian.Uint16(data[4:6]),
-		RDummy:    binary.BigEndian.Uint16(data[6:8]),
-		TDelay:    binary.BigEndian.Uint16(data[8:10]),
-		RDelay:    binary.BigEndian.Uint16(data[10:12]),
-	}, nil
-}
-
-// Serialize encodes OptionsParams into a 12-byte Options block per spec.
-func (o *OptionsParams) Serialize() []byte {
-	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "Serialize"}).Debug("encoding OptionsParams to 12-byte block")
-	data := make([]byte, 12)
-	data[0] = floatToFixedPoint(o.TMinRatio)
-	data[1] = floatToFixedPoint(o.TMaxRatio)
-	data[2] = floatToFixedPoint(o.RMinRatio)
-	data[3] = floatToFixedPoint(o.RMaxRatio)
-	binary.BigEndian.PutUint16(data[4:6], o.TDummy)
-	binary.BigEndian.PutUint16(data[6:8], o.RDummy)
-	binary.BigEndian.PutUint16(data[8:10], o.TDelay)
-	binary.BigEndian.PutUint16(data[10:12], o.RDelay)
-	return data
-}
-
 // SetLocalOptions sets the local padding parameters that will be advertised
 // in outbound Options blocks during handshake.
 func (h *HandshakeHandler) SetLocalOptions(opts *OptionsParams) {
@@ -370,61 +298,7 @@ func (h *HandshakeHandler) LocalOptions() *OptionsParams {
 // both peers' preferences: max of minimums, min of maximums.
 // Returns nil if either side has not provided options.
 func (h *HandshakeHandler) NegotiatedPadding() *OptionsParams {
-	local := h.localOptions
-	peer := h.peerOptions
-	if local == nil || peer == nil {
-		return nil
-	}
-	// The peer's transmit limits constrain what we receive, and our transmit
-	// limits constrain what the peer receives. Negotiate the overlap.
-	negotiated := &OptionsParams{}
-
-	// Our send padding: bounded by our tmin/tmax AND peer's rmin/rmax
-	negotiated.TMinRatio = max44(local.TMinRatio, peer.RMinRatio)
-	negotiated.TMaxRatio = min44(local.TMaxRatio, peer.RMaxRatio)
-	if negotiated.TMaxRatio < negotiated.TMinRatio {
-		// Empty intersection — treat as no constraint (zero both).
-		negotiated.TMinRatio = 0
-		negotiated.TMaxRatio = 0
-	}
-
-	// Our receive padding: bounded by our rmin/rmax AND peer's tmin/tmax
-	negotiated.RMinRatio = max44(local.RMinRatio, peer.TMinRatio)
-	negotiated.RMaxRatio = min44(local.RMaxRatio, peer.TMaxRatio)
-	if negotiated.RMaxRatio < negotiated.RMinRatio {
-		// Empty intersection — treat as no constraint (zero both).
-		negotiated.RMinRatio = 0
-		negotiated.RMaxRatio = 0
-	}
-
-	// Dummy traffic and delay: use the smaller of the two peers' values
-	negotiated.TDummy = minU16(local.TDummy, peer.RDummy)
-	negotiated.RDummy = minU16(local.RDummy, peer.TDummy)
-	negotiated.TDelay = minU16(local.TDelay, peer.RDelay)
-	negotiated.RDelay = minU16(local.RDelay, peer.TDelay)
-
-	return negotiated
-}
-
-func max44(a, b float64) float64 {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-func min44(a, b float64) float64 {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func minU16(a, b uint16) uint16 {
-	if a < b {
-		return a
-	}
-	return b
+	return NegotiatedPadding(h.localOptions, h.peerOptions)
 }
 
 // extractPeerOptions scans deserialized handshake blocks for an Options block
@@ -445,23 +319,11 @@ func (h *HandshakeHandler) extractPeerOptions(blocks []*SSU2Block) {
 // stores the RouterInfo block data for later validation.
 // Returns an error if the payload is non-empty but cannot be deserialized.
 func (h *HandshakeHandler) extractPeerRouterInfo(payload []byte) error {
-	if len(payload) == 0 {
-		return nil
-	}
-	blocks, err := DeserializeBlocks(payload)
+	routerInfo, err := extractPeerRouterInfo(payload)
 	if err != nil {
-		log.WithFields(logger.Fields{
-			"pkg":  "ssu2",
-			"func": "extractPeerRouterInfo",
-		}).WithError(err).Warn("failed to deserialize SessionConfirmed blocks")
-		return oops.Wrapf(err, "failed to deserialize SessionConfirmed blocks")
+		return err
 	}
-	for _, block := range blocks {
-		if block.Type == BlockTypeRouterInfo && len(block.Data) > 0 {
-			h.peerRouterInfo = copyBytes(block.Data)
-			return nil
-		}
-	}
+	h.peerRouterInfo = routerInfo
 	return nil
 }
 
@@ -476,27 +338,19 @@ func (h *HandshakeHandler) extractPeerRouterInfo(payload []byte) error {
 //
 // Returns an error tagged TerminationSParamMissing on mismatch.
 func (h *HandshakeHandler) verifyPeerRouterInfoStaticKey() error {
-	if len(h.peerRouterInfo) == 0 {
-		return nil // RouterInfo optional; skip.
-	}
-	if len(h.remoteStaticKey) != 32 {
-		return nil // Static key not yet established; skip.
-	}
-	pubB64 := i2pbase64.EncodeToString(h.remoteStaticKey)
-	if bytes.Contains(h.peerRouterInfo, []byte(pubB64)) {
-		return nil
-	}
-	return oops.
-		In("handshake").
-		With("termination_reason", TerminationSParamMissing).
-		Errorf("peer RouterInfo does not advertise the static key authenticated by the Noise handshake")
+	return verifyPeerRouterInfoStaticKey(h.peerRouterInfo, h.remoteStaticKey)
 }
 
 // GetPeerRouterInfo returns the raw RouterInfo block received during
 // the SessionConfirmed handshake message. Returns nil if no RouterInfo
 // was received (e.g. initiator side, or tests without RouterInfo).
 func (h *HandshakeHandler) GetPeerRouterInfo() []byte {
-	return copyBytes(h.peerRouterInfo)
+	if h.peerRouterInfo == nil {
+		return nil
+	}
+	copied := make([]byte, len(h.peerRouterInfo))
+	copy(copied, h.peerRouterInfo)
+	return copied
 }
 
 // createHandshakeBlocks creates the standard blocks for handshake messages.
@@ -688,94 +542,31 @@ func (h *HandshakeHandler) updateCipherStates(cs1, cs2 *noise.CipherState) {
 // split key) so that data-phase AEAD uses the spec-mandated derived key.
 // Returns the send-direction k_header_2 and recv-direction k_header_2.
 func (h *HandshakeHandler) DeriveHeaderKeys() (sendKHeader2, recvKHeader2 []byte, err error) {
-	log.WithFields(logger.Fields{"pkg": "ssu2", "func": "DeriveHeaderKeys"}).Debug("Deriving data-phase header keys")
-	if h.sendCipher == nil || h.recvCipher == nil {
-		return nil, nil, oops.Errorf("handshake not complete: cipher states not available")
-	}
-
-	sendKData, sendKHeader2, err := deriveDataPhaseKeys(h.sendCipher)
-	if err != nil {
-		return nil, nil, oops.Wrapf(err, "failed to derive send data-phase keys")
-	}
-
-	recvKData, recvKHeader2, err := deriveDataPhaseKeys(h.recvCipher)
-	if err != nil {
-		return nil, nil, oops.Wrapf(err, "failed to derive recv data-phase keys")
-	}
-
-	// Install k_data as the AEAD encryption key per SSU2 spec §KDF for
-	// data phase. The raw split keys (k_ab/k_ba) must NOT be used directly.
-	var sendKey, recvKey [32]byte
-	copy(sendKey[:], sendKData)
-	copy(recvKey[:], recvKData)
-	h.sendCipher.UnsafeSetKey(sendKey)
-	h.recvCipher.UnsafeSetKey(recvKey)
-
-	return sendKHeader2, recvKHeader2, nil
+	return DeriveHeaderKeys(h.sendCipher, h.recvCipher)
 }
 
 // SessCreateHeaderKey returns the k_header_2 for SessionCreated, derived from
 // the chaining key after handshake message 1 (→ e, es) using the info string
 // "SessCreateHeader". Returns nil if the key has not yet been derived.
 func (h *HandshakeHandler) SessCreateHeaderKey() []byte {
-	return copyBytes(h.sessCreateHeaderKey)
+	if h.sessCreateHeaderKey == nil {
+		return nil
+	}
+	copied := make([]byte, len(h.sessCreateHeaderKey))
+	copy(copied, h.sessCreateHeaderKey)
+	return copied
 }
 
 // SessionConfirmedHeaderKey returns the k_header_2 for SessionConfirmed,
 // derived from the chaining key after handshake message 2 (← e, ee) using
 // the info string "SessionConfirmed". Returns nil if not yet derived.
 func (h *HandshakeHandler) SessionConfirmedHeaderKey() []byte {
-	return copyBytes(h.sessionConfirmedHeaderKey)
-}
-
-// deriveIntermediateHeaderKey derives a header protection key from the
-// handshake's current chaining key using the SSU2 spec's HKDF pattern:
-//
-//	temp_key = HMAC-SHA256(salt=chainKey, ikm=ZEROLEN)
-//	key      = HMAC-SHA256(temp_key, info || 0x01)
-func deriveIntermediateHeaderKey(chainKey []byte, info string) []byte {
-	mac := hmac.New(sha256.New, chainKey)
-	tempKey := mac.Sum(nil)
-
-	mac = hmac.New(sha256.New, tempKey)
-	mac.Write([]byte(info))
-	mac.Write([]byte{0x01})
-	return mac.Sum(nil)
-}
-
-// deriveDataPhaseKeys derives both k_data and k_header_2 for the data phase
-// from a split cipher key using the SSU2 spec's two-step HKDF:
-//
-//	temp_key = HMAC-SHA256(key, ZEROLEN)
-//	k_data   = HMAC-SHA256(temp_key, "HKDFSSU2DataKeys" || 0x01)  // first 32 bytes
-//	k_header_2 = HMAC-SHA256(temp_key, k_data || "HKDFSSU2DataKeys" || 0x02)
-//
-// Per spec, k_data replaces the raw split key for AEAD encryption,
-// and k_header_2 is used for data-phase header protection.
-func deriveDataPhaseKeys(cs *noise.CipherState) (kData, kHeader2 []byte, err error) {
-	key := cs.UnsafeKey()
-
-	info := []byte("HKDFSSU2DataKeys")
-
-	// HKDF-Extract: temp_key = HMAC-SHA256(salt=key, ikm=zerolen)
-	mac := hmac.New(sha256.New, key[:])
-	// ikm = zerolen (write nothing)
-	tempKey := mac.Sum(nil)
-
-	// HKDF-Expand T(1) = HMAC-SHA256(temp_key, info || 0x01) → k_data (32 bytes)
-	mac = hmac.New(sha256.New, tempKey)
-	mac.Write(info)
-	mac.Write([]byte{0x01})
-	kData = mac.Sum(nil)
-
-	// HKDF-Expand T(2) = HMAC-SHA256(temp_key, T(1) || info || 0x02) → k_header_2 (32 bytes)
-	mac = hmac.New(sha256.New, tempKey)
-	mac.Write(kData)
-	mac.Write(info)
-	mac.Write([]byte{0x02})
-	kHeader2 = mac.Sum(nil)
-
-	return kData, kHeader2, nil
+	if h.sessionConfirmedHeaderKey == nil {
+		return nil
+	}
+	copied := make([]byte, len(h.sessionConfirmedHeaderKey))
+	copy(copied, h.sessionConfirmedHeaderKey)
+	return copied
 }
 
 // Close releases resources held by the HandshakeHandler, including the
@@ -799,16 +590,6 @@ func (h *HandshakeHandler) ReconfigureReplayCache(ttl time.Duration) {
 		MaxSize:         1024,
 		CleanupInterval: 30 * time.Second,
 	})
-}
-
-// copyBytes creates a defensive copy of a byte slice.
-func copyBytes(b []byte) []byte {
-	if b == nil {
-		return nil
-	}
-	copied := make([]byte, len(b))
-	copy(copied, b)
-	return copied
 }
 
 // derivePublicKey computes the Curve25519 public key that corresponds to the

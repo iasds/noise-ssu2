@@ -1,7 +1,6 @@
 package server
 
 import (
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
@@ -14,11 +13,6 @@ import (
 	"github.com/go-i2p/logger"
 	"github.com/samber/oops"
 )
-
-// errNoTokenPresent is a sentinel error returned by validateSessionRequestToken
-// when the SessionRequest does not contain a NewToken block. This is used by
-// handleNewSession to decide whether to send a Retry message.
-var errNoTokenPresent = errors.New("no token present in SessionRequest")
 
 // SSU2Listener implements net.Listener for accepting SSU2 connections over UDP.
 // It manages incoming packets, routes them to existing sessions, and creates
@@ -95,19 +89,6 @@ type SSU2Listener struct {
 	wg           sync.WaitGroup
 }
 
-// incomingPacket holds a received packet and its source address for worker processing.
-type incomingPacket struct {
-	data       []byte
-	remoteAddr *net.UDPAddr
-}
-
-// packetWorkers is the number of goroutines in the packet processing pool.
-const packetWorkers = 8
-
-// packetQueueSize is the buffer size for the incoming packet channel.
-// Packets arriving when the queue is full are dropped.
-const packetQueueSize = 256
-
 // NewSSU2Listener creates a new SSU2 listener wrapping the specified packet connection.
 // The listener starts in an idle state; call Start() to begin accepting connections.
 //
@@ -171,21 +152,6 @@ func NewSSU2Listener(underlying net.PacketConn, config *SSU2Config) (*SSU2Listen
 	}
 
 	return l, nil
-}
-
-// initHeaderProtection initializes the inbound HeaderProtector when an
-// IntroKey is configured. See the field documentation on SSU2Listener and
-// AUDIT C-1 for the rationale.
-func (l *SSU2Listener) initHeaderProtection(config *SSU2Config) error {
-	if len(config.IntroKey) != 32 {
-		return nil
-	}
-	hp, err := NewHeaderProtectorFromIntroKey(config.IntroKey, HeaderTypeSessionRequest)
-	if err != nil {
-		return oops.Wrapf(err, "failed to build inbound header protector")
-	}
-	l.introHeaderProtector = hp
-	return nil
 }
 
 // Start begins accepting connections on the listener.
@@ -289,150 +255,6 @@ func (l *SSU2Listener) Close() error {
 // Returns the SSU2 address for this listener.
 func (l *SSU2Listener) Addr() net.Addr {
 	return l.addr
-}
-
-// receiveLoop continuously reads packets from the underlying connection
-// and routes them to appropriate sessions or creates new sessions.
-// M-2: Blocking ReadFrom is used instead of 100ms deadline polling.
-// The loop exits when the underlying connection is closed by Close().
-func (l *SSU2Listener) receiveLoop() {
-	log.WithFields(logger.Fields{"pkg": "server", "func": "receiveLoop"}).Debug("receiveLoop: starting packet receive loop")
-	defer l.wg.Done()
-
-	buf := make([]byte, MaxPacketSizeIPv4)
-
-	const (
-		backoffMin = 5 * time.Millisecond
-		backoffMax = time.Second
-	)
-	backoff := backoffMin
-
-	for {
-		n, remoteAddr, err := l.underlying.ReadFrom(buf)
-		if err != nil {
-			// Check if we're shutting down
-			select {
-			case <-l.shutdownChan:
-				return
-			default:
-			}
-			// Log non-shutdown errors and apply exponential backoff to
-			// prevent CPU-spin when the socket enters a persistent error state.
-			log.WithFields(logger.Fields{"pkg": "server", "func": "receiveLoop"}).
-				WithError(err).Warn("receiveLoop: ReadFrom error; backing off")
-			select {
-			case <-l.shutdownChan:
-				return
-			case <-time.After(backoff):
-			}
-			if backoff < backoffMax {
-				backoff *= 2
-				if backoff > backoffMax {
-					backoff = backoffMax
-				}
-			}
-			continue
-		}
-		// Reset backoff on successful read.
-		backoff = backoffMin
-
-		udpAddr, ok := remoteAddr.(*net.UDPAddr)
-		if !ok {
-			continue
-		}
-
-		packetData := make([]byte, n)
-		copy(packetData, buf[:n])
-
-		select {
-		case l.packetQueue <- incomingPacket{data: packetData, remoteAddr: udpAddr}:
-		default:
-			// packetQueue is full - drop packet and warn
-			atomic.AddUint64(&l.droppedPackets, 1)
-			log.WithFields(logger.Fields{
-				"pkg":        "server",
-				"func":       "receiveLoop",
-				"remoteAddr": udpAddr.String(),
-				"dropped":    atomic.LoadUint64(&l.droppedPackets),
-			}).Warn("packetQueue full, dropping packet")
-		}
-	}
-}
-
-// packetWorker drains the packet queue and processes packets.
-// Multiple workers run concurrently as a bounded pool.
-func (l *SSU2Listener) packetWorker() {
-	log.WithFields(logger.Fields{"pkg": "server", "func": "packetWorker"}).Debug("packetWorker: starting packet processing worker")
-	defer l.wg.Done()
-
-	for {
-		select {
-		case pkt, ok := <-l.packetQueue:
-			if !ok {
-				return
-			}
-			l.handleIncomingPacket(pkt.data, pkt.remoteAddr)
-		case <-l.shutdownChan:
-			return
-		}
-	}
-}
-
-// handleIncomingPacket processes a received packet and routes it appropriately.
-// This is called in a goroutine for each received packet.
-//
-// AUDIT C-1: If plaintext Deserialize fails and an inbound HeaderProtector is
-// configured (i.e. config.IntroKey was set), the listener performs an in-place
-// header-protection decryption attempt before discarding the packet. This is
-// the receiver-side counterpart to spec-compliant SSU2 senders that obfuscate
-// header bytes 0-15 (and, for long headers, bytes 16-63) using ChaCha20 keyed
-// on the receiver's intro key.
-func (l *SSU2Listener) handleIncomingPacket(data []byte, remoteAddr *net.UDPAddr) {
-	log.WithFields(logger.Fields{"pkg": "server", "func": "handleIncomingPacket", "remote_addr": remoteAddr.String(), "data_len": len(data)}).Debug("handleIncomingPacket: processing received packet")
-	packet, ok := l.parseInboundPacket(data)
-	if !ok {
-		return
-	}
-
-	// Route packet to appropriate handler
-	if err := l.router.RoutePacket(packet, remoteAddr); err != nil {
-		// Routing failed, check if this is a token request
-		if packet.MessageType == MessageTypeTokenRequest {
-			_ = l.processTokenRequest(packet, remoteAddr)
-		}
-		// Otherwise ignore error
-	}
-}
-
-// parseInboundPacket attempts to deserialize a received datagram. It first tries
-// the plaintext interpretation (used by internal tests and legacy peers that do
-// not apply header protection). If that fails and the listener has an inbound
-// HeaderProtector configured, it falls back to header-protection decryption on
-// a defensive copy and re-tries Deserialize. Returns (packet, true) on success
-// or (nil, false) when the packet should be silently dropped.
-func (l *SSU2Listener) parseInboundPacket(data []byte) (*SSU2Packet, bool) {
-	packet := &SSU2Packet{}
-	if err := packet.Deserialize(data); err == nil {
-		return packet, true
-	}
-
-	if l.introHeaderProtector == nil {
-		return nil, false
-	}
-
-	// Work on a defensive copy: DecryptHeader mutates the buffer in place,
-	// and the inbound buffer may be re-used by the read loop.
-	decrypted := make([]byte, len(data))
-	copy(decrypted, data)
-	if err := l.introHeaderProtector.DecryptHeader(decrypted); err != nil {
-		return nil, false
-	}
-
-	packet = &SSU2Packet{}
-	if err := packet.Deserialize(decrypted); err != nil {
-		return nil, false
-	}
-	return packet, true
 }
 
 // handleNewSession is called by the router when a handshake packet arrives
@@ -723,102 +545,6 @@ func (l *SSU2Listener) processTokenRequest(packet *SSU2Packet, remoteAddr *net.U
 	// Per spec: Retry must not be larger than 3x the incoming message.
 	incomingSize := len(packet.Header) + len(packet.Payload) + len(packet.MAC)
 	return l.sendRetry(remoteAddr, token, packet.Header, incomingSize)
-}
-
-// sendRetry sends a Retry message containing the specified token to the remote address.
-// Per SSU2 spec §Retry, the Retry message uses the same long header format as
-// SessionCreated and must include:
-//   - dest_conn_id (bytes 0-7): initiator's source connection ID from the request
-//   - src_conn_id (bytes 16-23): a new destination connection ID chosen by responder
-//   - token (bytes 24-31): the retry token value
-//   - payload: DateTime + NewToken blocks, AEAD-encrypted
-//
-// Per spec, the Retry message must not be larger than 3x the incoming message size.
-//
-// Parameters:
-//   - remoteAddr: Destination UDP address
-//   - token: 8-byte token value for the NewToken block
-//   - originalHeader: Header from the SessionRequest (for connection ID extraction)
-//   - incomingSize: Size of the incoming message (for amplification limit)
-func (l *SSU2Listener) sendRetry(remoteAddr *net.UDPAddr, token, originalHeader []byte, incomingSize int) error {
-	if len(token) != TokenSize {
-		return oops.Errorf("token must be exactly %d bytes, got %d", TokenSize, len(token))
-	}
-
-	payload, err := l.buildRetryPayload(token)
-	if err != nil {
-		return err
-	}
-
-	header, err := buildRetryHeader(originalHeader, token)
-	if err != nil {
-		return err
-	}
-
-	retryPacket := NewSSU2Packet(MessageTypeRetry, 0)
-	retryPacket.Header = header
-	retryPacket.Payload = payload
-	retryPacket.MAC = make([]byte, MACSize)
-
-	packetData, err := retryPacket.Serialize()
-	if err != nil {
-		return oops.Wrapf(err, "failed to serialize Retry packet")
-	}
-
-	if incomingSize > 0 && len(packetData) > 3*incomingSize {
-		return oops.Errorf("Retry message (%d bytes) exceeds 3x amplification limit of incoming message (%d bytes)", len(packetData), incomingSize)
-	}
-
-	_, err = l.underlying.WriteTo(packetData, remoteAddr)
-	if err != nil {
-		return oops.Wrapf(err, "failed to send Retry packet")
-	}
-	return nil
-}
-
-// buildRetryPayload creates the DateTime + NewToken payload for a Retry message.
-func (l *SSU2Listener) buildRetryPayload(token []byte) ([]byte, error) {
-	now := time.Now()
-
-	dtData := make([]byte, 4)
-	binary.BigEndian.PutUint32(dtData, uint32(now.Unix()))
-	dateTimeBlock := NewSSU2Block(BlockTypeDateTime, dtData)
-
-	expiration := now.Add(l.tokenCache.GetTTL())
-	tokenBlock, err := NewNewTokenBlock(expiration, token)
-	if err != nil {
-		return nil, oops.Wrapf(err, "failed to create NewToken block")
-	}
-
-	payload, err := SerializeBlocks([]*SSU2Block{dateTimeBlock, tokenBlock})
-	if err != nil {
-		return nil, oops.Wrapf(err, "failed to serialize Retry payload blocks")
-	}
-	return payload, nil
-}
-
-// buildRetryHeader constructs the 32-byte long header for a Retry message.
-func buildRetryHeader(originalHeader, token []byte) ([]byte, error) {
-	header := make([]byte, LongHeaderSize)
-
-	if len(originalHeader) >= 24 {
-		copy(header[0:8], originalHeader[16:24])
-	} else if len(originalHeader) >= 8 {
-		copy(header[0:8], originalHeader[0:8])
-	}
-
-	header[12] = MessageTypeRetry
-	header[13] = SSU2ProtocolVersion
-	header[14] = SSU2NetworkID
-
-	var srcConnID [8]byte
-	if _, err := rand.Read(srcConnID[:]); err != nil {
-		return nil, oops.Wrapf(err, "failed to generate source connection ID for Retry")
-	}
-	copy(header[16:24], srcConnID[:])
-	copy(header[24:32], token)
-
-	return header, nil
 }
 
 // removeSession removes a session from the listener's session map.
