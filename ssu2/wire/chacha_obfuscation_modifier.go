@@ -63,7 +63,11 @@ func NewChaChaObfuscationModifier(name string, introKey []byte) (*ChaChaObfuscat
 func (com *ChaChaObfuscationModifier) ModifyOutbound(phase handshake.HandshakePhase, data []byte) ([]byte, error) {
 	log.WithFields(logger.Fields{"pkg": "wire", "func": "ModifyOutbound", "phase": phase, "dataLen": len(data)}).Debug("ChaCha obfuscation ModifyOutbound")
 	if len(data) != 48 && len(data) != 32 {
-		return data, nil
+		return nil, oops.
+			Code("INVALID_CHACHA_INPUT_LENGTH").
+			In("wire").
+			With("length", len(data)).
+			Errorf("unexpected data length %d for chacha obfuscation: expected 32 or 48", len(data))
 	}
 
 	switch phase {
@@ -80,7 +84,11 @@ func (com *ChaChaObfuscationModifier) ModifyOutbound(phase handshake.HandshakePh
 func (com *ChaChaObfuscationModifier) ModifyInbound(phase handshake.HandshakePhase, data []byte) ([]byte, error) {
 	log.WithFields(logger.Fields{"pkg": "wire", "func": "ModifyInbound", "phase": phase, "dataLen": len(data)}).Debug("ChaCha obfuscation ModifyInbound")
 	if len(data) != 48 && len(data) != 32 {
-		return data, nil
+		return nil, oops.
+			Code("INVALID_CHACHA_INPUT_LENGTH").
+			In("wire").
+			With("length", len(data)).
+			Errorf("unexpected data length %d for chacha obfuscation: expected 32 or 48", len(data))
 	}
 
 	switch phase {

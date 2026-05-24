@@ -107,6 +107,12 @@ func (h *DataHandler) handleFirstFragment(data []byte) error {
 		existing.I2NPType = i2npType
 		existing.ShortExpiration = shortExpiration
 		existing.HasFirst = true
+		// If an early FollowOnFragment with fragNum==0 arrived before this
+		// FirstFragment, its bytes were already counted in ReceivedSize.
+		// Subtract them before overwriting Fragments[0] to avoid double-counting.
+		if oldFrag, hadFrag0 := existing.Fragments[0]; hadFrag0 {
+			existing.ReceivedSize -= uint32(len(oldFrag))
+		}
 		existing.Fragments[0] = make([]byte, len(fragmentData))
 		copy(existing.Fragments[0], fragmentData)
 		existing.ReceivedSize += uint32(len(fragmentData))

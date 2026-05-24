@@ -169,16 +169,16 @@ func TestChaChaObfuscationModifier_NonEphemeralKey(t *testing.T) {
 	mod, err := NewChaChaObfuscationModifier("test-size", introKey)
 	require.NoError(t, err)
 
-	testCases := []int{0, 1, 16, 31, 33, 64, 128}
+	// Lengths that are neither 32 nor 48 should now return an error.
+	unexpectedSizes := []int{0, 1, 16, 31, 33, 64, 128}
 
-	for _, size := range testCases {
+	for _, size := range unexpectedSizes {
 		t.Run(string(rune(size))+"_bytes", func(t *testing.T) {
 			data := make([]byte, size)
 			_, _ = rand.Read(data)
 
-			result, err := mod.ModifyOutbound(handshake.PhaseInitial, data)
-			require.NoError(t, err)
-			assert.True(t, bytes.Equal(data, result), "non-32-byte data should pass through unchanged")
+			_, err := mod.ModifyOutbound(handshake.PhaseInitial, data)
+			require.Error(t, err, "unexpected data length should return error")
 		})
 	}
 }

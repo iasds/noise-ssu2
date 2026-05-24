@@ -587,6 +587,7 @@ func (sc *SSU2Config) Validate() error {
 		sc.validateTimeoutConfiguration,
 		sc.validateUDPConfiguration,
 		sc.validatePaddingConfiguration,
+		sc.validateTokenConfiguration,
 	)
 }
 
@@ -718,6 +719,23 @@ func (sc *SSU2Config) validatePaddingConfiguration() error {
 			Errorf("padding ratio must be between 0.0 and 15.9375")
 	}
 
+	return nil
+}
+
+// validateTokenConfiguration rejects configurations that would make the
+// listener permanently unreachable: RequireRetry==true combined with
+// GlobalTokenIssuanceRate==0 means every SessionRequest is answered with a
+// Retry message whose token is never issued.
+func (sc *SSU2Config) validateTokenConfiguration() error {
+	log.WithFields(logger.Fields{"pkg": "config", "func": "validateTokenConfiguration", "require_retry": sc.RequireRetry, "token_rate": sc.GlobalTokenIssuanceRate}).Debug("Checking token issuance configuration")
+	if sc.RequireRetry && sc.GlobalTokenIssuanceRate <= 0 {
+		return oops.
+			Code("INVALID_TOKEN_CONFIG").
+			In("ssu2").
+			With("require_retry", sc.RequireRetry).
+			With("token_rate", sc.GlobalTokenIssuanceRate).
+			Errorf("GlobalTokenIssuanceRate must be > 0 when RequireRetry is true; otherwise all SessionRequests are rejected and the listener is permanently unreachable")
+	}
 	return nil
 }
 

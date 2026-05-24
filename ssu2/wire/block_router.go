@@ -128,13 +128,25 @@ func (r *BlockRouter) RouteBlock(block *SSU2Block) error {
 	r.stats.UnknownBlocks++
 	r.stats.mu.Unlock()
 
-	log.WithFields(logger.Fields{
-		"pkg":        "ssu2",
-		"func":       "RouteBlock",
-		"blockType":  block.Type,
-		"blockName":  BlockTypeName(block.Type),
-		"dataLength": len(block.Data),
-	}).Warn("No handler registered for block type")
+	if exists {
+		// A registered handler was tried but returned handled==false; this is
+		// a legitimate outcome (e.g. handler ignores empty Data), not an error.
+		log.WithFields(logger.Fields{
+			"pkg":        "ssu2",
+			"func":       "RouteBlock",
+			"blockType":  block.Type,
+			"blockName":  BlockTypeName(block.Type),
+			"dataLength": len(block.Data),
+		}).Debug("Registered handler declined block (handled=false)")
+	} else {
+		log.WithFields(logger.Fields{
+			"pkg":        "ssu2",
+			"func":       "RouteBlock",
+			"blockType":  block.Type,
+			"blockName":  BlockTypeName(block.Type),
+			"dataLength": len(block.Data),
+		}).Warn("No handler registered for block type")
+	}
 
 	return nil
 }

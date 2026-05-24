@@ -413,10 +413,15 @@ func (krm *KeyRotationManager) rotateKeyLocked(keyName string, keySize int, curr
 	}
 	*previous = oldKey
 
-	go func(key *ManagedKey) {
-		time.Sleep(KeyGracePeriod)
+	go func(key *ManagedKey, stop <-chan struct{}) {
+		t := time.NewTimer(KeyGracePeriod)
+		defer t.Stop()
+		select {
+		case <-t.C:
+		case <-stop:
+		}
 		mod.SecureZero(key.Key)
-	}(oldKey)
+	}(oldKey, krm.stopCh)
 
 	if krm.onRotation != nil {
 		cb := krm.onRotation

@@ -8,6 +8,8 @@
 package ratchet
 
 import (
+	"crypto/subtle"
+
 	"github.com/go-i2p/crypto/chacha20poly1305"
 	"github.com/go-i2p/crypto/types"
 	"github.com/go-i2p/logger"
@@ -150,7 +152,7 @@ func VerifyResponseRecordHash(hash [32]byte, randomData [495]byte, reply byte) e
 
 	expectedHash := types.SHA256(data)
 
-	if hash != expectedHash {
+	if subtle.ConstantTimeCompare(hash[:], expectedHash[:]) != 1 {
 		return oops.Errorf("hash verification failed")
 	}
 

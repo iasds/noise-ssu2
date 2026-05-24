@@ -109,6 +109,14 @@ type Config struct {
 	// in message 3 part 2.
 	LocalRouterInfo []byte
 
+	// StrictRouterInfoVerification, when true, causes the initiator handshake
+	// to return a hard error if the configured LocalRouterInfo does not
+	// advertise the static key that will be sent in the Noise handshake msg1.
+	// Defaults to false so that existing tests using synthetic RouterInfo
+	// bytes continue to work. Set to true in production to catch
+	// misconfiguration before a silent i2pd interop failure (frame #0 EOF).
+	StrictRouterInfoVerification bool
+
 	// sipHashModifier stores the SipHash modifier created during ToConnConfig()
 	// so it can be passed to NTCP2Conn for data-phase framing.
 	// Access is via atomic.Pointer to avoid data races between the
@@ -261,6 +269,14 @@ func (nc *Config) WithLocalRouterInfo(ri []byte) *Config {
 		nc.LocalRouterInfo = make([]byte, len(ri))
 		copy(nc.LocalRouterInfo, ri)
 	}
+	return nc
+}
+
+// WithStrictRouterInfoVerification enables or disables hard-error mode for the
+// local RouterInfo / static-key mismatch check. Set to true in production to
+// catch misconfiguration before a silent i2pd interop failure.
+func (nc *Config) WithStrictRouterInfoVerification(strict bool) *Config {
+	nc.StrictRouterInfoVerification = strict
 	return nc
 }
 

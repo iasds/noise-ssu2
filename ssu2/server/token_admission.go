@@ -1,6 +1,7 @@
 package server
 
 import (
+	"container/list"
 	"sync"
 	"time"
 
@@ -29,12 +30,23 @@ import (
 //     gate were bypassed, an attacker cannot amplify issuance beyond the
 //     configured rate by fanning across spoofed IPs.
 
+// firstSightEntry holds a single addr observation stored in the LRU list.
+type firstSightEntry struct {
+	addr string
+	ts   time.Time
+}
+
 // firstSightTracker records the first time an address was observed so that
 // the listener can demand a repeat contact before allocating a full token
 // cache entry for it.
 type firstSightTracker struct {
-	// entries maps address string -> first-seen time.
-	entries map[string]time.Time
+	// entries maps address string -> *list.Element (pointing into order).
+	entries map[string]*list.Element
+	// order is a doubly-linked list of *firstSightEntry, ordered from least-
+	// recently-used (front) to most-recently-used (back). This mirrors the
+	// eviction semantics of the original map scan (oldest last-seen time
+	// evicted first) but in O(1) instead of O(n).
+	order *list.List
 	// window is the duration a sighting remains "fresh".
 	window time.Duration
 	// maxEntries bounds memory use. When the tracker is full, the oldest
@@ -62,7 +74,8 @@ func newFirstSightTracker(window time.Duration, maxEntries int) *firstSightTrack
 		"max_entries": maxEntries,
 	}).Debug("Creating first-sight tracker")
 	return &firstSightTracker{
-		entries:    make(map[string]time.Time),
+		entries:    make(map[string]*list.Element),
+		order:      list.New(),
 		window:     window,
 		maxEntries: maxEntries,
 		nowFunc:    time.Now,
@@ -82,18 +95,25 @@ func (f *firstSightTracker) ObserveAndAllow(addr string) bool {
 
 	now := f.nowFunc()
 
-	if ts, exists := f.entries[addr]; exists {
-		if now.Sub(ts) < f.window {
-			f.entries[addr] = now
+	if elem, exists := f.entries[addr]; exists {
+		entry := elem.Value.(*firstSightEntry)
+		if now.Sub(entry.ts) < f.window {
+			// Fresh: refresh timestamp and mark as most-recently-used.
+			entry.ts = now
+			f.order.MoveToBack(elem)
 			return true
 		}
-		// Stale sighting: treat as brand new.
+		// Stale: remove from list so it can be re-inserted as a new entry.
+		f.order.Remove(elem)
+		delete(f.entries, addr)
 	}
 
 	if len(f.entries) >= f.maxEntries {
 		f.evictOldestLocked()
 	}
-	f.entries[addr] = now
+	entry := &firstSightEntry{addr: addr, ts: now}
+	elem := f.order.PushBack(entry)
+	f.entries[addr] = elem
 	return false
 }
 
@@ -106,36 +126,38 @@ func (f *firstSightTracker) Size() int {
 
 // Cleanup removes entries older than the window. Returns the number of
 // entries removed. Intended to be called periodically by the listener.
+// Because the list is maintained in LRU order (oldest at front), the walk
+// can break early once a fresh entry is encountered.
 func (f *firstSightTracker) Cleanup() int {
 	f.mutex.Lock()
 	defer f.mutex.Unlock()
 
 	cutoff := f.nowFunc().Add(-f.window)
 	removed := 0
-	for addr, ts := range f.entries {
-		if ts.Before(cutoff) {
-			delete(f.entries, addr)
+	for e := f.order.Front(); e != nil; {
+		entry := e.Value.(*firstSightEntry)
+		if entry.ts.Before(cutoff) {
+			next := e.Next()
+			f.order.Remove(e)
+			delete(f.entries, entry.addr)
 			removed++
+			e = next
+		} else {
+			break // remaining entries are all newer
 		}
 	}
 	return removed
 }
 
-// evictOldestLocked drops the single oldest sighting. Caller must hold mu.
+// evictOldestLocked drops the single oldest (LRU front) sighting. Caller must hold mu.
 func (f *firstSightTracker) evictOldestLocked() {
-	var oldestKey string
-	var oldestTime time.Time
-	first := true
-	for k, v := range f.entries {
-		if first || v.Before(oldestTime) {
-			oldestKey = k
-			oldestTime = v
-			first = false
-		}
+	front := f.order.Front()
+	if front == nil {
+		return
 	}
-	if !first {
-		delete(f.entries, oldestKey)
-	}
+	entry := front.Value.(*firstSightEntry)
+	f.order.Remove(front)
+	delete(f.entries, entry.addr)
 }
 
 // tokenIssuanceLimiter is a single global token bucket that limits the

@@ -284,8 +284,14 @@ type handshakeContext struct {
 }
 
 // createHandshakeContext creates a context with timeout for handshake operations.
+// If HandshakeTimeout is zero or negative the default is used (defence-in-depth
+// guard against a future regression that permits a zero value past Validate).
 func (nc *Conn) createHandshakeContext(ctx context.Context) *handshakeContext {
-	handshakeCtx, cancel := context.WithTimeout(ctx, nc.config.HandshakeTimeout)
+	timeout := nc.config.HandshakeTimeout
+	if timeout <= 0 {
+		timeout = defaultHandshakeTimeout
+	}
+	handshakeCtx, cancel := context.WithTimeout(ctx, timeout)
 	return &handshakeContext{
 		ctx:    handshakeCtx,
 		cancel: cancel,
@@ -308,7 +314,12 @@ func (nc *Conn) executeRoleBasedHandshake(ctx context.Context) error {
 		// Clear the deadline once the handshake finishes (or fails) so
 		// subsequent data-phase I/O is not accidentally time-limited.
 		defer func() {
-			_ = nc.underlying.SetDeadline(time.Time{})
+			if err := nc.underlying.SetDeadline(time.Time{}); err != nil {
+				nc.logger.WithFields(i2plogger.Fields{
+					"pkg":  "noise",
+					"func": "executeRoleBasedHandshake",
+				}).Debug("failed to clear handshake deadline")
+			}
 		}()
 	}
 

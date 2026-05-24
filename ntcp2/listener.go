@@ -187,6 +187,11 @@ func (nl *Listener) wrapInNTCP2Conn(noiseConn *noise.NoiseConn, remoteAddr *Addr
 // Accept waits for and returns the next connection to the listener.
 // The returned connection is wrapped in an NTCP2Conn configured as a responder
 // with the full NTCP2 cipher suite, protocol name, and modifiers.
+//
+// The returned connection has NOT yet performed the Noise handshake.
+// RemoteAddr().(*Addr).RouterHash is a zero value until Handshake(ctx) and
+// PropagatePeerStaticKey() complete. Most callers should use
+// AcceptWithHandshake (if available) or call Handshake explicitly after Accept.
 func (nl *Listener) Accept() (net.Conn, error) {
 	if err := nl.validateAcceptState(); err != nil {
 		return nil, err

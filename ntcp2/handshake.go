@@ -170,6 +170,12 @@ func performInitiatorHandshake(cfg *Config, nc *noise.NoiseConn) error {
 	// PROMPT.md in this repo. Logging (not erroring) keeps existing tests
 	// that use synthetic RouterInfo bytes working.
 	if err := verifyLocalRouterInfoMatchesStaticKey(cfg.StaticKey, riBytes); err != nil {
+		if cfg.StrictRouterInfoVerification {
+			return oops.
+				Code("ROUTER_INFO_KEY_MISMATCH").
+				In("ntcp2").
+				Wrapf(err, "LocalRouterInfo does not advertise the static key (strict mode enabled; see PROMPT.md)")
+		}
 		log.WithFields(logger.Fields{
 			"pkg":   "ntcp2",
 			"func":  "performInitiatorHandshake",
