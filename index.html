@@ -13,7 +13,7 @@
         <a href="index.html">go-i2p/go-noise</a>
       </h2>
       <div class="repo-meta">
-        📝 312 commits
+        📝 377 commits
          • 📜 License
       </div>
     </div>
@@ -42,8 +42,6 @@
         
           <li><a href="docs/handshake/DOC.html">handshake</a></li>
         
-          <li><a href="docs/internal/DOC.html">internal</a></li>
-        
           <li><a href="docs/examples/listener/DOC.html">listener</a></li>
         
           <li><a href="docs/examples/modifiers/DOC.html">modifiers</a></li>
@@ -58,15 +56,9 @@
         
           <li><a href="docs/examples/ntcp2-listener/DOC.html">ntcp2-listener</a></li>
         
-          <li><a href="docs/pool/DOC.html">pool</a></li>
-        
           <li><a href="docs/examples/pool/DOC.html">pool</a></li>
         
           <li><a href="docs/examples/retry/DOC.html">retry</a></li>
-        
-          <li><a href="docs/examples/shared/DOC.html">shared</a></li>
-        
-          <li><a href="docs/examples/ntcp2-shared/DOC.html">shared</a></li>
         
           <li><a href="docs/examples/shutdown/DOC.html">shutdown</a></li>
         
@@ -92,12 +84,12 @@
       <div class="repo-stats">
         
         <div class="repo-stat">
-          <span>📝</span> <span>312 commits</span>
+          <span>📝</span> <span>377 commits</span>
         </div>
         
         
         <div class="repo-stat">
-          <span>📅</span> <span>Last updated: May 8, 2026</span>
+          <span>📅</span> <span>Last updated: May 24, 2026</span>
         </div>
         
         
@@ -117,7 +109,7 @@
 
 <p>A wrapper library around the flynn/noise package that provides <code>net.Conn</code>, <code>net.Listener</code>, and <code>net.Addr</code> interfaces for the Noise Protocol Framework. Designed for implementing I2P&rsquo;s NTCP2 and SSU2 transport protocols with extensible handshake modification capabilities.</p>
 
-<h2 id="notes-on-scope">Notes on scope:</h2>
+<h2 id="notes-on-scope">Notes on scope</h2>
 
 <p>go-i2p theoretically has strictly scoped packages for low-level operations.
 This package is intended to be the package where specific modifications are applied to Noise protocol handshakes.
@@ -147,7 +139,7 @@ It is currently slightly jumbled with <code>go-i2p/crypto</code> on the lower le
 <ul>
 <li><strong>Configurable Noise Patterns</strong>: Support for all standard Noise Protocol patterns<br>
 </li>
-<li><strong>net.Conn Interface</strong>: Compatible with Go&rsquo;s standard network interfaces<br>
+<li><strong>net.Conn Interface</strong>: The core Noise connection wrapper (<code>conn/conn.go</code>) implements <code>net.Conn</code> fully. NTCP2 connections (<code>ntcp2/conn.go</code>) implement <code>net.Conn</code>. SSU2 connections (<code>ssu2/session/conn.go</code>) implement partial <code>net.Conn</code> (Close, LocalAddr, RemoteAddr, deadlines) but use callback-based message I/O via <code>DataHandler.MessageChan()</code> instead of Read/Write — see <a href="ssu2/README.md" target="_blank">SSU2 README</a> for details.<br>
 </li>
 <li><strong>Error Handling</strong>: Contextual error information using samber/oops<br>
 </li>
@@ -453,7 +445,7 @@ WARNFAIL_I2P=true DEBUG_I2P=debug go test ./...
                 eyedeekay
               </div>
               <div class="contributor-commits">
-                312 commits
+                377 commits
               </div>
             </div>
           </div>
@@ -465,7 +457,7 @@ WARNFAIL_I2P=true DEBUG_I2P=debug go test ./...
     </main>
     
     <footer class="page-footer">
-      <p>Generated on 2026-05-24 07:28:12 • <a href="https://github.com/go-i2p/go-noise" target="_blank">View on GitHub</a></p>
+      <p>Generated on 2026-05-24 09:13:17 • <a href="https://github.com/go-i2p/go-noise" target="_blank">View on GitHub</a></p>
     </footer>
   </div>
 </body>
