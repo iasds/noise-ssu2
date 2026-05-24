@@ -8,7 +8,6 @@ import (
 
 	"github.com/go-i2p/logger"
 	"github.com/go-i2p/pool"
-	"github.com/samber/oops"
 )
 
 var (
@@ -19,7 +18,7 @@ var (
 // Default is the package-level Transport used by DialNoise, ListenNoise, etc.
 // It is lazily initialised on first use via getDefault().
 //
-// Package-level convenience only: callers that share the Default instance
+// Deprecated: Package-level convenience only. Callers that share the Default instance
 // across goroutines or tests affect shared state (pool, shutdown manager).
 // Prefer constructing a Transport directly for production use:
 //
@@ -66,6 +65,9 @@ func getDefault() *Transport {
 
 // SetGlobalConnPool sets a custom connection pool on the Default Transport.
 // p may be any implementation of pool.Pool, including *pool.ConnPool.
+//
+// Deprecated: Use Transport.DialWithPool or Transport.DialWithPoolAndHandshake
+// on a dedicated Transport instance instead of mutating global state.
 func SetGlobalConnPool(p pool.Pool) {
 	dt := getDefault()
 	dt.mu.Lock()
@@ -77,6 +79,8 @@ func SetGlobalConnPool(p pool.Pool) {
 }
 
 // GetGlobalConnPool returns the Default Transport's connection pool.
+//
+// Deprecated: Use a dedicated Transport instance instead of accessing global state.
 func GetGlobalConnPool() pool.Pool {
 	dt := getDefault()
 	dt.mu.RLock()
@@ -86,6 +90,8 @@ func GetGlobalConnPool() pool.Pool {
 
 // SetGlobalShutdownManager sets a custom shutdown manager on the Default Transport.
 // The previous shutdown manager is shut down gracefully before being replaced.
+//
+// Deprecated: Use a dedicated Transport instance instead of mutating global state.
 func SetGlobalShutdownManager(sm Shutdowner) {
 	dt := getDefault()
 	dt.mu.Lock()
@@ -97,6 +103,8 @@ func SetGlobalShutdownManager(sm Shutdowner) {
 }
 
 // GetGlobalShutdownManager returns the Default Transport's shutdown manager.
+//
+// Deprecated: Use a dedicated Transport instance instead of accessing global state.
 func GetGlobalShutdownManager() Shutdowner {
 	dt := getDefault()
 	dt.mu.RLock()
@@ -105,6 +113,8 @@ func GetGlobalShutdownManager() Shutdowner {
 }
 
 // GracefulShutdown initiates graceful shutdown of all Default Transport components.
+//
+// Deprecated: Use Transport.GracefulShutdown on a dedicated Transport instance instead.
 func GracefulShutdown() error {
 	log.WithFields(logger.Fields{"pkg": "noise", "func": "GracefulShutdown"}).Debug("Initiating graceful shutdown of global components")
 	return getDefault().GracefulShutdown()
@@ -139,12 +149,18 @@ func GracefulShutdown() error {
 
 // DialNoise creates a connection to the given address and wraps it with NoiseConn.
 // This is a convenience function that delegates to the Default Transport.
+//
+// Deprecated: Use Transport.Dial on a dedicated Transport instance instead of
+// depending on package-level global state.
 func DialNoise(network, addr string, config *ConnConfig) (*NoiseConn, error) {
 	return getDefault().Dial(network, addr, config)
 }
 
 // ListenNoise creates a listener on the given address and wraps it with NoiseListener.
 // This is a convenience function that delegates to the Default Transport.
+//
+// Deprecated: Use Transport.Listen on a dedicated Transport instance instead of
+// depending on package-level global state.
 func ListenNoise(network, addr string, config *ListenerConfig) (*NoiseListener, error) {
 	return getDefault().Listen(network, addr, config)
 }
@@ -165,80 +181,39 @@ func WrapListener(listener net.Listener, config *ListenerConfig) (*NoiseListener
 // If a suitable connection is available in the pool, it will be reused.
 // Otherwise, a new connection is created. The connection will be automatically
 // returned to the pool when the NoiseConn is closed.
+//
+// Deprecated: Use Transport.DialWithPool on a dedicated Transport instance instead of
+// depending on package-level global state.
 func DialNoiseWithPool(network, addr string, config *ConnConfig) (*NoiseConn, error) {
-	log.WithFields(logger.Fields{"pkg": "noise", "func": "DialNoiseWithPool", "network": network, "address": addr}).Debug("starting")
-	if err := validateDialParams(network, addr, config); err != nil {
-		return nil, err
-	}
-
-	conn, fromPool := tryGetPooledConn(addr)
-	if conn == nil {
-		var err error
-		conn, err = createNewConn(network, addr)
-		if err != nil {
-			return nil, err
-		}
-		// Wrap the freshly-dialed conn so that NoiseConn.Close() returns it to
-		// the pool instead of closing it to the OS.  Pool-retrieved conns are
-		// already wrapped in PoolConnWrapper by ConnPool.Get(), which handles
-		// the release path; this wrapper covers only the new-connection case.
-		dt := getDefault()
-		dt.mu.RLock()
-		p := dt.pool
-		dt.mu.RUnlock()
-		if p != nil {
-			conn = newPutOnCloseWrapper(conn, p)
-		}
-	}
-	_ = fromPool // pool-retrieved path is handled by PoolConnWrapper
-
-	noiseConn, err := createNoiseConn(conn, config, network, addr)
-	if err != nil {
-		conn.Close()
-		return nil, err
-	}
-
-	return noiseConn, nil
+	return getDefault().DialWithPool(network, addr, config)
 }
 
 // DialNoiseWithHandshake creates a connection to the given address, wraps it with NoiseConn,
 // and performs the handshake with retry logic. This is the recommended high-level function
 // for establishing Noise connections with automatic retry capabilities.
+//
+// Deprecated: Use Transport.DialWithHandshake on a dedicated Transport instance instead of
+// depending on package-level global state.
 func DialNoiseWithHandshake(network, addr string, config *ConnConfig) (*NoiseConn, error) {
-	return DialNoiseWithHandshakeContext(context.Background(), network, addr, config)
+	return getDefault().DialWithHandshake(network, addr, config)
 }
 
 // DialNoiseWithHandshakeContext creates a connection with context support for cancellation.
 // It combines dialing, NoiseConn creation, and handshake with retry in a single operation.
+//
+// Deprecated: Use Transport.DialWithHandshakeContext on a dedicated Transport instance instead of
+// depending on package-level global state.
 func DialNoiseWithHandshakeContext(ctx context.Context, network, addr string, config *ConnConfig) (*NoiseConn, error) {
-	if err := validateDialParams(network, addr, config); err != nil {
-		return nil, err
-	}
-
-	conn, err := net.Dial(network, addr)
-	if err != nil {
-		return nil, oops.
-			Code("DIAL_FAILED").
-			In("transport").
-			With("network", network).
-			With("address", addr).
-			Wrapf(err, "failed to dial %s://%s", network, addr)
-	}
-
-	// createAndHandshakeConn takes ownership of conn on error (closes it
-	// and zeros key material), so we must not close conn here.
-	noiseConn, err := createAndHandshakeConn(ctx, conn, config, network, addr)
-	if err != nil {
-		return nil, err
-	}
-
-	return noiseConn, nil
+	return getDefault().DialWithHandshakeContext(ctx, network, addr, config)
 }
 
 // DialNoiseWithPoolAndHandshake creates a connection with pool support and handshake retry.
 // It checks the pool first, creates new if needed, and performs handshake with retry logic.
+//
+// Deprecated: Use Transport.DialWithPoolAndHandshake on a dedicated Transport instance instead of
+// depending on package-level global state.
 func DialNoiseWithPoolAndHandshake(network, addr string, config *ConnConfig) (*NoiseConn, error) {
-	return DialNoiseWithPoolAndHandshakeContext(context.Background(), network, addr, config)
+	return getDefault().DialWithPoolAndHandshake(network, addr, config)
 }
 
 // DialNoiseWithPoolAndHandshakeContext combines pool checking, dialing, and handshake with context.
@@ -246,29 +221,9 @@ func DialNoiseWithPoolAndHandshake(network, addr string, config *ConnConfig) (*N
 // conn.RemoteAddr().String(), which equals addr), wraps it in a new NoiseConn,
 // and performs the Noise handshake. Falls back to a fresh dial if the pool is
 // empty or the pooled connection fails the handshake.
+//
+// Deprecated: Use Transport.DialWithPoolAndHandshakeContext on a dedicated Transport instance instead of
+// depending on package-level global state.
 func DialNoiseWithPoolAndHandshakeContext(ctx context.Context, network, addr string, config *ConnConfig) (*NoiseConn, error) {
-	if err := validateDialParams(network, addr, config); err != nil {
-		return nil, err
-	}
-
-	// pool.Put stores entries under conn.RemoteAddr().String(), which is the
-	// plain "host:port" string — use addr directly so the keys match.
-	dt := getDefault()
-	dt.mu.RLock()
-	p := dt.pool
-	dt.mu.RUnlock()
-	if p != nil {
-		if rawConn := p.Get(addr); rawConn != nil {
-			noiseConn, err := createAndHandshakeConn(ctx, rawConn, config, network, addr)
-			if err == nil {
-				return noiseConn, nil
-			}
-			// createAndHandshakeConn takes ownership of rawConn on error
-			// (closes it to release the PoolConnWrapper and zero keys).
-			// Fall through to fresh dial.
-		}
-	}
-
-	// Create new connection with handshake
-	return DialNoiseWithHandshakeContext(ctx, network, addr, config)
+	return getDefault().DialWithPoolAndHandshakeContext(ctx, network, addr, config)
 }

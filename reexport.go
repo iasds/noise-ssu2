@@ -18,6 +18,11 @@ import (
 // NoiseConn is an alias for conn.Conn.
 type NoiseConn = conn.Conn
 
+// NoiseConnIface is an alias for conn.ConnIface.
+// Use this interface instead of *NoiseConn when you need to substitute
+// test doubles or alternative implementations.
+type NoiseConnIface = conn.ConnIface
+
 // NoiseAddr is an alias for conn.Addr.
 type NoiseAddr = conn.Addr
 
@@ -29,6 +34,11 @@ type ConnState = conn.ConnState
 
 // NoiseListener is an alias for listener.Listener.
 type NoiseListener = listener.Listener
+
+// NoiseListenerIface is an alias for listener.ListenerIface.
+// Use this interface instead of *NoiseListener when you need to substitute
+// test doubles or alternative implementations.
+type NoiseListenerIface = listener.ListenerIface
 
 // ListenerConfig is an alias for listener.ListenerConfig.
 type ListenerConfig = listener.ListenerConfig
