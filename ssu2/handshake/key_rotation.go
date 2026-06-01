@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-i2p/go-noise/mod"
+	"github.com/go-i2p/go-noise/internal/securemem"
 	"github.com/go-i2p/logger"
 	"github.com/samber/oops"
 )
@@ -409,7 +409,7 @@ func (krm *KeyRotationManager) rotateKeyLocked(keyName string, keySize int, curr
 	oldKey.Successor = *current
 
 	if *previous != nil {
-		mod.SecureZero((*previous).Key)
+		securemem.SecureZero((*previous).Key)
 	}
 	*previous = oldKey
 
@@ -420,7 +420,7 @@ func (krm *KeyRotationManager) rotateKeyLocked(keyName string, keySize int, curr
 		case <-t.C:
 		case <-stop:
 		}
-		mod.SecureZero(key.Key)
+		securemem.SecureZero(key.Key)
 	}(oldKey, krm.stopCh)
 
 	if krm.onRotation != nil {
