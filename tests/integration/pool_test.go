@@ -75,8 +75,8 @@ func TestConnPoolIntegration(t *testing.T) {
 
 		// Verify pool stats
 		stats := pool.Stats()
-		if stats["total"] != 1 {
-			t.Errorf("Expected 1 connection in pool, got %d", stats["total"])
+		if stats.Total != 1 {
+			t.Errorf("Expected 1 connection in pool, got %d", stats.Total)
 		}
 	})
 
@@ -119,10 +119,11 @@ func TestConnPoolIntegration(t *testing.T) {
 				defer func() { done <- true }()
 
 				// Try to get a connection from pool first
-				conn := pool.Get(serverAddr)
+				var conn net.Conn
+				pooledConn := pool.Get(serverAddr)
 
 				// If not available, create new connection
-				if conn == nil {
+				if pooledConn == nil {
 					var err error
 					conn, err = net.Dial("tcp", serverAddr)
 					if err != nil {
@@ -133,6 +134,7 @@ func TestConnPoolIntegration(t *testing.T) {
 					// Put it in pool when done
 					defer pool.Put(conn)
 				} else {
+					conn = pooledConn
 					// Release pooled connection when done
 					defer conn.Close()
 				}
@@ -159,8 +161,8 @@ func TestConnPoolIntegration(t *testing.T) {
 		stats := pool.Stats()
 		t.Logf("Final pool stats: %+v", stats)
 
-		if stats["total"] > 3 {
-			t.Errorf("Pool should not exceed MaxSize of 3, got %d", stats["total"])
+		if stats.Total > 3 {
+			t.Errorf("Pool should not exceed MaxSize of 3, got %d", stats.Total)
 		}
 	})
 }

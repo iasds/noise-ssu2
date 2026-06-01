@@ -1,6 +1,7 @@
 package ssu2
 
 import (
+	"crypto/ed25519"
 	"net"
 	"sync"
 	"testing"
@@ -447,7 +448,8 @@ func setupPeer(t *testing.T, name string) *testPeer {
 
 	// Create NAT traversal components
 	relayMgr := NewRelayManager(listener)
-	holePunchCoord := NewHolePunchCoordinator(relayMgr)
+	holePunchCoord, err := NewHolePunchCoordinator(relayMgr, func(_ *RelayIntroBlock, _ ed25519.PublicKey) error { return nil })
+	require.NoError(t, err)
 
 	return &testPeer{
 		addr:           packetConn.LocalAddr().(*net.UDPAddr),

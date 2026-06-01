@@ -1,6 +1,7 @@
 package ssu2
 
 import (
+	"crypto/ed25519"
 	"net"
 	"sync"
 	"testing"
@@ -152,8 +153,21 @@ func TestRelay6StepProcess(t *testing.T) {
 	sessionID, err := alice.holePunchCoord.InitiateHolePunch(charlie.addr, bob.addr, aliceRelayTag)
 	require.NoError(t, err)
 
+	// BUG-M03: block must be non-nil; verifier callback accepts anything.
+	dummyBlock := &RelayIntroBlock{
+		Flag:            0,
+		AliceRouterHash: alice.routerHash[:],
+		Nonce:           relayIntro.Nonce,
+		AliceRelayTag:   aliceRelayTag,
+		Timestamp:       uint32(time.Now().Unix()),
+		Version:         2,
+		AlicePort:       uint16(alice.addr.Port),
+		AliceIP:         alice.addr.IP,
+		Signature:       make([]byte, 64),
+	}
+	dummyKey := make(ed25519.PublicKey, ed25519.PublicKeySize)
 	// Charlie's hole punch message (simulated through state updates)
-	err = alice.holePunchCoord.HandleHolePunch(sessionID, charlie.addr, nil, nil)
+	err = alice.holePunchCoord.HandleHolePunch(sessionID, charlie.addr, dummyBlock, dummyKey)
 	require.NoError(t, err)
 
 	attempt := alice.holePunchCoord.GetAttempt(sessionID)
@@ -165,7 +179,7 @@ func TestRelay6StepProcess(t *testing.T) {
 	t.Log("Step 6: Alice sends SessionRequest to Charlie")
 
 	// Alice processes the hole punch response
-	err = alice.holePunchCoord.ProcessHolePunchResponse(sessionID, charlie.addr, nil, nil)
+	err = alice.holePunchCoord.ProcessHolePunchResponse(sessionID, charlie.addr, dummyBlock, dummyKey)
 	require.NoError(t, err)
 
 	attempt = alice.holePunchCoord.GetAttempt(sessionID)
@@ -616,7 +630,8 @@ func setupRelayTestPeer(t *testing.T, name string) *relayTestPeer {
 
 	// Create relay components
 	relayMgr := NewRelayManager(listener)
-	holePunchCoord := NewHolePunchCoordinator(relayMgr)
+	holePunchCoord, err := NewHolePunchCoordinator(relayMgr, func(_ *RelayIntroBlock, _ ed25519.PublicKey) error { return nil })
+	require.NoError(t, err)
 
 	return &relayTestPeer{
 		addr:           packetConn.LocalAddr().(*net.UDPAddr),

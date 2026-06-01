@@ -477,7 +477,7 @@ func TestSelectBestNATType(t *testing.T) {
 		{"cone vs symmetric", NATCone, NATSymmetric, NATCone},
 		{"symmetric vs restricted", NATSymmetric, NATRestricted, NATRestricted},
 		{"equal types", NATCone, NATCone, NATCone},
-		{"unknown vs known", NATUnknown, NATCone, NATUnknown},
+		{"unknown vs known", NATUnknown, NATCone, NATCone},
 	}
 
 	for _, tt := range tests {
@@ -500,7 +500,7 @@ func TestSelectWorstNATType(t *testing.T) {
 		{"cone vs symmetric", NATCone, NATSymmetric, NATSymmetric},
 		{"symmetric vs restricted", NATSymmetric, NATRestricted, NATSymmetric},
 		{"equal types", NATCone, NATCone, NATCone},
-		{"unknown vs known", NATUnknown, NATCone, NATUnknown},
+		{"unknown vs known", NATUnknown, NATCone, NATCone},
 	}
 
 	for _, tt := range tests {

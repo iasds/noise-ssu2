@@ -47,7 +47,7 @@ func TestPeerTestManager_InitiatePeerTest(t *testing.T) {
 	assert.Equal(t, TestRequested, test.State)
 	assert.Equal(t, bobAddr.String(), test.BobAddr.String())
 	assert.False(t, test.StartTime.IsZero())
-	assert.Len(t, test.Timeouts, 7)
+	assert.False(t, test.Deadline.IsZero())
 }
 
 // TestPeerTestManager_InitiatePeerTest_NilAddress tests error handling.
@@ -334,7 +334,7 @@ func TestPeerTestManager_DetermineNATType(t *testing.T) {
 	listener := createMockListener(t)
 	defer listener.Close()
 
-	ptm := NewPeerTestManager(listener)
+	_ = NewPeerTestManager(listener)
 
 	tests := []struct {
 		name     string
@@ -410,13 +410,13 @@ func TestPeerTestManager_DetermineNATType(t *testing.T) {
 				DirectProbeSuccess:  true,
 				RelayedProbeSuccess: false,
 			},
-			expected: NATCone,
+			expected: NATUnknown,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			natType := ptm.DetermineNATType(tt.result)
+			natType := DetermineNATType(tt.result)
 			assert.Equal(t, tt.expected, natType)
 		})
 	}

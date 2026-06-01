@@ -42,10 +42,10 @@ func TestRelayManager_Stop(t *testing.T) {
 	// Stop should clean up
 	rm.Stop()
 
-	// State should be nil after stop
-	assert.Nil(t, rm.GetAllIntroducers())
-	assert.Nil(t, rm.GetRelayTagsMap())
-	assert.Nil(t, rm.GetPendingSessionsMap())
+	// State should be empty after stop
+	assert.Empty(t, rm.GetAllIntroducers())
+	assert.Empty(t, rm.GetRelayTagsMap())
+	assert.Empty(t, rm.GetPendingSessionsMap())
 }
 
 // TestRelayManager_RegisterIntroducer tests introducer registration.

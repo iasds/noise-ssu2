@@ -167,7 +167,7 @@ func TestPeerTest_SymmetricNAT(t *testing.T) {
 	assert.False(t, aliceTest.Reachable, "Should not be directly reachable")
 
 	// Verify DetermineNATType function
-	detectedType := alice.ptm.DetermineNATType(testResult)
+	detectedType := DetermineNATType(testResult)
 	assert.Equal(t, NATSymmetric, detectedType, "DetermineNATType should return Symmetric")
 }
 
@@ -194,9 +194,11 @@ func TestPeerTest_FullConeNAT(t *testing.T) {
 	require.NoError(t, err)
 
 	// Simulate full cone NAT: both probes succeed, port/IP consistent
+	// Use a public (non-local) IP so DetermineNATType returns NATCone, not NATNone.
+	externalAddr := &net.UDPAddr{IP: net.ParseIP("203.0.113.1"), Port: alice.addr.Port}
 	testResult := &TestResult{
 		NATType:             NATCone,
-		ExternalAddr:        alice.addr,
+		ExternalAddr:        externalAddr,
 		ExternalPort:        uint16(alice.addr.Port),
 		Reachable:           true,
 		TestTime:            time.Now(),
@@ -214,7 +216,7 @@ func TestPeerTest_FullConeNAT(t *testing.T) {
 	assert.Equal(t, NATCone, aliceTest.NATType, "Should detect full cone NAT")
 	assert.True(t, aliceTest.Reachable, "Should be directly reachable")
 
-	detectedType := alice.ptm.DetermineNATType(testResult)
+	detectedType := DetermineNATType(testResult)
 	assert.Equal(t, NATCone, detectedType, "DetermineNATType should return Full Cone")
 }
 
@@ -261,7 +263,7 @@ func TestPeerTest_RestrictedNAT(t *testing.T) {
 	assert.Equal(t, NATRestricted, aliceTest.NATType, "Should detect restricted cone NAT")
 	assert.False(t, aliceTest.Reachable, "Should not be directly reachable")
 
-	detectedType := alice.ptm.DetermineNATType(testResult)
+	detectedType := DetermineNATType(testResult)
 	assert.Equal(t, NATRestricted, detectedType, "DetermineNATType should return Restricted")
 }
 

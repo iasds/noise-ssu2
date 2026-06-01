@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"net"
 	"testing"
+	"time"
 
 	"github.com/go-i2p/common/data"
 	"github.com/stretchr/testify/assert"
@@ -72,10 +73,11 @@ func TestSignAndVerifyPeerTestMsg1(t *testing.T) {
 	require.NoError(t, err)
 
 	bobHash := generateRandomHash()
+	now := uint32(time.Now().Unix())
 
 	sig, err := SignPeerTest(
 		priv, bobHash, nil,
-		2, 42, 1700000000,
+		2, 42, now,
 		9000, net.IPv4(10, 0, 0, 1),
 	)
 	require.NoError(t, err)
@@ -83,7 +85,7 @@ func TestSignAndVerifyPeerTestMsg1(t *testing.T) {
 
 	valid, err := VerifyPeerTestSignature(
 		pub, sig, bobHash, nil,
-		2, 42, 1700000000,
+		2, 42, now,
 		9000, net.IPv4(10, 0, 0, 1),
 	)
 	require.NoError(t, err)
@@ -96,17 +98,18 @@ func TestSignAndVerifyPeerTestMsg3(t *testing.T) {
 
 	bobHash := generateRandomHash()
 	aliceHash := generateRandomHash()
+	now := uint32(time.Now().Unix())
 
 	sig, err := SignPeerTest(
 		priv, bobHash, &aliceHash,
-		2, 42, 1700000000,
+		2, 42, now,
 		9000, net.IPv4(10, 0, 0, 1),
 	)
 	require.NoError(t, err)
 
 	valid, err := VerifyPeerTestSignature(
 		pub, sig, bobHash, &aliceHash,
-		2, 42, 1700000000,
+		2, 42, now,
 		9000, net.IPv4(10, 0, 0, 1),
 	)
 	require.NoError(t, err)

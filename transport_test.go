@@ -487,8 +487,8 @@ func TestPutOnCloseWrapper(t *testing.T) {
 
 	// The pool must now know about the connection.
 	stats := p.Stats()
-	if stats["total"] != 1 {
-		t.Errorf("pool should contain 1 connection after Put, got total=%d", stats["total"])
+	if stats.Total != 1 {
+		t.Errorf("pool should contain 1 connection after Put, got total=%d", stats.Total)
 	}
 
 	// A second Close() must be idempotent and must not add a duplicate.
@@ -496,8 +496,8 @@ func TestPutOnCloseWrapper(t *testing.T) {
 		t.Fatalf("second Close() should not error, got: %v", err)
 	}
 	stats = p.Stats()
-	if stats["total"] != 1 {
-		t.Errorf("second Close() should not add a duplicate, got total=%d", stats["total"])
+	if stats.Total != 1 {
+		t.Errorf("second Close() should not add a duplicate, got total=%d", stats.Total)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"net"
 	"testing"
+	"time"
 
 	"github.com/go-i2p/common/data"
 	"github.com/stretchr/testify/assert"
@@ -64,10 +65,11 @@ func TestSignAndVerifyRelayRequest(t *testing.T) {
 
 	bobHash := generateRandomHash()
 	charlieHash := generateRandomHash()
+	now := uint32(time.Now().Unix())
 
 	sig, err := SignRelayRequest(
 		priv, bobHash, charlieHash,
-		42, 100, 1700000000, 2, 9000,
+		42, 100, now, 2, 9000,
 		net.IPv4(10, 0, 0, 1),
 	)
 	require.NoError(t, err)
@@ -75,7 +77,7 @@ func TestSignAndVerifyRelayRequest(t *testing.T) {
 
 	valid, err := VerifyRelayRequestSignature(
 		pub, sig, bobHash, charlieHash,
-		42, 100, 1700000000, 2, 9000,
+		42, 100, now, 2, 9000,
 		net.IPv4(10, 0, 0, 1),
 	)
 	require.NoError(t, err)
@@ -133,10 +135,11 @@ func TestSignAndVerifyRelayResponse(t *testing.T) {
 	require.NoError(t, err)
 
 	bobHash := generateRandomHash()
+	now := uint32(time.Now().Unix())
 
 	sig, err := SignRelayResponse(
 		priv, bobHash,
-		42, 1700000000, 2, 9000,
+		42, now, 2, 9000,
 		net.IPv4(10, 0, 0, 1),
 	)
 	require.NoError(t, err)
@@ -144,7 +147,7 @@ func TestSignAndVerifyRelayResponse(t *testing.T) {
 
 	valid, err := VerifyRelayResponseSignature(
 		pub, sig, bobHash,
-		42, 1700000000, 2, 9000,
+		42, now, 2, 9000,
 		net.IPv4(10, 0, 0, 1),
 	)
 	require.NoError(t, err)
