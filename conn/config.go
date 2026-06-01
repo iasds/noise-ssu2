@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/go-i2p/go-noise/handshake"
-	"github.com/go-i2p/go-noise/mod"
+	"github.com/go-i2p/go-noise/mod/validation"
 	"github.com/go-i2p/logger"
 	"github.com/go-i2p/noise"
 	"github.com/samber/oops"
@@ -226,7 +226,7 @@ func (c *ConnConfig) invalidateModifierCache() {
 // Returns an error with context if validation fails.
 func (c *ConnConfig) Validate() error {
 	log.WithFields(logger.Fields{"pkg": "noise", "func": "ConnConfig.Validate", "pattern": c.Pattern}).Debug("Validating ConnConfig")
-	return mod.RunValidators(
+	return validation.RunValidators(
 		c.validatePattern,
 		c.validateHandshakeTimeout,
 		c.validateRetryConfig,
@@ -237,7 +237,7 @@ func (c *ConnConfig) Validate() error {
 
 // validatePattern checks if the noise pattern is set, non-empty, and recognized.
 func (c *ConnConfig) validatePattern() error {
-	if err := mod.ValidatePattern(c.Pattern, "noise"); err != nil {
+	if err := validation.ValidatePattern(c.Pattern, "noise"); err != nil {
 		return err
 	}
 	if _, err := parseHandshakePattern(c.Pattern); err != nil {
@@ -252,20 +252,20 @@ func (c *ConnConfig) validatePattern() error {
 
 // validateHandshakeTimeout checks if the handshake timeout is positive.
 func (c *ConnConfig) validateHandshakeTimeout() error {
-	return mod.ValidateHandshakeTimeout(c.HandshakeTimeout, "noise")
+	return validation.ValidateHandshakeTimeout(c.HandshakeTimeout, "noise")
 }
 
 // validateRetryConfig checks if the retry configuration is valid.
 func (c *ConnConfig) validateRetryConfig() error {
-	return mod.ValidateRetryConfig(c.HandshakeRetries, c.RetryBackoff, "noise")
+	return validation.ValidateRetryConfig(c.HandshakeRetries, c.RetryBackoff, "noise")
 }
 
 // validateStaticKeyLength checks if the static key has the correct length for Curve25519.
 func (c *ConnConfig) validateStaticKeyLength() error {
-	return mod.ValidateKeyLength(c.StaticKey, "static key", "noise")
+	return validation.ValidateKeyLength(c.StaticKey, "static key", "noise")
 }
 
 // validateRemoteKeyLength checks if the remote key has the correct length for Curve25519.
 func (c *ConnConfig) validateRemoteKeyLength() error {
-	return mod.ValidateKeyLength(c.RemoteKey, "remote key", "noise")
+	return validation.ValidateKeyLength(c.RemoteKey, "remote key", "noise")
 }

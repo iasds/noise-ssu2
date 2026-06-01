@@ -4,7 +4,7 @@ import (
 	"sync"
 
 	"github.com/go-i2p/go-noise/handshake"
-	"github.com/go-i2p/go-noise/mod"
+	"github.com/go-i2p/go-noise/internal/securemem"
 	"github.com/go-i2p/logger"
 	"github.com/samber/oops"
 	"golang.org/x/crypto/chacha20"
@@ -146,7 +146,7 @@ func (com *ChaChaObfuscationModifier) Close() error {
 	defer com.mu.Unlock()
 	if !com.closed {
 		com.closed = true
-		mod.SecureZero(com.introKey)
+		securemem.SecureZero(com.introKey)
 	}
 	return nil
 }

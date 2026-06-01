@@ -8,7 +8,7 @@ import (
 	ssu2hs "github.com/go-i2p/go-noise/ssu2/handshake"
 	"github.com/go-i2p/go-noise/ssu2/reliability"
 	"github.com/go-i2p/go-noise/ssu2/wire"
-	"github.com/go-i2p/path"
+	path "github.com/go-i2p/path"
 )
 
 // ─── From ssu2/config ─────────────────────────────────────────────────────────

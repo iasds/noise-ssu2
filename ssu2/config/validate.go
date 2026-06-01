@@ -3,7 +3,7 @@ package config
 import (
 	noise "github.com/go-i2p/go-noise"
 	"github.com/go-i2p/go-noise/handshake"
-	"github.com/go-i2p/go-noise/mod"
+	"github.com/go-i2p/go-noise/mod/validation"
 	ssu2hs "github.com/go-i2p/go-noise/ssu2/handshake"
 	"github.com/go-i2p/go-noise/ssu2/wire"
 	"github.com/go-i2p/logger"
@@ -13,7 +13,7 @@ import (
 // Validate checks if the configuration is valid for SSU2.
 func (sc *SSU2Config) Validate() error {
 	log.WithFields(logger.Fields{"pkg": "config", "func": "Validate"}).Debug("Validating SSU2Config")
-	return mod.RunValidators(
+	return validation.RunValidators(
 		sc.validateBasicConfiguration,
 		sc.validateCryptographicParameters,
 		sc.validateTimeoutConfiguration,
@@ -27,7 +27,7 @@ func (sc *SSU2Config) Validate() error {
 func (sc *SSU2Config) validateBasicConfiguration() error {
 	log.WithFields(logger.Fields{"pkg": "config", "func": "validateBasicConfiguration", "pattern": sc.Pattern}).Debug("Checking pattern and router hash")
 	// Validate pattern (SSU2 typically uses XK)
-	if err := mod.ValidatePattern(sc.Pattern, "ssu2"); err != nil {
+	if err := validation.ValidatePattern(sc.Pattern, "ssu2"); err != nil {
 		return err
 	}
 
@@ -38,7 +38,7 @@ func (sc *SSU2Config) validateBasicConfiguration() error {
 func (sc *SSU2Config) validateCryptographicParameters() error {
 	log.WithFields(logger.Fields{"pkg": "config", "func": "validateCryptographicParameters", "initiator": sc.Initiator, "has_static_key": len(sc.StaticKey) > 0}).Debug("Checking keys and obfuscation settings")
 	// Validate static key if provided
-	if err := mod.ValidateKeyLength(sc.StaticKey, "static key", "ssu2"); err != nil {
+	if err := validation.ValidateKeyLength(sc.StaticKey, "static key", "ssu2"); err != nil {
 		return err
 	}
 
@@ -85,7 +85,7 @@ func (sc *SSU2Config) validateCryptographicParameters() error {
 func (sc *SSU2Config) validateTimeoutConfiguration() error {
 	log.WithFields(logger.Fields{"pkg": "config", "func": "validateTimeoutConfiguration", "handshake_timeout": sc.HandshakeTimeout, "keepalive_interval": sc.KeepaliveInterval}).Debug("Checking timeout and retry settings")
 	// Validate handshake timeout and retry configuration via shared helper.
-	if err := mod.ValidateTransportConfig(sc.HandshakeTimeout, sc.HandshakeRetries, sc.RetryBackoff, "ssu2"); err != nil {
+	if err := validation.ValidateTransportConfig(sc.HandshakeTimeout, sc.HandshakeRetries, sc.RetryBackoff, "ssu2"); err != nil {
 		return err
 	}
 

@@ -3,7 +3,7 @@
 // backward-compatible access from the flat ssu2 package.
 package ssu2
 
-import "github.com/go-i2p/path"
+import path "github.com/go-i2p/path"
 
 // ─── Interface re-exports ──────────────────────────────────────────────────────
 
@@ -154,6 +154,7 @@ var (
 	VerifyRelayResponseSignature = path.VerifyRelayResponseSignature
 
 	CompareNATTypes         = path.CompareNATTypes
+	DetermineNATType        = path.DetermineNATType
 	DescribeNATCapabilities = path.DescribeNATCapabilities
 	HasPublicIP             = path.HasPublicIP
 	IsSymmetricNAT          = path.IsSymmetricNAT

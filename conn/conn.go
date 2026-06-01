@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-i2p/go-noise/internal/securemem"
 	"github.com/go-i2p/go-noise/mod"
 	shutdown "github.com/go-i2p/go-noise/shutdown"
 	i2plogger "github.com/go-i2p/logger"
@@ -267,7 +268,7 @@ func (nc *Conn) Close() error {
 
 	// Zero static key material from config to prevent lingering in memory
 	if nc.config != nil && len(nc.config.StaticKey) > 0 {
-		mod.SecureZero(nc.config.StaticKey)
+		securemem.SecureZero(nc.config.StaticKey)
 	}
 
 	// Unregister from shutdown manager if set

@@ -257,6 +257,15 @@ func (l *SSU2Listener) Addr() net.Addr {
 	return l.addr
 }
 
+// GetAddr returns the string representation of the listener's address.
+// Implements the ssu2path.ListenerRef interface.
+func (l *SSU2Listener) GetAddr() string {
+	if l.addr == nil {
+		return ""
+	}
+	return l.addr.String()
+}
+
 // handleNewSession is called by the router when a handshake packet arrives
 // for a new session. It creates a new SSU2Conn and adds it to the accept queue.
 //

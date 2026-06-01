@@ -4,7 +4,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 
-	"github.com/go-i2p/go-noise/mod"
+	"github.com/go-i2p/go-noise/internal/securemem"
 	"github.com/go-i2p/logger"
 	"github.com/go-i2p/noise"
 	"github.com/samber/oops"
@@ -109,7 +109,7 @@ func (h *HandshakeHandler) ResetForRetry() error {
 	// be collected by the GC when the old HandshakeState is no longer referenced.
 	if h.handshakeState != nil {
 		oldEphem := h.handshakeState.LocalEphemeral()
-		mod.SecureZero(oldEphem.Private)
+		securemem.SecureZero(oldEphem.Private)
 	}
 	h.handshakeState = hs
 	h.sendCipher = nil

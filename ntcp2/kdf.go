@@ -4,7 +4,7 @@ import (
 	"encoding/binary"
 
 	"github.com/go-i2p/crypto/hmac"
-	"github.com/go-i2p/go-noise/mod"
+	"github.com/go-i2p/go-noise/internal/securemem"
 	"github.com/go-i2p/logger"
 	"github.com/samber/oops"
 )
@@ -110,12 +110,12 @@ func DeriveSipHashKeys(askMaster, handshakeHash []byte) (
 	// "overwrite ask_master in memory, no longer needed"
 	// "overwrite sip_master in memory, no longer needed"
 	// "overwrite the temp_key in memory, no longer needed"
-	mod.SecureZero(hData)
-	mod.SecureZero(tempKey[:])
-	mod.SecureZero(sipMaster[:])
-	mod.SecureZero(fullAB[:])
-	mod.SecureZero(step5Data)
-	mod.SecureZero(fullBA[:])
+	securemem.SecureZero(hData)
+	securemem.SecureZero(tempKey[:])
+	securemem.SecureZero(sipMaster[:])
+	securemem.SecureZero(fullAB[:])
+	securemem.SecureZero(step5Data)
+	securemem.SecureZero(fullBA[:])
 
 	log.WithFields(logger.Fields{"pkg": "ntcp2", "func": "DeriveSipHashKeys"}).Debug("SipHash key derivation completed successfully")
 	return sipKeysAB, sipIVAB, sipKeysBA, sipIVBA, nil
