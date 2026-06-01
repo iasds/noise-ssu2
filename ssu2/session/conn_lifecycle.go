@@ -1,0 +1,273 @@
+package session
+
+import (
+	"encoding/binary"
+	"net"
+	"time"
+
+	"github.com/go-i2p/logger"
+	"github.com/samber/oops"
+)
+
+func (h *SSU2Conn) Close() error {
+	return h.CloseWithReason(TerminationNormalClose, nil)
+}
+
+// CloseWithReason sends a Termination block with the given reason code
+// and optional additional data, then closes the connection.
+// Per spec §Termination, the data is: validDataPacketsReceived (8 bytes)
+// + reason (1 byte) + additional data (optional).
+// CloseWithReason sends a Termination block with the given reason code
+// and optional additional data, then closes the connection.
+// Per spec §Termination, the data is: validDataPacketsReceived (8 bytes)
+// + reason (1 byte) + additional data (optional).
+func (h *SSU2Conn) CloseWithReason(reason TerminationReason, additionalData []byte) error {
+	h.closeOnce.Do(func() {
+		log.WithFields(logger.Fields{"pkg": "session", "func": "CloseWithReason", "reason": reason}).Debug("Closing SSU2 connection")
+		// Update state first
+		h.stateMutex.Lock()
+		h.state = StateClosing
+		h.stateMutex.Unlock()
+
+		// Send Termination block (best effort)
+		// Spec §Termination: validDataPacketsReceived(8 bytes, big-endian) + reason(1 byte) + additionalData
+		termData := make([]byte, 9+len(additionalData))
+		binary.BigEndian.PutUint64(termData[0:8], h.validDataPacketsReceived.Load())
+		termData[8] = byte(reason)
+		if len(additionalData) > 0 {
+			copy(termData[9:], additionalData)
+		}
+		termBlock := &SSU2Block{
+			Type: BlockTypeTermination,
+			Data: termData,
+		}
+
+		// Create Data packet with termination block
+		pktNum := h.nextSendSequence()
+		hdr := make([]byte, ShortHeaderSize)
+		binary.BigEndian.PutUint64(hdr[0:8], h.remoteConnectionID)
+		binary.BigEndian.PutUint32(hdr[8:12], pktNum)
+		packet := &SSU2Packet{
+			MessageType:  MessageTypeData,
+			PacketNumber: pktNum,
+			Header:       hdr,
+			MAC:          make([]byte, MACSize),
+		}
+		payload, err := SerializeBlocks([]*SSU2Block{termBlock})
+		if err == nil {
+			packet.Payload = payload
+			_ = h.sendPacketDirect(packet) // Best effort, ignore errors
+		}
+
+		// Per spec §Termination: wait briefly for the peer's Termination
+		// response before tearing down the session. This avoids lingering
+		// half-open state on the remote side. Use a timer instead of
+		// time.Sleep so future callers could cancel via a context or
+		// additional signal channel.
+		if h.config.DestroyTimeout > 0 {
+			timeout := h.config.DestroyTimeout
+			const maxDestroyTimeout = 30 * time.Second
+			if timeout > maxDestroyTimeout {
+				timeout = maxDestroyTimeout
+			}
+			timer := time.NewTimer(timeout)
+			<-timer.C
+			timer.Stop()
+		}
+
+		// Stop keepalive timer
+		if h.keepaliveTimer != nil {
+			h.keepaliveTimer.Stop()
+		}
+
+		// Stop fragment reaper
+		if h.dataHandler != nil {
+			h.dataHandler.Close()
+		}
+
+		// Stop replay cache cleanup goroutine
+		if h.handshakeHandler != nil {
+			h.handshakeHandler.Close()
+		}
+
+		// Zero SipHash key material
+		if mod := h.sipHashModifier.Load(); mod != nil {
+			mod.ZeroKeys()
+		}
+
+		// Close channels to signal goroutines to exit
+		close(h.closeChan)
+
+		// Wait for background goroutines to complete
+		h.wg.Wait()
+
+		// Close the underlying PacketConn if this connection owns it
+		// (created via DialSSU2). Shared sockets (DialSSU2WithConn,
+		// listener-accepted) are not closed here.
+		if h.ownsUnderlying && h.underlying != nil {
+			h.closeErr = h.underlying.Close()
+		}
+
+		// Update final state
+		h.stateMutex.Lock()
+		h.state = StateClosed
+		h.stateMutex.Unlock()
+	})
+
+	h.closeMutex.Lock()
+	defer h.closeMutex.Unlock()
+	return h.closeErr
+}
+
+// LocalAddr implements net.Conn.LocalAddr.
+// LocalAddr implements net.Conn.LocalAddr.
+func (h *SSU2Conn) LocalAddr() net.Addr {
+	if localUDPAddr, ok := h.underlying.LocalAddr().(*net.UDPAddr); ok {
+		role := "initiator"
+		if !h.initiator {
+			role = "responder"
+		}
+		addr, err := NewSSU2Addr(localUDPAddr, h.config.RouterHash, h.config.ConnectionID, role)
+		if err == nil {
+			return addr
+		}
+	}
+	return h.underlying.LocalAddr()
+}
+
+// RemoteAddr implements net.Conn.RemoteAddr.
+// RemoteAddr implements net.Conn.RemoteAddr.
+func (h *SSU2Conn) RemoteAddr() net.Addr {
+	return h.ssu2Addr
+}
+
+// SendToAddress sends a block to a specific UDP address (implements PathValidationConn).
+// SendToAddress sends a block to a specific UDP address (implements PathValidationConn).
+func (h *SSU2Conn) SendToAddress(block *SSU2Block, addr *net.UDPAddr) error {
+	pktNum := h.nextSendSequence()
+	hdr := make([]byte, ShortHeaderSize)
+	binary.BigEndian.PutUint64(hdr[0:8], h.remoteConnectionID)
+	binary.BigEndian.PutUint32(hdr[8:12], pktNum)
+	packet := &SSU2Packet{
+		MessageType:  MessageTypeData,
+		PacketNumber: pktNum,
+		Header:       hdr,
+		MAC:          make([]byte, MACSize),
+	}
+	payload, err := SerializeBlocks([]*SSU2Block{block})
+	if err != nil {
+		return oops.Wrapf(err, "failed to serialize block for path validation")
+	}
+	packet.Payload = payload
+	data, err := packet.Serialize()
+	if err != nil {
+		return oops.Wrapf(err, "failed to serialize packet for path validation")
+	}
+	_, err = h.underlying.WriteTo(data, addr)
+	return err
+}
+
+// GetRemoteAddr returns the current remote UDP address (implements PathValidationConn).
+// GetRemoteAddr returns the current remote UDP address (implements PathValidationConn).
+func (h *SSU2Conn) GetRemoteAddr() *net.UDPAddr {
+	h.remoteAddrLock.RLock()
+	defer h.remoteAddrLock.RUnlock()
+	return h.remoteAddr
+}
+
+// SetRemoteAddr updates the remote address after successful path validation (implements PathValidationConn).
+// SetRemoteAddr updates the remote address after successful path validation (implements PathValidationConn).
+func (h *SSU2Conn) SetRemoteAddr(addr *net.UDPAddr) error {
+	if addr == nil {
+		return oops.Errorf("address is nil")
+	}
+	h.remoteAddrLock.Lock()
+	defer h.remoteAddrLock.Unlock()
+	h.remoteAddr = addr
+	return nil
+}
+
+// SetDeadline implements net.Conn.SetDeadline.
+// SetDeadline implements net.Conn.SetDeadline.
+func (h *SSU2Conn) SetDeadline(t time.Time) error {
+	h.deadlineMutex.Lock()
+	defer h.deadlineMutex.Unlock()
+	h.readDeadline = t
+	h.writeDeadline = t
+	return nil
+}
+
+// SetReadDeadline implements net.Conn.SetReadDeadline.
+// SetReadDeadline implements net.Conn.SetReadDeadline.
+func (h *SSU2Conn) SetReadDeadline(t time.Time) error {
+	h.deadlineMutex.Lock()
+	defer h.deadlineMutex.Unlock()
+	h.readDeadline = t
+	return nil
+}
+
+// SetWriteDeadline implements net.Conn.SetWriteDeadline.
+// SetWriteDeadline implements net.Conn.SetWriteDeadline.
+func (h *SSU2Conn) SetWriteDeadline(t time.Time) error {
+	h.deadlineMutex.Lock()
+	defer h.deadlineMutex.Unlock()
+	h.writeDeadline = t
+	return nil
+}
+
+// GetState returns the current connection state.
+// GetState returns the current connection state.
+func (h *SSU2Conn) GetState() ConnState {
+	h.stateMutex.RLock()
+	defer h.stateMutex.RUnlock()
+	return h.state
+}
+
+// RecvStats returns error counters from the receive loop for observability.
+// Keys: "read_errors", "parse_errors", "decrypt_errors".
+// RecvStats returns error counters from the receive loop for observability.
+// Keys: "read_errors", "parse_errors", "decrypt_errors".
+func (h *SSU2Conn) RecvStats() map[string]uint64 {
+	return map[string]uint64{
+		"read_errors":    h.readErrors.Load(),
+		"parse_errors":   h.parseErrors.Load(),
+		"decrypt_errors": h.decryptErrors.Load(),
+	}
+}
+
+// SetDataHandlerCallbacks wires application-level callbacks for SSU2 block types
+// received during the data phase. Call before Handshake() completes to ensure
+// callbacks are active from the first data packet. Safe to call concurrently
+// with an active connection; updates take effect on the next inbound packet.
+// SetDataHandlerCallbacks wires application-level callbacks for SSU2 block types
+// received during the data phase. Call before Handshake() completes to ensure
+// callbacks are active from the first data packet. Safe to call concurrently
+// with an active connection; updates take effect on the next inbound packet.
+func (h *SSU2Conn) SetDataHandlerCallbacks(cbs DataHandlerCallbacks) {
+	h.dataHandler.SetCallbacks(cbs)
+}
+
+// SetOwnsUnderlying marks whether this connection owns the underlying
+// PacketConn. When true, CloseWithReason will close the PacketConn.
+// When false (shared socket scenarios), the PacketConn is left open.
+func (h *SSU2Conn) SetOwnsUnderlying(v bool) {
+	h.ownsUnderlying = v
+}
+
+// GetSSU2Addr returns the SSU2 address associated with this connection.
+// It exposes the otherwise-unexported ssu2Addr field for use by outer
+// packages such as ssu2/server tests.
+func (h *SSU2Conn) GetSSU2Addr() *SSU2Addr {
+	return h.ssu2Addr
+}
+
+// IsInitiator reports whether this connection was created as the initiating side
+// of the SSU2 handshake.
+func (h *SSU2Conn) IsInitiator() bool {
+	return h.initiator
+}
+
+// NewMockSSU2Conn creates a minimal SSU2Conn with the given connectionID in
+// StateEstablished. The connection has no underlying PacketConn and must not
+// be used for actual I/O. Intended for unit tests that need to inject mock
+// sessions (e.g. testing SessionCount or graceful shutdown).

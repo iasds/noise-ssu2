@@ -1,3 +1,5 @@
+//go:build ntcp2_debug
+
 package ntcp2
 
 // debug.go — NTCP2 wire-dump and interop-diagnostic helpers.

@@ -12,6 +12,9 @@ import (
 	"github.com/samber/oops"
 )
 
+// FrameLengthFieldSize is the size of the SipHash-obfuscated length field.
+const FrameLengthFieldSize = 2
+
 // Read implements net.Conn.Read.
 // When a length obfuscator is set, reads use NTCP2 framed I/O:
 //  1. Return any buffered plaintext from a previous frame first

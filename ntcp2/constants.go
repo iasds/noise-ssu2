@@ -39,9 +39,6 @@ const (
 	// SipHashIVSize is the size of the SipHash IV in bytes (uint64 = 8 bytes).
 	SipHashIVSize = 8
 
-	// FrameLengthFieldSize is the size of the SipHash-obfuscated length field.
-	FrameLengthFieldSize = 2
-
 	// NTCP2ProtocolName is the full Noise protocol name for NTCP2 as defined by the I2P spec.
 	// This is passed to InitializeSymmetric() via the ProtocolName field on noise.Config,
 	// producing the correct KDF output for interoperability with other I2P implementations.
@@ -49,9 +46,6 @@ const (
 
 	// NTCP2Pattern is the base Noise pattern used by NTCP2.
 	NTCP2Pattern = "XK"
-
-	// DefaultHandshakeTimeoutSeconds is the default handshake timeout in seconds.
-	DefaultHandshakeTimeoutSeconds = 30
 
 	// DefaultMaxFrameSize is the default maximum frame size (16KB).
 	DefaultMaxFrameSize = 16384
@@ -71,9 +65,6 @@ const (
 	// plus generous padding headroom, while preventing DoS via unbounded allocation
 	// on malicious m3p2Len. This limit applies to the AEAD ciphertext size.
 	MaxNTCP2Message3Part2Len = 8192
-
-	// DefaultHandshakeRetries is the default number of handshake retry attempts.
-	DefaultHandshakeRetries = 3
 
 	// MaxPaddingRatio is the maximum padding ratio per I2P NTCP2 spec (4.4 fixed-point).
 	MaxPaddingRatio = 15.9375

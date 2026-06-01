@@ -13,6 +13,12 @@ import (
 	"github.com/samber/oops"
 )
 
+// DefaultHandshakeTimeoutSeconds is the default handshake timeout in seconds.
+const DefaultHandshakeTimeoutSeconds = 30
+
+// DefaultHandshakeRetries is the default number of handshake retry attempts.
+const DefaultHandshakeRetries = 3
+
 // Config contains configuration for creating NTCP2 connections and listeners.
 // It follows the builder pattern for optional configuration and validation,
 // similar to the main ConnConfig but with NTCP2-specific parameters.
