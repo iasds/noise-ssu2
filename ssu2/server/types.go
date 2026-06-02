@@ -107,5 +107,6 @@ var (
 	DeserializeBlocks              = wire.DeserializeBlocks
 	FindBlockByType                = wire.FindBlockByType
 	ExtractConnectionID            = wire.ExtractConnectionID
+	ExtractConnIDWithIntroKey      = wire.ExtractConnIDWithIntroKey
 	NewHeaderProtectorFromIntroKey = wire.NewHeaderProtectorFromIntroKey
 )

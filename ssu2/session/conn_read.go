@@ -196,6 +196,21 @@ func (h *SSU2Conn) keepaliveLoop() {
 	}
 }
 
+// DeliverRawPacket receives a raw packet from the listener for session-level
+// processing. This is the entry point for the fast-path routing in the listener:
+// the listener only unmasked the connID (using intro key) and determined this
+// session owns the packet. Now the session uses its OWN keys to fully decrypt
+// the header and payload.
+//
+// This matches i2pd's architecture where the server dispatches raw packets to
+// session.ProcessData / session.ProcessSessionCreated etc.
+func (h *SSU2Conn) DeliverRawPacket(data []byte, addr net.Addr) {
+	packet := h.parseInboundPacket(data, addr)
+	if packet != nil {
+		h.processInboundPacket(packet)
+	}
+}
+
 // processInboundPacket processes a received packet.
 func (h *SSU2Conn) processInboundPacket(packet *SSU2Packet) {
 	switch packet.MessageType {

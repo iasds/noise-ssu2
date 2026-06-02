@@ -86,6 +86,9 @@ func DialSSU2WithConn(packetConn net.PacketConn, remoteAddr *net.UDPAddr, config
 		return nil, err
 	}
 
+	// Shared socket: the caller owns the PacketConn, not this connection.
+	conn.SetOwnsUnderlying(false)
+
 	return conn, nil
 }
 

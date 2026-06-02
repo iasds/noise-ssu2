@@ -381,6 +381,66 @@ func (hp *HeaderProtector) GetHeaderType() HeaderType {
 	return hp.headerType
 }
 
+// GetIntroKey returns kHeader1 (the intro key). For protectors created via
+// NewHeaderProtectorFromIntroKey, both kHeader1 and kHeader2 are the intro key.
+// The returned slice is a copy — safe to hold without locks.
+func (hp *HeaderProtector) GetIntroKey() []byte {
+	hp.mu.RLock()
+	defer hp.mu.RUnlock()
+	out := make([]byte, len(hp.kHeader1))
+	copy(out, hp.kHeader1)
+	return out
+}
+
+// ExtractConnIDWithIntroKey extracts the destination connection ID from a raw
+// (still-encrypted) SSU2 packet using ONLY the receiver's intro key.
+//
+// Per SSU2 spec, the destination connID (bytes 0-7) is ALWAYS XOR-masked with
+// ChaCha20 keyed on the RECEIVER's intro key, regardless of the packet phase
+// (handshake or data). This allows the server to demux sessions without fully
+// parsing/decrypting the packet — matching i2pd's SSU2Server::ProcessNextPacket
+// architecture where only the connID is unmasked for routing.
+//
+// The mask is generated from:
+//   - key: receiver's intro key (kHeader1 = kHeader2 = introKey)
+//   - IV: packet[len-24:len-12] (first 12 bytes of the 24-byte tail)
+//
+// Returns the unmasked connID, or error if the packet is too small.
+func ExtractConnIDWithIntroKey(packet []byte, introKey []byte) (uint64, error) {
+	if len(introKey) != HeaderKeySize {
+		return 0, oops.
+			Code("INVALID_KEY_SIZE").
+			In("ssu2").
+			With("expected", HeaderKeySize).
+			With("actual", len(introKey)).
+			Errorf("intro key must be exactly %d bytes", HeaderKeySize)
+	}
+	if len(packet) < 32 { // minimum: 8-byte header + 24-byte tail
+		return 0, oops.
+			Code("PACKET_TOO_SMALL").
+			In("ssu2").
+			With("packet_size", len(packet)).
+			Errorf("packet too small to extract connID (need >= 32 bytes)")
+	}
+
+	// IV1 = packet[len-24 : len-12]
+	iv1 := make([]byte, 12)
+	copy(iv1, packet[len(packet)-24:len(packet)-12])
+
+	// mask1 = ChaCha20(introKey, iv1, zeros)[0:8]
+	cipher, err := chacha20.NewUnauthenticatedCipher(introKey, iv1)
+	if err != nil {
+		return 0, oops.Wrapf(err, "failed to init ChaCha20 for connID extraction")
+	}
+	zeros := make([]byte, 8)
+	mask := make([]byte, 8)
+	cipher.XORKeyStream(mask, zeros)
+
+	// Unmask bytes 0-7
+	connID := binary.BigEndian.Uint64(packet[0:8]) ^ binary.BigEndian.Uint64(mask)
+	return connID, nil
+}
+
 func ExtractConnectionID(header []byte) (uint64, error) {
 	if len(header) < 8 {
 		return 0, oops.

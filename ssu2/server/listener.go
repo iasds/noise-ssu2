@@ -299,6 +299,9 @@ func (l *SSU2Listener) handleNewSession(remoteAddr *net.UDPAddr, packet *SSU2Pac
 		return nil, oops.Wrapf(err, "failed to create SSU2 connection")
 	}
 
+	// Listener-accepted connections share the listener's socket.
+	conn.SetOwnsUnderlying(false)
+
 	return l.registerAndQueueConn(conn, connID)
 }
 
@@ -708,4 +711,13 @@ func (rl *ipRateLimiter) Allow(ip string) bool {
 // counter grows under normal load.
 func (l *SSU2Listener) GetDroppedPackets() uint64 {
 	return atomic.LoadUint64(&l.droppedPackets)
+}
+
+// getIntroKey returns the raw intro key bytes from the listener's header protector.
+// Returns nil if no header protector is configured.
+func (l *SSU2Listener) getIntroKey() []byte {
+	if l.introHeaderProtector == nil {
+		return nil
+	}
+	return l.introHeaderProtector.GetIntroKey()
 }

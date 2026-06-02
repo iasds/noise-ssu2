@@ -153,6 +153,7 @@ var (
 	GetBlockCategory                    = wire.GetBlockCategory
 	AllBlockTypes                       = wire.AllBlockTypes
 	ExtractConnectionID                 = wire.ExtractConnectionID
+	ExtractConnIDWithIntroKey           = wire.ExtractConnIDWithIntroKey
 	ParseNewTokenBlock                  = wire.ParseNewTokenBlock
 	EncodeAddressBlock                  = wire.EncodeAddressBlock
 	DecodeAddressBlock                  = wire.DecodeAddressBlock

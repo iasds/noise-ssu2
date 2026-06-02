@@ -126,20 +126,44 @@ func (l *SSU2Listener) packetWorker() {
 // handleIncomingPacket processes a received packet and routes it appropriately.
 // This is called in a goroutine for each received packet.
 //
-// AUDIT C-1: If plaintext Deserialize fails and an inbound HeaderProtector is
-// configured (i.e. config.IntroKey was set), the listener performs an in-place
-// header-protection decryption attempt before discarding the packet. This is
-// the receiver-side counterpart to spec-compliant SSU2 senders that obfuscate
-// header bytes 0-15 (and, for long headers, bytes 16-63) using ChaCha20 keyed
-// on the receiver's intro key.
+// Architecture (matching i2pd SSU2Server::ProcessNextPacket):
 //
-// Design:
-// - Attempts to parse the packet (plaintext first, then header-protected)
-// - Routes the packet to an existing session via PacketRouter
-// - If routing fails and packet is a TokenRequest, processes it directly
-// - All other routing failures are silently ignored
+//  1. FAST PATH — connID-only demux: If the listener has an intro key, extract
+//     the destination connID from the raw packet using ONLY the intro key
+//     (per SSU2 spec, connID is always masked with receiver's intro key regardless
+//     of packet phase). If a registered session matches, deliver the raw bytes
+//     to the session for full decryption with its own session-specific keys.
+//     This avoids the listener needing to know session-derived keys.
+//
+//  2. SLOW PATH — full parse: For new-session packets (SessionRequest, TokenRequest)
+//     where no session exists yet, fall back to full header-protection decrypt +
+//     Deserialize, then route via PacketRouter which creates new sessions.
+//
+// This two-phase approach fixes the root cause where SessionCreated packets
+// (encrypted with SessCreateHeader key) were silently dropped because the
+// listener's intro-key-based header protector couldn't fully decrypt them.
 func (l *SSU2Listener) handleIncomingPacket(data []byte, remoteAddr *net.UDPAddr) {
 	log.WithFields(logger.Fields{"pkg": "server", "func": "handleIncomingPacket", "remote_addr": remoteAddr.String(), "data_len": len(data)}).Debug("handleIncomingPacket: processing received packet")
+
+	// FAST PATH: Extract connID from raw bytes and route to existing session.
+	// Per SSU2 spec, the destination connID (bytes 0-7) is ALWAYS masked with
+	// the receiver's intro key, regardless of packet phase. This lets us demux
+	// without knowing session-specific keys.
+	if l.introHeaderProtector != nil && len(data) >= 32 {
+		introKey := l.getIntroKey()
+		if len(introKey) == 32 {
+			if connID, err := ExtractConnIDWithIntroKey(data, introKey); err == nil {
+				if conn := l.router.GetSession(connID); conn != nil {
+					// Existing session found — deliver raw bytes for session-level
+					// decryption using session-specific keys.
+					conn.DeliverRawPacket(data, remoteAddr)
+					return
+				}
+			}
+		}
+	}
+
+	// SLOW PATH: Full parse for new-session packets.
 	packet, ok := l.parseInboundPacket(data)
 	if !ok {
 		return

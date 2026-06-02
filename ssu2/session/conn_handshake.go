@@ -42,8 +42,16 @@ func (h *SSU2Conn) Handshake(ctx context.Context) error {
 	// Start recvLoop (needed during handshake for receivePacketWithTimeout).
 	// Started here rather than in the constructor so that callers who create
 	// a conn but never call Handshake or Close don't leak a goroutine.
-	h.wg.Add(1)
-	go h.recvLoop()
+	//
+	// When the socket is shared (ownsUnderlying == false), recvLoop is NOT
+	// started because SetReadDeadline on the shared socket would interfere
+	// with other readers (e.g. the SSU2Listener's receiveLoop). Instead,
+	// packets are delivered via the PacketRouter which calls
+	// processInboundPacket directly, feeding recvQueue.
+	if h.ownsUnderlying {
+		h.wg.Add(1)
+		go h.recvLoop()
+	}
 
 	// Ensure recvLoop is cleaned up if handshake fails. The CloseWithReason
 	// call is idempotent (via closeOnce), so it's safe to call again later.
