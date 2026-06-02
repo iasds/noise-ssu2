@@ -36,6 +36,11 @@ type SSU2Config struct {
 	// parameter from the peer's RouterAddress options.
 	RemoteStaticKey []byte
 
+	// RouterInfoBytes is the serialized RouterInfo to send in SessionConfirmed.
+	// Must include the SSU2 address with the "s=" parameter (static key).
+	// When empty, RouterHash is used as fallback (will fail peer verification).
+	RouterInfoBytes []byte
+
 	// HandshakeTimeout is the maximum time to wait for handshake completion
 	// Default: 15 seconds (per SSU2 specification)
 	HandshakeTimeout time.Duration

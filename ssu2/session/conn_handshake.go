@@ -239,7 +239,16 @@ func (h *SSU2Conn) installSessionConfirmedHeaderKey() error {
 // sendSessionConfirmed creates and sends SessionConfirmed fragments.
 func (h *SSU2Conn) sendSessionConfirmed() error {
 	log.WithFields(logger.Fields{"pkg": "session", "func": "sendSessionConfirmed", "remoteConnectionID": h.remoteConnectionID}).Debug("Creating and sending SessionConfirmed fragments")
-	fragments, err := h.handshakeHandler.CreateSessionConfirmedFragments(h.remoteConnectionID, 0, h.config.RouterHash[:])
+
+	// Use RouterInfoBytes if available (contains full RouterInfo with static key),
+	// otherwise fall back to RouterHash (will fail peer verification).
+	routerInfoPayload := h.config.RouterInfoBytes
+	if len(routerInfoPayload) == 0 {
+		log.WithFields(logger.Fields{"pkg": "session", "func": "sendSessionConfirmed"}).Warn("RouterInfoBytes empty, falling back to RouterHash (peer verification will fail)")
+		routerInfoPayload = h.config.RouterHash[:]
+	}
+
+	fragments, err := h.handshakeHandler.CreateSessionConfirmedFragments(h.remoteConnectionID, 0, routerInfoPayload)
 	if err != nil {
 		return oops.Wrapf(err, "failed to create SessionConfirmed")
 	}
