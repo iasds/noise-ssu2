@@ -79,6 +79,13 @@ func (l *SSU2Listener) receiveLoop() {
 			continue
 		}
 
+		log.WithFields(logger.Fields{
+			"pkg":        "server",
+			"func":       "receiveLoop",
+			"bytes":      n,
+			"remoteAddr": udpAddr.String(),
+		}).Info("receiveLoop: received UDP packet")
+
 		packetData := make([]byte, n)
 		copy(packetData, buf[:n])
 
@@ -153,19 +160,47 @@ func (l *SSU2Listener) handleIncomingPacket(data []byte, remoteAddr *net.UDPAddr
 		introKey := l.getIntroKey()
 		if len(introKey) == 32 {
 			if connID, err := ExtractConnIDWithIntroKey(data, introKey); err == nil {
+				log.WithFields(logger.Fields{
+					"pkg":        "server",
+					"func":       "handleIncomingPacket",
+					"connID":     connID,
+					"remoteAddr": remoteAddr.String(),
+				}).Info("handleIncomingPacket: fast path connID extracted")
 				if conn := l.router.GetSession(connID); conn != nil {
 					// Existing session found — deliver raw bytes for session-level
 					// decryption using session-specific keys.
 					conn.DeliverRawPacket(data, remoteAddr)
 					return
 				}
+				log.WithFields(logger.Fields{
+					"pkg":    "server",
+					"func":   "handleIncomingPacket",
+					"connID": connID,
+				}).Info("handleIncomingPacket: fast path no session found for connID")
+			} else {
+				log.WithFields(logger.Fields{
+					"pkg":    "server",
+					"func":   "handleIncomingPacket",
+					"error":  err.Error(),
+				}).Info("handleIncomingPacket: fast path connID extraction failed")
 			}
 		}
 	}
 
 	// SLOW PATH: Full parse for new-session packets.
+	log.WithFields(logger.Fields{
+		"pkg":        "server",
+		"func":       "handleIncomingPacket",
+		"remoteAddr": remoteAddr.String(),
+		"data_len":   len(data),
+	}).Info("handleIncomingPacket: entering slow path for new session")
 	packet, ok := l.parseInboundPacket(data)
 	if !ok {
+		log.WithFields(logger.Fields{
+			"pkg":        "server",
+			"func":       "handleIncomingPacket",
+			"remoteAddr": remoteAddr.String(),
+		}).Info("handleIncomingPacket: slow path parse failed, dropping packet")
 		return
 	}
 

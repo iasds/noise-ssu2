@@ -205,9 +205,27 @@ func (h *SSU2Conn) keepaliveLoop() {
 // This matches i2pd's architecture where the server dispatches raw packets to
 // session.ProcessData / session.ProcessSessionCreated etc.
 func (h *SSU2Conn) DeliverRawPacket(data []byte, addr net.Addr) {
+	log.WithFields(logger.Fields{
+		"pkg":       "session",
+		"func":      "DeliverRawPacket",
+		"data_len":  len(data),
+		"from":      addr.String(),
+		"initiator": h.initiator,
+		"state":     h.state,
+	}).Info("DeliverRawPacket: received raw packet from listener")
 	packet := h.parseInboundPacket(data, addr)
 	if packet != nil {
+		log.WithFields(logger.Fields{
+			"pkg":         "session",
+			"func":        "DeliverRawPacket",
+			"messageType": packet.MessageType,
+		}).Info("DeliverRawPacket: parsed successfully, processing")
 		h.processInboundPacket(packet)
+	} else {
+		log.WithFields(logger.Fields{
+			"pkg":  "session",
+			"func": "DeliverRawPacket",
+		}).Info("DeliverRawPacket: parseInboundPacket returned nil, packet dropped")
 	}
 }
 
