@@ -203,7 +203,7 @@ func validateNewConnParams(underlying net.Conn, config *ConnConfig) error {
 }
 
 // createHandshakeState creates and initializes the Noise handshake state.
-func createHandshakeState(config *ConnConfig) (*noise.HandshakeState, error) {
+func createHandshakeState(config *ConnConfig, privateStaticKey []byte) (*noise.HandshakeState, error) {
 	cs := config.CipherSuite
 	if cs == nil {
 		cs = noise.NewCipherSuite(noise.DH25519, noise.CipherAESGCM, noise.HashSHA256)
@@ -222,9 +222,10 @@ func createHandshakeState(config *ConnConfig) (*noise.HandshakeState, error) {
 	// can use it in pre-messages and static key transmission patterns.
 	// The StaticKeypair requires both Private and Public to be set;
 	// the upstream library does NOT compute the public key automatically.
+	// Use the per-connection private key copy to avoid corrupting the caller's config.
 	var staticKeypair noise.DHKey
-	if len(config.StaticKey) > 0 {
-		privKey, err := ecdh.X25519().NewPrivateKey(config.StaticKey)
+	if len(privateStaticKey) > 0 {
+		privKey, err := ecdh.X25519().NewPrivateKey(privateStaticKey)
 		if err != nil {
 			return nil, oops.
 				Code("INVALID_STATIC_KEY").
@@ -232,7 +233,7 @@ func createHandshakeState(config *ConnConfig) (*noise.HandshakeState, error) {
 				Wrapf(err, "failed to derive public key from static private key")
 		}
 		staticKeypair = noise.DHKey{
-			Private: config.StaticKey,
+			Private: privateStaticKey,
 			Public:  privKey.PublicKey().Bytes(),
 		}
 	}
@@ -352,7 +353,7 @@ func (nc *Conn) markHandshakeComplete() {
 // so that retry attempts begin with fresh nonce counters and chaining key.
 // Any partial cipher states from a failed handshake are also cleared.
 func (nc *Conn) resetHandshakeState() {
-	hs, err := createHandshakeState(nc.config)
+	hs, err := createHandshakeState(nc.config, nc.privateStaticKey)
 	if err != nil {
 		nc.logger.WithFields(i2plogger.Fields{
 			"pkg":  "noise",

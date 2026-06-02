@@ -70,6 +70,11 @@ type ShutdownManager struct {
 
 	// once ensures shutdown only happens once
 	once sync.Once
+
+	// shutdownErr stores the error from the shutdown sequence.
+	// Protected by mu to ensure concurrent callers can read it.
+	// See LOW-1 audit finding.
+	shutdownErr error
 }
 
 // NewShutdownManager creates a new shutdown manager with the given timeout.
@@ -194,9 +199,21 @@ func (sm *ShutdownManager) Shutdown() error {
 
 		shutdownErr = sm.executeShutdownSequence()
 		sm.logger.WithFields(i2plogger.Fields{"pkg": "noise", "func": "ShutdownManager.Shutdown"}).Info("graceful shutdown complete")
+
+		// Store the error in the struct so subsequent callers can retrieve it.
+		// See LOW-1 audit finding: all callers should see the same result.
+		sm.mu.Lock()
+		sm.shutdownErr = shutdownErr
+		sm.mu.Unlock()
 	})
 
-	return shutdownErr
+	// Wait for the closure to complete if this is a concurrent caller.
+	<-sm.done
+
+	// Retrieve the stored shutdown error for all callers (including this one).
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	return sm.shutdownErr
 }
 
 // logShutdownInitiation logs the start of the shutdown process with current state.

@@ -35,9 +35,12 @@ func (nc *Conn) GetConnectionState() ConnState {
 // during the Noise handshake. Returns nil if the handshake has not completed
 // or if the handshake pattern does not transmit a static key.
 //
-// Thread Safety: This method is safe for concurrent use. The underlying
-// HandshakeState.PeerStatic() is mutex-protected.
+// Thread Safety: This method is safe for concurrent use. Takes stateMutex.RLock()
+// to protect access to handshakeState (see LOW-3 audit finding).
 func (nc *Conn) PeerStatic() []byte {
+	nc.stateMutex.RLock()
+	defer nc.stateMutex.RUnlock()
+
 	if nc.handshakeState == nil {
 		log.WithFields(i2plogger.Fields{"pkg": "noise", "func": "NoiseConn.PeerStatic"}).Debug("handshake state is nil")
 		return nil
@@ -53,9 +56,12 @@ func (nc *Conn) PeerStatic() []byte {
 //
 // Returns nil if the handshake has not been initiated.
 //
-// Thread Safety: This method is safe for concurrent use. The underlying
-// HandshakeState.ChannelBinding() is mutex-protected.
+// Thread Safety: This method is safe for concurrent use. Takes stateMutex.RLock()
+// to protect access to handshakeState (see LOW-3 audit finding).
 func (nc *Conn) ChannelBinding() []byte {
+	nc.stateMutex.RLock()
+	defer nc.stateMutex.RUnlock()
+
 	if nc.handshakeState == nil {
 		log.WithFields(i2plogger.Fields{"pkg": "noise", "func": "NoiseConn.ChannelBinding"}).Debug("handshake state is nil")
 		return nil
@@ -67,14 +73,24 @@ func (nc *Conn) ChannelBinding() []byte {
 // SendCipherState returns the send-direction CipherState for direct access
 // by protocol layers (e.g., NTCP2 SipHash key derivation).
 // Returns nil before the handshake produces cipher states.
+//
+// Thread Safety: This method is safe for concurrent use. Takes stateMutex.RLock()
+// to protect access to sendCipherState (see LOW-3 audit finding).
 func (nc *Conn) SendCipherState() *noise.CipherState {
+	nc.stateMutex.RLock()
+	defer nc.stateMutex.RUnlock()
 	return nc.sendCipherState
 }
 
 // RecvCipherState returns the receive-direction CipherState for direct access
 // by protocol layers.
 // Returns nil before the handshake produces cipher states.
+//
+// Thread Safety: This method is safe for concurrent use. Takes stateMutex.RLock()
+// to protect access to recvCipherState (see LOW-3 audit finding).
 func (nc *Conn) RecvCipherState() *noise.CipherState {
+	nc.stateMutex.RLock()
+	defer nc.stateMutex.RUnlock()
 	return nc.recvCipherState
 }
 

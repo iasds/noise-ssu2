@@ -47,17 +47,34 @@ type TTLCache struct {
 
 // New creates a new TTLCache and starts a background cleanup goroutine.
 // Call Close when the cache is no longer needed.
+// Defaults: if CleanupInterval is non-positive, defaults to TTL.
+// If MaxSize is non-positive, defaults to 10000 (see LOW-2 audit finding).
 func New(cfg Config) *TTLCache {
 	log.WithFields(logger.Fields{"pkg": "replaycache", "func": "New", "ttl": cfg.TTL, "max_size": cfg.MaxSize}).Debug("Creating new replay cache")
 	nf := cfg.NowFunc
 	if nf == nil {
 		nf = time.Now
 	}
+
+	// Default CleanupInterval to TTL if not specified or non-positive.
+	// This ensures time.NewTicker doesn't panic (LOW-2).
+	cleanupInterval := cfg.CleanupInterval
+	if cleanupInterval <= 0 {
+		cleanupInterval = cfg.TTL
+	}
+
+	// Default MaxSize to 10000 if not specified or non-positive.
+	// This prevents silent weakening of replay detection.
+	maxSize := cfg.MaxSize
+	if maxSize <= 0 {
+		maxSize = 10000
+	}
+
 	c := &TTLCache{
 		entries:         make(map[[32]byte]time.Time),
 		ttl:             cfg.TTL,
-		maxSize:         cfg.MaxSize,
-		cleanupInterval: cfg.CleanupInterval,
+		maxSize:         maxSize,
+		cleanupInterval: cleanupInterval,
 		done:            make(chan struct{}),
 		nowFunc:         nf,
 	}

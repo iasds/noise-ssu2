@@ -95,6 +95,17 @@ func (h *SSU2Conn) CloseWithReason(reason TerminationReason, additionalData []by
 			mod.ZeroKeys()
 		}
 
+		// Zero pending message buffer to avoid lingering data in memory.
+		// See MEDIUM-1 audit finding.
+		if len(h.pendingMessage) > 0 {
+			// We can't use securemem here without adding a dependency,
+			// but zeroing via slice assignment is sufficient for this buffer.
+			for i := range h.pendingMessage {
+				h.pendingMessage[i] = 0
+			}
+			h.pendingMessage = nil
+		}
+
 		// Close channels to signal goroutines to exit
 		close(h.closeChan)
 

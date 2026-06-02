@@ -137,6 +137,16 @@ type SSU2Conn struct {
 	writeDeadline time.Time
 	deadlineMutex sync.RWMutex
 
+	// readMutex serializes Read calls to safely manage pending message buffer.
+	// Protects pendingMessage and the DataHandler.MessageChan read.
+	readMutex sync.Mutex
+
+	// pendingMessage holds the unread remainder of a message when the caller's
+	// buffer is smaller than the message. Subsequent Read calls drain from this
+	// buffer first. This mirrors conn.Conn.pendingPlaintext to maintain net.Conn
+	// compatibility. See MEDIUM-1 audit finding.
+	pendingMessage []byte
+
 	// Keepalive
 	lastActivity     time.Time
 	lastActivityLock sync.RWMutex

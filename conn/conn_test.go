@@ -1266,3 +1266,52 @@ func TestApplyModifier_InvokesPhaseData(t *testing.T) {
 		})
 	}
 }
+
+// TestConfigReuseAfterClose verifies that closing a connection does not corrupt
+// a reused ConnConfig's StaticKey (HIGH-1 regression test).
+// The fix ensures that each Conn has its own copy of the StaticKey, so closing
+// one connection does not affect other connections using the same config.
+func TestConfigReuseAfterClose(t *testing.T) {
+	// Create a shared config with a static key
+	originalKey := []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+		17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32}
+	keyBackup := make([]byte, len(originalKey))
+	copy(keyBackup, originalKey)
+
+	config := NewConnConfig("XX", true).WithStaticKey(originalKey)
+
+	// Create first connection
+	pipe1a, pipe1b := net.Pipe()
+	conn1, err := NewNoiseConn(pipe1a, config)
+	require.NoError(t, err)
+	require.NotNil(t, conn1)
+
+	// Close the first connection
+	err = conn1.Close()
+	require.NoError(t, err)
+
+	// Verify the caller's config StaticKey was NOT corrupted (HIGH-1 fix)
+	assert.Equal(t, keyBackup, config.StaticKey,
+		"closing conn1 should not zero the config's StaticKey")
+	pipe1b.Close()
+
+	// Create a second connection with the same config - it should still work
+	pipe2a, pipe2b := net.Pipe()
+	conn2, err := NewNoiseConn(pipe2a, config)
+	require.NoError(t, err)
+	require.NotNil(t, conn2)
+
+	// Verify the second connection has a non-zero private key
+	assert.Len(t, conn2.privateStaticKey, len(originalKey),
+		"second connection should have a private key copy")
+	assert.NotEqual(t, make([]byte, len(originalKey)), conn2.privateStaticKey,
+		"second connection's private key should not be all zeros")
+
+	err = conn2.Close()
+	require.NoError(t, err)
+	pipe2b.Close()
+
+	// Final verification: config is still intact
+	assert.Equal(t, keyBackup, config.StaticKey,
+		"config StaticKey should still be intact after both closes")
+}

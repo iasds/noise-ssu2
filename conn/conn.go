@@ -56,6 +56,11 @@ type Conn struct {
 	// config contains the Noise protocol configuration
 	config *ConnConfig
 
+	// privateStaticKey is a per-connection copy of the static key, isolated from
+	// the caller-owned config. It is zeroed on Close() to prevent the caller's
+	// config from being corrupted. See HIGH-1 audit finding.
+	privateStaticKey []byte
+
 	// sendCipherState handles encryption for outgoing data after handshake.
 	// For interactive patterns: initiator uses cs1, responder uses cs2.
 	sendCipherState *noise.CipherState
@@ -112,22 +117,36 @@ func NewNoiseConn(underlying net.Conn, config *ConnConfig) (*Conn, error) {
 		return nil, err
 	}
 
-	hs, err := createHandshakeState(config)
+	// Make a per-connection copy of the static key to isolate from the caller's
+	// config. This prevents Close() from corrupting the caller's key material.
+	// See HIGH-1 audit finding.
+	var privateStaticKey []byte
+	if len(config.StaticKey) > 0 {
+		privateStaticKey = make([]byte, len(config.StaticKey))
+		copy(privateStaticKey, config.StaticKey)
+	}
+
+	hs, err := createHandshakeState(config, privateStaticKey)
 	if err != nil {
+		// Ensure the private key is zeroed on error
+		if len(privateStaticKey) > 0 {
+			securemem.SecureZero(privateStaticKey)
+		}
 		return nil, err
 	}
 
 	localAddr, remoteAddr := createNoiseAddresses(underlying, config)
 
 	nc := &Conn{
-		underlying:     underlying,
-		config:         config,
-		handshakeState: hs,
-		localAddr:      localAddr,
-		remoteAddr:     remoteAddr,
-		logger:         log,
-		metrics:        mod.NewConnectionMetrics(),
-		state:          mod.StateInit,
+		underlying:       underlying,
+		config:           config,
+		privateStaticKey: privateStaticKey,
+		handshakeState:   hs,
+		localAddr:        localAddr,
+		remoteAddr:       remoteAddr,
+		logger:           log,
+		metrics:          mod.NewConnectionMetrics(),
+		state:            mod.StateInit,
 	}
 
 	nc.logger.WithFields(i2plogger.Fields{
@@ -266,9 +285,10 @@ func (nc *Conn) Close() error {
 		chain.Close()
 	}
 
-	// Zero static key material from config to prevent lingering in memory
-	if nc.config != nil && len(nc.config.StaticKey) > 0 {
-		securemem.SecureZero(nc.config.StaticKey)
+	// Zero the per-connection static key copy instead of the caller's config.
+	// This prevents corrupting a reused ConnConfig. See HIGH-1 audit finding.
+	if len(nc.privateStaticKey) > 0 {
+		securemem.SecureZero(nc.privateStaticKey)
 	}
 
 	// Unregister from shutdown manager if set

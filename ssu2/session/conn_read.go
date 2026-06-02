@@ -26,10 +26,33 @@ func (h *SSU2Conn) validateReadyForIO() error {
 // Read implements net.Conn.Read.
 // Reads data from the connection, reassembling I2NP messages from Data packets.
 // Blocks until data is available, the read deadline expires, or the connection closes.
+//
+// If a previous Read call did not consume a complete message (because the caller's
+// buffer was too small), this Read returns the remainder of that message first
+// before fetching a new one from the DataHandler.
 func (h *SSU2Conn) Read(b []byte) (int, error) {
 	log.WithFields(logger.Fields{"pkg": "session", "func": "Read", "buf_len": len(b)}).Debug("waiting for inbound data")
 	if err := h.validateReadyForIO(); err != nil {
 		return 0, err
+	}
+
+	h.readMutex.Lock()
+	defer h.readMutex.Unlock()
+
+	// Check if we have a pending message from a previous truncated Read.
+	// This mirrors the buffering in conn.Conn.pendingPlaintext.
+	if len(h.pendingMessage) > 0 {
+		n := copy(b, h.pendingMessage)
+		h.pendingMessage = h.pendingMessage[n:]
+		// Zero the consumed portion if fully drained
+		if len(h.pendingMessage) == 0 {
+			h.pendingMessage = nil
+		}
+		log.WithFields(logger.Fields{
+			"pkg": "session", "func": "Read",
+			"copied_len": n, "remaining": len(h.pendingMessage),
+		}).Debug("Data read from pending message buffer")
+		return n, nil
 	}
 
 	// Block until a message arrives, the connection closes, or the deadline expires
@@ -46,6 +69,14 @@ func (h *SSU2Conn) Read(b []byte) (int, error) {
 	// Copy message to buffer
 	n := copy(b, msg)
 	if n < len(msg) {
+		// Buffer was too small. Store the unread remainder for the next Read call
+		// instead of silently dropping it. See MEDIUM-1 audit finding.
+		h.pendingMessage = make([]byte, len(msg)-n)
+		copy(h.pendingMessage, msg[n:])
+		log.WithFields(logger.Fields{
+			"pkg": "session", "func": "Read",
+			"needed": len(msg), "got": len(b), "buffered": len(h.pendingMessage),
+		}).Debug("Buffer too small; buffering message remainder")
 		return n, oops.Errorf("buffer too small: need %d bytes, got %d", len(msg), len(b))
 	}
 
