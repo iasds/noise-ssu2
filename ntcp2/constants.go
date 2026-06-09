@@ -42,7 +42,7 @@ const (
 	// NTCP2ProtocolName is the full Noise protocol name for NTCP2 as defined by the I2P spec.
 	// This is passed to InitializeSymmetric() via the ProtocolName field on noise.Config,
 	// producing the correct KDF output for interoperability with other I2P implementations.
-	NTCP2ProtocolName = "Noise_XKaesobfse+hs2+hs3_25519_ChaChaPoly_SHA256"
+	NTCP2ProtocolName = "Noise_XK_25519_ChaChaPoly_SHA256"
 
 	// NTCP2Pattern is the base Noise pattern used by NTCP2.
 	NTCP2Pattern = "XK"
